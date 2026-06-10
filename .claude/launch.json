@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "מנהל חלוקה (Desktop App)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["main.py"]
+    }
+  ]
+}
