@@ -117,6 +117,7 @@ class GroupUpdateTab(QWidget):
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._update_counts)
         lay.addWidget(self.table)
@@ -159,6 +160,11 @@ class GroupUpdateTab(QWidget):
 
     def _populate(self):
         self.table.blockSignals(True)
+        # Drop old items in one batch BEFORE re-sizing. Calling setItem() over an
+        # existing checkable cell is pathologically slow (≈8s for 1000 rows); a
+        # clear first makes every refresh O(n) instead of freezing the app.
+        self.table.clearContents()
+        self.table.setRowCount(0)
         self.table.setRowCount(len(self._rows_data))
         for r, rec in enumerate(self._rows_data):
             # Checkbox column

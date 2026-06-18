@@ -243,6 +243,9 @@ def export_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
 
     alt_fill = PatternFill("solid", fgColor="F8FAFC")
     normal_fill = PatternFill("solid", fgColor="FFFFFF")
+    # Build the style objects ONCE and reuse them. Creating a fresh Alignment per
+    # cell meant ~32k objects for a few-thousand-row export, which took seconds.
+    cell_align = Alignment(horizontal="right", vertical="center")
 
     for i, rec in enumerate(recipients, 1):
         row = [i, rec.get("full_name", ""), rec.get("phone1", ""),
@@ -251,7 +254,7 @@ def export_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
         ws.append(row)
         fill = alt_fill if i % 2 == 0 else normal_fill
         for cell in ws[i + 1]:
-            cell.alignment = Alignment(horizontal="right", vertical="center")
+            cell.alignment = cell_align
             cell.fill = fill
             cell.border = border
         ws.row_dimensions[i + 1].height = 18

@@ -82,6 +82,7 @@ class OneTimeTab(QWidget):
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._on_check_changed)
         lay.addWidget(self.table)
@@ -106,6 +107,9 @@ class OneTimeTab(QWidget):
 
     def _populate(self, suggested_n: int = -1):
         self.table.blockSignals(True)
+        # Clear old items first — re-using existing checkable cells is very slow.
+        self.table.clearContents()
+        self.table.setRowCount(0)
         self.table.setRowCount(len(self._rows_data))
         today = date.today()
 

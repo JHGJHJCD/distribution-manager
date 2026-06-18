@@ -57,6 +57,7 @@ class TrackingTab(QWidget):
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
         lay.addWidget(self.table)
 
@@ -74,6 +75,7 @@ class TrackingTab(QWidget):
         hdr2 = self.log_table.horizontalHeader()
         hdr2.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr2.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr2.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.log_table.verticalHeader().setVisible(False)
         lay.addWidget(self.log_table)
 
@@ -87,6 +89,8 @@ class TrackingTab(QWidget):
     def _populate(self, rows):
         _ALIGN = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         self.table.blockSignals(True)
+        self.table.clearContents()
+        self.table.setRowCount(0)
         self.table.setRowCount(len(rows))
         for r, rec in enumerate(rows):
             vals = [str(r + 1), rec.get("recipient_name", ""),
@@ -116,6 +120,8 @@ class TrackingTab(QWidget):
         _ALIGN = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         logs = db.get_change_log(limit=100)
         self.log_table.blockSignals(True)
+        self.log_table.clearContents()
+        self.log_table.setRowCount(0)
         self.log_table.setRowCount(len(logs))
         for r, entry in enumerate(logs):
             vals = [entry.get("changed_at", "")[:16], entry.get("recipient_name", ""),

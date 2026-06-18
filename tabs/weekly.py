@@ -98,6 +98,7 @@ class WeeklyTab(QWidget):
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
         self.table.cellDoubleClicked.connect(self._toggle_status)
         lay.addWidget(self.table)
@@ -110,6 +111,8 @@ class WeeklyTab(QWidget):
 
     def _populate(self):
         today = date.today()
+        self.table.clearContents()
+        self.table.setRowCount(0)
         self.table.setRowCount(len(self._rows_data))
         overdue = today_cnt = week_cnt = 0
 

@@ -96,6 +96,7 @@ class SearchTab(QWidget):
         hdr = self.hist_table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.hist_table.verticalHeader().setVisible(False)
         lay.addWidget(self.hist_table)
 
@@ -151,6 +152,8 @@ class SearchTab(QWidget):
 
         hist = db.get_distributions_for_recipient(rec["id"])
         self.l_count.setText(str(len(hist)))
+        self.hist_table.clearContents()
+        self.hist_table.setRowCount(0)
         self.hist_table.setRowCount(len(hist))
         for r, entry in enumerate(hist):
             vals = [_fdate(entry.get("dist_date", "")), entry.get("what_dist", ""),

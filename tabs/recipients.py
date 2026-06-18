@@ -165,6 +165,11 @@ class RecipientsTab(QWidget):
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        # Sample only a few rows when auto-sizing columns. Default samples up to
+        # 1000 rows × every column on each refresh — with thousands of recipients
+        # that O(rows×cols) scan froze/crashed the app. A small precision keeps
+        # the auto-fit look at constant cost.
+        hdr.setResizeContentsPrecision(20)
         self.table.verticalHeader().setVisible(False)
         lay.addWidget(self.table)
 
@@ -216,6 +221,8 @@ class RecipientsTab(QWidget):
         _ALIGN     = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
 
         self.table.blockSignals(True)
+        self.table.clearContents()
+        self.table.setRowCount(0)
         self.table.setRowCount(len(rows))
         for r, rec in enumerate(rows):
             rec_id = rec.get("id")
@@ -242,7 +249,11 @@ class RecipientsTab(QWidget):
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(_ALIGN)
-                item.setData(Qt.ItemDataRole.UserRole, rec_id)
+                # The row id is only read back from column 0 (see _selected_id),
+                # so tag just that cell instead of all 33 — saves ~32 setData
+                # calls per row, which adds up to seconds on thousands of rows.
+                if c == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, rec_id)
                 if color:
                     item.setForeground(color)
                 self.table.setItem(r, c, item)
