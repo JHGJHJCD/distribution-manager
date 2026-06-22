@@ -25,7 +25,7 @@ from tabs.tracking import TrackingTab
 from tabs.search import SearchTab
 from tabs.settings import SettingsTab
 
-APP_VERSION = "1.0"
+from version import APP_VERSION
 
 
 def resource_path(relative: str) -> str:
@@ -397,6 +397,13 @@ def _run():
     try:
         from utils.backup import auto_backup_async
         auto_backup_async()
+    except Exception:
+        pass
+
+    # Remove the previous EXE left behind by a self-update, if any.
+    try:
+        from utils.updater import cleanup_old
+        cleanup_old()
     except Exception:
         pass
 

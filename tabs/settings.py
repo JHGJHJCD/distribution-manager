@@ -1,14 +1,46 @@
 from datetime import datetime
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
-    QPushButton, QFrame, QMessageBox, QFileDialog, QInputDialog, QLineEdit
+    QPushButton, QFrame, QMessageBox, QFileDialog, QInputDialog, QLineEdit,
+    QProgressDialog, QApplication
 )
 
 import database as db
 from utils.backup import auto_backup, restore_from_backup
 from utils.ui import busy_cursor
+from utils import updater
+from version import APP_VERSION
+
+
+class _UpdateWorker(QThread):
+    """Runs the network check / download off the UI thread."""
+    checked = pyqtSignal(object)      # dict | None | Exception
+    progress = pyqtSignal(int)
+    finished_dl = pyqtSignal(object)  # path str | Exception
+
+    def __init__(self, mode, url=None, dest=None):
+        super().__init__()
+        self.mode = mode
+        self.url = url
+        self.dest = dest
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        try:
+            if self.mode == "check":
+                self.checked.emit(updater.check_latest())
+            else:
+                updater.download(self.url, self.dest,
+                                 progress_cb=lambda p: self.progress.emit(p),
+                                 cancel_cb=lambda: self._cancel)
+                self.finished_dl.emit(self.dest)
+        except Exception as e:
+            (self.checked if self.mode == "check" else self.finished_dl).emit(e)
 
 
 class SettingsTab(QWidget):
@@ -50,6 +82,36 @@ class SettingsTab(QWidget):
         pwd_row.addWidget(btn_pwd)
         sec_lay.addLayout(pwd_row)
         lay.addWidget(sec_frame)
+
+        # ── Software update section ───────────────────────
+        upd_frame = QFrame()
+        upd_frame.setObjectName("panel")
+        upd_lay = QVBoxLayout(upd_frame)
+        upd_lay.setContentsMargins(14, 12, 14, 12)
+        upd_lay.setSpacing(10)
+
+        upd_title = QLabel("עדכון תוכנה")
+        upd_title.setObjectName("section-header")
+        upd_lay.addWidget(upd_title)
+
+        ver_row = QHBoxLayout()
+        ver_row.addWidget(QLabel("גרסה נוכחית:"))
+        self.lbl_version = QLabel(f"v{APP_VERSION}")
+        self.lbl_version.setStyleSheet("font-weight:700; color:#1565c0;")
+        ver_row.addWidget(self.lbl_version)
+        ver_row.addStretch()
+        self.btn_check_update = QPushButton("בדוק עדכונים")
+        self.btn_check_update.setObjectName("neutral")
+        self.btn_check_update.setToolTip("בדוק אם קיימת גרסה חדשה יותר ב-GitHub")
+        self.btn_check_update.clicked.connect(self._check_updates)
+        ver_row.addWidget(self.btn_check_update)
+        upd_lay.addLayout(ver_row)
+
+        self.lbl_update_status = QLabel("")
+        self.lbl_update_status.setObjectName("subtitle")
+        self.lbl_update_status.setWordWrap(True)
+        upd_lay.addWidget(self.lbl_update_status)
+        lay.addWidget(upd_frame)
 
         # ── Backup section ────────────────────────────────
         bk_frame = QFrame()
@@ -287,3 +349,84 @@ class SettingsTab(QWidget):
         if self.main_win and hasattr(self.main_win, "choose_backup_folder"):
             self.main_win.choose_backup_folder()
             self.refresh()
+
+    # ── Software update ───────────────────────────────────────────────────────
+
+    def _check_updates(self):
+        self.btn_check_update.setEnabled(False)
+        self.lbl_update_status.setStyleSheet("")
+        self.lbl_update_status.setText("בודק עדכונים מול GitHub...")
+        self._worker = _UpdateWorker("check")
+        self._worker.checked.connect(self._on_checked)
+        self._worker.start()
+
+    def _on_checked(self, result):
+        self.btn_check_update.setEnabled(True)
+        if isinstance(result, Exception):
+            self.lbl_update_status.setStyleSheet("color:#dc2626;")
+            self.lbl_update_status.setText("בדיקת העדכונים נכשלה — ודא חיבור לאינטרנט ונסה שוב.")
+            return
+        if not result or not result.get("url"):
+            self.lbl_update_status.setText("לא נמצאה גרסה זמינה.")
+            return
+        if updater.is_newer(result["version"], APP_VERSION):
+            notes = (result.get("notes") or "").strip()
+            if len(notes) > 300:
+                notes = notes[:300] + "..."
+            ask = QMessageBox.question(
+                self, "עדכון זמין",
+                f"גרסה חדשה זמינה: v{result['version']}\n"
+                f"הגרסה שלך: v{APP_VERSION}\n\n"
+                + (notes + "\n\n" if notes else "")
+                + "להוריד ולהתקין עכשיו?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if ask == QMessageBox.StandardButton.Yes:
+                self._start_download(result)
+            else:
+                self.lbl_update_status.setStyleSheet("color:#b45309;")
+                self.lbl_update_status.setText(f"גרסה v{result['version']} זמינה — ניתן לעדכן בכל עת.")
+        else:
+            self.lbl_update_status.setStyleSheet("color:#16a34a;")
+            self.lbl_update_status.setText(f"התוכנה מעודכנת (v{APP_VERSION}) ✓")
+
+    def _start_download(self, result):
+        if not updater.current_exe():
+            QMessageBox.information(
+                self, "עדכון",
+                "עדכון אוטומטי זמין רק בגרסת התוכנה המותקנת (EXE).\n"
+                f"ניתן להוריד ידנית את גרסה v{result['version']} מ-GitHub.")
+            return
+        dest = updater.download_target()
+        self._progress = QProgressDialog("מוריד עדכון...", "ביטול", 0, 100, self)
+        self._progress.setWindowTitle("עדכון תוכנה")
+        self._progress.setWindowModality(Qt.WindowModality.WindowModal)
+        self._progress.setMinimumDuration(0)
+        self._progress.setAutoClose(False)
+        self._progress.setAutoReset(False)
+        self._worker = _UpdateWorker("download", url=result["url"], dest=dest)
+        self._worker.progress.connect(self._progress.setValue)
+        self._worker.finished_dl.connect(self._on_downloaded)
+        self._progress.canceled.connect(self._worker.cancel)
+        self._progress.setValue(0)
+        self._worker.start()
+
+    def _on_downloaded(self, result):
+        if hasattr(self, "_progress") and self._progress is not None:
+            self._progress.close()
+        if isinstance(result, Exception):
+            if isinstance(result, InterruptedError):
+                self.lbl_update_status.setText("העדכון בוטל.")
+            else:
+                QMessageBox.critical(self, "שגיאת עדכון",
+                                     f"הורדת העדכון נכשלה:\n{result}")
+            return
+        err = updater.apply_update(result)
+        if err:
+            QMessageBox.critical(self, "שגיאת עדכון", err)
+            return
+        QMessageBox.information(
+            self, "מתעדכן",
+            "העדכון הותקן בהצלחה.\nהתוכנה תיסגר כעת ותיפתח מחדש בגרסה החדשה.")
+        QApplication.quit()

@@ -34,6 +34,7 @@ a = Analysis(
         'database',
         'styles',
         'widgets',
+        'version',
         'tabs.recipients',
         'tabs.group_update',
         'tabs.weekly',
@@ -46,6 +47,11 @@ a = Analysis(
         'utils.backup',
         'utils.print_view',
         'utils.ui',
+        'utils.updater',
+        # ── networking (in-app updater) ──────────────────────────────────────
+        'urllib.request',
+        'json',
+        'ssl',
         # ── PyQt6 submodules sometimes missed ────────────────────────────────
         'PyQt6.QtPrintSupport',
         'PyQt6.QtWidgets',
