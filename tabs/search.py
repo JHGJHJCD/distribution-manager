@@ -169,8 +169,9 @@ class SearchTab(QWidget):
         self.results_table.blockSignals(False)
         self.count_lbl.setText(f"נמצאו: {len(self._results)}")
 
-        # Auto-select the single match so its details show immediately.
-        if len(self._results) == 1:
+        # Auto-select the top match so its details show immediately — preserving
+        # the old name-search feel where details appeared without an extra click.
+        if self._results:
             self.results_table.setCurrentCell(0, 0)
         else:
             self.results_table.clearSelection()
