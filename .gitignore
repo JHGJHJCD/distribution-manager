@@ -1,0 +1,20 @@
+# Build artifacts
+build/
+dist/
+*.spec.bak
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Local data (never distribute real recipient data)
+data.db
+data.db-wal
+data.db-shm
+exports/
+backups/
+crash_log.txt
+
+# Preview/scratch
+search_preview.png

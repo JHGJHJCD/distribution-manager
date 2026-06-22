@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
 
 import database as db
 from utils.backup import auto_backup, restore_from_backup
+from utils.ui import busy_cursor
 
 
 class SettingsTab(QWidget):
@@ -166,11 +167,13 @@ class SettingsTab(QWidget):
         self.lbl_db_path.setText(db.DB_PATH)
 
         folder = db.get_setting("backup_folder") or ""
-        self.lbl_backup_folder.setText(folder if folder else "לא הוגדרה")
-        self.lbl_backup_folder.setStyleSheet(
-            "color:#374151;" if folder else "color:#dc2626;"
-        )
-        self.btn_backup_now.setEnabled(bool(folder))
+        if folder:
+            self.lbl_backup_folder.setText(folder)
+        else:
+            # Backups still happen automatically to the default location.
+            self.lbl_backup_folder.setText(f"{db.BACKUP_DIR}  (ברירת מחדל)")
+        self.lbl_backup_folder.setStyleSheet("color:#374151;")
+        self.btn_backup_now.setEnabled(True)
 
         last_backup = db.get_setting("last_backup_at") or ""
         if last_backup:
@@ -245,11 +248,13 @@ class SettingsTab(QWidget):
         if not self._ensure_safety_backup():
             return
 
-        ok = restore_from_backup(path)
+        with busy_cursor():
+            ok = restore_from_backup(path)
+            if ok:
+                self.refresh()
+                if self.main_win:
+                    self.main_win.refresh_all()
         if ok:
-            self.refresh()
-            if self.main_win:
-                self.main_win.refresh_all()
             QMessageBox.information(self, "שחזור הושלם", "הנתונים שוחזרו בהצלחה מהגיבוי ✓")
         else:
             QMessageBox.critical(self, "שגיאה", "שחזור נכשל — ודא שהקובץ תקין ונגיש.")
@@ -268,9 +273,10 @@ class SettingsTab(QWidget):
         if not self._ensure_safety_backup():
             return
 
-        db.reset_all_data()
-        if self.main_win:
-            self.main_win.refresh_all()
+        with busy_cursor():
+            db.reset_all_data()
+            if self.main_win:
+                self.main_win.refresh_all()
         QMessageBox.information(self, "אופס הושלם", "כל הנתונים נמחקו. הגדרות המערכת נשמרו.")
 
     def _change_password(self):

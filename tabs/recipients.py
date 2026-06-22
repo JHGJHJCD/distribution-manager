@@ -35,6 +35,7 @@ def _fdate(s: str) -> str:
     return s or ""
 from utils.backup import auto_backup_async
 from utils.excel_utils import import_from_excel
+from utils.ui import busy_cursor
 
 COLS = ["מס'", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3",
         "כתובת", "אזור", "נפשות", "תדירות", "חלוקה אחרונה",
@@ -364,11 +365,12 @@ class RecipientsTab(QWidget):
 
     def _run_import(self, path: str):
         try:
-            rows = import_from_excel(path)
-            report = _import_quality_report(rows)
-            added, updated, conflicts = db.import_recipients_from_list(rows)
-            auto_backup_async()
-            self.refresh()
+            with busy_cursor():
+                rows = import_from_excel(path)
+                report = _import_quality_report(rows)
+                added, updated, conflicts = db.import_recipients_from_list(rows)
+                auto_backup_async()
+                self.refresh()
             msg = (
                 f"נוספו {added} מקבלים חדשים\n"
                 f"עודכנו {updated} מקבלים קיימים\n"

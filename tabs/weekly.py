@@ -16,6 +16,7 @@ def _fdate(s: str) -> str:
     return s or ""
 from utils.excel_utils import export_distribution_to_excel
 from utils.print_view import print_distribution_list
+from utils.ui import busy_cursor
 
 COLS = ["מס'", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3",
         "אזור", "נפשות", "תדירות", "חלוקה הבאה", "ימים", "✓ ביצוע"]
@@ -186,7 +187,8 @@ class WeeklyTab(QWidget):
             QMessageBox.information(self, "", "אין נתונים לייצוא")
             return
         try:
-            path = export_distribution_to_excel(rows, date.today().strftime("%d/%m/%Y"))
+            with busy_cursor():
+                path = export_distribution_to_excel(rows, date.today().strftime("%d/%m/%Y"))
             QMessageBox.information(self, "ייצוא הושלם", f"נשמר:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "שגיאה", str(e))

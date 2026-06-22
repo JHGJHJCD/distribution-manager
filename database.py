@@ -6,15 +6,78 @@ import secrets
 from datetime import date, datetime, timedelta
 
 
-def _app_dir() -> str:
-    """Return the directory where persistent data files should be stored.
-    Works correctly both in development and as a PyInstaller frozen EXE."""
+APP_DIR_NAME = "ManhalHaluka"
+
+
+def _exe_dir() -> str:
+    """Directory of the running EXE (frozen) or the source file (dev)."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.abspath(__file__))
 
 
-DB_PATH = os.path.join(_app_dir(), "data.db")
+def _data_dir() -> str:
+    """Stable per-user data directory (%APPDATA%\\ManhalHaluka), independent of
+    where the EXE lives — so replacing or moving the EXE never loses data.
+    Falls back to the EXE directory if %APPDATA% is unavailable."""
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    try:
+        d = os.path.join(base, APP_DIR_NAME)
+        os.makedirs(d, exist_ok=True)
+        return d
+    except Exception:
+        return _exe_dir()
+
+
+# Kept for backward compatibility (older code referenced _app_dir()).
+_app_dir = _data_dir
+
+DB_PATH = os.path.join(_data_dir(), "data.db")
+BACKUP_DIR = os.path.join(_data_dir(), "backups")
+
+
+def _legacy_db_candidates() -> list:
+    """Old locations where a pre-upgrade database might live (next to the EXE,
+    or inside the Desktop distribution folder)."""
+    cands = [os.path.join(_exe_dir(), "data.db")]
+    home = os.path.expanduser("~")
+    cands.append(os.path.join(home, "Desktop", "מנהל_חלוקה_הפצה", "data.db"))
+    return cands
+
+
+def _copy_db(src_path: str, dst_path: str) -> bool:
+    """Copy a SQLite DB using the Online Backup API (captures WAL contents)."""
+    try:
+        src = sqlite3.connect(src_path)
+        dst = sqlite3.connect(dst_path)
+        try:
+            with dst:
+                src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+        return True
+    except Exception:
+        return False
+
+
+def migrate_legacy_db_if_needed(candidates=None, force=False):
+    """One-time import of an old next-to-EXE database into the stable data dir.
+    Runs only in the packaged app (unless force=True for tests). Returns the
+    source path if a copy happened, else None. Never overwrites existing data."""
+    if not force and not getattr(sys, "frozen", False):
+        return None
+    if os.path.exists(DB_PATH):
+        return None  # stable location already has data — nothing to migrate
+    for legacy in (candidates or _legacy_db_candidates()):
+        try:
+            if os.path.abspath(legacy) == os.path.abspath(DB_PATH):
+                continue
+            if os.path.exists(legacy) and _copy_db(legacy, DB_PATH):
+                return legacy
+        except Exception:
+            continue
+    return None
 
 
 def get_connection():
@@ -28,6 +91,9 @@ def get_connection():
 
 
 def init_db():
+    # Bring forward data from a pre-upgrade location BEFORE opening (which would
+    # otherwise create an empty DB in the stable dir and hide the old data).
+    migrate_legacy_db_if_needed()
     with get_connection() as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS recipients (
@@ -101,17 +167,6 @@ def init_db():
 
         INSERT OR IGNORE INTO settings (key, value) VALUES ('backup_folder', '');
         INSERT OR IGNORE INTO settings (key, value) VALUES ('last_backup_at', '');
-
-        CREATE INDEX IF NOT EXISTS idx_recipients_status
-            ON recipients(status);
-        CREATE INDEX IF NOT EXISTS idx_recipients_name
-            ON recipients(full_name COLLATE NOCASE);
-        CREATE INDEX IF NOT EXISTS idx_distributions_recipient
-            ON distributions(recipient_id);
-        CREATE INDEX IF NOT EXISTS idx_distributions_name
-            ON distributions(recipient_name);
-        CREATE INDEX IF NOT EXISTS idx_distributions_date
-            ON distributions(dist_date);
         """)
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(recipients)")}
         _migrations = [
@@ -140,6 +195,21 @@ def init_db():
         for col, definition in _migrations:
             if col not in columns:
                 conn.execute(f"ALTER TABLE recipients ADD COLUMN {col} {definition}")
+
+        # Indexes are created AFTER the column migrations so that an older DB
+        # (missing a column an index references) is upgraded first, not crashed.
+        conn.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_recipients_status
+            ON recipients(status);
+        CREATE INDEX IF NOT EXISTS idx_recipients_name
+            ON recipients(full_name COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS idx_distributions_recipient
+            ON distributions(recipient_id);
+        CREATE INDEX IF NOT EXISTS idx_distributions_name
+            ON distributions(recipient_name);
+        CREATE INDEX IF NOT EXISTS idx_distributions_date
+            ON distributions(dist_date);
+        """)
 
         # ── Password migration ────────────────────────────────────────────────
         # Seed a hashed default password ('1234') for fresh installs, and

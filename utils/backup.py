@@ -28,12 +28,19 @@ def auto_backup_async():
 
 def auto_backup():
     """Backup data.db using SQLite's Online Backup API (WAL-safe).
-    Returns True on success, None if no folder configured, False on failure."""
+    Returns True on success, False on failure. Falls back to a default backups
+    folder in the stable data dir, so backups happen even if the user never
+    configured a folder."""
     try:
         import database as db
         backup_folder = db.get_setting("backup_folder")
         if not backup_folder or not os.path.isdir(backup_folder):
-            return None
+            # Default location — always available, survives EXE upgrades.
+            backup_folder = db.BACKUP_DIR
+            try:
+                os.makedirs(backup_folder, exist_ok=True)
+            except Exception:
+                return None
 
         if not os.path.exists(db.DB_PATH):
             return False

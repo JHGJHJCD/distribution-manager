@@ -16,6 +16,7 @@ import database as db
 from utils.backup import auto_backup_async
 from utils.excel_utils import export_distribution_to_excel
 from utils.print_view import print_distribution_list
+from utils.ui import busy_cursor
 
 COLS = ["✔", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3", "אזור", "נפשות", "הערות"]
 
@@ -272,8 +273,9 @@ class GroupUpdateTab(QWidget):
             QMessageBox.warning(self, "שדות חסרים", "• " + "\n• ".join(errors))
             return
 
-        db.bulk_add_distributions(checked, dist_date, what, qty, distributor)
-        auto_backup_async()
+        with busy_cursor():
+            db.bulk_add_distributions(checked, dist_date, what, qty, distributor)
+            auto_backup_async()
 
         msg = f"נשמרה חלוקה ל-{len(checked)} מקבלים"
         QMessageBox.information(self, "הצלחה", msg)
@@ -289,7 +291,8 @@ class GroupUpdateTab(QWidget):
             checked = self._rows_data
         dist_date = _fdate(self.date_edit.get_iso())
         try:
-            path = export_distribution_to_excel(checked, dist_date)
+            with busy_cursor():
+                path = export_distribution_to_excel(checked, dist_date)
             QMessageBox.information(self, "ייצוא הושלם", f"הקובץ נשמר:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "שגיאה", str(e))

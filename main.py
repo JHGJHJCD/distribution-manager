@@ -393,6 +393,13 @@ def _run():
 
     db.init_db()
 
+    # Startup safety backup (non-blocking) — a restore point on every launch.
+    try:
+        from utils.backup import auto_backup_async
+        auto_backup_async()
+    except Exception:
+        pass
+
     # Keep splash visible for at least 1.8 s
     remaining = max(0, 1800 - int((time.time() - t0) * 1000))
     if remaining:

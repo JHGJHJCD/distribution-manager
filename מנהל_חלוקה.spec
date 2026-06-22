@@ -45,6 +45,7 @@ a = Analysis(
         'utils.excel_utils',
         'utils.backup',
         'utils.print_view',
+        'utils.ui',
         # ── PyQt6 submodules sometimes missed ────────────────────────────────
         'PyQt6.QtPrintSupport',
         'PyQt6.QtWidgets',
