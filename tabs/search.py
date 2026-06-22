@@ -1,8 +1,8 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLabel, QComboBox, QAbstractItemView, QFormLayout, QFrame
+    QHeaderView, QLabel, QLineEdit, QAbstractItemView, QFormLayout, QFrame
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 import database as db
 
 def _fdate(s: str) -> str:
@@ -11,12 +11,25 @@ def _fdate(s: str) -> str:
     return s or ""
 
 HIST_COLS = ["תאריך", "מה חולק", "כמות", "מחלק", "הערות"]
+RESULT_COLS = ["שם מלא", "טלפון", "ת״ז בעל", "ת״ז אשה", "אזור", "סטטוס"]
+
+
+def _first_phone(rec: dict) -> str:
+    for k in ("phone1", "phone2", "phone3"):
+        v = rec.get(k)
+        if v:
+            return str(v)
+    return ""
 
 
 class SearchTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._name_map: dict = {}  # display_name → recipient_id
+        self._all_rows: list = []         # cached on refresh, filtered in-memory
+        self._results: list = []          # current result rows
+        self._filter_timer = QTimer()
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.timeout.connect(self._run_search)
         self._build_ui()
 
     def _build_ui(self):
@@ -28,16 +41,36 @@ class SearchTab(QWidget):
         title.setObjectName("title")
         lay.addWidget(title)
 
-        # Name picker
-        pick_row = QHBoxLayout()
-        pick_row.addWidget(QLabel("בחר שם:"))
-        self.name_combo = QComboBox()
-        self.name_combo.setMinimumWidth(280)
-        self.name_combo.setEditable(True)
-        self.name_combo.currentTextChanged.connect(self._on_name_changed)
-        pick_row.addWidget(self.name_combo)
-        pick_row.addStretch()
-        lay.addLayout(pick_row)
+        # Search box — matches across ALL fields
+        search_row = QHBoxLayout()
+        search_row.addWidget(QLabel("חיפוש:"))
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("שם, טלפון, ת״ז בעל/אשה, כתובת, אימייל...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.textChanged.connect(lambda: self._filter_timer.start(200))
+        search_row.addWidget(self.search_input)
+        self.count_lbl = QLabel("")
+        self.count_lbl.setObjectName("subtitle")
+        search_row.addWidget(self.count_lbl)
+        lay.addLayout(search_row)
+
+        # Results table
+        self.results_table = QTableWidget()
+        self.results_table.setColumnCount(len(RESULT_COLS))
+        self.results_table.setHorizontalHeaderLabels(RESULT_COLS)
+        self.results_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.results_table.setAlternatingRowColors(True)
+        self.results_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.results_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.results_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.results_table.setMaximumHeight(220)
+        rhdr = self.results_table.horizontalHeader()
+        rhdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        rhdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        rhdr.setResizeContentsPrecision(20)
+        self.results_table.verticalHeader().setVisible(False)
+        self.results_table.itemSelectionChanged.connect(self._on_result_selected)
+        lay.addWidget(self.results_table)
 
         # Details frame
         frame = QFrame()
@@ -54,6 +87,7 @@ class SearchTab(QWidget):
             w.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             return w
 
+        self.l_name = lbl()
         self.l_phone1 = lbl()
         self.l_phone2 = lbl()
         self.l_phone3 = lbl()
@@ -62,14 +96,19 @@ class SearchTab(QWidget):
         self.l_souls = lbl()
         self.l_freq = lbl()
         self.l_status = lbl()
+        self.l_id = lbl()
+        self.l_spouse_id = lbl()
         self.l_last = lbl()
         self.l_next = lbl()
         self.l_notes = lbl()
         self.l_count = lbl()
 
+        form.addRow("שם מלא:", self.l_name)
         form.addRow("טלפון 1:", self.l_phone1)
         form.addRow("טלפון 2:", self.l_phone2)
         form.addRow("טלפון 3:", self.l_phone3)
+        form.addRow("ת״ז בעל:", self.l_id)
+        form.addRow("ת״ז אשה:", self.l_spouse_id)
         form.addRow("כתובת:", self.l_address)
         form.addRow("אזור:", self.l_area)
         form.addRow("נפשות:", self.l_souls)
@@ -101,46 +140,64 @@ class SearchTab(QWidget):
         lay.addWidget(self.hist_table)
 
     def refresh(self):
-        all_recs = db.get_all_recipients()
-        self._name_map = {}
-        display_names = []
+        # Cache the full recipient list once; keystrokes filter this in-memory
+        # instead of re-hitting the database on every character.
+        self._all_rows = db.get_all_recipients()
+        self._run_search()
 
-        for rec in sorted(all_recs, key=lambda r: r.get("full_name", "")):
-            name = rec["full_name"]
-            status = rec.get("status", "פעיל")
-            display = name if status == "פעיל" else f"{name} ({status})"
-            self._name_map[display] = rec["id"]
-            display_names.append(display)
+    def _run_search(self):
+        query = self.search_input.text()
+        self._results = db.filter_recipients(self._all_rows, query)
+        self._populate_results()
 
-        current = self.name_combo.currentText()
-        self.name_combo.blockSignals(True)
-        self.name_combo.clear()
-        self.name_combo.addItems([""] + display_names)
-        if current in display_names:
-            self.name_combo.setCurrentText(current)
-        self.name_combo.blockSignals(False)
-        self._on_name_changed(self.name_combo.currentText())
+    def _populate_results(self):
+        _ALIGN = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        self.results_table.blockSignals(True)
+        self.results_table.clearContents()
+        self.results_table.setRowCount(0)
+        self.results_table.setRowCount(len(self._results))
+        for r, rec in enumerate(self._results):
+            vals = [rec.get("full_name", ""), _first_phone(rec),
+                    rec.get("id_number", "") or "", rec.get("spouse_id_number", "") or "",
+                    rec.get("area", "") or "", rec.get("status", "")]
+            for c, v in enumerate(vals):
+                item = QTableWidgetItem(str(v) or "")
+                item.setTextAlignment(_ALIGN)
+                if c == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
+                self.results_table.setItem(r, c, item)
+        self.results_table.blockSignals(False)
+        self.count_lbl.setText(f"נמצאו: {len(self._results)}")
 
-    def _on_name_changed(self, display_name):
-        if not display_name:
-            self._clear()
-            return
-
-        rec_id = self._name_map.get(display_name)
-        if rec_id:
-            rec = db.get_recipient(rec_id)
+        # Auto-select the single match so its details show immediately.
+        if len(self._results) == 1:
+            self.results_table.setCurrentCell(0, 0)
         else:
-            # Typed input not in map — search by exact full_name
-            all_recs = db.get_all_recipients()
-            rec = next((r for r in all_recs if r["full_name"] == display_name), None)
+            self.results_table.clearSelection()
+            self._clear_details()
 
+    def _on_result_selected(self):
+        row = self.results_table.currentRow()
+        if row < 0:
+            self._clear_details()
+            return
+        item = self.results_table.item(row, 0)
+        rec_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if rec_id:
+            self._show_recipient(rec_id)
+
+    def _show_recipient(self, rec_id):
+        rec = db.get_recipient(rec_id)
         if not rec:
-            self._clear()
+            self._clear_details()
             return
 
+        self.l_name.setText(rec.get("full_name") or "")
         self.l_phone1.setText(rec.get("phone1") or "")
         self.l_phone2.setText(rec.get("phone2") or "")
         self.l_phone3.setText(rec.get("phone3") or "")
+        self.l_id.setText(rec.get("id_number") or "")
+        self.l_spouse_id.setText(rec.get("spouse_id_number") or "")
         self.l_address.setText(rec.get("address") or "")
         self.l_area.setText(rec.get("area") or "")
         self.l_souls.setText(str(rec.get("souls") or ""))
@@ -164,9 +221,11 @@ class SearchTab(QWidget):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.hist_table.setItem(r, c, item)
 
-    def _clear(self):
-        for lbl in [self.l_phone1, self.l_phone2, self.l_phone3, self.l_address,
+    def _clear_details(self):
+        for lbl in [self.l_name, self.l_phone1, self.l_phone2, self.l_phone3,
+                    self.l_id, self.l_spouse_id, self.l_address,
                     self.l_area, self.l_souls, self.l_freq, self.l_status,
                     self.l_last, self.l_next, self.l_notes, self.l_count]:
             lbl.setText("")
+        self.hist_table.clearContents()
         self.hist_table.setRowCount(0)

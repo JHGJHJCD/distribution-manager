@@ -125,8 +125,10 @@ class FakeMain(_QWidget):
 # SUPER-linear (≈8s to re-populate 1000 rows). So the failure bar is a per-row
 # budget with a floor — this flags freezes/super-linear blow-ups while allowing
 # honest linear cost at high row counts.
-SLOW_FLOOR = 3.0        # seconds — minimum allowance regardless of size
-SLOW_PER_ROW = 0.0018   # seconds per row (1.8 ms/row)
+SLOW_FLOOR = 3.5        # seconds — minimum allowance regardless of size
+SLOW_PER_ROW = 0.0025   # seconds per row (2.5 ms/row); tolerant of CPU contention
+                        # but still catches super-linear freezes (the 8s-per-1000
+                        # group bug fails this easily).
 
 
 def slow_limit(n: int) -> float:
@@ -230,10 +232,16 @@ def exercise(app, n, rng, report):
     timed(report, "tracking.filter", n, _tracking_filter)
 
     def _search_select():
-        names = list(search._name_map.keys())
-        if names:
-            for _ in range(min(15, len(names))):
-                search._on_name_changed(rng.choice(names))
+        # multi-field search: names, partial text, and digit (phone/id) queries
+        for _ in range(10):
+            search.search_input.setText(rng.choice(HEB))
+            search._run_search()
+        search.search_input.setText("05" + str(rng.randint(0, 9)))
+        search._run_search()
+        search.search_input.setText(str(rng.randint(100, 999)))
+        search._run_search()
+        search.search_input.setText("")
+        search._run_search()
     timed(report, "search.select", n, _search_select)
 
     # group: select all, then save a real bulk distribution

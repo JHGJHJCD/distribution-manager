@@ -247,6 +247,11 @@ class RecipientsTab(QWidget):
                     sv("housing_expenses"), sv("medical_expenses"), sv("income"), sv("per_soul"),
                     sv("work_scope"), sv("parent_type"), sv("occupation"), sv("representative")]
             for c, v in enumerate(vals):
+                # Skip empty cells — most of the 33 admin columns are blank for a
+                # typical recipient, and an empty QTableWidgetItem still costs.
+                # Column 0 always carries the row id, so it is never skipped.
+                if not v and c != 0:
+                    continue
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(_ALIGN)
                 # The row id is only read back from column 0 (see _selected_id),

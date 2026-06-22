@@ -217,6 +217,48 @@ def get_recipient(rec_id: int):
         return dict(row) if row else None
 
 
+# Fields searched as free text, and fields searched as digit-only (phones / IDs).
+_SEARCH_TEXT_FIELDS = [
+    "full_name", "address", "area", "email", "synagogue", "occupation",
+    "representative", "source", "notes", "external_id",
+]
+_SEARCH_DIGIT_FIELDS = [
+    "phone1", "phone2", "phone3", "id_number", "spouse_id_number", "external_id",
+]
+
+
+def _only_digits(val) -> str:
+    return "".join(ch for ch in str(val or "") if ch.isdigit())
+
+
+def filter_recipients(rows: list, query: str, limit: int = 500):
+    """Filter an already-loaded list of recipient dicts across ALL key fields —
+    name, phones, IDs (husband/wife), address, email, etc. A digit query also
+    matches phone / ID numbers ignoring spaces and dashes. Empty query returns
+    everyone. Results sorted by name. Pure (no DB access) so the search tab can
+    cache rows once and filter in-memory on each keystroke."""
+    q = (query or "").strip().lower()
+    if not q:
+        return sorted(rows, key=lambda r: r.get("full_name", ""))[:limit]
+
+    q_digits = _only_digits(q)
+    out = []
+    for r in rows:
+        haystack = " ".join(str(r.get(f, "") or "") for f in _SEARCH_TEXT_FIELDS).lower()
+        matched = q in haystack
+        if not matched and q_digits:
+            digits = " ".join(_only_digits(r.get(f, "")) for f in _SEARCH_DIGIT_FIELDS)
+            matched = q_digits in digits
+        if matched:
+            out.append(r)
+    return sorted(out, key=lambda r: r.get("full_name", ""))[:limit]
+
+
+def search_recipients(query: str, limit: int = 500):
+    """Convenience wrapper — loads all recipients then filters across all fields."""
+    return filter_recipients(get_all_recipients(), query, limit)
+
+
 _RECIPIENT_FIELDS = [
     "full_name", "phone1", "phone2", "phone3", "address", "area",
     "souls", "frequency", "start_date", "last_distribution", "next_distribution",
