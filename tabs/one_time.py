@@ -14,7 +14,20 @@ def _fdate(s: str) -> str:
         return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
     return s or ""
 
-COLS = ["בחר", "שם מלא", "טלפון", "אזור", "נפשות", "חלוקה אחרונה", "ימים מאז"]
+COLS = ["בחר", "עדיפות", "ניקוד", "שם מלא", "טלפון", "אזור", "נפשות", "חלוקה אחרונה", "ימים מאז"]
+
+# Priority code → label shown in the table.
+_PRIORITY_LABEL = {3: "ראשונה", 2: "שנייה"}
+
+
+def _priority_label(rec: dict) -> str:
+    pr = rec.get("priority")
+    if pr in _PRIORITY_LABEL:
+        return _PRIORITY_LABEL[pr]
+    raw = (rec.get("priority_raw") or "").strip()
+    if "בירור" in raw:
+        return "בירור"
+    return "—"
 
 
 class OneTimeTab(QWidget):
@@ -62,9 +75,9 @@ class OneTimeTab(QWidget):
 
         # Legend
         legend = QHBoxLayout()
-        for color, text in [(OVERDUE_FG,   "● מעל 30 יום / לא קיבל"),
-                             (TODAY_FG,    "● 14–30 יום"),
-                             (WEEK_FG,     "● פחות מ-14 יום"),
+        for color, text in [(OVERDUE_FG,   "● עדיפות ראשונה (3)"),
+                             (TODAY_FG,    "● עדיפות שנייה (2)"),
+                             (WEEK_FG,     "● לא בחלוקה (1 / בירור)"),
                              (SELECTED_FG, "● נבחר לחלוקה")]:
             lbl = QLabel(text)
             lbl.setStyleSheet(f"color: {color};")
@@ -81,7 +94,7 @@ class OneTimeTab(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # שם מלא column
         hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._on_check_changed)
@@ -111,24 +124,25 @@ class OneTimeTab(QWidget):
         self.table.clearContents()
         self.table.setRowCount(0)
         self.table.setRowCount(len(self._rows_data))
-        today = date.today()
 
+        selected_so_far = 0
         for r, rec in enumerate(self._rows_data):
-            days_since = rec.get("days_since", 0)
-            selected = (suggested_n >= 0 and r < suggested_n)
-
+            in_dist = rec.get("in_distribution")
+            # auto-select the top `suggested_n` DISTRIBUTION rows (tier 3 then 2,
+            # already ranked by need-score). Never auto-select non-distribution rows.
+            selected = (suggested_n >= 0 and in_dist and selected_so_far < suggested_n)
             if selected:
-                bg = QColor(SELECTED_BG)
-                fg = QColor(SELECTED_FG)
-            elif days_since >= 30:
-                bg = QColor(OVERDUE_BG)
-                fg = QColor(OVERDUE_FG)
-            elif days_since >= 14:
-                bg = QColor(TODAY_BG)
-                fg = QColor(TODAY_FG)
+                selected_so_far += 1
+
+            pr = rec.get("priority")
+            if selected:
+                bg, fg = QColor(SELECTED_BG), QColor(SELECTED_FG)
+            elif pr == 3:
+                bg, fg = QColor(OVERDUE_BG), QColor(OVERDUE_FG)
+            elif pr == 2:
+                bg, fg = QColor(TODAY_BG), QColor(TODAY_FG)
             else:
-                bg = QColor(WEEK_BG)
-                fg = QColor(WEEK_FG)
+                bg, fg = QColor(WEEK_BG), QColor(WEEK_FG)
 
             # Checkbox
             chk = QTableWidgetItem()
@@ -141,8 +155,11 @@ class OneTimeTab(QWidget):
 
             ld_raw = rec.get("last_distribution", "") or ""
             ld_display = (_fdate(ld_raw) if ld_raw else "לא קיבל")
-            days_display = str(days_since) if ld_raw else "—"
-            vals = [rec.get("full_name", ""), rec.get("phone1", ""), rec.get("area", ""),
+            days_display = str(rec.get("days_since", 0)) if ld_raw else "—"
+            score = rec.get("need_score")
+            score_display = f"{score:.0f}" if isinstance(score, (int, float)) else "—"
+            vals = [_priority_label(rec), score_display,
+                    rec.get("full_name", ""), rec.get("phone1", ""), rec.get("area", ""),
                     str(rec.get("souls", "") or ""), ld_display, days_display]
 
             for c, v in enumerate(vals):
@@ -155,7 +172,9 @@ class OneTimeTab(QWidget):
 
         self.table.blockSignals(False)
         self._update_selected_count()
-        self.lbl_stats.setText(f"סה\"כ חד-פעמיים: {len(self._rows_data)}")
+        in_dist_count = sum(1 for x in self._rows_data if x.get("in_distribution"))
+        self.lbl_stats.setText(
+            f"בחלוקה (עדיפות 1+2): {in_dist_count}  |  סה\"כ ברשימה: {len(self._rows_data)}")
 
     def _on_check_changed(self):
         self._update_selected_count()
@@ -173,14 +192,21 @@ class OneTimeTab(QWidget):
             QMessageBox.information(self, "", "הכנס מספר מוצרים זמינים")
             return
         n, regular_count = db.compute_suggested_n(total)
+        in_dist_count = sum(1 for x in self._rows_data if x.get("in_distribution"))
+        picked = min(n, in_dist_count)
         self._populate(suggested_n=n)
-        QMessageBox.information(
-            self, "המלצת מערכת",
+        msg = (
             f"סה\"כ מוצרים: {total}\n"
-            f"קבועים פעילים: {regular_count}\n"
-            f"מוצרים לחד-פעמיים: {n}\n\n"
-            f"סומנו {n} ראשונים לפי עדיפות (מי שקיבל הכי מזמן)"
+            f"קבועים (קוד 4): {regular_count}\n"
+            f"נותר לחד-פעמיים: {n}\n"
+            f"מועמדים בעדיפות (1+2): {in_dist_count}\n\n"
+            f"סומנו {picked} — עדיפות ראשונה (3) קודם, אחר כך שנייה (2),\n"
+            f"ובתוך כל דרגה לפי ניקוד הצורך (גבוה = נזקק יותר)."
         )
+        if n > in_dist_count:
+            msg += (f"\n\n⚠ יש יותר מוצרים ({n}) ממועמדי העדיפות ({in_dist_count}). "
+                    f"את השאר אפשר לסמן ידנית.")
+        QMessageBox.information(self, "המלצת מערכת", msg)
 
     def _add_to_group_update(self):
         selected = []

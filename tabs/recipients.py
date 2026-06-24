@@ -33,11 +33,11 @@ def _fdate(s: str) -> str:
     if s and len(s) >= 10 and s[4] == '-':
         return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
     return s or ""
-from utils.backup import auto_backup_async
+from utils.backup import auto_backup_async, auto_backup
 from utils.excel_utils import import_from_excel
 from utils.ui import busy_cursor
 
-COLS = ["מס'", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3",
+COLS = ["מס'", "שם מלא", "עדיפות", "טלפון 1", "טלפון 2", "טלפון 3",
         "כתובת", "אזור", "נפשות", "תדירות", "חלוקה אחרונה",
         "חלוקה הבאה", "סטטוס", "הערות",
         "מס' מזהה", "מקור", "ת. לידה", "ת. לידה בן/בת זוג",
@@ -47,7 +47,7 @@ COLS = ["מס'", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3",
         "הוצ' דיור", "הוצ' רפואיות", "הכנסות", "פנוי לנפש",
         "היקף משרה", "סוג הורה", "עיסוק בעל", "שם נציג"]
 
-COL_KEYS = ["id", "full_name", "phone1", "phone2", "phone3",
+COL_KEYS = ["id", "full_name", "priority", "phone1", "phone2", "phone3",
             "address", "area", "souls", "frequency", "last_distribution",
             "next_distribution", "status", "notes",
             "external_id", "source", "birth_date", "spouse_birth_date",
@@ -56,6 +56,27 @@ COL_KEYS = ["id", "full_name", "phone1", "phone2", "phone3",
             "marital_status", "email", "synagogue",
             "housing_expenses", "medical_expenses", "income", "per_soul",
             "work_scope", "parent_type", "occupation", "representative"]
+
+# Priority editor options: (display label, priority int | None, priority_raw)
+_PRIORITY_OPTIONS = [
+    ("",                    None, ""),
+    ("4 — קבוע",            4,    "4"),
+    ("3 — עדיפות ראשונה",   3,    "3"),
+    ("2 — עדיפות שנייה",    2,    "2"),
+    ("1",                   1,    "1"),
+    ("0",                   0,    "0"),
+    ("חובת בירור",          None, "חובת בירור"),
+]
+
+
+def _priority_display(rec: dict) -> str:
+    """Short label for the recipients table priority cell."""
+    pr = rec.get("priority")
+    labels = {4: "4 קבוע", 3: "3 ראשונה", 2: "2 שנייה", 1: "1", 0: "0"}
+    if pr in labels:
+        return labels[pr]
+    raw = (rec.get("priority_raw") or "").strip()
+    return "בירור" if "בירור" in raw else ""
 
 
 def _clean_phone(value: str) -> str:
@@ -233,7 +254,7 @@ class RecipientsTab(QWidget):
                       else None)
             sv = lambda key, _r=rec: self._sv(_r, key)
 
-            vals = [str(rec_id or ""), rec.get("full_name", ""),
+            vals = [str(rec_id or ""), rec.get("full_name", ""), _priority_display(rec),
                     rec.get("phone1", ""), rec.get("phone2", ""), rec.get("phone3", ""),
                     rec.get("address", ""), rec.get("area", ""),
                     str(rec.get("souls", "") or ""), rec.get("frequency", ""),
@@ -364,14 +385,44 @@ class RecipientsTab(QWidget):
         self._run_import(str(template_path))
 
     def _run_import(self, path: str):
+        # Choose import mode: full replace vs merge into existing data.
+        choice = QMessageBox.question(
+            self, "אופן ייבוא",
+            "להחליף את כל הנתונים הקיימים, או למזג עם הקיים?\n\n"
+            "• כן  = החלפה מלאה (מוחק הכל ומייבא מחדש)\n"
+            "• לא  = מיזוג (מוסיף חדשים, משלים שדות ריקים בקיימים)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.No,
+        )
+        if choice == QMessageBox.StandardButton.Cancel:
+            return
+        replace = (choice == QMessageBox.StandardButton.Yes)
+        if replace:
+            confirm = QMessageBox.warning(
+                self, "אישור החלפה מלאה",
+                "כל המקבלים הקיימים יימחקו ויוחלפו בתוכן הקובץ.\n"
+                "פעולה בלתי הפיכה — ייווצר גיבוי אוטומטי לפני המחיקה.\n\nלהמשיך?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                return
         try:
             with busy_cursor():
                 rows = import_from_excel(path)
                 report = _import_quality_report(rows)
+                if replace:
+                    # Safety backup BEFORE wiping — abort if it cannot be made.
+                    if auto_backup() is not True:
+                        raise RuntimeError(
+                            "גיבוי הבטיחות נכשל — הייבוא בוטל כדי לא לאבד נתונים.")
+                    db.reset_all_data()
                 added, updated, conflicts = db.import_recipients_from_list(rows)
                 auto_backup_async()
                 self.refresh()
             msg = (
+                f"{'(החלפה מלאה) ' if replace else ''}\n"
                 f"נוספו {added} מקבלים חדשים\n"
                 f"עודכנו {updated} מקבלים קיימים\n"
                 f"נמצאו {len(conflicts)} התנגשויות ייבוא\n\n"
@@ -534,10 +585,17 @@ class RecipientDialog(QDialog):
         # ── Tab 4: מידע מנהלי ───────────────────────────────────────────────
         f4 = _tab("מידע מנהלי")
 
+        self.f_priority = QComboBox()
+        self.f_priority.addItems([o[0] or "—" for o in _PRIORITY_OPTIONS])
+        self.f_priority.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.f_priority.setToolTip("קוד החלוקה: 4 קבוע · 3 עדיפות ראשונה · 2 שנייה · "
+                                   "1/0/חובת בירור = לא בחלוקה")
+
         self.f_external_id  = field("מספר מזהה חיצוני")
         self.f_source       = field("מקור הפנייה")
         self.f_representative = field("שם נציג")
 
+        f4.addRow("עדיפות חלוקה:", self.f_priority)
         f4.addRow("מס' מזהה:", self.f_external_id)
         f4.addRow("מקור:", self.f_source)
         f4.addRow("שם נציג:", self.f_representative)
@@ -580,6 +638,16 @@ class RecipientDialog(QDialog):
             self.f_external_id.setText(rec.get("external_id") or "")
             self.f_source.setText(rec.get("source") or "")
             self.f_representative.setText(rec.get("representative") or "")
+
+            # priority: match by number, else by 'חובת בירור', else blank
+            pr = rec.get("priority")
+            raw = rec.get("priority_raw") or ""
+            p_idx = 0
+            if pr is not None:
+                p_idx = next((i for i, o in enumerate(_PRIORITY_OPTIONS) if o[1] == pr), 0)
+            elif "בירור" in raw:
+                p_idx = next((i for i, o in enumerate(_PRIORITY_OPTIONS) if "בירור" in o[0]), 0)
+            self.f_priority.setCurrentIndex(p_idx)
 
         btns = QHBoxLayout()
         btn_ok = QPushButton("שמור")
@@ -695,5 +763,7 @@ class RecipientDialog(QDialog):
             "external_id":        self.f_external_id.text().strip(),
             "source":             self.f_source.text().strip(),
             "representative":     self.f_representative.text().strip(),
+            "priority":           _PRIORITY_OPTIONS[self.f_priority.currentIndex()][1],
+            "priority_raw":       _PRIORITY_OPTIONS[self.f_priority.currentIndex()][2],
         }
 

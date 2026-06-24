@@ -132,7 +132,9 @@ def init_db():
             work_scope      TEXT DEFAULT '',
             parent_type     TEXT DEFAULT '',
             occupation      TEXT DEFAULT '',
-            representative  TEXT DEFAULT ''
+            representative  TEXT DEFAULT '',
+            priority        INTEGER,
+            priority_raw    TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS distributions (
@@ -191,6 +193,8 @@ def init_db():
             ("parent_type",        "TEXT DEFAULT ''"),
             ("occupation",         "TEXT DEFAULT ''"),
             ("representative",     "TEXT DEFAULT ''"),
+            ("priority",           "INTEGER"),
+            ("priority_raw",       "TEXT DEFAULT ''"),
         ]
         for col, definition in _migrations:
             if col not in columns:
@@ -339,12 +343,22 @@ _RECIPIENT_FIELDS = [
     "marital_status", "email", "synagogue",
     "housing_expenses", "medical_expenses", "income", "per_soul",
     "work_scope", "parent_type", "occupation", "representative",
+    "priority", "priority_raw",
 ]
 
 _INT_FIELDS = {"souls", "children_home", "children_married", "children_total"}
+# Nullable integer fields — '' / None stays NULL instead of being coerced to 0.
+_NULLABLE_INT_FIELDS = {"priority"}
 
 
 def _coerce(field: str, val):
+    if field in _NULLABLE_INT_FIELDS:
+        if val in ("", None):
+            return None
+        try:
+            return int(float(val))
+        except (ValueError, TypeError):
+            return None
     if field in _INT_FIELDS:
         try:
             return int(float(val)) if val not in ("", None) else 0
@@ -466,8 +480,56 @@ def get_weekly_list(days_ahead: int = 30, area_filter: str = "הכל"):
 
 # ------------------------------------------------------------------------------- One-time recipients ──────────────────────────────────────────────────────
 
+# ─── Need-score (priority ranking within a tier) ──────────────────────────────
+# Weights for the need-score (sum ≈ 1.0). Higher score = greater need = served
+# earlier within a priority tier. These are the tuning knobs.
+NEED_W_MONEY = 0.34     # מצוקה כלכלית — based on "פנוי לנפש" (disposable per soul)
+NEED_W_SOULS = 0.33     # גודל משפחה
+NEED_W_RECENCY = 0.33   # ותק — days since last distribution (fairness/rotation)
+
+# Priority codes that participate in the one-time priority distribution. Code 3
+# = first priority, code 2 = second. Everything else (1/0/none/חובת בירור) is
+# kept as data but excluded from the auto-distribution.
+PRIORITY_TIERS = (3, 2)
+
+
+def _norm(v, lo, hi):
+    if hi <= lo:
+        return 0.5
+    x = (v - lo) / (hi - lo)
+    return 0.0 if x < 0 else 1.0 if x > 1 else x
+
+
+def _annotate_need_scores(rows):
+    """Add 'need_score' (0–100) to each row, normalized within `rows`. Missing
+    data → that component is neutral (0.5) so it neither helps nor hurts."""
+    def fnum(v):
+        try:
+            return float(v) if v not in ("", None) else None
+        except (ValueError, TypeError):
+            return None
+
+    ps_vals = [v for v in (fnum(r.get("per_soul")) for r in rows) if v is not None and v > 0]
+    s_vals = [r.get("souls") or 0 for r in rows]
+    d_vals = [r.get("days_since", 0) for r in rows]
+    ps_lo, ps_hi = (min(ps_vals), max(ps_vals)) if ps_vals else (0, 0)
+    s_lo, s_hi = (min(s_vals), max(s_vals)) if s_vals else (0, 0)
+    d_lo, d_hi = (min(d_vals), max(d_vals)) if d_vals else (0, 0)
+
+    for r in rows:
+        ps = fnum(r.get("per_soul"))
+        money = 0.5 if (ps is None or ps <= 0) else (1.0 - _norm(ps, ps_lo, ps_hi))
+        souls = _norm(r.get("souls") or 0, s_lo, s_hi)
+        recency = _norm(r.get("days_since", 0), d_lo, d_hi)
+        r["need_score"] = round(
+            100 * (NEED_W_MONEY * money + NEED_W_SOULS * souls + NEED_W_RECENCY * recency), 1)
+    return rows
+
+
 def get_one_time_list(area_filter: str = "הכל"):
-    """One-time recipients sorted: oldest last_distribution first, tie-break: souls DESC."""
+    """One-time recipients ranked for the priority distribution: priority-3 first
+    then priority-2, each ordered by need-score (desc). Other codes
+    (1/0/none/חובת בירור) are kept visible but listed afterwards, by recency."""
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT * FROM recipients WHERE status='פעיל' AND frequency='חד-פעמי' ORDER BY full_name"
@@ -483,14 +545,25 @@ def get_one_time_list(area_filter: str = "הכל"):
         except ValueError:
             ld = date(2000, 1, 1)
         r["last_dist_date"] = ld
-        days_since = (date.today() - ld).days
-        r["days_since"] = days_since
+        r["days_since"] = (date.today() - ld).days
+        r["in_distribution"] = r.get("priority") in PRIORITY_TIERS
         result.append(r)
-    return sorted(result, key=lambda x: (x["last_dist_date"], -(x.get("souls") or 0)))
+
+    in_dist = [r for r in result if r["in_distribution"]]
+    others = [r for r in result if not r["in_distribution"]]
+    _annotate_need_scores(in_dist)
+    for r in others:
+        r["need_score"] = None
+    # tier always dominates (3 before 2), then need-score desc
+    in_dist.sort(key=lambda x: (-(x.get("priority") or 0), -(x.get("need_score") or 0)))
+    others.sort(key=lambda x: (x["last_dist_date"], -(x.get("souls") or 0)))
+    return in_dist + others
 
 
 def compute_suggested_n(total_products: int) -> tuple[int, int]:
-    """Returns (n_for_one_time, regular_count)."""
+    """Returns (n_for_one_time, regular_count). Regulars (frequency != חד-פעמי,
+    e.g. code-4 קבוע) are served first; the rest of the products go to the
+    one-time priority list."""
     with get_connection() as conn:
         regular_count = conn.execute(
             "SELECT COUNT(*) as c FROM recipients WHERE status='פעיל' AND frequency != 'חד-פעמי'"
@@ -622,7 +695,8 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
                  "children_home", "children_married", "children_total",
                  "marital_status", "email", "synagogue",
                  "housing_expenses", "medical_expenses", "income", "per_soul",
-                 "work_scope", "parent_type", "occupation", "representative"]
+                 "work_scope", "parent_type", "occupation", "representative",
+                 "priority", "priority_raw"]
     phone_fields = ("phone1", "phone2", "phone3")
 
     def _is_empty(val) -> bool:

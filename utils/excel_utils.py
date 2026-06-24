@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from datetime import datetime, date as _date_type
 from pathlib import Path
@@ -137,6 +138,13 @@ def import_from_excel(path: str) -> List[Dict]:
         elif h_s == "שם נציג":
             col_map["representative"] = idx
 
+    # Priority code column — unnamed, sits right before "משפחה". Holds the
+    # distribution code (e.g. 4=קבוע, 3=עדיפות ראשונה, 2=שנייה, חובת בירור...).
+    priority_idx = None
+    _fam_idx = col_map.get("family_name")
+    if _fam_idx is not None and _fam_idx - 1 >= 0 and not str(header[_fam_idx - 1] or "").strip():
+        priority_idx = _fam_idx - 1
+
     results = []
     for row in rows[header_row_idx + 1:]:
         if not any(row):
@@ -178,6 +186,26 @@ def import_from_excel(path: str) -> List[Dict]:
         children_home = _int_cell("children_home")
         souls = children_home + 2
 
+        # Priority code → priority number + frequency.
+        # 4 = קבוע → weekly regular flow; 3/2/1/0 = one-time (priority tiers);
+        # 'חובת בירור' (no digit) = one-time, kept as data only. The V/X letters
+        # are ignored — only the number matters.
+        priority = None
+        priority_raw = ""
+        if priority_idx is not None and priority_idx < len(row):
+            rawv = row[priority_idx]
+            if rawv is not None:
+                priority_raw = str(rawv).strip()
+                m = re.search(r"\d+", priority_raw)
+                if m:
+                    priority = int(m.group())
+        if priority == 4:
+            frequency = "שבועי"
+        elif priority is not None or priority_raw:
+            frequency = "חד-פעמי"
+        else:
+            frequency = cell("frequency")
+
         results.append({
             "full_name":         name,
             "phone1":            _normalize_phone(cell("phone1")),
@@ -186,7 +214,9 @@ def import_from_excel(path: str) -> List[Dict]:
             "address":           address,
             "area":              cell("area"),
             "souls":             souls,
-            "frequency":         cell("frequency"),
+            "frequency":         frequency,
+            "priority":          priority,
+            "priority_raw":      priority_raw,
             "status":            cell("status") or "פעיל",
             "last_distribution": _parse_date(raw_cell("last_distribution")),
             "next_distribution": _parse_date(raw_cell("next_distribution")),
