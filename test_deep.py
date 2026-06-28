@@ -416,7 +416,9 @@ print("\n=== N: משקלי ניקוד מתכווננים ===")
 db.set_need_weights(db.DEFAULT_NEED_WEIGHTS)
 _wd = db.get_need_weights()
 check("default weights: money=34", _wd["money"] == 34.0, f"got {_wd['money']}")
-check("default weights: new fields 0", _wd["income"] == 0 and _wd["children"] == 0)
+check("default weights: financial fields 0", _wd["income"] == 0 and _wd["medical"] == 0)
+check("default weights sum to 100", abs(sum(_wd.values()) - 100) < 0.01, f"sum={sum(_wd.values())}")
+check("no separate children factor (avoids double-count with souls)", "children" not in _wd)
 check("money parser '5,000 ₪' → 5000", db._need_num("5,000 ₪", "money") == 5000.0)
 db.set_need_weights({"income": -3})
 check("negative weight clamped to 0", db.get_need_weights()["income"] == 0.0)
@@ -428,10 +430,10 @@ db.add_recipient({"full_name": "גדולה", "frequency": "חד-פעמי", "stat
 db.add_recipient({"full_name": "עניה", "frequency": "חד-פעמי", "status": "פעיל",
                   "priority": 3, "souls": 3, "income": "1000"})
 db.set_need_weights({"souls": 100, "money": 0, "recency": 0,
-                     "income": 0, "housing": 0, "medical": 0, "children": 0})
+                     "income": 0, "housing": 0, "medical": 0})
 check("souls-weighted → big family first", db.get_one_time_list()[0]["full_name"] == "גדולה")
 db.set_need_weights({"income": 100, "souls": 0, "money": 0,
-                     "recency": 0, "housing": 0, "medical": 0, "children": 0})
+                     "recency": 0, "housing": 0, "medical": 0})
 check("income-weighted → low income first", db.get_one_time_list()[0]["full_name"] == "עניה")
 db.set_need_weights(db.DEFAULT_NEED_WEIGHTS)   # restore default
 

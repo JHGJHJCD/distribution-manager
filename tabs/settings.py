@@ -138,8 +138,8 @@ class SettingsTab(QWidget):
 
         w_desc = QLabel(
             "קביעת המשקל של כל נתון בחישוב 'ניקוד הצורך' שלפיו מדורגים המקבלים "
-            "בלשונית \"חד פעמי\". המשקלים יחסיים ומנורמלים אוטומטית — "
-            "0 = להתעלם מהנתון.")
+            "בלשונית \"חד פעמי\". המשקלים הם אחוזים שמסתכמים תמיד ל-100% — "
+            "הגדלת אחד מקטינה אוטומטית את האחרים. 0% = להתעלם מהנתון.")
         w_desc.setObjectName("subtitle")
         w_desc.setWordWrap(True)
         w_lay.addWidget(w_desc)
@@ -147,12 +147,14 @@ class SettingsTab(QWidget):
         w_form = QFormLayout()
         w_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         w_form.setSpacing(8)
+        self._balancing = False
         self._weight_spins = {}
         for f in db.NEED_FACTORS:
             spin = QSpinBox()
             spin.setRange(0, 100)
+            spin.setSuffix("%")
             spin.setFixedWidth(90)
-            spin.valueChanged.connect(self._update_weight_preview)
+            spin.valueChanged.connect(lambda _v, k=f["key"]: self._rebalance(k))
             self._weight_spins[f["key"]] = spin
             w_form.addRow(f["label"] + ":", spin)
         w_lay.addLayout(w_form)
@@ -316,26 +318,70 @@ class SettingsTab(QWidget):
 
     # ── Need-score weights ────────────────────────────────────────────────────
 
+    @staticmethod
+    def _even_split(total: int, keys: list) -> dict:
+        base, rem = divmod(total, len(keys))
+        return {k: base + (1 if i < rem else 0) for i, k in enumerate(keys)}
+
+    @staticmethod
+    def _scale_to_100(vals: dict) -> dict:
+        keys = list(vals)
+        s = sum(vals.values())
+        if s <= 0:
+            return SettingsTab._even_split(100, keys)
+        raw = {k: 100 * vals[k] / s for k in keys}
+        out = {k: int(raw[k]) for k in keys}
+        rem = 100 - sum(out.values())
+        for k in sorted(keys, key=lambda k: raw[k] - out[k], reverse=True)[:rem]:
+            out[k] += 1
+        return out
+
     def _load_weights(self):
         weights = db.get_need_weights()
-        for key, spin in self._weight_spins.items():
-            spin.blockSignals(True)
-            spin.setValue(int(round(weights.get(key, 0))))
-            spin.blockSignals(False)
-        self._update_weight_preview()
+        keys = [f["key"] for f in db.NEED_FACTORS]
+        self._balancing = True
+        try:
+            vals = self._scale_to_100({k: weights.get(k, 0) for k in keys})
+            for k in keys:
+                self._weight_spins[k].setValue(vals[k])
+        finally:
+            self._balancing = False
+        self._update_weight_total()
 
-    def _update_weight_preview(self):
-        vals = {k: s.value() for k, s in self._weight_spins.items()}
-        total = sum(vals.values())
-        if total <= 0:
-            self.lbl_weight_preview.setText("⚠ כל המשקלים 0 — המערכת תשתמש בברירת המחדל.")
-            self.lbl_weight_preview.setStyleSheet("color:#b45309;")
+    def _rebalance(self, changed: str):
+        """Keep the weights summing to 100%: when one changes, distribute the
+        remaining budget across the others in proportion to their current values
+        (so raising one lowers the rest, which is what users expect)."""
+        if self._balancing:
             return
-        labels = {f["key"]: f["label"] for f in db.NEED_FACTORS}
-        parts = [f"{labels[f['key']]} {round(100 * vals[f['key']] / total)}%"
-                 for f in db.NEED_FACTORS if vals[f["key"]] > 0]
-        self.lbl_weight_preview.setText("משקל אפקטיבי:  " + "  ·  ".join(parts))
-        self.lbl_weight_preview.setStyleSheet("color:#16a34a;")
+        self._balancing = True
+        try:
+            keys = [f["key"] for f in db.NEED_FACTORS]
+            v = self._weight_spins[changed].value()
+            others = [k for k in keys if k != changed]
+            budget = 100 - v
+            osum = sum(self._weight_spins[o].value() for o in others)
+            if budget <= 0:
+                newvals = {o: 0 for o in others}
+            elif osum <= 0:
+                newvals = self._even_split(budget, others)
+            else:
+                raw = {o: budget * self._weight_spins[o].value() / osum for o in others}
+                newvals = {o: int(raw[o]) for o in others}
+                rem = budget - sum(newvals.values())
+                for o in sorted(others, key=lambda o: raw[o] - newvals[o], reverse=True)[:rem]:
+                    newvals[o] += 1
+            for o in others:
+                self._weight_spins[o].setValue(newvals[o])
+        finally:
+            self._balancing = False
+        self._update_weight_total()
+
+    def _update_weight_total(self):
+        total = sum(s.value() for s in self._weight_spins.values())
+        self.lbl_weight_preview.setText(f"סה\"כ: {total}%")
+        self.lbl_weight_preview.setStyleSheet(
+            "color:#16a34a;" if total == 100 else "color:#b45309;")
 
     def _save_weights(self):
         db.set_need_weights({k: s.value() for k, s in self._weight_spins.items()})

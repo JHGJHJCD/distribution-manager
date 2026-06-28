@@ -556,15 +556,16 @@ NEED_FACTORS = [
     {"key": "income",   "label": "הכנסות נמוכות",             "field": "income",           "dir": "low",  "kind": "money"},
     {"key": "housing",  "label": "הוצאות דיור",               "field": "housing_expenses", "dir": "high", "kind": "money"},
     {"key": "medical",  "label": "הוצאות רפואיות",            "field": "medical_expenses", "dir": "high", "kind": "money"},
-    {"key": "children", "label": "מספר ילדים",               "field": "children_total",   "dir": "high", "kind": "int"},
 ]
+# NOTE: "מספר ילדים" was intentionally NOT made a separate factor — household
+# size is already captured by נפשות (souls), so weighting both double-counts it.
 
-# Default weights (relative). The original three factors keep their historical
-# balance; the newly added factors default to 0 so existing rankings are
-# unchanged until the user gives them weight in the Settings tab.
+# Default weights (percent, sum = 100). The original three factors keep their
+# historical balance; the added financial factors default to 0 so existing
+# rankings are unchanged until the user gives them weight in the Settings tab.
 DEFAULT_NEED_WEIGHTS = {
     "money": 34.0, "souls": 33.0, "recency": 33.0,
-    "income": 0.0, "housing": 0.0, "medical": 0.0, "children": 0.0,
+    "income": 0.0, "housing": 0.0, "medical": 0.0,
 }
 
 # Priority codes that participate in the one-time priority distribution. Code 3
