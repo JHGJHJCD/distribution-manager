@@ -159,14 +159,9 @@ class RecipientsTab(QWidget):
 
         btn_import = QPushButton("יבוא מ-Excel")
         btn_import.setObjectName("neutral")
+        btn_import.setToolTip("ייבוא מקובץ Excel (פורמט תבנית ליהודה)")
         btn_import.clicked.connect(self._import_excel)
         top.addWidget(btn_import)
-
-        btn_import_template = QPushButton("יבוא מתבנית ליהודה")
-        btn_import_template.setObjectName("neutral")
-        btn_import_template.setToolTip(r"ייבוא מהקובץ: C:\Users\יהודה\Downloads\תבנית ליהודה.xlsx")
-        btn_import_template.clicked.connect(self._import_from_template)
-        top.addWidget(btn_import_template)
 
         lay.addLayout(top)
 
@@ -375,15 +370,6 @@ class RecipientsTab(QWidget):
             return
         self._run_import(path)
 
-    def _import_from_template(self):
-        template_path = Path.home() / "Downloads" / "תבנית ליהודה.xlsx"
-        if not template_path.exists():
-            QMessageBox.warning(self, "קובץ לא נמצא",
-                                f"לא נמצא הקובץ:\n{template_path}\n\n"
-                                "ודא שהקובץ 'תבנית ליהודה.xlsx' נמצא בתיקיית ההורדות.")
-            return
-        self._run_import(str(template_path))
-
     def _run_import(self, path: str):
         # Choose import mode: full replace vs merge into existing data.
         choice = QMessageBox.question(
@@ -418,20 +404,25 @@ class RecipientsTab(QWidget):
                         raise RuntimeError(
                             "גיבוי הבטיחות נכשל — הייבוא בוטל כדי לא לאבד נתונים.")
                     db.reset_all_data()
-                added, updated, conflicts = db.import_recipients_from_list(rows)
+                    # Insert everything (keep duplicates for the review tab).
+                    added = db.bulk_insert_recipients(rows)
+                    updated, conflicts = 0, []
+                else:
+                    added, updated, conflicts = db.import_recipients_from_list(rows)
                 auto_backup_async()
                 self.refresh()
-            msg = (
-                f"{'(החלפה מלאה) ' if replace else ''}\n"
-                f"נוספו {added} מקבלים חדשים\n"
-                f"עודכנו {updated} מקבלים קיימים\n"
-                f"נמצאו {len(conflicts)} התנגשויות ייבוא\n\n"
-                f"בדיקת איכות קובץ:\n"
-                f"• חסרי טלפון: {report['missing_phone']}\n"
-                f"• חסרי תדירות: {report['missing_frequency']}\n"
-                f"• טלפון חשוד: {report['suspicious_phone']}\n"
-                f"• שמות כפולים: {len(report['duplicate_names'])}"
-            )
+            dup = len(report["duplicate_names"])
+            msg = f"{'(החלפה מלאה) ' if replace else ''}\nנוספו {added} מקבלים חדשים\n"
+            if not replace:
+                msg += (f"עודכנו {updated} מקבלים קיימים\n"
+                        f"נמצאו {len(conflicts)} התנגשויות ייבוא\n")
+            msg += (f"\nבדיקת איכות קובץ:\n"
+                    f"• חסרי טלפון: {report['missing_phone']}\n"
+                    f"• חסרי תדירות: {report['missing_frequency']}\n"
+                    f"• טלפון חשוד: {report['suspicious_phone']}\n"
+                    f"• שמות כפולים בקובץ: {dup}")
+            if replace and dup:
+                msg += "\n\nℹ הכפילויות נשמרו — בדוק ונקה אותן בלשונית 'בדיקת נתונים'."
             QMessageBox.information(self, "ייבוא הושלם", msg)
             if conflicts:
                 conflict_preview = "\n\n".join(_format_conflict(c) for c in conflicts[:10])
@@ -439,7 +430,8 @@ class RecipientsTab(QWidget):
                     conflict_preview += f"\n\nועוד {len(conflicts) - 10} התנגשויות..."
                 QMessageBox.warning(self, "התנגשויות ייבוא", conflict_preview)
             if self.main_win:
-                self.main_win.status_msg(f"ייבוא הושלם: {added} חדשים, {updated} עודכנו")
+                self.main_win.status_msg(f"ייבוא הושלם: {added} נוספו")
+                self.main_win.refresh_all()
         except Exception as e:
             QMessageBox.critical(self, "שגיאה ביבוא", str(e))
 

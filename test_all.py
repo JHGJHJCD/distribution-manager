@@ -75,7 +75,7 @@ check("DB path is temp file", Path(db.DB_PATH).name != "data.db")
 # רובד 4 — הגדרות (settings CRUD)
 # ══════════════════════════════════════════════════════════════════════════════
 print("\n=== רובד 4: הגדרות ===")
-check("default password = 1234", db.get_setting("password") == "1234")
+check("default password = 1234 (hashed)", db.verify_password("1234"))
 db.set_setting("__test_key__", "hello123")
 check("set/get setting", db.get_setting("__test_key__") == "hello123")
 db.set_setting("__test_key__", "updated")
@@ -228,25 +228,31 @@ check("non-digit → unchanged",      _normalize_phone("abc") == "abc")
 # רובד 12 — ייבוא מ-Excel (גיליון + כותרת + תאריכים + טלפונים)
 # ══════════════════════════════════════════════════════════════════════════════
 print("\n=== רובד 12: ייבוא מ-Excel ===")
-_xlsx = os.path.join(os.path.dirname(__file__), "..", "מערכת חלוקה.xlsx")
-_excel_rows = []
-if os.path.exists(_xlsx):
-    _excel_rows = import_from_excel(_xlsx)
-    check("Excel rows > 0", len(_excel_rows) > 0, f"({len(_excel_rows)} שורות)")
-    if _excel_rows:
-        r0 = _excel_rows[0]
-        check("full_name exists", bool(r0.get("full_name")))
-        check("status exists",    bool(r0.get("status")))
-        # כל מספר בן 9 ספרות שמתחיל ב-5 חייב להיות מנורמל
-        bad_phones = [
-            r.get("phone1","") for r in _excel_rows
-            if r.get("phone1","").isdigit()
-            and len(r.get("phone1","")) == 9
-            and r.get("phone1","").startswith("5")
-        ]
-        check("phones normalized", len(bad_phones) == 0, f"({len(bad_phones)} לא תוקנו)")
-else:
-    print("  ⚠ קובץ Excel לא נמצא — דילוג על רובד 12")
+# בונים קובץ תבנית-ליהודה עצמאי כדי שהבדיקה תהיה דטרמיניסטית ולא תלויה בקובץ חיצוני.
+# העמודה הריקה משמאל ל'משפחה' היא קוד העדיפות; נייד בן 9 ספרות שמתחיל ב-5 חייב להתנרמל.
+import openpyxl as _opx
+_tmpl_fd, _tmpl_xlsx = tempfile.mkstemp(suffix=".xlsx"); os.close(_tmpl_fd)
+_wb_t = _opx.Workbook(); _ws_t = _wb_t.active
+_ws_t.append(["", "משפחה", "פרטי", "נייד בעל", "נייד אשה", "קהילה"])
+_ws_t.append([3, "כהן", "ראובן", "527146566", "", "בעלז"])    # 9 ספרות 5XX → 0527146566
+_ws_t.append([4, "לוי", "שמעון", "0531234567", "", "נתיב"])
+_wb_t.save(_tmpl_xlsx)
+_excel_rows = import_from_excel(_tmpl_xlsx)
+check("Excel rows > 0", len(_excel_rows) > 0, f"({len(_excel_rows)} שורות)")
+if _excel_rows:
+    r0 = _excel_rows[0]
+    check("full_name exists", bool(r0.get("full_name")))
+    check("status exists",    bool(r0.get("status")))
+    # כל מספר בן 9 ספרות שמתחיל ב-5 חייב להיות מנורמל
+    bad_phones = [
+        r.get("phone1","") for r in _excel_rows
+        if r.get("phone1","").isdigit()
+        and len(r.get("phone1","")) == 9
+        and r.get("phone1","").startswith("5")
+    ]
+    check("phones normalized", len(bad_phones) == 0, f"({len(bad_phones)} לא תוקנו)")
+try: os.unlink(_tmpl_xlsx)
+except OSError: pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -385,9 +391,10 @@ check("חד-פעמי next_distribution = ''", rec_ot["next_distribution"] in (No
 # רובד 19 — auto_backup (None/True/False)
 # ══════════════════════════════════════════════════════════════════════════════
 print("\n=== רובד 19: auto_backup ===")
+# התנהגות נוכחית: ללא תיקייה מוגדרת — מגבה לתיקיית ברירת המחדל (%APPDATA%) ומחזיר True.
 db.set_setting("backup_folder", "")
 result_no_folder = auto_backup()
-check("no folder → None", result_no_folder is None)
+check("no folder → True (default dir)", result_no_folder is True)
 
 _bk_dir = tempfile.mkdtemp()
 try:
@@ -398,9 +405,10 @@ try:
     bk_files = [f for f in os.listdir(_bk_dir) if f.startswith("backup_") and f.endswith(".db")]
     check("backup file created in folder", len(bk_files) > 0)
 
+    # תיקייה לא-קיימת — נופלת חזרה לתיקיית ברירת המחדל ולא נכשלת.
     db.set_setting("backup_folder", r"Z:\nonexistent_path_xyz")
     result_bad = auto_backup()
-    check("bad folder → None or False", result_bad in (None, False))
+    check("bad folder → True (falls back to default)", result_bad is True)
 finally:
     db.set_setting("backup_folder", "")
     shutil.rmtree(_bk_dir, ignore_errors=True)
@@ -442,7 +450,7 @@ from main import MainWindow
 _win = MainWindow()
 _win.show()
 
-check("7 tabs", _win.tabs.count() == 7)
+check("8 tabs", _win.tabs.count() == 8)
 check("_extra_ids is set", isinstance(_win.group_tab._extra_ids, set))
 check("settings tab available", hasattr(_win, "settings_tab"))
 
@@ -466,7 +474,7 @@ check("summary has all keys", all(k in _stats for k in
     ["active", "overdue", "total_souls", "dists_month", "dists_total", "suspended", "by_freq", "by_area"]))
 
 _win.search_tab.refresh()
-check("search shows all recipients", len(_win.search_tab._name_map) == len(db.get_all_recipients()))
+check("search shows all recipients", len(_win.search_tab._all_rows) == len(db.get_all_recipients()))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

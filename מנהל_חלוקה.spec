@@ -41,6 +41,7 @@ a = Analysis(
         'tabs.one_time',
         'tabs.tracking',
         'tabs.search',
+        'tabs.review',
         'tabs.settings',
         'tabs.summary',
         'utils.excel_utils',

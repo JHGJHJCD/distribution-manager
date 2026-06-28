@@ -17,4 +17,6 @@ backups/
 crash_log.txt
 
 # Preview/scratch
-search_preview.png
+*_preview.png
+screenshots_test/
+_shot_review.py

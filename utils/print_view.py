@@ -1,8 +1,15 @@
+import html
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 from PyQt6.QtGui import QTextDocument
 from datetime import date
 from typing import List, Dict
+
+
+def _esc(v) -> str:
+    """HTML-escape any cell value so '&', '<', '>' in names/data don't break the
+    printed table markup."""
+    return html.escape(str(v if v is not None else ""))
 
 
 def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWidget = None):
@@ -36,17 +43,17 @@ def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWid
         rows_html += (
             f"<tr>"
             f"<td>{i}</td>"
-            f"<td><b>{rec.get('full_name', '')}</b></td>"
-            f"<td>{phones}</td>"
-            f"<td>{rec.get('area', '')}</td>"
-            f"<td>{rec.get('souls', '')}</td>"
+            f"<td><b>{_esc(rec.get('full_name', ''))}</b></td>"
+            f"<td>{_esc(phones)}</td>"
+            f"<td>{_esc(rec.get('area', ''))}</td>"
+            f"<td>{_esc(rec.get('souls', ''))}</td>"
             f"<td style='width:60px;'>&nbsp;</td>"
             f"</tr>"
         )
 
     html = f"""
     <html><body>
-    <h2>רשימת חלוקה — {dist_date}</h2>
+    <h2>רשימת חלוקה — {_esc(dist_date)}</h2>
     <table>
         <thead>
             <tr>

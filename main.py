@@ -23,6 +23,7 @@ from tabs.weekly import WeeklyTab
 from tabs.one_time import OneTimeTab
 from tabs.tracking import TrackingTab
 from tabs.search import SearchTab
+from tabs.review import ReviewTab
 from tabs.settings import SettingsTab
 
 from version import APP_VERSION
@@ -227,6 +228,7 @@ class MainWindow(QMainWindow):
         self.one_time_tab   = OneTimeTab(self)
         self.tracking_tab   = TrackingTab(self)
         self.search_tab     = SearchTab(self)
+        self.review_tab     = ReviewTab(self)
         self.settings_tab   = SettingsTab(self)
 
         self.tabs.addTab(self.group_tab,      "עדכון קבוצתי")
@@ -235,6 +237,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.one_time_tab,   "חד פעמי")
         self.tabs.addTab(self.tracking_tab,   "מעקב חלוקות")
         self.tabs.addTab(self.search_tab,     "חיפוש מהיר")
+        self.tabs.addTab(self.review_tab,     "בדיקת נתונים")
         self.tabs.addTab(self.settings_tab,   "הגדרות")
 
         # Tab 0 (group_update) loaded in __init__; others lazy-load on first click

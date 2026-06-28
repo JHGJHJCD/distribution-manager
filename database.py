@@ -333,6 +333,64 @@ def search_recipients(query: str, limit: int = 500):
     return filter_recipients(get_all_recipients(), query, limit)
 
 
+def find_duplicate_groups():
+    """Find data-quality issues for the review tab: recipients that share a
+    full name, and phone numbers shared across different recipients.
+    Returns a list of {'type', 'key', 'members': [recipient dicts]} groups."""
+    recs = get_all_recipients()
+    groups = []
+
+    # ── duplicate full names ──────────────────────────────────────────────────
+    by_name = {}
+    for r in recs:
+        nm = (r.get("full_name") or "").strip()
+        if nm:
+            by_name.setdefault(nm, []).append(r)
+    for nm, members in by_name.items():
+        if len(members) > 1:
+            groups.append({"type": "שם כפול", "key": nm, "members": members})
+
+    # ── phone numbers shared by more than one recipient ───────────────────────
+    by_phone = {}
+    for r in recs:
+        seen = set()
+        for f in ("phone1", "phone2", "phone3"):
+            p = _only_digits(r.get(f))
+            if len(p) >= 9 and p not in seen:
+                seen.add(p)
+                by_phone.setdefault(p, []).append(r)
+    for phone, members in by_phone.items():
+        uniq = list({m["id"]: m for m in members}.values())
+        if len(uniq) > 1:
+            groups.append({"type": "טלפון משותף", "key": phone, "members": uniq})
+
+    # names first, then phones; each group's members kept together
+    groups.sort(key=lambda g: (g["type"] != "שם כפול", g["key"]))
+    return groups
+
+
+def bulk_insert_recipients(rows: list) -> int:
+    """Insert every row with a valid name as a NEW record (no dedup/merge) —
+    used by 'replace' import so duplicates are preserved for review instead of
+    being silently dropped. Returns the number inserted."""
+    cols = _RECIPIENT_FIELDS
+    sql = f"INSERT INTO recipients ({','.join(cols)}) VALUES ({','.join(['?'] * len(cols))})"
+    i_name, i_status = cols.index("full_name"), cols.index("status")
+    count = 0
+    with get_connection() as conn:
+        for row in rows:
+            name = (row.get("full_name") or "").strip()
+            if not name or name in ("None", "0"):
+                continue
+            vals = [_coerce(c, row.get(c, "")) for c in cols]
+            vals[i_name] = name
+            if not vals[i_status]:
+                vals[i_status] = "פעיל"
+            conn.execute(sql, vals)
+            count += 1
+    return count
+
+
 _RECIPIENT_FIELDS = [
     "full_name", "phone1", "phone2", "phone3", "address", "area",
     "souls", "frequency", "start_date", "last_distribution", "next_distribution",

@@ -310,9 +310,8 @@ val = conn_new.execute("SELECT value FROM settings WHERE key='test_persist'").fe
 conn_new.close()
 check("setting persists in new connection", val and val["value"] == "ערך_לשמירה")
 
-# הגדרת סיסמא ברירת מחדל קיימת
-pwd = db.get_setting("password")
-check("default password = 1234 persists", pwd == "1234")
+# הגדרת סיסמא ברירת מחדל קיימת (מאוחסנת כ-hash PBKDF2, מאומתת דרך verify_password)
+check("default password = 1234 persists", db.verify_password("1234"))
 
 
 # ══════════════════════════════════════════════════
