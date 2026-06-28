@@ -35,7 +35,7 @@ def _fdate(s: str) -> str:
     return s or ""
 from utils.backup import auto_backup_async, auto_backup
 from utils.excel_utils import import_from_excel
-from utils.ui import busy_cursor
+from utils.ui import busy_cursor, attach_empty_state, refresh_empty_state
 
 COLS = ["מס'", "שם מלא", "עדיפות", "טלפון 1", "טלפון 2", "טלפון 3",
         "כתובת", "אזור", "נפשות", "תדירות", "חלוקה אחרונה",
@@ -154,6 +154,7 @@ class RecipientsTab(QWidget):
         top.addWidget(self.status_filter)
 
         btn_add = QPushButton("+ הוסף מקבל")
+        btn_add.setObjectName("primary")
         btn_add.clicked.connect(self._add)
         top.addWidget(btn_add)
 
@@ -189,6 +190,7 @@ class RecipientsTab(QWidget):
         hdr.setResizeContentsPrecision(20)
         self.table.verticalHeader().setVisible(False)
         lay.addWidget(self.table)
+        attach_empty_state(self.table, "אין מקבלים להצגה")
 
         # Bottom buttons
         bot = QHBoxLayout()
@@ -281,6 +283,7 @@ class RecipientsTab(QWidget):
                 self.table.setItem(r, c, item)
         self.table.blockSignals(False)
         self.count_lbl.setText(f"סה\"כ: {len(rows)} מקבלים")
+        refresh_empty_state(self.table)
 
     def _apply_filter(self):
         text = self.search_input.text().strip().lower()
@@ -643,6 +646,7 @@ class RecipientDialog(QDialog):
 
         btns = QHBoxLayout()
         btn_ok = QPushButton("שמור")
+        btn_ok.setObjectName("primary")
         btn_ok.clicked.connect(self._validate_and_accept)
         btn_cancel = QPushButton("ביטול")
         btn_cancel.setObjectName("neutral")

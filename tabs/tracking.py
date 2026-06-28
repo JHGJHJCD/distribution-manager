@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer
 import database as db
+from utils.ui import attach_empty_state, refresh_empty_state
 
 def _fdate(s: str) -> str:
     if s and len(s) >= 10 and s[4] == '-':
@@ -60,6 +61,7 @@ class TrackingTab(QWidget):
         hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
         lay.addWidget(self.table)
+        attach_empty_state(self.table, "אין עדיין חלוקות רשומות")
 
         # Change log section
         log_title = QLabel("היסטוריית שינויי סטטוס")
@@ -104,6 +106,7 @@ class TrackingTab(QWidget):
                 self.table.setItem(r, c, item)
         self.table.blockSignals(False)
         self.count_lbl.setText(f"סה\"כ רשומות: {len(rows)}")
+        refresh_empty_state(self.table)
 
     def _apply_filter(self):
         text = self.search.text().strip().lower()

@@ -7,13 +7,23 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QFontDatabase
 
 import database as db
 from styles import EXTRA_QSS, QT_MATERIAL_EXTRA
 
 app = QApplication(sys.argv)
 app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+
+# load bundled Rubik so screenshots match the real app
+_family = "Segoe UI"
+_fonts = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+if os.path.isdir(_fonts):
+    for _fn in os.listdir(_fonts):
+        if _fn.lower().endswith((".ttf", ".otf")):
+            _fid = QFontDatabase.addApplicationFont(os.path.join(_fonts, _fn))
+            if "Rubik" in (QFontDatabase.applicationFontFamilies(_fid) if _fid != -1 else []):
+                _family = "Rubik"
 
 try:
     from qt_material import apply_stylesheet
@@ -22,7 +32,7 @@ try:
 except ImportError:
     app.setStyleSheet(EXTRA_QSS)
 
-app.setFont(QFont("Segoe UI", 10))
+app.setFont(QFont(_family, 11))
 db.init_db()
 
 from main import MainWindow

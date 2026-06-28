@@ -7,6 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from datetime import date
 import database as db
+from utils.ui import attach_empty_state, refresh_empty_state
 from styles import OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG, SELECTED_BG, SELECTED_FG
 
 def _fdate(s: str) -> str:
@@ -102,6 +103,7 @@ class OneTimeTab(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._on_check_changed)
         lay.addWidget(self.table)
+        attach_empty_state(self.table, "אין חד-פעמיים פעילים להצגה")
 
         # Bottom
         bot = QHBoxLayout()
@@ -110,7 +112,7 @@ class OneTimeTab(QWidget):
         bot.addStretch()
 
         btn_add = QPushButton("הוסף נבחרים לעדכון קבוצתי")
-        btn_add.setObjectName("success")
+        btn_add.setObjectName("primary")
         btn_add.setMinimumHeight(36)
         btn_add.clicked.connect(self._add_to_group_update)
         bot.addWidget(btn_add)
@@ -174,6 +176,7 @@ class OneTimeTab(QWidget):
                 self.table.setItem(r, c + 1, item)
 
         self.table.blockSignals(False)
+        refresh_empty_state(self.table)
         self._update_selected_count()
         in_dist_count = sum(1 for x in self._rows_data if x.get("in_distribution"))
         self.lbl_stats.setText(

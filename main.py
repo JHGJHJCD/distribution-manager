@@ -24,15 +24,33 @@ from tabs.one_time import OneTimeTab
 from tabs.tracking import TrackingTab
 from tabs.search import SearchTab
 from tabs.review import ReviewTab
-from tabs.settings import SettingsTab
+from tabs.settings import SettingsTab, _UpdateWorker
 
 from version import APP_VERSION
+from utils import updater
 
 
 def resource_path(relative: str) -> str:
     """Resolve path for both dev mode and frozen EXE."""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, relative)
+
+
+def _load_app_fonts() -> str:
+    """Register bundled fonts (fonts/*.ttf) so the UI uses a proper Hebrew
+    typeface. Returns the primary family ('Rubik') if available, else 'Segoe UI'
+    so the app still looks fine if the font is missing."""
+    from PyQt6.QtGui import QFontDatabase
+    fonts_dir = resource_path("fonts")
+    primary = "Segoe UI"
+    if os.path.isdir(fonts_dir):
+        for fn in os.listdir(fonts_dir):
+            if fn.lower().endswith((".ttf", ".otf")):
+                fid = QFontDatabase.addApplicationFont(os.path.join(fonts_dir, fn))
+                fams = QFontDatabase.applicationFontFamilies(fid) if fid != -1 else []
+                if "Rubik" in fams:
+                    primary = "Rubik"
+    return primary
 
 
 # ─── Splash screen ───────────────────────────────────────────────────────────
@@ -277,6 +295,39 @@ class MainWindow(QMainWindow):
     def status_msg(self, msg: str):
         self.statusBar().showMessage(msg, 4000)
 
+    # ── Automatic update check on startup ─────────────────────────────────────
+    def _auto_check_updates(self):
+        """Silently check GitHub for a newer version on startup. If one exists,
+        offer a one-click install. No-op when running from source (can't self-
+        replace a script) and silent on any network failure."""
+        if not updater.current_exe():
+            return
+        self._auto_worker = _UpdateWorker("check")
+        self._auto_worker.checked.connect(self._on_auto_update_checked)
+        self._auto_worker.start()
+
+    def _on_auto_update_checked(self, result):
+        # Background check — stay quiet on errors / no newer version.
+        if isinstance(result, Exception) or not result or not result.get("url"):
+            return
+        if not updater.is_newer(result["version"], APP_VERSION):
+            return
+        notes = (result.get("notes") or "").strip()
+        if len(notes) > 300:
+            notes = notes[:300] + "..."
+        ask = QMessageBox.question(
+            self, "עדכון זמין",
+            f"גרסה חדשה זמינה: v{result['version']}\n"
+            f"הגרסה שלך: v{APP_VERSION}\n\n"
+            + (notes + "\n\n" if notes else "")
+            + "להוריד ולהתקין עכשיו?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ask == QMessageBox.StandardButton.Yes:
+            # Reuse the Settings tab's full download → install → restart flow.
+            self.settings_tab._start_download(result)
+
     def change_password(self):
         from PyQt6.QtWidgets import QInputDialog
         old, ok = QInputDialog.getText(
@@ -385,10 +436,11 @@ def _run():
     if os.path.exists(_ico):
         app.setWindowIcon(QIcon(_ico))
 
+    # Register bundled fonts BEFORE the theme so qt-material's "Rubik" request resolves.
+    family = _load_app_fonts()
     _apply_theme(app)
 
-    font = QFont("Segoe UI", 10)
-    app.setFont(font)
+    app.setFont(QFont(family, 11))
 
     import time
     splash = _show_splash(app)
@@ -423,6 +475,8 @@ def _run():
 
     win = MainWindow()
     win.show()
+    # Check for updates shortly after the UI is up (background; non-blocking).
+    QTimer.singleShot(1500, win._auto_check_updates)
     sys.exit(app.exec())
 
 

@@ -16,7 +16,7 @@ def _fdate(s: str) -> str:
     return s or ""
 from utils.excel_utils import export_distribution_to_excel
 from utils.print_view import print_distribution_list
-from utils.ui import busy_cursor
+from utils.ui import busy_cursor, attach_empty_state, refresh_empty_state
 
 COLS = ["מס'", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3",
         "אזור", "נפשות", "תדירות", "חלוקה הבאה", "ימים", "✓ ביצוע"]
@@ -73,7 +73,7 @@ class WeeklyTab(QWidget):
         filter_row.addWidget(btn_print)
 
         btn_sync = QPushButton("שמור סימונים")
-        btn_sync.setObjectName("success")
+        btn_sync.setObjectName("primary")
         btn_sync.clicked.connect(self._save_statuses)
         filter_row.addWidget(btn_sync)
 
@@ -103,6 +103,7 @@ class WeeklyTab(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.cellDoubleClicked.connect(self._toggle_status)
         lay.addWidget(self.table)
+        attach_empty_state(self.table, "אין חלוקות קרובות בטווח שנבחר")
 
     def refresh(self):
         days = self.days_spin.value()
@@ -150,6 +151,7 @@ class WeeklyTab(QWidget):
         self.lbl_stats.setText(
             f"⏰ באיחור: {overdue}  |  🔥 היום/מחר: {today_cnt}  |  ✅ השבוע: {week_cnt}  |  סה\"כ: {len(self._rows_data)}"
         )
+        refresh_empty_state(self.table)
 
     def _toggle_status(self, row, col):
         if col != 10:

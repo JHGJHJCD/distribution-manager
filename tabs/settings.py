@@ -166,7 +166,7 @@ class SettingsTab(QWidget):
 
         w_btns = QHBoxLayout()
         btn_save_w = QPushButton("שמור משקלים")
-        btn_save_w.setObjectName("success")
+        btn_save_w.setObjectName("primary")
         btn_save_w.setToolTip("שמור את המשקלים וחשב מחדש את ניקוד העדיפות")
         btn_save_w.clicked.connect(self._save_weights)
         w_btns.addWidget(btn_save_w)
@@ -216,7 +216,7 @@ class SettingsTab(QWidget):
         bk_btns.addWidget(btn_folder)
 
         self.btn_backup_now = QPushButton("גבה עכשיו")
-        self.btn_backup_now.setObjectName("success")
+        self.btn_backup_now.setObjectName("primary")
         self.btn_backup_now.setToolTip("בצע גיבוי ידני מיידי לתיקייה שנבחרה")
         self.btn_backup_now.clicked.connect(self._backup_now)
         bk_btns.addWidget(self.btn_backup_now)
