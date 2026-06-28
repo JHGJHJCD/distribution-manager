@@ -539,16 +539,101 @@ def get_weekly_list(days_ahead: int = 30, area_filter: str = "הכל"):
 # ------------------------------------------------------------------------------- One-time recipients ──────────────────────────────────────────────────────
 
 # ─── Need-score (priority ranking within a tier) ──────────────────────────────
-# Weights for the need-score (sum ≈ 1.0). Higher score = greater need = served
-# earlier within a priority tier. These are the tuning knobs.
-NEED_W_MONEY = 0.34     # מצוקה כלכלית — based on "פנוי לנפש" (disposable per soul)
-NEED_W_SOULS = 0.33     # גודל משפחה
-NEED_W_RECENCY = 0.33   # ותק — days since last distribution (fairness/rotation)
+# The need-score (0–100, higher = needier = served earlier within a tier) is a
+# weighted blend of several recipient data points. Each factor's weight is a
+# user-tunable knob stored in `settings` (see get_need_weights/set_need_weights
+# and the "משקלי ניקוד" panel in the Settings tab). Weights are RELATIVE — they
+# are normalized at scoring time, so any non-negative numbers work and 0 means
+# "ignore this data point".
+#
+# Each factor: key, Hebrew label, recipient field, direction, value parser.
+#   dir "low"  → a LOWER value means MORE need (e.g. הכנסות, פנוי לנפש)
+#   dir "high" → a HIGHER value means MORE need (e.g. נפשות, הוצאות, ילדים)
+NEED_FACTORS = [
+    {"key": "money",    "label": "מצוקה כלכלית (פנוי לנפש)", "field": "per_soul",         "dir": "low",  "kind": "money"},
+    {"key": "souls",    "label": "גודל משפחה (נפשות)",        "field": "souls",            "dir": "high", "kind": "int"},
+    {"key": "recency",  "label": "ותק (ימים מאז חלוקה)",      "field": "days_since",       "dir": "high", "kind": "int"},
+    {"key": "income",   "label": "הכנסות נמוכות",             "field": "income",           "dir": "low",  "kind": "money"},
+    {"key": "housing",  "label": "הוצאות דיור",               "field": "housing_expenses", "dir": "high", "kind": "money"},
+    {"key": "medical",  "label": "הוצאות רפואיות",            "field": "medical_expenses", "dir": "high", "kind": "money"},
+    {"key": "children", "label": "מספר ילדים",               "field": "children_total",   "dir": "high", "kind": "int"},
+]
+
+# Default weights (relative). The original three factors keep their historical
+# balance; the newly added factors default to 0 so existing rankings are
+# unchanged until the user gives them weight in the Settings tab.
+DEFAULT_NEED_WEIGHTS = {
+    "money": 34.0, "souls": 33.0, "recency": 33.0,
+    "income": 0.0, "housing": 0.0, "medical": 0.0, "children": 0.0,
+}
 
 # Priority codes that participate in the one-time priority distribution. Code 3
 # = first priority, code 2 = second. Everything else (1/0/none/חובת בירור) is
 # kept as data but excluded from the auto-distribution.
 PRIORITY_TIERS = (3, 2)
+
+
+def _need_num(val, kind):
+    """Extract a number from a recipient field for scoring. kind 'money' tolerates
+    currency symbols, commas and spaces ('5,000 ₪' → 5000.0). Returns None when
+    there is no usable number."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    if not s or s == "None":
+        return None
+    if kind == "money":
+        s = s.replace(",", "")
+        kept = "".join(ch for ch in s if ch.isdigit() or ch == ".")
+        if kept.count(".") > 1:                       # keep only the first dot
+            head, _, tail = kept.partition(".")
+            kept = head + "." + tail.replace(".", "")
+        if not any(ch.isdigit() for ch in kept):
+            return None
+        try:
+            return float(kept)
+        except ValueError:
+            return None
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def get_need_weights() -> dict:
+    """Return the per-factor need-score weights {key: float}, read from settings
+    and falling back to DEFAULT_NEED_WEIGHTS for any missing/invalid value."""
+    with get_connection() as conn:
+        stored = {row["key"]: row["value"] for row in
+                  conn.execute("SELECT key, value FROM settings WHERE key LIKE 'need_w_%'")}
+    weights = {}
+    for f in NEED_FACTORS:
+        raw = stored.get("need_w_" + f["key"])
+        try:
+            w = float(raw)
+            w = 0.0 if w < 0 else w
+        except (TypeError, ValueError):
+            w = DEFAULT_NEED_WEIGHTS.get(f["key"], 0.0)
+        weights[f["key"]] = w
+    return weights
+
+
+def set_need_weights(weights: dict):
+    """Persist need-score weights. Accepts a {key: number} dict (keys from
+    NEED_FACTORS); negatives clamp to 0, unknown keys are ignored."""
+    valid = {f["key"] for f in NEED_FACTORS}
+    with get_connection() as conn:
+        for key, val in weights.items():
+            if key not in valid:
+                continue
+            try:
+                w = max(0.0, float(val))
+            except (TypeError, ValueError):
+                continue
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)",
+                         ("need_w_" + key, str(w)))
 
 
 def _norm(v, lo, hi):
@@ -558,29 +643,47 @@ def _norm(v, lo, hi):
     return 0.0 if x < 0 else 1.0 if x > 1 else x
 
 
-def _annotate_need_scores(rows):
-    """Add 'need_score' (0–100) to each row, normalized within `rows`. Missing
-    data → that component is neutral (0.5) so it neither helps nor hurts."""
-    def fnum(v):
-        try:
-            return float(v) if v not in ("", None) else None
-        except (ValueError, TypeError):
-            return None
+def _annotate_need_scores(rows, weights: dict = None):
+    """Add 'need_score' (0–100) to each row, normalized within `rows`. Every
+    factor in NEED_FACTORS with a positive weight contributes its (normalized)
+    share; missing data → that component is neutral (0.5) so it neither helps nor
+    hurts. `weights` defaults to the user-configured weights from settings."""
+    if weights is None:
+        weights = get_need_weights()
+    active = [f for f in NEED_FACTORS if weights.get(f["key"], 0) > 0]
+    total_w = sum(weights.get(f["key"], 0) for f in active)
+    # Nothing weighted → fall back to defaults so the list still ranks sensibly.
+    if total_w <= 0:
+        weights = DEFAULT_NEED_WEIGHTS
+        active = [f for f in NEED_FACTORS if weights.get(f["key"], 0) > 0]
+        total_w = sum(weights.get(f["key"], 0) for f in active)
 
-    ps_vals = [v for v in (fnum(r.get("per_soul")) for r in rows) if v is not None and v > 0]
-    s_vals = [r.get("souls") or 0 for r in rows]
-    d_vals = [r.get("days_since", 0) for r in rows]
-    ps_lo, ps_hi = (min(ps_vals), max(ps_vals)) if ps_vals else (0, 0)
-    s_lo, s_hi = (min(s_vals), max(s_vals)) if s_vals else (0, 0)
-    d_lo, d_hi = (min(d_vals), max(d_vals)) if d_vals else (0, 0)
+    # Pre-compute each active factor's min/max for in-list normalization. For a
+    # 'low' factor (less = needier) only positive values count, so an empty field
+    # stays neutral instead of looking like the neediest.
+    ranges = {}
+    for f in active:
+        vals = []
+        for r in rows:
+            v = _need_num(r.get(f["field"]), f["kind"])
+            if v is None or (f["dir"] == "low" and v <= 0):
+                continue
+            vals.append(v)
+        ranges[f["key"]] = (min(vals), max(vals)) if vals else (0.0, 0.0)
 
     for r in rows:
-        ps = fnum(r.get("per_soul"))
-        money = 0.5 if (ps is None or ps <= 0) else (1.0 - _norm(ps, ps_lo, ps_hi))
-        souls = _norm(r.get("souls") or 0, s_lo, s_hi)
-        recency = _norm(r.get("days_since", 0), d_lo, d_hi)
-        r["need_score"] = round(
-            100 * (NEED_W_MONEY * money + NEED_W_SOULS * souls + NEED_W_RECENCY * recency), 1)
+        acc = 0.0
+        for f in active:
+            v = _need_num(r.get(f["field"]), f["kind"])
+            if v is None or (f["dir"] == "low" and v <= 0):
+                comp = 0.5                       # missing → neutral
+            else:
+                lo, hi = ranges[f["key"]]
+                comp = _norm(v, lo, hi)
+                if f["dir"] == "low":
+                    comp = 1.0 - comp
+            acc += weights.get(f["key"], 0) * comp
+        r["need_score"] = round(100 * acc / total_w, 1)
     return rows
 
 

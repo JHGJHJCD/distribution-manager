@@ -89,6 +89,9 @@ class OneTimeTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
+        _score_hdr = self.table.horizontalHeaderItem(2)  # "ניקוד"
+        if _score_hdr:
+            _score_hdr.setToolTip("ניקוד הצורך — משוקלל לפי 'משקלי ניקוד' בלשונית הגדרות")
         self.table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)

@@ -4,7 +4,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QPushButton, QFrame, QMessageBox, QFileDialog, QInputDialog, QLineEdit,
-    QProgressDialog, QApplication
+    QProgressDialog, QApplication, QSpinBox, QScrollArea
 )
 
 import database as db
@@ -50,7 +50,19 @@ class SettingsTab(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        lay = QVBoxLayout(self)
+        # The settings page has many sections — wrap it in a scroll area so every
+        # section stays fully visible (and reachable) on shorter windows instead
+        # of being squeezed/clipped.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        outer.addWidget(scroll)
+        content = QWidget()
+        scroll.setWidget(content)
+
+        lay = QVBoxLayout(content)
         lay.setSpacing(16)
         lay.setContentsMargins(16, 16, 16, 16)
 
@@ -112,6 +124,57 @@ class SettingsTab(QWidget):
         self.lbl_update_status.setWordWrap(True)
         upd_lay.addWidget(self.lbl_update_status)
         lay.addWidget(upd_frame)
+
+        # ── Need-score weights section ────────────────────
+        w_frame = QFrame()
+        w_frame.setObjectName("panel")
+        w_lay = QVBoxLayout(w_frame)
+        w_lay.setContentsMargins(14, 12, 14, 12)
+        w_lay.setSpacing(10)
+
+        w_title = QLabel("משקלי ניקוד עדיפות")
+        w_title.setObjectName("section-header")
+        w_lay.addWidget(w_title)
+
+        w_desc = QLabel(
+            "קביעת המשקל של כל נתון בחישוב 'ניקוד הצורך' שלפיו מדורגים המקבלים "
+            "בלשונית \"חד פעמי\". המשקלים יחסיים ומנורמלים אוטומטית — "
+            "0 = להתעלם מהנתון.")
+        w_desc.setObjectName("subtitle")
+        w_desc.setWordWrap(True)
+        w_lay.addWidget(w_desc)
+
+        w_form = QFormLayout()
+        w_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        w_form.setSpacing(8)
+        self._weight_spins = {}
+        for f in db.NEED_FACTORS:
+            spin = QSpinBox()
+            spin.setRange(0, 100)
+            spin.setFixedWidth(90)
+            spin.valueChanged.connect(self._update_weight_preview)
+            self._weight_spins[f["key"]] = spin
+            w_form.addRow(f["label"] + ":", spin)
+        w_lay.addLayout(w_form)
+
+        self.lbl_weight_preview = QLabel("")
+        self.lbl_weight_preview.setObjectName("subtitle")
+        self.lbl_weight_preview.setWordWrap(True)
+        w_lay.addWidget(self.lbl_weight_preview)
+
+        w_btns = QHBoxLayout()
+        btn_save_w = QPushButton("שמור משקלים")
+        btn_save_w.setObjectName("success")
+        btn_save_w.setToolTip("שמור את המשקלים וחשב מחדש את ניקוד העדיפות")
+        btn_save_w.clicked.connect(self._save_weights)
+        w_btns.addWidget(btn_save_w)
+        btn_reset_w = QPushButton("אפס לברירת מחדל")
+        btn_reset_w.setObjectName("neutral")
+        btn_reset_w.clicked.connect(self._reset_weights)
+        w_btns.addWidget(btn_reset_w)
+        w_btns.addStretch()
+        w_lay.addLayout(w_btns)
+        lay.addWidget(w_frame)
 
         # ── Backup section ────────────────────────────────
         bk_frame = QFrame()
@@ -227,6 +290,7 @@ class SettingsTab(QWidget):
 
     def refresh(self):
         self.lbl_db_path.setText(db.DB_PATH)
+        self._load_weights()
 
         folder = db.get_setting("backup_folder") or ""
         if folder:
@@ -249,6 +313,44 @@ class SettingsTab(QWidget):
             last_backup = "לא בוצע עדיין"
             self.lbl_last_backup.setStyleSheet("color:#9ca3af;")
         self.lbl_last_backup.setText(last_backup)
+
+    # ── Need-score weights ────────────────────────────────────────────────────
+
+    def _load_weights(self):
+        weights = db.get_need_weights()
+        for key, spin in self._weight_spins.items():
+            spin.blockSignals(True)
+            spin.setValue(int(round(weights.get(key, 0))))
+            spin.blockSignals(False)
+        self._update_weight_preview()
+
+    def _update_weight_preview(self):
+        vals = {k: s.value() for k, s in self._weight_spins.items()}
+        total = sum(vals.values())
+        if total <= 0:
+            self.lbl_weight_preview.setText("⚠ כל המשקלים 0 — המערכת תשתמש בברירת המחדל.")
+            self.lbl_weight_preview.setStyleSheet("color:#b45309;")
+            return
+        labels = {f["key"]: f["label"] for f in db.NEED_FACTORS}
+        parts = [f"{labels[f['key']]} {round(100 * vals[f['key']] / total)}%"
+                 for f in db.NEED_FACTORS if vals[f["key"]] > 0]
+        self.lbl_weight_preview.setText("משקל אפקטיבי:  " + "  ·  ".join(parts))
+        self.lbl_weight_preview.setStyleSheet("color:#16a34a;")
+
+    def _save_weights(self):
+        db.set_need_weights({k: s.value() for k, s in self._weight_spins.items()})
+        if self.main_win:
+            self.main_win.status_msg("משקלי הניקוד נשמרו")
+            self.main_win.refresh_all()
+        QMessageBox.information(
+            self, "נשמר", "משקלי הניקוד עודכנו וניקוד העדיפות חושב מחדש ✓")
+
+    def _reset_weights(self):
+        db.set_need_weights(db.DEFAULT_NEED_WEIGHTS)
+        self._load_weights()
+        if self.main_win:
+            self.main_win.refresh_all()
+        QMessageBox.information(self, "אופס", "המשקלים אופסו לברירת המחדל ✓")
 
     def _backup_now(self):
         result = auto_backup()

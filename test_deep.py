@@ -410,6 +410,33 @@ check("no cross-contamination", len(dists_target) >= 1 and len(dists_other) >= 1
 
 
 # ══════════════════════════════════════════════════
+# רובד N — משקלי ניקוד מתכווננים
+# ══════════════════════════════════════════════════
+print("\n=== N: משקלי ניקוד מתכווננים ===")
+db.set_need_weights(db.DEFAULT_NEED_WEIGHTS)
+_wd = db.get_need_weights()
+check("default weights: money=34", _wd["money"] == 34.0, f"got {_wd['money']}")
+check("default weights: new fields 0", _wd["income"] == 0 and _wd["children"] == 0)
+check("money parser '5,000 ₪' → 5000", db._need_num("5,000 ₪", "money") == 5000.0)
+db.set_need_weights({"income": -3})
+check("negative weight clamped to 0", db.get_need_weights()["income"] == 0.0)
+
+# the chosen weight drives the ranking
+db.reset_all_data()
+db.add_recipient({"full_name": "גדולה", "frequency": "חד-פעמי", "status": "פעיל",
+                  "priority": 3, "souls": 12, "income": "9000"})
+db.add_recipient({"full_name": "עניה", "frequency": "חד-פעמי", "status": "פעיל",
+                  "priority": 3, "souls": 3, "income": "1000"})
+db.set_need_weights({"souls": 100, "money": 0, "recency": 0,
+                     "income": 0, "housing": 0, "medical": 0, "children": 0})
+check("souls-weighted → big family first", db.get_one_time_list()[0]["full_name"] == "גדולה")
+db.set_need_weights({"income": 100, "souls": 0, "money": 0,
+                     "recency": 0, "housing": 0, "medical": 0, "children": 0})
+check("income-weighted → low income first", db.get_one_time_list()[0]["full_name"] == "עניה")
+db.set_need_weights(db.DEFAULT_NEED_WEIGHTS)   # restore default
+
+
+# ══════════════════════════════════════════════════
 # סיכום
 # ══════════════════════════════════════════════════
 print()
