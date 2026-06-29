@@ -501,6 +501,16 @@ for _f in (_bad, _good):
     try: os.unlink(_f)
     except OSError: pass
 
+# settings weight helpers always normalise to a 100-sum (the auto-rebalance math)
+from tabs.settings import SettingsTab
+check("scale_to_100 already-100 stays 100", sum(SettingsTab._scale_to_100(
+    {"a": 34, "b": 33, "c": 33, "d": 0}).values()) == 100)
+check("scale_to_100 arbitrary → 100", sum(SettingsTab._scale_to_100(
+    {"a": 7, "b": 3, "c": 90, "d": 50}).values()) == 100)
+check("scale_to_100 all-zero → even 100", sum(SettingsTab._scale_to_100(
+    {"a": 0, "b": 0, "c": 0}).values()) == 100)
+check("even_split sums to total", sum(SettingsTab._even_split(100, ["a", "b", "c"]).values()) == 100)
+
 
 # ══════════════════════════════════════════════════
 # סיכום
