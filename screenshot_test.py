@@ -32,7 +32,7 @@ try:
 except ImportError:
     app.setStyleSheet(EXTRA_QSS)
 
-app.setFont(QFont(_family, 11))
+app.setFont(QFont("Segoe UI", 11))
 db.init_db()
 
 from main import MainWindow

@@ -500,11 +500,11 @@ def _run():
     if os.path.exists(_ico):
         app.setWindowIcon(QIcon(_ico))
 
-    # Register bundled fonts BEFORE the theme so qt-material's "Rubik" request resolves.
-    family = _load_app_fonts()
     _apply_theme(app)
 
-    app.setFont(QFont(family, 11))
+    # Segoe UI renders Hebrew crisply at every DPI; the bundled variable font
+    # (Rubik) looked soft/blurry, so the UI uses the system font.
+    app.setFont(QFont("Segoe UI", 11))
 
     import time
     splash = _show_splash(app)

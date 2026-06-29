@@ -32,8 +32,10 @@ PALETTE = {
     "ghost_line":  "#cbd5e1", "ghost_ink": "#475569", "ghost_hover": "#eef2f7",
 }
 
-# ── סקאלת-גופן + מחסנית גופנים (Rubik ראשי, נטען בהפעלה; fallback ל-Segoe UI) ──
-FONT_STACK = "'Rubik','Assistant','Segoe UI','Tahoma',Arial,sans-serif"
+# ── סקאלת-גופן + מחסנית גופנים ──
+# Segoe UI: גופן מערכת חד בכל DPI ותומך עברית. הגופן Rubik (variable) רונדר
+# רך/מטושטש, ולכן הוחזר ל-Segoe UI.
+FONT_STACK = "'Segoe UI','Tahoma',Arial,sans-serif"
 
 TOKENS = {
     **PALETTE,
@@ -347,7 +349,7 @@ EXTRA_QSS = _QSS_TEMPLATE.substitute(TOKENS)
 
 # ── Extra config for qt-material ───────────────────────────────────────────
 QT_MATERIAL_EXTRA = {
-    "font_family": "Rubik",
+    "font_family": "Segoe UI",
     "density_scale": "0",
 }
 
