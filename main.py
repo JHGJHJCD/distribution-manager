@@ -407,6 +407,26 @@ class MainWindow(QMainWindow):
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+def _set_windows_dpi_awareness():
+    """Make the process per-monitor DPI-aware BEFORE Qt starts, so Windows renders
+    the UI at the screen's native resolution instead of bitmap-stretching it —
+    which is what makes the app look blurry on 125%/150% display scaling.
+    Falls back gracefully on older Windows; safe to call once at startup."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    for attempt in (
+        lambda: ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)),  # PER_MONITOR_V2 (Win10 1703+)
+        lambda: ctypes.windll.shcore.SetProcessDpiAwareness(2),  # PER_MONITOR (Win8.1+)
+        lambda: ctypes.windll.user32.SetProcessDPIAware(),       # system aware (Vista+)
+    ):
+        try:
+            attempt()
+            return
+        except Exception:
+            continue
+
+
 def _set_window_icon(widget):
     ico = resource_path("icon.ico")
     if os.path.exists(ico):
@@ -457,6 +477,7 @@ def _app_dir_str() -> str:
 
 
 def main():
+    _set_windows_dpi_awareness()   # before any Qt init — fixes blurry UI on scaled displays
     try:
         _run()
     except Exception:
