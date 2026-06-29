@@ -755,7 +755,7 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
                 "INSERT INTO distributions "
                 "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes) "
                 "VALUES (?,?,?,?,?,?,?,?,?)",
-                (rec.get("id"), rec["full_name"], dist_date,
+                (rec.get("id"), rec.get("full_name", ""), dist_date,
                  rec.get("area", ""), rec.get("souls", 0),
                  what_dist, quantity, distributor,
                  rec.get("notes", ""))
@@ -766,7 +766,7 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
             # so it must not bleed into the next week's distribution list.
             conn.execute(
                 "UPDATE recipients SET last_distribution=?, next_distribution=?, weekly_status='' WHERE id=?",
-                (dist_date, nw, rec["id"])
+                (dist_date, nw, rec.get("id"))
             )
 
 
@@ -920,7 +920,7 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
                 for field in updatable:
                     new_val = row.get(field)
                     if not _is_empty(new_val) and _is_empty(ex.get(field)):
-                        updates[field] = int(new_val) if field == "souls" else new_val
+                        updates[field] = _coerce(field, new_val) if field == "souls" else new_val
                 if updates:
                     sets = ", ".join(f"{k}=?" for k in updates)
                     vals = list(updates.values()) + [ex["id"]]

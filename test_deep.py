@@ -439,6 +439,50 @@ db.set_need_weights(db.DEFAULT_NEED_WEIGHTS)   # restore default
 
 
 # ══════════════════════════════════════════════════
+# רובד O — חוסן ופיצ'רים חדשים
+# ══════════════════════════════════════════════════
+print("\n=== O: חוסן ופיצ'רים ===")
+from tabs.recipients import _priority_display
+check("priority 4 → קבוע", _priority_display({"priority": 4}) == "קבוע")
+check("priority 3 → ראשונה", _priority_display({"priority": 3}) == "ראשונה")
+check("priority 1 → ריק", _priority_display({"priority": 1}) == "")
+check("priority 0 → ריק", _priority_display({"priority": 0}) == "")
+
+db.reset_all_data()
+db.set_need_weights(db.DEFAULT_NEED_WEIGHTS)
+db.add_recipient({"full_name": "חד A", "frequency": "חד-פעמי", "status": "פעיל",
+                  "priority": 3, "souls": 8})
+_ot = db.get_one_time_list()
+_t = next((r for r in _ot if r["full_name"] == "חד A"), None)
+check("one-time row carries _score_parts",
+      _t is not None and isinstance(_t.get("_score_parts"), list) and len(_t["_score_parts"]) >= 1)
+
+# bulk_add_distributions must tolerate a record without an 'id'
+try:
+    db.bulk_add_distributions([{"full_name": "ללא מזהה", "frequency": "חד-פעמי"}],
+                              "2026-06-10", "סל", 1, "בודק")
+    check("bulk_add_distributions tolerates missing id", True)
+except Exception as e:
+    check("bulk_add_distributions tolerates missing id", False, str(e))
+
+# merge-import must tolerate a non-numeric 'souls' (no crash)
+db.reset_all_data()
+db.add_recipient({"full_name": "קיים", "status": "פעיל"})
+try:
+    db.import_recipients_from_list([{"full_name": "קיים", "souls": "לא-מספר"}])
+    check("import tolerates bad souls (no crash)", True)
+except Exception as e:
+    check("import tolerates bad souls (no crash)", False, str(e))
+
+# printed list splits reserve into its own marked section, after the main list
+from utils.print_view import _build_html
+_ph = _build_html([{"full_name": "עיקרי", "_reserve": False},
+                   {"full_name": "רזרבה1", "_reserve": True}], "10/06/2026")
+check("print: reserve section present", "רזרבה — לפי סדר עדיפות" in _ph)
+check("print: main listed before reserve", _ph.index("עיקרי") < _ph.index("רזרבה1"))
+
+
+# ══════════════════════════════════════════════════
 # סיכום
 # ══════════════════════════════════════════════════
 print()

@@ -460,9 +460,15 @@ def _crash_dialog(msg: str):
 
 
 def _write_crash_log(msg: str):
-    """Write crash details next to the executable so the user can send them."""
+    """Write crash details to the per-user data dir (%APPDATA%\\ManhalHaluka),
+    which is always writable — unlike next to the EXE if it sits in a protected
+    folder like Program Files."""
     try:
-        log_path = os.path.join(_app_dir_str(), "crash_log.txt")
+        try:
+            base = db._data_dir()
+        except Exception:
+            base = _app_dir_str()
+        log_path = os.path.join(base, "crash_log.txt")
         with open(log_path, "w", encoding="utf-8") as f:
             from datetime import datetime
             f.write(f"[{datetime.now().isoformat()}]\n{msg}\n")
