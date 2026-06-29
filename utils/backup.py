@@ -6,15 +6,24 @@ from datetime import datetime
 
 def restore_from_backup(backup_path: str) -> bool:
     """Restore data.db from a backup .db file using SQLite Online Backup API.
-    Returns True on success, False on failure."""
+    Refuses (returns False) if the file is not a valid app database — so picking
+    a wrong/corrupt file never overwrites the real data. Returns True on success."""
     try:
         import database as db
         src_conn = sqlite3.connect(backup_path)
-        dst_conn = sqlite3.connect(db.DB_PATH)
         try:
-            src_conn.backup(dst_conn)
+            # Only restore from something that actually looks like our DB.
+            valid = src_conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='recipients'"
+            ).fetchone()
+            if not valid:
+                return False
+            dst_conn = sqlite3.connect(db.DB_PATH)
+            try:
+                src_conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
         finally:
-            dst_conn.close()
             src_conn.close()
         return True
     except Exception:

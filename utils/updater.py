@@ -99,6 +99,13 @@ def download(url: str, dest: str, progress_cb=None, cancel_cb=None, timeout: int
                 done += len(chunk)
                 if progress_cb and total:
                     progress_cb(min(100, int(done * 100 / total)))
+    # Guard against a truncated download silently replacing the running EXE.
+    if total and os.path.getsize(dest) != total:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise IOError("ההורדה לא הושלמה במלואה — נסה שוב")
     return dest
 
 

@@ -454,6 +454,14 @@ check("8 tabs", _win.tabs.count() == 8)
 check("_extra_ids is set", isinstance(_win.group_tab._extra_ids, set))
 check("settings tab available", hasattr(_win, "settings_tab"))
 
+# tab reordering by drag + persistence
+check("tabs are movable", _win.tabs.isMovable())
+_win.tabs.tabBar().moveTab(_win.tabs.count() - 1, 0)
+_order0 = _win.tabs.widget(0).objectName()
+check("tab order saved on drag", db.get_setting("tab_order").split(",")[0] == _order0)
+_win_b = MainWindow()
+check("tab order restored on relaunch", _win_b.tabs.widget(0).objectName() == _order0)
+
 _win.recipients_tab.refresh()
 check("recipients table loaded", _win.recipients_tab.table.rowCount() > 0)
 

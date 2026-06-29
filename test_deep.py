@@ -481,6 +481,26 @@ _ph = _build_html([{"full_name": "עיקרי", "_reserve": False},
 check("print: reserve section present", "רזרבה — לפי סדר עדיפות" in _ph)
 check("print: main listed before reserve", _ph.index("עיקרי") < _ph.index("רזרבה1"))
 
+# restore safety: refuse a non-DB file (don't clobber real data); accept a valid one
+from utils.backup import restore_from_backup
+db.reset_all_data()
+db.add_recipient({"full_name": "סימן שחזור", "status": "פעיל"})
+_bfd, _bad = tempfile.mkstemp(suffix=".db"); os.close(_bfd)
+with open(_bad, "w", encoding="utf-8") as _bf:
+    _bf.write("this is not a database")
+check("restore refuses a non-DB file", restore_from_backup(_bad) is False)
+check("data intact after refused restore",
+      any(r["full_name"] == "סימן שחזור" for r in db.get_all_recipients()))
+_gfd, _good = tempfile.mkstemp(suffix=".db"); os.close(_gfd)
+_s = sqlite3.connect(db.DB_PATH); _d = sqlite3.connect(_good); _s.backup(_d); _d.close(); _s.close()
+db.reset_all_data()
+check("restore from a valid backup succeeds", restore_from_backup(_good) is True)
+check("marker present after valid restore",
+      any(r["full_name"] == "סימן שחזור" for r in db.get_all_recipients()))
+for _f in (_bad, _good):
+    try: os.unlink(_f)
+    except OSError: pass
+
 
 # ══════════════════════════════════════════════════
 # סיכום
