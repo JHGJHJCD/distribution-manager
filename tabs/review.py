@@ -15,7 +15,7 @@ _GROUP_BG = [QColor("#fff7ed"), QColor("#eff6ff")]   # warm / cool
 
 
 def _priority_text(rec: dict) -> str:
-    labels = {4: "4 קבוע", 3: "3 ראשונה", 2: "2 שנייה", 1: "1", 0: "0"}
+    labels = {4: "קבוע", 3: "ראשונה", 2: "שנייה"}
     pr = rec.get("priority")
     if pr in labels:
         return labels[pr]
@@ -105,6 +105,8 @@ class ReviewTab(QWidget):
                 item.setBackground(bg)
                 if c == 0:
                     item.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
+                if c == 2:   # name — bold
+                    nf = item.font(); nf.setBold(True); item.setFont(nf)
                 self.table.setItem(r, c, item)
         self.table.blockSignals(False)
 

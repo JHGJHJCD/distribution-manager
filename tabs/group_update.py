@@ -184,6 +184,8 @@ class GroupUpdateTab(QWidget):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if c < len(vals) - 1:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if c == 0:   # name — bold
+                    nf = item.font(); nf.setBold(True); item.setFont(nf)
                 self.table.setItem(r, c + 1, item)
 
         self.table.blockSignals(False)

@@ -146,6 +146,8 @@ class WeeklyTab(QWidget):
                 item.setBackground(bg)
                 item.setForeground(fg)
                 item.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
+                if c == 1:   # name — bold
+                    nf = item.font(); nf.setBold(True); item.setFont(nf)
                 self.table.setItem(r, c, item)
 
         self.lbl_stats.setText(

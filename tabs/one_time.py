@@ -1,7 +1,8 @@
+import html
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QSpinBox,
-    QAbstractItemView, QMessageBox
+    QAbstractItemView, QMessageBox, QDialog
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
@@ -15,10 +16,14 @@ def _fdate(s: str) -> str:
         return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
     return s or ""
 
-COLS = ["בחר", "עדיפות", "ניקוד", "שם מלא", "טלפון", "אזור", "נפשות", "חלוקה אחרונה", "ימים מאז"]
+COLS = ["בחר", "שם מלא", "עדיפות", "ניקוד", "חלוקה אחרונה"]
 
 # Priority code → label shown in the table.
 _PRIORITY_LABEL = {3: "ראשונה", 2: "שנייה"}
+
+# Reserve (standby) row colours — distinct from the main "selected" tint.
+RESERVE_BG = "#ede7f6"
+RESERVE_FG = "#5e35b1"
 
 
 def _priority_label(rec: dict) -> str:
@@ -63,6 +68,17 @@ class OneTimeTab(QWidget):
         self.products_spin.setFixedWidth(90)
         ctrl.addWidget(self.products_spin)
 
+        ctrl.addWidget(QLabel("רזרבה:"))
+        self.reserve_spin = QSpinBox()
+        self.reserve_spin.setRange(0, 999)
+        try:
+            self.reserve_spin.setValue(int(db.get_setting("reserve_count") or 5))
+        except (ValueError, TypeError):
+            self.reserve_spin.setValue(5)
+        self.reserve_spin.setToolTip("כמה אנשי רזרבה (הבאים בתור לפי עדיפות) להוסיף לרשימה")
+        self.reserve_spin.setFixedWidth(70)
+        ctrl.addWidget(self.reserve_spin)
+
         btn_calc = QPushButton("חשב המלצה")
         btn_calc.clicked.connect(self._calc_suggestion)
         ctrl.addWidget(btn_calc)
@@ -79,18 +95,23 @@ class OneTimeTab(QWidget):
         for color, text in [(OVERDUE_FG,   "● עדיפות ראשונה (3)"),
                              (TODAY_FG,    "● עדיפות שנייה (2)"),
                              (WEEK_FG,     "● לא בחלוקה (1 / בירור)"),
-                             (SELECTED_FG, "● נבחר לחלוקה")]:
+                             (SELECTED_FG, "● נבחר לחלוקה"),
+                             (RESERVE_FG,  "● רזרבה")]:
             lbl = QLabel(text)
             lbl.setStyleSheet(f"color: {color};")
             legend.addWidget(lbl)
         legend.addStretch()
         lay.addLayout(legend)
 
+        hint = QLabel("💡 לחיצה על שם מקבל מציגה את פירוט חישוב הניקוד")
+        hint.setObjectName("subtitle")
+        lay.addWidget(hint)
+
         # Table
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
-        _score_hdr = self.table.horizontalHeaderItem(2)  # "ניקוד"
+        _score_hdr = self.table.horizontalHeaderItem(3)  # "ניקוד"
         if _score_hdr:
             _score_hdr.setToolTip("ניקוד הצורך — משוקלל לפי 'משקלי ניקוד' בלשונית הגדרות")
         self.table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -98,10 +119,11 @@ class OneTimeTab(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # שם מלא column
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # שם מלא column
         hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._on_check_changed)
+        self.table.cellClicked.connect(self._on_cell_clicked)
         lay.addWidget(self.table)
         attach_empty_state(self.table, "אין חד-פעמיים פעילים להצגה")
 
@@ -123,24 +145,34 @@ class OneTimeTab(QWidget):
         self._rows_data = db.get_one_time_list(area_filter=area)
         self._populate()
 
-    def _populate(self, suggested_n: int = -1):
+    def _populate(self, suggested_n: int = -1, reserve_n: int = 0):
         self.table.blockSignals(True)
         # Clear old items first — re-using existing checkable cells is very slow.
         self.table.clearContents()
         self.table.setRowCount(0)
         self.table.setRowCount(len(self._rows_data))
 
-        selected_so_far = 0
+        # By priority order: the first `suggested_n` distribution rows are MAIN,
+        # the next `reserve_n` are RESERVE (standby). Both are checked/included;
+        # reserve is flagged + tinted so it prints as a separate section.
+        main_so_far = 0
+        reserve_so_far = 0
         for r, rec in enumerate(self._rows_data):
             in_dist = rec.get("in_distribution")
-            # auto-select the top `suggested_n` DISTRIBUTION rows (tier 3 then 2,
-            # already ranked by need-score). Never auto-select non-distribution rows.
-            selected = (suggested_n >= 0 and in_dist and selected_so_far < suggested_n)
-            if selected:
-                selected_so_far += 1
+            is_main = (suggested_n >= 0 and in_dist and main_so_far < suggested_n)
+            is_reserve = False
+            if is_main:
+                main_so_far += 1
+            elif suggested_n >= 0 and in_dist and reserve_so_far < reserve_n:
+                is_reserve = True
+                reserve_so_far += 1
+            rec["_reserve"] = is_reserve
+            selected = is_main or is_reserve
 
             pr = rec.get("priority")
-            if selected:
+            if is_reserve:
+                bg, fg = QColor(RESERVE_BG), QColor(RESERVE_FG)
+            elif is_main:
                 bg, fg = QColor(SELECTED_BG), QColor(SELECTED_FG)
             elif pr == 3:
                 bg, fg = QColor(OVERDUE_BG), QColor(OVERDUE_FG)
@@ -160,12 +192,10 @@ class OneTimeTab(QWidget):
 
             ld_raw = rec.get("last_distribution", "") or ""
             ld_display = (_fdate(ld_raw) if ld_raw else "לא קיבל")
-            days_display = str(rec.get("days_since", 0)) if ld_raw else "—"
             score = rec.get("need_score")
             score_display = f"{score:.0f}" if isinstance(score, (int, float)) else "—"
-            vals = [_priority_label(rec), score_display,
-                    rec.get("full_name", ""), rec.get("phone1", ""), rec.get("area", ""),
-                    str(rec.get("souls", "") or ""), ld_display, days_display]
+            prio_label = _priority_label(rec) + (" · רזרבה" if is_reserve else "")
+            vals = [rec.get("full_name", ""), prio_label, score_display, ld_display]
 
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
@@ -173,14 +203,21 @@ class OneTimeTab(QWidget):
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 item.setBackground(bg)
                 item.setForeground(fg)
+                if c == 0:   # name column — bold + clickable for the score breakdown
+                    item.setToolTip("לחץ על השם לפירוט חישוב הניקוד")
+                    nf = item.font(); nf.setUnderline(True); nf.setBold(True); item.setFont(nf)
                 self.table.setItem(r, c + 1, item)
 
         self.table.blockSignals(False)
         refresh_empty_state(self.table)
         self._update_selected_count()
-        in_dist_count = sum(1 for x in self._rows_data if x.get("in_distribution"))
-        self.lbl_stats.setText(
-            f"בחלוקה (עדיפות 1+2): {in_dist_count}  |  סה\"כ ברשימה: {len(self._rows_data)}")
+        if suggested_n >= 0:
+            self.lbl_stats.setText(
+                f"עיקרי: {main_so_far}  ·  רזרבה: {reserve_so_far}  |  סה\"כ ברשימה: {len(self._rows_data)}")
+        else:
+            in_dist_count = sum(1 for x in self._rows_data if x.get("in_distribution"))
+            self.lbl_stats.setText(
+                f"בחלוקה (עדיפות 1+2): {in_dist_count}  |  סה\"כ ברשימה: {len(self._rows_data)}")
 
     def _on_check_changed(self):
         self._update_selected_count()
@@ -192,22 +229,78 @@ class OneTimeTab(QWidget):
         )
         self.lbl_selected.setText(f"נבחרו: {count}")
 
+    def _on_cell_clicked(self, row, col):
+        # Clicking a name (column 1) opens the score breakdown for that person.
+        if col != 1 or row < 0 or row >= len(self._rows_data):
+            return
+        self._show_score_breakdown(self._rows_data[row])
+
+    def _show_score_breakdown(self, rec):
+        name = rec.get("full_name", "")
+        parts = rec.get("_score_parts")
+        if not parts:
+            QMessageBox.information(
+                self, "פירוט ניקוד",
+                f"{name} אינו ברשימת החלוקה (עדיפות 3/2), ולכן אין לו ניקוד צורך.")
+            return
+        rows_html = "".join(
+            f"<tr>"
+            f"<td>{html.escape(str(p['label']))}</td>"
+            f"<td align='center'>{html.escape(str(p['value']))}</td>"
+            f"<td align='center'>{p['weight_pct']}%</td>"
+            f"<td align='center'><b>{p['points']}</b></td>"
+            f"</tr>"
+            for p in parts
+        )
+        body = (
+            f"<div dir='rtl' style='font-family:Rubik,Segoe UI;'>"
+            f"<p>ניקוד צורך כולל: <b style='color:#1565c0;font-size:15px'>"
+            f"{rec.get('need_score')}</b> / 100 &nbsp;(גבוה = נזקק יותר)</p>"
+            f"<table border='1' cellpadding='6' cellspacing='0' width='100%' "
+            f"style='border-collapse:collapse;'>"
+            f"<tr style='background:#e3f2fd;color:#1565c0;'>"
+            f"<th align='right'>גורם</th><th>ערך</th><th>משקל</th><th>תרומה לניקוד</th></tr>"
+            f"{rows_html}</table>"
+            f"<p style='color:#6b7280;font-size:11px'>ערך חסר מחושב כניטרלי. "
+            f"המשקלים נקבעים בהגדרות ← משקלי ניקוד עדיפות.</p></div>"
+        )
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"פירוט ניקוד — {name}")
+        dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dlg.setMinimumWidth(440)
+        v = QVBoxLayout(dlg)
+        lbl = QLabel(body)
+        lbl.setTextFormat(Qt.TextFormat.RichText)
+        lbl.setWordWrap(True)
+        v.addWidget(lbl)
+        row = QHBoxLayout()
+        row.addStretch()
+        btn = QPushButton("סגור")
+        btn.setObjectName("neutral")
+        btn.clicked.connect(dlg.accept)
+        row.addWidget(btn)
+        v.addLayout(row)
+        dlg.exec()
+
     def _calc_suggestion(self):
         total = self.products_spin.value()
         if total <= 0:
             QMessageBox.information(self, "", "הכנס מספר מוצרים זמינים")
             return
         n, regular_count = db.compute_suggested_n(total)
+        reserve_n = self.reserve_spin.value()
+        db.set_setting("reserve_count", str(reserve_n))   # remember as default
         in_dist_count = sum(1 for x in self._rows_data if x.get("in_distribution"))
         picked = min(n, in_dist_count)
-        self._populate(suggested_n=n)
+        reserve_picked = max(0, min(reserve_n, in_dist_count - picked))
+        self._populate(suggested_n=n, reserve_n=reserve_n)
         msg = (
             f"סה\"כ מוצרים: {total}\n"
             f"קבועים (קוד 4): {regular_count}\n"
             f"נותר לחד-פעמיים: {n}\n"
             f"מועמדים בעדיפות (1+2): {in_dist_count}\n\n"
-            f"סומנו {picked} — עדיפות ראשונה (3) קודם, אחר כך שנייה (2),\n"
-            f"ובתוך כל דרגה לפי ניקוד הצורך (גבוה = נזקק יותר)."
+            f"סומנו {picked} עיקריים + {reserve_picked} רזרבה — לפי סדר עדיפות\n"
+            f"(ראשונה (3) קודם, אחר כך שנייה (2), ובתוך כל דרגה לפי ניקוד הצורך)."
         )
         if n > in_dist_count:
             msg += (f"\n\n⚠ יש יותר מוצרים ({n}) ממועמדי העדיפות ({in_dist_count}). "
@@ -233,7 +326,7 @@ class OneTimeTab(QWidget):
             added = 0
             for rec in selected:
                 if not any(r["id"] == rec["id"] for r in gt._rows_data):
-                    gt._rows_data.append(rec)
+                    gt._rows_data.append(dict(rec))   # snapshot incl. _reserve flag
                     gt._extra_ids.add(rec["id"])
                     added += 1
             gt._populate()

@@ -57,22 +57,24 @@ COL_KEYS = ["id", "full_name", "priority", "phone1", "phone2", "phone3",
             "housing_expenses", "medical_expenses", "income", "per_soul",
             "work_scope", "parent_type", "occupation", "representative"]
 
-# Priority editor options: (display label, priority int | None, priority_raw)
+# Priority editor options: (display label, priority int | None, priority_raw).
+# No raw numbers — those were only the original spreadsheet's codes. Codes 1/0
+# carry no real meaning ("not in distribution"), so they are NOT offered here and
+# a recipient imported as 1/0 simply shows no priority.
 _PRIORITY_OPTIONS = [
-    ("",                    None, ""),
-    ("4 — קבוע",            4,    "4"),
-    ("3 — עדיפות ראשונה",   3,    "3"),
-    ("2 — עדיפות שנייה",    2,    "2"),
-    ("1",                   1,    "1"),
-    ("0",                   0,    "0"),
-    ("חובת בירור",          None, "חובת בירור"),
+    ("ללא",              None, ""),
+    ("קבוע",             4,    "4"),
+    ("עדיפות ראשונה",    3,    "3"),
+    ("עדיפות שנייה",     2,    "2"),
+    ("חובת בירור",       None, "חובת בירור"),
 ]
 
 
 def _priority_display(rec: dict) -> str:
-    """Short label for the recipients table priority cell."""
+    """Short label for the recipients table priority cell — Hebrew status only,
+    never the raw import code. Codes 1/0/none show as blank."""
     pr = rec.get("priority")
-    labels = {4: "4 קבוע", 3: "3 ראשונה", 2: "2 שנייה", 1: "1", 0: "0"}
+    labels = {4: "קבוע", 3: "ראשונה", 2: "שנייה"}
     if pr in labels:
         return labels[pr]
     raw = (rec.get("priority_raw") or "").strip()
@@ -278,6 +280,8 @@ class RecipientsTab(QWidget):
                 # calls per row, which adds up to seconds on thousands of rows.
                 if c == 0:
                     item.setData(Qt.ItemDataRole.UserRole, rec_id)
+                if c == 1:   # name — bold everywhere
+                    nf = item.font(); nf.setBold(True); item.setFont(nf)
                 if color:
                     item.setForeground(color)
                 self.table.setItem(r, c, item)
@@ -503,6 +507,12 @@ class RecipientDialog(QDialog):
         self.f_status.addItems(["פעיל", "מושהה", "הסתיים"])
         self.f_status.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
+        self.f_priority = QComboBox()
+        self.f_priority.addItems([o[0] or "—" for o in _PRIORITY_OPTIONS])
+        self.f_priority.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.f_priority.setToolTip("עדיפות בחלוקה: קבוע · עדיפות ראשונה · עדיפות שנייה · "
+                                   "חובת בירור (ריק = לא בחלוקה)")
+
         self.f_start_date = DateEdit(allow_empty=True)
         self.f_last_dist  = DateEdit(allow_empty=True)
         self.f_next_dist  = DateEdit(allow_empty=True)
@@ -527,10 +537,18 @@ class RecipientDialog(QDialog):
         f1.addRow("אזור:", self.f_area)
         f1.addRow("נפשות:", self.f_souls)
         f1.addRow("תדירות:", self.f_freq)
+        f1.addRow("עדיפות:", self.f_priority)
         f1.addRow("סטטוס:", self.f_status)
-        f1.addRow("תאריך התחלה:", self.f_start_date)
-        f1.addRow("חלוקה אחרונה:", self.f_last_dist)
-        f1.addRow("חלוקה הבאה ✦:", self.f_next_dist)
+        # On ADD these are meaningless and only add noise: 'חלוקה אחרונה' is set
+        # automatically when a distribution is recorded (a new recipient has none
+        # yet), 'חלוקה הבאה' is auto-computed from the frequency (✦), and
+        # 'תאריך התחלה' isn't used by any scheduling/display logic. Keep them only
+        # when editing an existing recipient (to view or correct). The widgets are
+        # still created above, so get_data()/validation keep working (empty on add).
+        if rec is not None:
+            f1.addRow("תאריך התחלה:", self.f_start_date)
+            f1.addRow("חלוקה אחרונה:", self.f_last_dist)
+            f1.addRow("חלוקה הבאה ✦:", self.f_next_dist)
         f1.addRow("הערות:", self.f_notes)
 
         # ── Tab 2: פרטים אישיים ─────────────────────────────────────────────
@@ -580,17 +598,10 @@ class RecipientDialog(QDialog):
         # ── Tab 4: מידע מנהלי ───────────────────────────────────────────────
         f4 = _tab("מידע מנהלי")
 
-        self.f_priority = QComboBox()
-        self.f_priority.addItems([o[0] or "—" for o in _PRIORITY_OPTIONS])
-        self.f_priority.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.f_priority.setToolTip("קוד החלוקה: 4 קבוע · 3 עדיפות ראשונה · 2 שנייה · "
-                                   "1/0/חובת בירור = לא בחלוקה")
-
         self.f_external_id  = field("מספר מזהה חיצוני")
         self.f_source       = field("מקור הפנייה")
         self.f_representative = field("שם נציג")
 
-        f4.addRow("עדיפות חלוקה:", self.f_priority)
         f4.addRow("מס' מזהה:", self.f_external_id)
         f4.addRow("מקור:", self.f_source)
         f4.addRow("שם נציג:", self.f_representative)

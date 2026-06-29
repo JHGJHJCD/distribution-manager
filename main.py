@@ -239,6 +239,7 @@ class MainWindow(QMainWindow):
     def _build_tabs(self):
         self.tabs = QTabWidget()
         self.tabs.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.tabs.setMovable(True)   # tabs can be reordered by dragging
 
         self.group_tab      = GroupUpdateTab(self)
         self.weekly_tab     = WeeklyTab(self)
@@ -249,21 +250,63 @@ class MainWindow(QMainWindow):
         self.review_tab     = ReviewTab(self)
         self.settings_tab   = SettingsTab(self)
 
-        self.tabs.addTab(self.group_tab,      "עדכון קבוצתי")
-        self.tabs.addTab(self.weekly_tab,     "חלוקה השבוע")
-        self.tabs.addTab(self.recipients_tab, "מקבלים")
-        self.tabs.addTab(self.one_time_tab,   "חד פעמי")
-        self.tabs.addTab(self.tracking_tab,   "מעקב חלוקות")
-        self.tabs.addTab(self.search_tab,     "חיפוש מהיר")
-        self.tabs.addTab(self.review_tab,     "בדיקת נתונים")
-        self.tabs.addTab(self.settings_tab,   "הגדרות")
+        # (widget, label, stable key). The key — not the position — is what we
+        # persist, so a saved order survives even if tabs are later added/removed.
+        tab_specs = [
+            (self.group_tab,      "עדכון קבוצתי",  "group"),
+            (self.weekly_tab,     "חלוקה השבוע",   "weekly"),
+            (self.recipients_tab, "מקבלים",        "recipients"),
+            (self.one_time_tab,   "חד פעמי",       "one_time"),
+            (self.tracking_tab,   "מעקב חלוקות",   "tracking"),
+            (self.search_tab,     "חיפוש מהיר",    "search"),
+            (self.review_tab,     "בדיקת נתונים",  "review"),
+            (self.settings_tab,   "הגדרות",        "settings"),
+        ]
+        for widget, label, key in tab_specs:
+            widget.setObjectName("tab_" + key)
+            self.tabs.addTab(widget, label)
 
         # Tab 0 (group_update) loaded in __init__; others lazy-load on first click
         for i in range(self.tabs.count()):
             self.tabs.widget(i)._needs_refresh = (i != 0)
 
+        self._restore_tab_order()
+        # Save the new order whenever the user drags a tab.
+        self.tabs.tabBar().tabMoved.connect(lambda *_: self._save_tab_order())
         self.tabs.currentChanged.connect(self._on_tab_changed)
         self.setCentralWidget(self.tabs)
+
+        # After restoring a custom order the tab now at position 0 may not be the
+        # one that self-refreshed in __init__, so refresh whatever is shown first.
+        cur = self.tabs.currentWidget()
+        if cur is not None and getattr(cur, "_needs_refresh", False) and hasattr(cur, "refresh"):
+            cur.refresh()
+            cur._needs_refresh = False
+
+        self._apply_rtl_polish()
+
+    def _apply_rtl_polish(self):
+        """Right-align every table header so the whole UI reads consistently RTL
+        (Qt centers header text by default, which looks LTR in a Hebrew app)."""
+        from PyQt6.QtWidgets import QTableView
+        for tv in self.findChildren(QTableView):
+            tv.horizontalHeader().setDefaultAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+    def _save_tab_order(self):
+        order = [self.tabs.widget(i).objectName() for i in range(self.tabs.count())]
+        db.set_setting("tab_order", ",".join(order))
+
+    def _restore_tab_order(self):
+        saved = db.get_setting("tab_order")
+        if not saved:
+            return
+        bar = self.tabs.tabBar()
+        for target_pos, key in enumerate(k for k in saved.split(",") if k):
+            cur = next((i for i in range(self.tabs.count())
+                        if self.tabs.widget(i).objectName() == key), None)
+            if cur is not None and cur != target_pos:
+                bar.moveTab(cur, target_pos)
 
     def _build_statusbar(self):
         sb = QStatusBar()

@@ -103,6 +103,8 @@ class TrackingTab(QWidget):
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(_ALIGN)
+                if c == 1:   # recipient name — bold
+                    nf = item.font(); nf.setBold(True); item.setFont(nf)
                 self.table.setItem(r, c, item)
         self.table.blockSignals(False)
         self.count_lbl.setText(f"סה\"כ רשומות: {len(rows)}")
@@ -133,5 +135,7 @@ class TrackingTab(QWidget):
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(_ALIGN)
+                if c == 1:   # recipient name — bold
+                    nf = item.font(); nf.setBold(True); item.setFont(nf)
                 self.log_table.setItem(r, c, item)
         self.log_table.blockSignals(False)

@@ -674,17 +674,27 @@ def _annotate_need_scores(rows, weights: dict = None):
 
     for r in rows:
         acc = 0.0
+        parts = []   # per-factor breakdown for the "why this score" view
         for f in active:
             v = _need_num(r.get(f["field"]), f["kind"])
-            if v is None or (f["dir"] == "low" and v <= 0):
+            missing = v is None or (f["dir"] == "low" and v <= 0)
+            if missing:
                 comp = 0.5                       # missing → neutral
             else:
                 lo, hi = ranges[f["key"]]
                 comp = _norm(v, lo, hi)
                 if f["dir"] == "low":
                     comp = 1.0 - comp
-            acc += weights.get(f["key"], 0) * comp
+            w = weights.get(f["key"], 0)
+            acc += w * comp
+            parts.append({
+                "label": f["label"],
+                "value": "—" if missing else r.get(f["field"]),
+                "weight_pct": round(100 * w / total_w),
+                "points": round(100 * w * comp / total_w, 1),
+            })
         r["need_score"] = round(100 * acc / total_w, 1)
+        r["_score_parts"] = parts
     return rows
 
 

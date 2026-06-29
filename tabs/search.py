@@ -88,6 +88,7 @@ class SearchTab(QWidget):
             return w
 
         self.l_name = lbl()
+        _nf = self.l_name.font(); _nf.setBold(True); self.l_name.setFont(_nf)
         self.l_phone1 = lbl()
         self.l_phone2 = lbl()
         self.l_phone3 = lbl()
@@ -163,8 +164,9 @@ class SearchTab(QWidget):
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(str(v) or "")
                 item.setTextAlignment(_ALIGN)
-                if c == 0:
+                if c == 0:   # name — bold
                     item.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
+                    nf = item.font(); nf.setBold(True); item.setFont(nf)
                 self.results_table.setItem(r, c, item)
         self.results_table.blockSignals(False)
         self.count_lbl.setText(f"נמצאו: {len(self._results)}")

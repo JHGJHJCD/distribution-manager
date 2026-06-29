@@ -23,8 +23,15 @@ _PRINT_CSS = """
     th { background-color: #1a4a7a; color: white; padding: 6px; text-align: right; border: 1px solid #305090; }
     td { padding: 5px 6px; text-align: right; border: 1px solid #aac; }
     tr:nth-child(even) { background-color: #eef3ff; }
+    .reserve-h { text-align: right; color: #b45309; font-size: 12pt; font-weight: bold;
+                 margin-top: 16px; border-bottom: 1px solid #f0c890; padding-bottom: 3px; }
+    table.reserve th { background-color: #b45309; border-color: #92400e; }
     .footer { text-align: center; font-size: 9pt; color: #888; margin-top: 8px; }
 """
+
+_THEAD = ("<thead><tr>"
+          "<th>✓ ביצוע</th><th>אזור</th><th>טלפון / ים</th><th>שם מלא</th><th>מס'</th>"
+          "</tr></thead>")
 
 
 def _esc(v) -> str:
@@ -33,23 +40,17 @@ def _esc(v) -> str:
     return html.escape(str(v if v is not None else ""))
 
 
-def _build_html(recipients: List[Dict], dist_date: str) -> str:
-    """Build the printable HTML for a distribution list — a right-to-left table
-    (Hebrew), recipients sorted alphabetically, with the fund name and a
-    trial-system disclaimer. The נפשות (souls) column is intentionally omitted."""
-    rows_sorted = sorted(recipients, key=lambda r: r.get("full_name", ""))
-
-    rows_html = ""
-    for i, rec in enumerate(rows_sorted, 1):
+def _table_rows(rows: List[Dict]) -> str:
+    # Columns are emitted RIGHT-TO-LEFT (✓/אזור/טלפון/שם/מס') because Qt's
+    # QTextDocument lays table columns in source order regardless of dir/layout —
+    # reversing the source order is what puts the index column on the right.
+    out = ""
+    for i, rec in enumerate(rows, 1):
         phones = " / ".join(
             p for p in [rec.get("phone1", ""), rec.get("phone2", ""), rec.get("phone3", "")]
             if p
         )
-        # Columns are emitted RIGHT-TO-LEFT (✓/אזור/טלפון/שם/מס') because Qt's
-        # QTextDocument lays table columns in source order regardless of `dir`/
-        # layout-direction — so reversing the source order is what actually puts
-        # the index column on the right, as a Hebrew table should read.
-        rows_html += (
+        out += (
             f"<tr>"
             f"<td style='width:60px;'>&nbsp;</td>"
             f"<td>{_esc(rec.get('area', ''))}</td>"
@@ -58,25 +59,33 @@ def _build_html(recipients: List[Dict], dist_date: str) -> str:
             f"<td>{i}</td>"
             f"</tr>"
         )
+    return out
+
+
+def _build_html(recipients: List[Dict], dist_date: str) -> str:
+    """Build the printable HTML for a distribution list — right-to-left (Hebrew),
+    with the fund name and a trial-system disclaimer. Recipients flagged
+    `_reserve` are split into a separate, clearly-marked 'רזרבה' section kept in
+    priority order (call order = row number). The נפשות column is omitted."""
+    mains = [r for r in recipients if not r.get("_reserve")]
+    reserves = [r for r in recipients if r.get("_reserve")]
+    mains = sorted(mains, key=lambda r: r.get("full_name", ""))
+    # reserves are NOT re-sorted — they arrive in priority order (call order).
+
+    body = f"<table>{_THEAD}<tbody>{_table_rows(mains)}</tbody></table>"
+    if reserves:
+        body += (
+            "<div class='reserve-h'>רזרבה — לפי סדר עדיפות (להתקשר לפי הסדר)</div>"
+            f"<table class='reserve'>{_THEAD}<tbody>{_table_rows(reserves)}</tbody></table>"
+        )
 
     return f"""
     <html><body>
     <div class='org'>{_esc(ORG_NAME)}</div>
     <h2>רשימת חלוקה — {_esc(dist_date)}</h2>
     <div class='notice'>{_esc(DISCLAIMER)}</div>
-    <table>
-        <thead>
-            <tr>
-                <th>✓ ביצוע</th>
-                <th>אזור</th>
-                <th>טלפון / ים</th>
-                <th>שם מלא</th>
-                <th>מס'</th>
-            </tr>
-        </thead>
-        <tbody>{rows_html}</tbody>
-    </table>
-    <p class='footer'>הודפס: {date.today().strftime('%d/%m/%Y')} | סה"כ: {len(recipients)} מקבלים</p>
+    {body}
+    <p class='footer'>הודפס: {date.today().strftime('%d/%m/%Y')} | חלוקה: {len(mains)} · רזרבה: {len(reserves)}</p>
     </body></html>
     """
 
