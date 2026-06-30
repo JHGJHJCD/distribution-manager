@@ -7,6 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 import database as db
 from utils.backup import auto_backup_async
+from utils.ui import BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES
 
 COLS = ["סוג", "מפתח", "שם מלא", "טלפון 1", "טלפון 2", "אזור", "עדיפות", "סטטוס"]
 
@@ -66,6 +67,8 @@ class ReviewTab(QWidget):
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # שם מלא
         hdr.setResizeContentsPrecision(20)
         self.table.verticalHeader().setVisible(False)
+        self.table.setItemDelegateForColumn(6, BadgeDelegate(PRIORITY_BADGES, self.table))  # עדיפות
+        self.table.setItemDelegateForColumn(7, BadgeDelegate(STATUS_BADGES, self.table))    # סטטוס
         lay.addWidget(self.table)
 
         bot = QHBoxLayout()

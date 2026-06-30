@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer
 import database as db
-from utils.ui import attach_empty_state, refresh_empty_state
+from utils.ui import attach_empty_state, refresh_empty_state, search_icon
 
 def _fdate(s: str) -> str:
     if s and len(s) >= 10 and s[4] == '-':
@@ -39,6 +39,7 @@ class TrackingTab(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("הקלד שם...")
         self.search.setMaximumWidth(200)
+        self.search.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
         self.search.textChanged.connect(lambda: self._filter_timer.start(220))
         frow.addWidget(self.search)
         frow.addStretch()

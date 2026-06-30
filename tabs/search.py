@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer
 import database as db
+from utils.ui import search_icon
 
 def _fdate(s: str) -> str:
     if s and len(s) >= 10 and s[4] == '-':
@@ -47,6 +48,7 @@ class SearchTab(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("שם, טלפון, ת״ז בעל/אשה, כתובת, אימייל...")
         self.search_input.setClearButtonEnabled(True)
+        self.search_input.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.textChanged.connect(lambda: self._filter_timer.start(200))
         search_row.addWidget(self.search_input)
         self.count_lbl = QLabel("")

@@ -35,7 +35,8 @@ def _fdate(s: str) -> str:
     return s or ""
 from utils.backup import auto_backup_async, auto_backup
 from utils.excel_utils import import_from_excel
-from utils.ui import busy_cursor, attach_empty_state, refresh_empty_state
+from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state,
+                      BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, search_icon)
 
 COLS = ["מס'", "שם מלא", "עדיפות", "טלפון 1", "טלפון 2", "טלפון 3",
         "כתובת", "אזור", "נפשות", "תדירות", "חלוקה אחרונה",
@@ -147,6 +148,7 @@ class RecipientsTab(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("חיפוש לפי שם...")
         self.search_input.setMaximumWidth(220)
+        self.search_input.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.textChanged.connect(lambda: self._filter_timer.start(220))
         top.addWidget(self.search_input)
 
@@ -193,6 +195,9 @@ class RecipientsTab(QWidget):
         self.table.verticalHeader().setVisible(False)
         lay.addWidget(self.table)
         attach_empty_state(self.table, "אין מקבלים להצגה")
+        # coloured pill badges for priority + status columns
+        self.table.setItemDelegateForColumn(2, BadgeDelegate(PRIORITY_BADGES, self.table))
+        self.table.setItemDelegateForColumn(12, BadgeDelegate(STATUS_BADGES, self.table))
 
         # Bottom buttons
         bot = QHBoxLayout()

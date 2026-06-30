@@ -96,26 +96,23 @@ QFrame#panel {
 /* ════ Tab bar ════ */
 QTabWidget::pane {
     border: 1px solid $blue_200;
-    border-top: none;
-    border-bottom-left-radius: 8px;
-    border-bottom-right-radius: 8px;
+    border-radius: 10px;
+    top: 4px;
 }
 QTabBar::tab {
-    font-weight: 700;
+    font-weight: 600;
     font-size: $fs_tab;
-    min-width: 112px;
-    padding: 11px 20px;
-    border-radius: 8px 8px 0 0;
+    min-width: 100px;
+    padding: 9px 18px;
+    border-radius: 9px;
     color: $ink_soft;
-    background-color: rgba(15, 23, 42, 0.04);
-    margin-left: 3px;
+    background-color: transparent;
+    margin: 3px 3px 5px 3px;
 }
 QTabBar::tab:selected {
-    background-color: $surface;
-    border: 2px solid $blue_700;
-    border-bottom: 2px solid $surface;
-    font-weight: 800;
-    color: $blue_700;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e88e5, stop:1 $blue_700);
+    color: #ffffff;
+    font-weight: 700;
 }
 QTabBar::tab:!selected:hover {
     background-color: $blue_100;
