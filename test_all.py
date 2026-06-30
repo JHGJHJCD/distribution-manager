@@ -477,6 +477,23 @@ check("weekly UI excludes חד-פעמי", not ot_in_ui)
 _win.one_time_tab.refresh()
 check("one_time tab loads", _win.one_time_tab.table.rowCount() >= 0)
 
+# regression: one-timers selected in "חד פעמי" must arrive CHECKED in "עדכון
+# קבוצתי" so they actually appear in the issued (checked) distribution list.
+from PyQt6.QtWidgets import QMessageBox as _QMB
+_orig_info = _QMB.information
+_QMB.information = staticmethod(lambda *a, **k: None)   # don't block on the popup
+db.add_recipient({"full_name": "__ot_issued__", "status": "פעיל",
+                  "frequency": "חד-פעמי", "priority": 3, "souls": 5})
+_win.one_time_tab.refresh()
+_win.one_time_tab.products_spin.setValue(999)
+_win.one_time_tab.reserve_spin.setValue(0)
+_win.one_time_tab._calc_suggestion()
+_win.one_time_tab._add_to_group_update()
+_QMB.information = _orig_info
+_issued = _win.group_tab._get_checked_recipients()
+check("one-timer added from חד-פעמי is checked & in issued list",
+      any(r["full_name"] == "__ot_issued__" for r in _issued))
+
 _stats = db.get_summary()
 check("summary has all keys", all(k in _stats for k in
     ["active", "overdue", "total_souls", "dists_month", "dists_total", "suspended", "by_freq", "by_area"]))

@@ -171,7 +171,11 @@ class GroupUpdateTab(QWidget):
             # Checkbox column
             chk = QTableWidgetItem()
             chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            chk.setCheckState(Qt.CheckState.Unchecked)
+            # One-time recipients explicitly added from the "חד פעמי" tab arrive
+            # PRE-CHECKED (they were deliberately selected), so they're included in
+            # the issued/saved list. Regulars start unchecked (mark who came).
+            chk.setCheckState(Qt.CheckState.Checked if rec.get("id") in self._extra_ids
+                              else Qt.CheckState.Unchecked)
             chk.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             chk.setData(Qt.ItemDataRole.UserRole, rec["id"])
             self.table.setItem(r, 0, chk)
@@ -278,6 +282,10 @@ class GroupUpdateTab(QWidget):
         with busy_cursor():
             db.bulk_add_distributions(checked, dist_date, what, qty, distributor)
             auto_backup_async()
+
+        # The added one-time recipients have now been distributed — drop them from
+        # the group list so they aren't shown (or re-saved) again next time.
+        self._extra_ids.clear()
 
         msg = f"נשמרה חלוקה ל-{len(checked)} מקבלים"
         QMessageBox.information(self, "הצלחה", msg)
