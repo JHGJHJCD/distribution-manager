@@ -49,9 +49,17 @@ print("  DB priority counts:", dict(dbpri))
 check("priority preserved in DB (code 3 count)", dbpri.get(3, 0) == pri.get(3, 0))
 check("priority preserved in DB (code 2 count)", dbpri.get(2, 0) == pri.get(2, 0))
 
-# regulars (code 4) are NOT one-time
-reg = [r for r in allrec if r.get("frequency") != "חד-פעמי"]
-check("regulars (code4) = frequency שבועי", all(r.get("frequency") == "שבועי" for r in reg), f"{len(reg)} regulars")
+# Only priority tiers 2/3 and 'בירור' become one-time. Code 4 = weekly; codes
+# 1/0 and unmarked rows carry NO invented frequency (blank) — they must NOT be
+# forced to 'חד-פעמי'.
+check("code 4 → frequency שבועי (DB)",
+      all(r.get("frequency") == "שבועי" for r in allrec if r.get("priority") == 4))
+check("codes 1/0 NOT forced to חד-פעמי",
+      all(r.get("frequency") != "חד-פעמי" for r in allrec if r.get("priority") in (0, 1)))
+non_onetime = [r for r in allrec if r.get("frequency") != "חד-פעמי"]
+check("non-one-time freq is only שבועי or blank",
+      all((r.get("frequency") or "") in ("", "שבועי") for r in non_onetime),
+      f"{len(non_onetime)} non-one-time")
 
 # ── ranking ────────────────────────────────────────────────────────────────────
 ot = db.get_one_time_list()

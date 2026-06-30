@@ -504,13 +504,25 @@ def calculate_next_dist(last_date_str: str, frequency: str) -> date:
 
 # ─── Weekly distribution list ─────────────────────────────────────────────────
 
+def get_areas() -> list:
+    """Distinct non-empty areas present in the data, sorted — so the area filter
+    reflects whatever areas actually exist (not a hard-coded pair)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT area FROM recipients "
+            "WHERE area IS NOT NULL AND TRIM(area) != '' ORDER BY area"
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
 def get_weekly_list(days_ahead: int = 30, area_filter: str = "הכל"):
     """Returns active non-one-time recipients sorted alphabetically."""
     today = date.today()
     cutoff = today + timedelta(days=days_ahead)
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT * FROM recipients WHERE status='פעיל' AND frequency != 'חד-פעמי' ORDER BY full_name"
+            "SELECT * FROM recipients WHERE status='פעיל' "
+            "AND frequency != 'חד-פעמי' AND frequency != '' ORDER BY full_name"
         ).fetchall()
         result = []
         updates = []
@@ -738,7 +750,8 @@ def compute_suggested_n(total_products: int) -> tuple[int, int]:
     one-time priority list."""
     with get_connection() as conn:
         regular_count = conn.execute(
-            "SELECT COUNT(*) as c FROM recipients WHERE status='פעיל' AND frequency != 'חד-פעמי'"
+            "SELECT COUNT(*) as c FROM recipients WHERE status='פעיל' "
+            "AND frequency != 'חד-פעמי' AND frequency != ''"
         ).fetchone()["c"]
     n = max(0, total_products - regular_count)
     return n, regular_count
@@ -823,7 +836,7 @@ def get_summary():
 
         overdue = conn.execute(
             "SELECT COUNT(*) as c FROM recipients "
-            "WHERE status='פעיל' AND frequency != 'חד-פעמי' "
+            "WHERE status='פעיל' AND frequency != 'חד-פעמי' AND frequency != '' "
             "AND next_distribution != '' "
             "AND date(next_distribution) < date('now')"
         ).fetchone()["c"]

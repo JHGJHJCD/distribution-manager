@@ -157,13 +157,26 @@ class RecipientsTab(QWidget):
         self.status_filter.currentTextChanged.connect(self.refresh)
         top.addWidget(self.status_filter)
 
+        # Priority filter — map label → priority code (None = no filter)
+        self.priority_filter = QComboBox()
+        self._PRIORITY_FILTERS = [
+            ("כל העדיפויות", None),
+            ("קבוע", 4),
+            ("עדיפות ראשונה", 3),
+            ("עדיפות שנייה", 2),
+        ]
+        self.priority_filter.addItems([o[0] for o in self._PRIORITY_FILTERS])
+        self.priority_filter.currentTextChanged.connect(self.refresh)
+        top.addWidget(self.priority_filter)
+
         btn_add = QPushButton("+ הוסף מקבל")
         btn_add.setObjectName("primary")
         btn_add.clicked.connect(self._add)
         top.addWidget(btn_add)
 
         btn_import = QPushButton("יבוא מ-Excel")
-        btn_import.setObjectName("neutral")
+        btn_import.setObjectName("success")
+        btn_import.setStyleSheet("font-size:11px; min-height:24px; min-width:0; padding:3px 12px;")
         btn_import.setToolTip("ייבוא מקובץ Excel (פורמט תבנית ליהודה)")
         btn_import.clicked.connect(self._import_excel)
         top.addWidget(btn_import)
@@ -233,7 +246,13 @@ class RecipientsTab(QWidget):
     def refresh(self):
         sf = self.status_filter.currentText()
         status = sf if sf != "הכל" else None
-        self._rows_data = db.get_all_recipients(status_filter=status)
+        rows = db.get_all_recipients(status_filter=status)
+        # Priority filter (in-memory) — match the selected priority code.
+        pcode = next((c for label, c in self._PRIORITY_FILTERS
+                      if label == self.priority_filter.currentText()), None)
+        if pcode is not None:
+            rows = [r for r in rows if r.get("priority") == pcode]
+        self._rows_data = rows
         self._populate(self._rows_data)
 
     @staticmethod

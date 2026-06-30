@@ -201,9 +201,13 @@ def import_from_excel(path: str) -> List[Dict]:
                     priority = int(m.group())
         if priority == 4:
             frequency = "שבועי"
-        elif priority is not None or priority_raw:
+        elif priority in (2, 3) or "בירור" in priority_raw:
             frequency = "חד-פעמי"
         else:
+            # Codes 1/0, stray non-priority marks (V/X/text), or nothing at all
+            # carry no real distribution meaning — don't invent 'חד-פעמי' for
+            # them. Take the file's own frequency column if present, otherwise
+            # leave it blank (an unmarked recipient stays unmarked).
             frequency = cell("frequency")
 
         results.append({

@@ -20,3 +20,6 @@ crash_log.txt
 *_preview.png
 screenshots_test/
 _shot_review.py
+
+# embedded secrets (token for GitHub feedback) — never commit
+_secret.py

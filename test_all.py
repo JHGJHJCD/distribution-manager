@@ -468,7 +468,7 @@ check("recipients table loaded", _win.recipients_tab.table.rowCount() > 0)
 _win.weekly_tab.refresh()
 ot_in_ui = False
 for _r in range(_win.weekly_tab.table.rowCount()):
-    _item = _win.weekly_tab.table.item(_r, 7)  # עמודת תדירות
+    _item = _win.weekly_tab.table.item(_r, 6)  # עמודת תדירות
     if _item and _item.text() == "חד-פעמי":
         ot_in_ui = True
         break
