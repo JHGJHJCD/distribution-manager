@@ -109,14 +109,26 @@ QTabBar::tab {
     background-color: transparent;
     margin: 3px 3px 5px 3px;
 }
-QTabBar::tab:selected {
+/* Note: position-qualified selectors (:top/:bottom/...) so we match
+   qt-material's more-specific `QTabBar::tab:top:selected` rule and override its
+   blue text — otherwise we'd get unreadable blue-on-blue. */
+QTabBar::tab:selected,
+QTabBar::tab:top:selected, QTabBar::tab:bottom:selected,
+QTabBar::tab:left:selected, QTabBar::tab:right:selected {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e88e5, stop:1 $blue_700);
     color: #ffffff;
     font-weight: 700;
 }
-QTabBar::tab:!selected:hover {
+QTabBar::tab:!selected:hover,
+QTabBar::tab:top:!selected:hover, QTabBar::tab:bottom:!selected:hover,
+QTabBar::tab:left:!selected:hover, QTabBar::tab:right:!selected:hover {
     background-color: $blue_100;
     color: $blue_700;
+}
+QTabBar::tab:selected:hover,
+QTabBar::tab:top:selected:hover, QTabBar::tab:bottom:selected:hover,
+QTabBar::tab:left:selected:hover, QTabBar::tab:right:selected:hover {
+    color: #ffffff;
 }
 
 /* ════ Tables — roomier rows for readability ════ */
@@ -135,7 +147,8 @@ QTableWidget::item, QTableView::item {
     color: $ink;
 }
 QTableWidget::item:hover, QTableView::item:hover { background-color: $blue_100; }
-QTableWidget::item:selected, QTableView::item:selected {
+QTableWidget::item:selected, QTableView::item:selected,
+QTableWidget::item:selected:focus, QTableView::item:selected:focus {
     background-color: $blue_200;
     color: $blue_900;
 }

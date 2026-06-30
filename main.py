@@ -324,9 +324,23 @@ class MainWindow(QMainWindow):
         day_name = days[today.weekday()]
         sb.showMessage(f"  {day_name}, {today.strftime('%d/%m/%Y')}  |  מנהל חלוקה")
 
+        # Feedback channel — small, always-visible button so any user can leave
+        # a message about a problem (stored locally for the developer to read).
+        fb_btn = QPushButton("✉ השאר הודעה")
+        fb_btn.setObjectName("neutral")
+        fb_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        fb_btn.setStyleSheet("font-size:11px; min-height:22px; padding:2px 10px;")
+        fb_btn.setToolTip("דווח על בעיה או השאר בקשה למפתח")
+        fb_btn.clicked.connect(self._open_feedback)
+        sb.addWidget(fb_btn)
+
         ver_lbl = QLabel(f"v{APP_VERSION}  ")
         ver_lbl.setStyleSheet("color:#9ca3af; font-size:11px;")
         sb.addPermanentWidget(ver_lbl)
+
+    def _open_feedback(self):
+        from utils.ui import FeedbackDialog
+        FeedbackDialog.open(self)
 
     def _on_tab_changed(self, idx):
         tab = self.tabs.widget(idx)

@@ -109,6 +109,82 @@ def refresh_empty_state(table):
         lbl.raise_()
 
 
+class FeedbackDialog:
+    """תיבת דו-שיח קטנה לשליחת הודעה/דיווח-תקלה למפתח.
+
+    בנויה כפונקציה שמרימה QDialog (כדי לא לייבא QtWidgets הכבדים בראש הקובץ).
+    ההודעה נשמרת דרך utils.feedback.save_feedback (קובץ JSONL מקומי שרק המפתח
+    קורא). אין מסך שמציג הודעות למשתמש — זה ערוץ חד-כיווני בכוונה.
+    """
+    @staticmethod
+    def open(parent=None):
+        from PyQt6.QtWidgets import (
+            QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+            QPlainTextEdit, QPushButton, QMessageBox,
+        )
+        from utils.feedback import save_feedback
+
+        dlg = QDialog(parent)
+        dlg.setWindowTitle("השארת הודעה למפתח")
+        dlg.setMinimumWidth(440)
+        dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        lay = QVBoxLayout(dlg)
+        lay.setSpacing(10)
+        lay.setContentsMargins(18, 16, 18, 16)
+
+        title = QLabel("נתקלת בבעיה? יש בקשה לשיפור?")
+        title.setObjectName("title")
+        lay.addWidget(title)
+
+        hint = QLabel(
+            "כתוב כאן בחופשיות מה קרה או מה היית רוצה שישתפר. ההודעה נשמרת "
+            "ותגיע למפתח התוכנה, שיתקן לפי הצורך. אפשר להשאיר שם — לא חובה."
+        )
+        hint.setObjectName("subtitle")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("שם (לא חובה):"))
+        name_edit = QLineEdit()
+        name_edit.setPlaceholderText("אפשר להשאיר ריק")
+        name_row.addWidget(name_edit)
+        lay.addLayout(name_row)
+
+        msg = QPlainTextEdit()
+        msg.setPlaceholderText("תאר כאן את הבעיה או הבקשה...")
+        msg.setMinimumHeight(120)
+        lay.addWidget(msg)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cancel = QPushButton("ביטול")
+        cancel.setObjectName("neutral")
+        cancel.clicked.connect(dlg.reject)
+        btn_row.addWidget(cancel)
+        send = QPushButton("שליחה")
+        send.setObjectName("primary")
+        btn_row.addWidget(send)
+        lay.addLayout(btn_row)
+
+        def _do_send():
+            text = msg.toPlainText().strip()
+            if not text:
+                QMessageBox.information(dlg, "", "נא לכתוב הודעה לפני השליחה.")
+                return
+            try:
+                save_feedback(text, name_edit.text())
+            except Exception as e:
+                QMessageBox.warning(dlg, "שגיאה", f"שמירת ההודעה נכשלה:\n{e}")
+                return
+            QMessageBox.information(dlg, "תודה!", "ההודעה נשמרה ותטופל. תודה רבה!")
+            dlg.accept()
+
+        send.clicked.connect(_do_send)
+        msg.setFocus()
+        return dlg.exec()
+
+
 @contextmanager
 def busy_cursor():
     """Show a wait cursor around a blocking operation and force a fresh repaint
