@@ -274,7 +274,14 @@ class MainWindow(QMainWindow):
         # Save the new order whenever the user drags a tab.
         self.tabs.tabBar().tabMoved.connect(lambda *_: self._save_tab_order())
         self.tabs.currentChanged.connect(self._on_tab_changed)
-        self.setCentralWidget(self.tabs)
+        # Wrap in a container with a top margin so the pill tabs aren't clipped
+        # against the window's title bar.
+        central = QWidget()
+        c_lay = QVBoxLayout(central)
+        c_lay.setContentsMargins(6, 8, 6, 6)
+        c_lay.setSpacing(0)
+        c_lay.addWidget(self.tabs)
+        self.setCentralWidget(central)
 
         # After restoring a custom order the tab now at position 0 may not be the
         # one that self-refreshed in __init__, so refresh whatever is shown first.
