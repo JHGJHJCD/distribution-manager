@@ -192,7 +192,7 @@ class LoginDialog(QDialog):
         b_lay.addWidget(self.pwd_input)
 
         btn = QPushButton("כניסה  ←")
-        btn.setMinimumHeight(40)
+        btn.setMinimumHeight(36)
         btn.setStyleSheet(
             "QPushButton{"
             "  background:#1565c0; color:white; font-weight:700;"

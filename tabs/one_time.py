@@ -135,7 +135,7 @@ class OneTimeTab(QWidget):
 
         btn_add = QPushButton("הוסף נבחרים לעדכון קבוצתי")
         btn_add.setObjectName("primary")
-        btn_add.setMinimumHeight(36)
+        btn_add.setMinimumHeight(34)
         btn_add.clicked.connect(self._add_to_group_update)
         bot.addWidget(btn_add)
         lay.addLayout(bot)

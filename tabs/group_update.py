@@ -129,7 +129,7 @@ class GroupUpdateTab(QWidget):
 
         btn_save = QPushButton("שמור חלוקה למעקב")
         btn_save.setObjectName("primary")
-        btn_save.setMinimumHeight(38)
+        btn_save.setMinimumHeight(34)
         btn_save.setToolTip("שמור את הסימונים כחלוקה מבוצעת ועדכן תאריכים")
         btn_save.clicked.connect(self._save)
         bot.addWidget(btn_save)

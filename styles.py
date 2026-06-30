@@ -161,42 +161,44 @@ QHeaderView::section:hover { background-color: $blue_200; }
 
 /* ════ Buttons — hierarchy: primary / success / danger / ghost ════ */
 QPushButton {
-    border-radius: 8px;
+    border-radius: 7px;
     font-weight: 700;
-    min-width: 84px;
-    min-height: 36px;
-    padding: 8px 22px;
+    min-width: 76px;
+    min-height: 30px;
+    padding: 6px 16px;
 }
 QPushButton:focus { outline: none; }
-QPushButton:pressed { padding-top: 9px; padding-bottom: 7px; }
+QPushButton:pressed { padding-top: 7px; padding-bottom: 5px; }
 
-/* PRIMARY — the single dominant action per screen */
+/* PRIMARY — the single dominant action per screen (subtle glossy gradient) */
 QPushButton#primary {
-    background-color: $blue_700;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e88e5, stop:1 $blue_700);
     color: #ffffff;
     border: none;
     font-weight: 800;
 }
-QPushButton#primary:hover   { background-color: $blue_600; }
-QPushButton#primary:pressed { background-color: $blue_900; }
+QPushButton#primary:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2b95ef, stop:1 $blue_600); }
+QPushButton#primary:pressed { background: $blue_900; }
 QPushButton#primary:focus   { border: 2px solid $blue_200; }
-QPushButton#primary:disabled { background-color: $line; color: $muted; }
+QPushButton#primary:disabled { background: $line; color: $muted; }
 
 QPushButton#danger {
-    background-color: $danger; color: #ffffff; border: none;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e85753, stop:1 $danger);
+    color: #ffffff; border: none;
 }
-QPushButton#danger:hover   { background-color: $danger_dk; }
-QPushButton#danger:pressed { background-color: $danger_dk; }
+QPushButton#danger:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ef6b67, stop:1 $danger_dk); }
+QPushButton#danger:pressed { background: $danger_dk; }
 QPushButton#danger:focus   { border: 2px solid $danger_soft; }
-QPushButton#danger:disabled { background-color: $line; color: $muted; }
+QPushButton#danger:disabled { background: $line; color: $muted; }
 
 QPushButton#success {
-    background-color: $success; color: #ffffff; border: none;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #43b563, stop:1 $success);
+    color: #ffffff; border: none;
 }
-QPushButton#success:hover   { background-color: $success_dk; }
-QPushButton#success:pressed { background-color: $success_dk; }
+QPushButton#success:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4fc06e, stop:1 $success_dk); }
+QPushButton#success:pressed { background: $success_dk; }
 QPushButton#success:focus   { border: 2px solid $success_soft; }
-QPushButton#success:disabled { background-color: $line; color: $muted; }
+QPushButton#success:disabled { background: $line; color: $muted; }
 
 /* NEUTRAL — secondary "ghost" (outlined) so it recedes behind primary */
 QPushButton#neutral {
