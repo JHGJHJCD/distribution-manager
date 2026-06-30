@@ -493,6 +493,9 @@ _QMB.information = _orig_info
 _issued = _win.group_tab._get_checked_recipients()
 check("one-timer added from חד-פעמי is checked & in issued list",
       any(r["full_name"] == "__ot_issued__" for r in _issued))
+_win.weekly_tab.refresh()
+check("weekly list also includes the one-time pick",
+      any(r.get("full_name") == "__ot_issued__" for r in _win.weekly_tab._rows_data))
 
 _stats = db.get_summary()
 check("summary has all keys", all(k in _stats for k in

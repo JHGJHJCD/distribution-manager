@@ -7,7 +7,11 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from datetime import date
 import database as db
-from styles import OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG
+from styles import (OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG,
+                    SELECTED_BG, SELECTED_FG)
+
+# colours for one-time picks (+ reserve) merged into the weekly issuance list
+_RESERVE_BG, _RESERVE_FG = "#ede7f6", "#5e35b1"
 
 def _fdate(s: str) -> str:
     """'2026-06-03' → '03/06/2026'"""
@@ -81,7 +85,8 @@ class WeeklyTab(QWidget):
 
         # Legend
         legend = QHBoxLayout()
-        for color, text in [(OVERDUE_FG, "● באיחור"), (TODAY_FG, "● היום/מחר"), (WEEK_FG, "● השבוע")]:
+        for color, text in [(OVERDUE_FG, "● באיחור"), (TODAY_FG, "● היום/מחר"), (WEEK_FG, "● השבוע"),
+                            (SELECTED_FG, "● חד-פעמי"), (_RESERVE_FG, "● רזרבה")]:
             lbl = QLabel(text)
             lbl.setStyleSheet(f"color: {color};")
             legend.addWidget(lbl)
@@ -109,36 +114,47 @@ class WeeklyTab(QWidget):
         days = self.days_spin.value()
         area = self.area_combo.currentText()
         self._rows_data = db.get_weekly_list(days_ahead=days, area_filter=area)
+        # Merge in the one-time picks (+ reserve) chosen in the 'חד פעמי' tab, so
+        # this is the full issuance list for the week. They live on group_tab.
+        gt = getattr(self.main_win, "group_tab", None)
+        if gt is not None:
+            base_ids = {r.get("id") for r in self._rows_data}
+            picks = [r for r in gt._rows_data
+                     if r.get("id") in gt._extra_ids and r.get("id") not in base_ids
+                     and (area == "הכל" or r.get("area", "") == area)]
+            self._rows_data = self._rows_data + picks
         self._populate()
 
     def _populate(self):
-        today = date.today()
         self.table.clearContents()
         self.table.setRowCount(0)
         self.table.setRowCount(len(self._rows_data))
-        overdue = today_cnt = week_cnt = 0
+        overdue = today_cnt = week_cnt = onetime = 0
 
         for r, rec in enumerate(self._rows_data):
-            days_left = rec.get("days_left", 0)
-
-            if days_left < 0:
-                bg = QColor(OVERDUE_BG)
-                fg = QColor(OVERDUE_FG)
-                overdue += 1
-            elif days_left <= 1:
-                bg = QColor(TODAY_BG)
-                fg = QColor(TODAY_FG)
-                today_cnt += 1
+            if rec.get("frequency") == "חד-פעמי":   # a one-time pick / reserve
+                onetime += 1
+                if rec.get("_reserve"):
+                    bg, fg, freq_disp = QColor(_RESERVE_BG), QColor(_RESERVE_FG), "חד-פעמי · רזרבה"
+                else:
+                    bg, fg, freq_disp = QColor(SELECTED_BG), QColor(SELECTED_FG), "חד-פעמי"
+                days_disp, next_disp = "—", ""
             else:
-                bg = QColor(WEEK_BG)
-                fg = QColor(WEEK_FG)
-                week_cnt += 1
+                days_left = rec.get("days_left", 0)
+                if days_left < 0:
+                    bg, fg = QColor(OVERDUE_BG), QColor(OVERDUE_FG); overdue += 1
+                elif days_left <= 1:
+                    bg, fg = QColor(TODAY_BG), QColor(TODAY_FG); today_cnt += 1
+                else:
+                    bg, fg = QColor(WEEK_BG), QColor(WEEK_FG); week_cnt += 1
+                days_disp = str(days_left)
+                next_disp = _fdate(rec.get("next_distribution", ""))
+                freq_disp = rec.get("frequency", "")
 
             vals = [str(r + 1), rec.get("full_name", ""),
                     rec.get("phone1", ""), rec.get("phone2", ""), rec.get("phone3", ""),
                     rec.get("area", ""), str(rec.get("souls", "") or ""),
-                    rec.get("frequency", ""), _fdate(rec.get("next_distribution", "")),
-                    str(days_left), rec.get("_status", "")]
+                    freq_disp, next_disp, days_disp, rec.get("_status", "")]
 
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
@@ -150,8 +166,10 @@ class WeeklyTab(QWidget):
                     nf = item.font(); nf.setBold(True); item.setFont(nf)
                 self.table.setItem(r, c, item)
 
+        extra = f"  |  ➕ חד-פעמי: {onetime}" if onetime else ""
         self.lbl_stats.setText(
-            f"⏰ באיחור: {overdue}  |  🔥 היום/מחר: {today_cnt}  |  ✅ השבוע: {week_cnt}  |  סה\"כ: {len(self._rows_data)}"
+            f"⏰ באיחור: {overdue}  |  🔥 היום/מחר: {today_cnt}  |  ✅ השבוע: {week_cnt}{extra}"
+            f"  |  סה\"כ: {len(self._rows_data)}"
         )
         refresh_empty_state(self.table)
 

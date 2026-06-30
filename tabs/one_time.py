@@ -330,5 +330,8 @@ class OneTimeTab(QWidget):
                     gt._extra_ids.add(rec["id"])
                     added += 1
             gt._populate()
+            # they also join the weekly issuance list — refresh it next time it opens
+            if hasattr(self.main_win, "weekly_tab"):
+                self.main_win.weekly_tab._needs_refresh = True
             self.main_win.tabs.setCurrentWidget(gt)
-            self.main_win.status_msg(f"נוספו {added} חד-פעמיים לעדכון קבוצתי")
+            self.main_win.status_msg(f"נוספו {added} חד-פעמיים לרשימת החלוקה")
