@@ -312,3 +312,118 @@ def export_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
     path = str(exports_dir / filename)
     wb.save(path)
     return path
+
+
+# Full recipient field set for the detailed export (key, Hebrew header).
+_FULL_FIELDS = [
+    ("full_name", "שם מלא"), ("priority", "עדיפות"),
+    ("phone1", "טלפון 1"), ("phone2", "טלפון 2"), ("phone3", "טלפון 3"),
+    ("address", "כתובת"), ("area", "אזור"), ("souls", "נפשות"),
+    ("frequency", "תדירות"), ("last_distribution", "חלוקה אחרונה"),
+    ("next_distribution", "חלוקה הבאה"), ("status", "סטטוס"), ("notes", "הערות"),
+    ("external_id", "מס' מזהה"), ("source", "מקור"),
+    ("birth_date", "ת. לידה"), ("spouse_birth_date", "ת. לידה בן/בת זוג"),
+    ("id_number", "ת.ז. בעל"), ("spouse_id_number", "ת.ז. אשה"),
+    ("children_home", "ילדים בבית"), ("children_married", "ילדים נשואים"),
+    ("children_total", "מספר ילדים"), ("marital_status", "מצב אישי"),
+    ("email", "אימייל"), ("synagogue", "בית כנסת"),
+    ("housing_expenses", "הוצ' דיור"), ("medical_expenses", "הוצ' רפואיות"),
+    ("income", "הכנסות"), ("per_soul", "פנוי לנפש"),
+    ("work_scope", "היקף משרה"), ("parent_type", "סוג הורה"),
+    ("occupation", "עיסוק בעל"), ("representative", "שם נציג"),
+]
+
+_PRIORITY_LABELS = {4: "קבוע", 3: "עדיפות ראשונה", 2: "עדיפות שנייה"}
+
+
+def _priority_text(rec: Dict) -> str:
+    pr = rec.get("priority")
+    if pr in _PRIORITY_LABELS:
+        return _PRIORITY_LABELS[pr]
+    return "חובת בירור" if "בירור" in (rec.get("priority_raw") or "") else ""
+
+
+def _fmt_date(v) -> str:
+    s = str(v or "")
+    if len(s) >= 10 and s[4] == "-":
+        return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
+    return s
+
+
+def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
+    """Detailed export of a distribution: EVERY recipient field stored in the app,
+    plus a 'קיבל חלוקה' column marking that the people listed received. Returns
+    the saved file path."""
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "חלוקה מלאה"
+    ws.sheet_view.rightToLeft = True
+
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor="2563EB")
+    got_fill = PatternFill("solid", fgColor="16A34A")   # green for 'קיבל חלוקה'
+    header_align = Alignment(horizontal="right", vertical="center")
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    headers = ["מס'", "קיבל חלוקה"] + [h for _, h in _FULL_FIELDS]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = border
+    ws[1][1].fill = got_fill   # highlight the 'קיבל חלוקה' header
+    ws.row_dimensions[1].height = 22
+
+    alt_fill = PatternFill("solid", fgColor="F8FAFC")
+    normal_fill = PatternFill("solid", fgColor="FFFFFF")
+    got_cell_fill = PatternFill("solid", fgColor="DCFCE7")
+    cell_align = Alignment(horizontal="right", vertical="center")
+    _DATE_KEYS = {"last_distribution", "next_distribution", "birth_date", "spouse_birth_date"}
+
+    for i, rec in enumerate(recipients, 1):
+        row = [i, "כן"]
+        for key, _ in _FULL_FIELDS:
+            if key == "priority":
+                row.append(_priority_text(rec))
+            elif key in _DATE_KEYS:
+                row.append(_fmt_date(rec.get(key)))
+            else:
+                v = rec.get(key)
+                row.append("" if v is None else v)
+        ws.append(row)
+        fill = alt_fill if i % 2 == 0 else normal_fill
+        for cell in ws[i + 1]:
+            cell.alignment = cell_align
+            cell.fill = fill
+            cell.border = border
+        ws[i + 1][1].fill = got_cell_fill   # the 'קיבל חלוקה' cell
+        ws.row_dimensions[i + 1].height = 18
+
+    # column widths — index, got, then a sensible width per field
+    widths = [6, 12] + [26 if k == "address" else 20 if k in ("full_name", "email", "synagogue")
+                        else 14 for k, _ in _FULL_FIELDS]
+    for col, width in enumerate(widths, 1):
+        ws.column_dimensions[ws.cell(1, col).column_letter].width = width
+
+    ncols = len(headers)
+    last_col = ws.cell(1, ncols).column_letter
+    ws.insert_rows(1)
+    ws.merge_cells(f"A1:{last_col}1")
+    title_cell = ws["A1"]
+    title_cell.value = f"רשימת חלוקה מלאה — {dist_date}  (המופיעים קיבלו חלוקה)"
+    title_cell.font = Font(bold=True, size=14, color="1D4ED8")
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 28
+    ws.freeze_panes = "A3"   # keep title + header visible while scrolling
+
+    exports_dir = _app_dir() / "exports"
+    exports_dir.mkdir(exist_ok=True)
+    filename = f"חלוקה_מלאה_{dist_date.replace('/', '-')}_{datetime.now().strftime('%H%M%S')}.xlsx"
+    path = str(exports_dir / filename)
+    wb.save(path)
+    return path

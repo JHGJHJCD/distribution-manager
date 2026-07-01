@@ -9,7 +9,7 @@ from datetime import date
 from widgets import DateEdit
 import database as db
 from utils.backup import auto_backup_async
-from utils.excel_utils import export_distribution_to_excel
+from utils.excel_utils import export_distribution_to_excel, export_full_distribution_to_excel
 from utils.print_view import print_distribution_list
 from utils.ui import busy_cursor, attach_empty_state, refresh_empty_state
 from styles import (OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG,
@@ -202,9 +202,16 @@ class GroupUpdateTab(QWidget):
         btn_export = QPushButton("ייצא ל-Excel")
         btn_export.setObjectName("success")
         btn_export.setStyleSheet(_SMALL_BTN)
-        btn_export.setToolTip("ייצא את הרשימה (המסומנים, או הכל אם אין סימון)")
+        btn_export.setToolTip("ייצא רשימה בסיסית (המסומנים, או הכל אם אין סימון)")
         btn_export.clicked.connect(self._export_excel)
         bot.addWidget(btn_export)
+
+        btn_export_full = QPushButton("ייצוא מלא לאקסל")
+        btn_export_full.setObjectName("success")
+        btn_export_full.setStyleSheet(_SMALL_BTN)
+        btn_export_full.setToolTip("ייצוא עם כל פרטי המקבל + ציון שהמופיעים קיבלו חלוקה")
+        btn_export_full.clicked.connect(self._export_full)
+        bot.addWidget(btn_export_full)
 
         btn_print = QPushButton("הדפסה")
         btn_print.setObjectName("neutral")
@@ -447,6 +454,19 @@ class GroupUpdateTab(QWidget):
             with busy_cursor():
                 path = export_distribution_to_excel(checked, dist_date)
             QMessageBox.information(self, "ייצוא הושלם", f"הקובץ נשמר:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה", str(e))
+
+    def _export_full(self):
+        rows = self._get_export_rows()
+        if not rows:
+            QMessageBox.information(self, "", "אין נתונים לייצוא")
+            return
+        dist_date = _fdate(self.date_edit.get_iso())
+        try:
+            with busy_cursor():
+                path = export_full_distribution_to_excel(rows, dist_date)
+            QMessageBox.information(self, "ייצוא הושלם", f"הקובץ (עם כל הפרטים) נשמר:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "שגיאה", str(e))
 
