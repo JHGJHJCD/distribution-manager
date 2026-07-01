@@ -59,6 +59,20 @@ class GroupUpdateTab(QWidget):
         db.set_setting("weekly_extra_ids", ",".join(str(i) for i in sorted(self._extra_ids)))
         db.set_setting("weekly_reserve_ids", ",".join(str(i) for i in sorted(self._reserve_ids)))
 
+    # ── remembered names for quick fill (distributor / distribution name) ──────
+    _HIST_MAX = 15
+
+    def _load_history(self, key: str) -> list:
+        raw = db.get_setting(key) or ""
+        return [x for x in raw.split("\n") if x.strip()]
+
+    def _push_history(self, key: str, value: str):
+        value = (value or "").strip()
+        if not value:
+            return
+        hist = [value] + [x for x in self._load_history(key) if x != value]
+        db.set_setting(key, "\n".join(hist[:self._HIST_MAX]))
+
     def add_one_time_picks(self, recs: list) -> int:
         """Called by the one-time tab. Records picks (persisted) and refreshes."""
         added = 0
@@ -102,10 +116,14 @@ class GroupUpdateTab(QWidget):
             return l
 
         details_row.addWidget(_lbl("שם החלוקה:"))
-        self.name_input = QLineEdit()
-        self.name_input.setPlaceholderText("לדוגמה: חלוקת פסח")
+        self.name_input = QComboBox()
+        self.name_input.setEditable(True)
+        self.name_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.name_input.setMinimumWidth(150)
-        self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה")
+        self.name_input.lineEdit().setPlaceholderText("לדוגמה: חלוקת פסח")
+        self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה. אפשר לבחור משמות קודמים.")
+        self.name_input.addItems(self._load_history("dist_names_history"))
+        self.name_input.setCurrentText("")
         details_row.addWidget(self.name_input, 2)
 
         details_row.addWidget(_lbl("תאריך:"))
@@ -129,10 +147,14 @@ class GroupUpdateTab(QWidget):
         details_row.addWidget(self.qty_spin)
 
         details_row.addWidget(_lbl("מחלק:"))
-        self.dist_input = QLineEdit()
-        self.dist_input.setPlaceholderText("שם המחלק")
+        self.dist_input = QComboBox()
+        self.dist_input.setEditable(True)
+        self.dist_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.dist_input.setMinimumWidth(130)
-        self.dist_input.setToolTip("שם האדם שביצע את החלוקה")
+        self.dist_input.lineEdit().setPlaceholderText("שם המחלק")
+        self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
+        self.dist_input.addItems(self._load_history("distributors_history"))
+        self.dist_input.setCurrentText(db.get_setting("last_distributor") or "")
         details_row.addWidget(self.dist_input, 1)
 
         lay.addWidget(details_card)
@@ -199,26 +221,19 @@ class GroupUpdateTab(QWidget):
         bot = QHBoxLayout()
         bot.setSpacing(8)
 
-        btn_save = QPushButton("שמור חלוקה למעקב")
+        btn_save = QPushButton("שמור חלוקה למעקב + ייצוא לאקסל")
         btn_save.setObjectName("primary")
         btn_save.setMinimumHeight(34)
-        btn_save.setToolTip("שמור את הסימונים כחלוקה מבוצעת ועדכן תאריכים")
+        btn_save.setToolTip("רושם את החלוקה למעקב ומייצא אוטומטית אקסל מלא לתיקיית ההורדות")
         btn_save.clicked.connect(self._save)
         bot.addWidget(btn_save)
 
-        btn_export = QPushButton("ייצא ל-Excel")
+        btn_export = QPushButton("ייצא ל-Excel (רשימה קצרה)")
         btn_export.setObjectName("success")
         btn_export.setStyleSheet(_SMALL_BTN)
         btn_export.setToolTip("ייצא רשימה בסיסית (המסומנים, או הכל אם אין סימון)")
         btn_export.clicked.connect(self._export_excel)
         bot.addWidget(btn_export)
-
-        btn_export_full = QPushButton("ייצוא מלא לאקסל")
-        btn_export_full.setObjectName("success")
-        btn_export_full.setStyleSheet(_SMALL_BTN)
-        btn_export_full.setToolTip("ייצוא כל פרטי המקבל למי שסומן שקיבל (חובה לסמן ✔ תחילה)")
-        btn_export_full.clicked.connect(self._export_full)
-        bot.addWidget(btn_export_full)
 
         btn_print = QPushButton("הדפסה")
         btn_print.setObjectName("neutral")
@@ -410,7 +425,8 @@ class GroupUpdateTab(QWidget):
         dist_date   = self.date_edit.get_iso()
         what        = self.what_input.text().strip()
         qty         = self.qty_spin.value()
-        distributor = self.dist_input.text().strip()
+        distributor = self.dist_input.currentText().strip()
+        dist_name   = self.name_input.currentText().strip()
 
         _ERR = "border: 2px solid #dc2626; background-color: #fff5f5;"
         errors = []
@@ -427,27 +443,56 @@ class GroupUpdateTab(QWidget):
             errors.append("שם המחלק: שדה חובה")
         else:
             self.dist_input.setStyleSheet("")
-            self.dist_input.setToolTip("שם האדם שביצע את החלוקה")
+            self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
         if errors:
             QMessageBox.warning(self, "שדות חסרים", "• " + "\n• ".join(errors))
             return
 
+        export_path = None
+        export_err = None
         with busy_cursor():
             db.bulk_add_distributions(checked, dist_date, what, qty, distributor)
             auto_backup_async()
+            # Merged action: also export a full Excel (of who received) to Downloads.
+            try:
+                export_path = export_full_distribution_to_excel(
+                    checked, _fdate(dist_date), dist_name)
+            except Exception as e:
+                export_err = str(e)
 
-        # The one-time picks have now been distributed — drop them so they aren't
-        # shown or re-saved next time. Persist the cleared state.
+        # Remember the distributor + distribution name and refresh the suggestions.
+        db.set_setting("last_distributor", distributor)
+        self._push_history("distributors_history", distributor)
+        self._push_history("dist_names_history", dist_name)
+        self._reload_name_history()
+
+        # One-time picks distributed — drop them so they aren't re-saved next time.
         self._extra_ids.clear()
         self._reserve_ids.clear()
         self._persist_extras()
 
-        msg = f"נשמרה חלוקה ל-{len(checked)} מקבלים"
+        msg = f"נשמרה חלוקה ל-{len(checked)} מקבלים."
+        if export_path:
+            msg += f"\n\nקובץ אקסל מלא נשמר בתיקיית ההורדות:\n{export_path}"
+        elif export_err:
+            msg += f"\n\n⚠ הרישום נשמר, אך ייצוא האקסל נכשל:\n{export_err}"
         QMessageBox.information(self, "הצלחה", msg)
 
         if self.main_win:
-            self.main_win.status_msg(msg)
+            self.main_win.status_msg(f"נשמרה חלוקה ל-{len(checked)} מקבלים")
             self.main_win.refresh_all()
+
+    def _reload_name_history(self):
+        """Refresh the dropdown suggestions of the distributor + name combos,
+        keeping whatever text is currently typed."""
+        for combo, key in ((self.dist_input, "distributors_history"),
+                           (self.name_input, "dist_names_history")):
+            cur = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(self._load_history(key))
+            combo.setCurrentText(cur)
+            combo.blockSignals(False)
 
     def _get_export_rows(self):
         """Rows to export/print: the checked set if any, else the whole list."""
@@ -464,27 +509,8 @@ class GroupUpdateTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "שגיאה", str(e))
 
-    def _export_full(self):
-        # The full export certifies who RECEIVED — so it requires the operator to
-        # tick the ✔ column first. Without any marks it is blocked (unlike the
-        # basic export, which falls back to the whole list).
-        rows = self._get_checked_recipients()
-        if not rows:
-            QMessageBox.warning(
-                self, "לא סומן מי קיבל",
-                "הייצוא המלא מאשר מי קיבל חלוקה.\n"
-                "יש לסמן תחילה בעמודת ✔ את מי שקיבל, ואז לייצא.")
-            return
-        dist_date = _fdate(self.date_edit.get_iso())
-        try:
-            with busy_cursor():
-                path = export_full_distribution_to_excel(rows, dist_date)
-            QMessageBox.information(self, "ייצוא הושלם", f"הקובץ (עם כל הפרטים) נשמר:\n{path}")
-        except Exception as e:
-            QMessageBox.critical(self, "שגיאה", str(e))
-
     def _print(self):
-        name = self.name_input.text().strip()
+        name = self.name_input.currentText().strip()
         if not name:
             self.name_input.setStyleSheet(
                 "border: 2px solid #dc2626; background-color:#fff5f5;")
@@ -495,7 +521,9 @@ class GroupUpdateTab(QWidget):
             self.name_input.setFocus()
             return
         self.name_input.setStyleSheet("")
-        self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה")
+        self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה. אפשר לבחור משמות קודמים.")
+        # Remember the name typed for print too, so it's suggested next time.
+        self._push_history("dist_names_history", name)
         checked = self._get_export_rows()
         dist_date = _fdate(self.date_edit.get_iso())
         print_distribution_list(checked, dist_date, self, dist_name=name)

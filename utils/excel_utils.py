@@ -13,6 +13,19 @@ def _app_dir() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _downloads_dir() -> Path:
+    """The user's Downloads folder (where all exports go). Falls back to an
+    'exports' folder next to the app if Downloads can't be resolved/created."""
+    try:
+        d = Path(os.path.expanduser("~")) / "Downloads"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+    except Exception:
+        d = _app_dir() / "exports"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+
 def _parse_date(val) -> str:
     """Convert any date representation to ISO yyyy-mm-dd string."""
     if val is None or val == "":
@@ -305,9 +318,7 @@ def export_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
     title_cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    # Save to exports subfolder next to the app
-    exports_dir = _app_dir() / "exports"
-    exports_dir.mkdir(exist_ok=True)
+    exports_dir = _downloads_dir()
     filename = f"חלוקה_{dist_date.replace('/', '-')}_{datetime.now().strftime('%H%M%S')}.xlsx"
     path = str(exports_dir / filename)
     wb.save(path)
@@ -350,7 +361,8 @@ def _fmt_date(v) -> str:
     return s
 
 
-def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
+def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
+                                      dist_name: str = "") -> str:
     """Detailed export of a distribution: EVERY recipient field stored in the app,
     plus a 'קיבל חלוקה' column marking that the people listed received. Returns
     the saved file path."""
@@ -419,15 +431,16 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str) ->
     ws.insert_rows(1)
     ws.merge_cells(f"A1:{last_col}1")
     title_cell = ws["A1"]
-    title_cell.value = f"רשימת חלוקה מלאה — {dist_date}  (המופיעים קיבלו חלוקה)"
+    _name_part = f"{dist_name} — " if dist_name else ""
+    title_cell.value = f"{_name_part}רשימת חלוקה מלאה — {dist_date}  (המופיעים קיבלו חלוקה)"
     title_cell.font = Font(bold=True, size=14, color="1D4ED8")
     title_cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
     ws.freeze_panes = "A3"   # keep title + header visible while scrolling
 
-    exports_dir = _app_dir() / "exports"
-    exports_dir.mkdir(exist_ok=True)
-    filename = f"חלוקה_מלאה_{dist_date.replace('/', '-')}_{datetime.now().strftime('%H%M%S')}.xlsx"
+    exports_dir = _downloads_dir()
+    _safe = "".join(c for c in (dist_name or "חלוקה_מלאה") if c not in '\\/:*?"<>|').strip() or "חלוקה_מלאה"
+    filename = f"{_safe}_{dist_date.replace('/', '-')}_{datetime.now().strftime('%H%M%S')}.xlsx"
     path = str(exports_dir / filename)
     wb.save(path)
     return path

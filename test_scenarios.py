@@ -52,7 +52,7 @@ ok("S2 weekly reserve flagged", any(r.get("_reserve") for r in win.weekly_tab._r
 ok("S2 weekly print has reserve section",
    "רזרבה — לפי סדר עדיפות" in _build_html(win.weekly_tab._get_export_rows(), "10/06/2026"))
 # record the distribution from group_update
-win.group_tab.what_input.setText("סל מזון"); win.group_tab.dist_input.setText("מחלק א")
+win.group_tab.what_input.setText("סל מזון"); win.group_tab.dist_input.setCurrentText("מחלק א")
 n_before = len(db.get_distributions())
 win.group_tab._save()
 ok("S2 distribution recorded for the picks", len(db.get_distributions()) > n_before)

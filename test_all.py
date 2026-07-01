@@ -423,7 +423,7 @@ try:
     _path = export_distribution_to_excel(_test_recs, "31/05/2026")
     _p = Path(_path)
     check("export file created", _p.exists())
-    check("file in exports/ subfolder", "exports" in str(_p))
+    check("export saved to Downloads", "Downloads" in str(_p) or "exports" in str(_p))
     check("file is xlsx", _path.endswith(".xlsx"))
     if _p.exists():
         _p.unlink()

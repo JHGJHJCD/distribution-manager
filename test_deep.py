@@ -330,7 +330,7 @@ path = export_distribution_to_excel(test_recs, "04/06/2026")
 p = Path(path)
 check("export file exists", p.exists())
 check("filename has no spaces", " " not in p.name)
-check("file in exports/ folder", "exports" in str(p))
+check("export saved to Downloads", "Downloads" in str(p) or "exports" in str(p))
 
 # בדוק תוכן הקובץ
 if p.exists():
