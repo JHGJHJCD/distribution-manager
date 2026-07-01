@@ -36,8 +36,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 
 # Tabs under test
-from tabs.group_update import GroupUpdateTab
-from tabs.weekly import WeeklyTab
+from tabs.group_update import GroupUpdateTab, SCOPE_WEEK, SCOPE_ALL
 from tabs.recipients import RecipientsTab
 from tabs.one_time import OneTimeTab
 from tabs.tracking import TrackingTab
@@ -168,7 +167,10 @@ def exercise(app, n, rng, report):
     # group_update refreshes itself in __init__
     group = GroupUpdateTab(fm)
     fm.group_tab = group
-    weekly = WeeklyTab(fm)
+    # WeeklyTab was merged into GroupUpdateTab; the old weekly view is now the
+    # SCOPE_WEEK scope of the merged tab. Keep a second instance so the weekly
+    # list path stays under stress coverage alongside the "all regulars" group.
+    weekly = GroupUpdateTab(fm)
     recipients = RecipientsTab(fm)
     one_time = OneTimeTab(fm)
     tracking = TrackingTab(fm)
@@ -212,10 +214,11 @@ def exercise(app, n, rng, report):
     timed(report, "recipients.filter", n, _filter_recipients)
 
     def _weekly_controls():
-        weekly.days_spin.setValue(90)
+        # scope + area toggles each trigger a real refresh() on the merged tab
+        weekly.scope_combo.setCurrentText(SCOPE_ALL)
         weekly.area_combo.setCurrentText("בעלז")
         weekly.area_combo.setCurrentText("הכל")
-        weekly.days_spin.setValue(7)
+        weekly.scope_combo.setCurrentText(SCOPE_WEEK)
     timed(report, "weekly.controls", n, _weekly_controls)
 
     def _one_time_calc():

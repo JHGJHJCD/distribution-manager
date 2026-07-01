@@ -29,8 +29,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow
 from PyQt6.QtCore import Qt
 
 from tabs.recipients import RecipientsTab
-from tabs.weekly import WeeklyTab
-from tabs.group_update import GroupUpdateTab
+from tabs.group_update import GroupUpdateTab, SCOPE_WEEK, SCOPE_ALL
 
 HEB = "אבגדהוזחטיכלמנסעפצקרשת"
 FREQS = ["שבועי", "דו-שבועי", "חודשי", "חד-פעמי"]
@@ -80,8 +79,10 @@ def main():
         # this is the real usage where refresh_all() fires after every save and
         # re-populates an already-populated table (the path that froze the app).
         rec = RecipientsTab(win); win.setCentralWidget(rec); win.show(); app.processEvents()
-        wk = WeeklyTab(win)
-        gp = GroupUpdateTab(win)
+        # WeeklyTab was merged into GroupUpdateTab. The old weekly-list render is
+        # now the SCOPE_WEEK scope; the full "all regulars" render is SCOPE_ALL.
+        wk = GroupUpdateTab(win); wk.scope_combo.setCurrentText(SCOPE_WEEK)
+        gp = GroupUpdateTab(win); gp.scope_combo.setCurrentText(SCOPE_ALL)
 
         for tab, label in ((rec, "recipients"), (wk, "weekly"), (gp, "group")):
             win.setCentralWidget(tab)

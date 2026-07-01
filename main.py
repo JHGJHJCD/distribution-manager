@@ -201,7 +201,11 @@ class LoginDialog(QDialog):
         h_lay.setContentsMargins(0, 20, 0, 18)
 
         logo = QLabel()
-        logo.setPixmap(_login_logo(62))
+        _ic = resource_path("icon.ico")
+        if os.path.exists(_ic):
+            logo.setPixmap(QIcon(_ic).pixmap(74, 74))   # the real app icon
+        else:
+            logo.setPixmap(_login_logo(62))             # painted fallback
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
         logo.setStyleSheet("background:transparent;")
         h_lay.addWidget(logo)

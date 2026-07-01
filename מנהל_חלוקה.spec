@@ -38,7 +38,6 @@ a = Analysis(
         'version',
         'tabs.recipients',
         'tabs.group_update',
-        'tabs.weekly',
         'tabs.one_time',
         'tabs.tracking',
         'tabs.search',
