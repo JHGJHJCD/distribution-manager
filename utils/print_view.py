@@ -45,6 +45,10 @@ def _css(fs: int = 11) -> str:
                  margin-top: 12px; border-bottom: 1px solid #f0c890; padding-bottom: 3px; }}
     table.reserve th {{ background-color: #b45309; border-color: #92400e; }}
     .footer {{ text-align: center; font-size: {small}pt; color: #888; margin-top: 6px; }}
+    .chk {{ text-align: center; font-size: {fs + 3}pt; }}
+    .resgrid {{ width: 100%; border-collapse: collapse; margin-top: 6px; direction: rtl; }}
+    .resgrid td {{ border: 1px solid #f0c890; padding: {pad}px 8px; text-align: right;
+                  font-size: {fs}pt; vertical-align: top; }}
     """
 
 
@@ -73,7 +77,7 @@ def _table_rows(rows: List[Dict]) -> str:
         )
         out += (
             f"<tr>"
-            f"<td style='width:60px;'>&nbsp;</td>"
+            f"<td class='chk'>☐</td>"
             f"<td>{_esc(rec.get('area', ''))}</td>"
             f"<td>{_esc(phones)}</td>"
             f"<td><b>{_esc(rec.get('full_name', ''))}</b></td>"
@@ -83,7 +87,28 @@ def _table_rows(rows: List[Dict]) -> str:
     return out
 
 
-def _build_html(recipients: List[Dict], dist_date: str, has_logo: bool = False) -> str:
+def _reserve_grid(reserves: List[Dict], per_row: int = 3) -> str:
+    """Reserve list laid out ACROSS the page width (compact, several per row) in
+    priority/call order, instead of one tall column."""
+    cells = []
+    for i, rec in enumerate(reserves, 1):
+        phones = " / ".join(
+            p for p in [rec.get("phone1", ""), rec.get("phone2", ""), rec.get("phone3", "")] if p)
+        txt = f"{i}. <b>{_esc(rec.get('full_name', ''))}</b>"
+        if phones:
+            txt += f" — {_esc(phones)}"
+        cells.append(txt)
+    out = "<table class='resgrid'>"
+    for r in range(0, len(cells), per_row):
+        chunk = cells[r:r + per_row]
+        out += "<tr>" + "".join(f"<td>{c}</td>" for c in chunk)
+        out += "<td></td>" * (per_row - len(chunk)) + "</tr>"
+    out += "</table>"
+    return out
+
+
+def _build_html(recipients: List[Dict], dist_date: str, has_logo: bool = False,
+                dist_name: str = "") -> str:
     """Build the printable HTML for a distribution list — right-to-left (Hebrew),
     with the fund name and a trial-system disclaimer. Recipients flagged
     `_reserve` are split into a separate, clearly-marked 'רזרבה' section kept in
@@ -97,15 +122,16 @@ def _build_html(recipients: List[Dict], dist_date: str, has_logo: bool = False) 
     if reserves:
         body += (
             "<div class='reserve-h'>רזרבה — לפי סדר עדיפות (להתקשר לפי הסדר)</div>"
-            f"<table class='reserve'>{_THEAD}<tbody>{_table_rows(reserves)}</tbody></table>"
+            + _reserve_grid(reserves)
         )
 
     logo_html = "<div class='logo'><img src='orglogo' width='150'></div>" if has_logo else ""
+    heading = f"{_esc(dist_name)} — {_esc(dist_date)}" if dist_name else f"רשימת חלוקה — {_esc(dist_date)}"
     return f"""
     <html><body>
     {logo_html}
     <div class='org'>{_esc(ORG_NAME)}</div>
-    <h2>רשימת חלוקה — {_esc(dist_date)}</h2>
+    <h2>{heading}</h2>
     <div class='notice'>{_esc(DISCLAIMER)}</div>
     {body}
     <p class='footer'>הודפס: {date.today().strftime('%d/%m/%Y')} | חלוקה: {len(mains)} · רזרבה: {len(reserves)}</p>
@@ -113,7 +139,8 @@ def _build_html(recipients: List[Dict], dist_date: str, has_logo: bool = False) 
     """
 
 
-def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWidget = None):
+def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWidget = None,
+                            dist_name: str = ""):
     """Open print dialog and print distribution list — portrait, right-to-left."""
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
     printer.setPageOrientation(QPageLayout.Orientation.Portrait)
@@ -126,7 +153,7 @@ def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWid
 
     logo_path = _resource_path("org_logo.png")
     has_logo = os.path.exists(logo_path)
-    html = _build_html(recipients, dist_date, has_logo)
+    html = _build_html(recipients, dist_date, has_logo, dist_name)
     page_size = QSizeF(printer.pageLayout().paintRectPixels(printer.resolution()).size())
 
     doc = QTextDocument()

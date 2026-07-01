@@ -101,6 +101,13 @@ class GroupUpdateTab(QWidget):
             l.setStyleSheet("font-weight:700; color:#374151; background:transparent; border:none;")
             return l
 
+        details_row.addWidget(_lbl("שם החלוקה:"))
+        self.name_input = QLineEdit()
+        self.name_input.setPlaceholderText("לדוגמה: חלוקת פסח")
+        self.name_input.setMinimumWidth(150)
+        self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה")
+        details_row.addWidget(self.name_input, 2)
+
         details_row.addWidget(_lbl("תאריך:"))
         self.date_edit = DateEdit(allow_empty=False)
         self.date_edit.setMinimumWidth(130)
@@ -477,6 +484,18 @@ class GroupUpdateTab(QWidget):
             QMessageBox.critical(self, "שגיאה", str(e))
 
     def _print(self):
+        name = self.name_input.text().strip()
+        if not name:
+            self.name_input.setStyleSheet(
+                "border: 2px solid #dc2626; background-color:#fff5f5;")
+            self.name_input.setToolTip("חובה לרשום שם חלוקה לפני הדפסה")
+            QMessageBox.warning(
+                self, "חסר שם חלוקה",
+                "יש לרשום שם חלוקה (למשל 'חלוקת פסח') בשדה 'שם החלוקה' לפני ההדפסה.")
+            self.name_input.setFocus()
+            return
+        self.name_input.setStyleSheet("")
+        self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה")
         checked = self._get_export_rows()
         dist_date = _fdate(self.date_edit.get_iso())
-        print_distribution_list(checked, dist_date, self)
+        print_distribution_list(checked, dist_date, self, dist_name=name)
