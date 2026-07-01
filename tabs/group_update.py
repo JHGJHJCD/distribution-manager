@@ -209,7 +209,7 @@ class GroupUpdateTab(QWidget):
         btn_export_full = QPushButton("ייצוא מלא לאקסל")
         btn_export_full.setObjectName("success")
         btn_export_full.setStyleSheet(_SMALL_BTN)
-        btn_export_full.setToolTip("ייצוא עם כל פרטי המקבל + ציון שהמופיעים קיבלו חלוקה")
+        btn_export_full.setToolTip("ייצוא כל פרטי המקבל למי שסומן שקיבל (חובה לסמן ✔ תחילה)")
         btn_export_full.clicked.connect(self._export_full)
         bot.addWidget(btn_export_full)
 
@@ -458,9 +458,15 @@ class GroupUpdateTab(QWidget):
             QMessageBox.critical(self, "שגיאה", str(e))
 
     def _export_full(self):
-        rows = self._get_export_rows()
+        # The full export certifies who RECEIVED — so it requires the operator to
+        # tick the ✔ column first. Without any marks it is blocked (unlike the
+        # basic export, which falls back to the whole list).
+        rows = self._get_checked_recipients()
         if not rows:
-            QMessageBox.information(self, "", "אין נתונים לייצוא")
+            QMessageBox.warning(
+                self, "לא סומן מי קיבל",
+                "הייצוא המלא מאשר מי קיבל חלוקה.\n"
+                "יש לסמן תחילה בעמודת ✔ את מי שקיבל, ואז לייצא.")
             return
         dist_date = _fdate(self.date_edit.get_iso())
         try:
