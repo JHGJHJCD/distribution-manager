@@ -10,16 +10,18 @@ else:
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QDialog,
     QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QMessageBox, QWidget, QStatusBar, QFrame, QSplashScreen
+    QPushButton, QMessageBox, QWidget, QStatusBar, QFrame, QSplashScreen,
+    QGraphicsDropShadowEffect
 )
-from PyQt6.QtCore import Qt, QRect, QTimer, QEventLoop
-from PyQt6.QtGui import QFont, QIcon, QColor, QPixmap, QPainter, QLinearGradient
+from PyQt6.QtCore import (Qt, QRect, QRectF, QPoint, QByteArray, QSharedMemory,
+                          QTimer, QEventLoop)
+from PyQt6.QtGui import (QFont, QIcon, QColor, QPixmap, QPainter, QLinearGradient,
+                         QPen, QBrush, QGuiApplication)
 
 import database as db
 from styles import EXTRA_QSS, QT_MATERIAL_EXTRA
 from tabs.recipients import RecipientsTab
 from tabs.group_update import GroupUpdateTab
-from tabs.weekly import WeeklyTab
 from tabs.one_time import OneTimeTab
 from tabs.tracking import TrackingTab
 from tabs.search import SearchTab
@@ -115,70 +117,129 @@ def _wait_ms(ms: int):
 
 # ─── Login dialog ─────────────────────────────────────────────────────────────
 
+def _login_logo(size: int = 60) -> QPixmap:
+    """A glossy rounded-square app logo with a white 2×2 window-pane grid,
+    painted at runtime (no bundled asset). Mirrors the splash/login branding."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    rad = size * 0.26
+    body = QLinearGradient(0, 0, 0, size)
+    body.setColorAt(0.0, QColor("#5fa8ef"))
+    body.setColorAt(0.5, QColor("#2f8be8"))
+    body.setColorAt(1.0, QColor("#1565c0"))
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QBrush(body))
+    p.drawRoundedRect(QRectF(1, 1, size - 2, size - 2), rad, rad)
+    # glossy sheen over the top half
+    sheen = QLinearGradient(0, 0, 0, size * 0.55)
+    sheen.setColorAt(0.0, QColor(255, 255, 255, 95))
+    sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
+    p.setBrush(QBrush(sheen))
+    p.drawRoundedRect(QRectF(2, 2, size - 4, size * 0.5), rad, rad)
+    # white window with a thin cross → four panes
+    m = size * 0.27
+    cell = size - 2 * m
+    p.setBrush(QColor("#ffffff"))
+    p.drawRoundedRect(QRectF(m, m, cell, cell), size * 0.05, size * 0.05)
+    gap = size * 0.055
+    p.setBrush(QColor("#2f8be8"))
+    cx = m + cell / 2
+    cy = m + cell / 2
+    p.drawRect(QRectF(cx - gap / 2, m, gap, cell))   # vertical divider
+    p.drawRect(QRectF(m, cy - gap / 2, cell, gap))   # horizontal divider
+    p.end()
+    return pm
+
+
 class LoginDialog(QDialog):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("מנהל חלוקה")
-        self.setFixedSize(400, 320)
+        self.setFixedSize(460, 430)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-
+        # Frameless floating card (matches the design mockup): rounded corners +
+        # soft drop shadow on a translucent window.
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         _set_window_icon(self)
+        self._drag_pos = None
 
         outer = QVBoxLayout(self)
-        outer.setSpacing(0)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(24, 20, 24, 28)   # leave room for the shadow
 
-        # ── Blue header ──────────────────────────────────────────────────────
+        card = QFrame()
+        card.setObjectName("login-card")
+        card.setStyleSheet("QFrame#login-card { background:#ffffff; border-radius:18px; }")
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(48)
+        shadow.setColor(QColor(20, 55, 105, 95))
+        shadow.setOffset(0, 10)
+        card.setGraphicsEffect(shadow)
+        outer.addWidget(card)
+
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(0, 0, 0, 0)
+        card_lay.setSpacing(0)
+
+        # ── Header ────────────────────────────────────────────────────────────
         header = QFrame()
         header.setObjectName("login-header")
-        header.setFixedHeight(118)
+        header.setFixedHeight(184)
         header.setStyleSheet(
             "QFrame#login-header {"
-            "  background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
-            "    stop:0 #1565c0, stop:1 #1e88e5);"
+            "  background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            "    stop:0 #2f8bdf, stop:1 #1565c0);"
+            "  border-top-left-radius:18px; border-top-right-radius:18px;"
             "  border:none;"
             "}"
         )
         h_lay = QVBoxLayout(header)
         h_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        h_lay.setSpacing(2)
-        h_lay.setContentsMargins(0, 14, 0, 14)
+        h_lay.setSpacing(6)
+        h_lay.setContentsMargins(0, 20, 0, 18)
 
+        logo = QLabel()
+        logo.setPixmap(_login_logo(62))
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo.setStyleSheet("background:transparent;")
+        h_lay.addWidget(logo)
 
         title_lbl = QLabel("מנהל חלוקה")
         title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ft = title_lbl.font(); ft.setPointSize(17); ft.setBold(True)
+        ft = title_lbl.font(); ft.setPointSize(20); ft.setBold(True)
         title_lbl.setFont(ft)
         title_lbl.setStyleSheet("color:white; background:transparent; border:none;")
+        glow = QGraphicsDropShadowEffect(title_lbl)
+        glow.setBlurRadius(10); glow.setColor(QColor(0, 30, 70, 110)); glow.setOffset(0, 1)
+        title_lbl.setGraphicsEffect(glow)
         h_lay.addWidget(title_lbl)
 
-        ver_lbl = QLabel(f"v{APP_VERSION}  •  מערכת ניהול חלוקת מצרכים")
+        ver_lbl = QLabel(f"מערכת ניהול חלוקת מוצרים  •  v{APP_VERSION}")
         ver_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ver_lbl.setStyleSheet(
-            "color:rgba(255,255,255,0.75); background:transparent; "
-            "border:none; font-size:11px;"
+            "color:rgba(255,255,255,0.82); background:transparent; "
+            "border:none; font-size:12px;"
         )
         h_lay.addWidget(ver_lbl)
 
-        outer.addWidget(header)
+        card_lay.addWidget(header)
 
-        # ── Thin accent line ─────────────────────────────────────────────────
-        line = QFrame()
-        line.setFixedHeight(3)
-        line.setStyleSheet("background:#42a5f5; border:none;")
-        outer.addWidget(line)
-
-        # ── White body ───────────────────────────────────────────────────────
-        body = QWidget()
+        # ── Body ──────────────────────────────────────────────────────────────
+        body = QFrame()
         body.setObjectName("login-body")
-        body.setStyleSheet("QWidget#login-body { background:#ffffff; }")
+        body.setStyleSheet(
+            "QFrame#login-body { background:#ffffff;"
+            "  border-bottom-left-radius:18px; border-bottom-right-radius:18px; }"
+        )
         b_lay = QVBoxLayout(body)
-        b_lay.setSpacing(12)
-        b_lay.setContentsMargins(36, 26, 36, 26)
+        b_lay.setSpacing(11)
+        b_lay.setContentsMargins(38, 26, 38, 28)
 
         pwd_lbl = QLabel("סיסמה:")
         pwd_lbl.setStyleSheet(
-            "color:#374151; font-weight:700; font-size:13px; "
+            "color:#334155; font-weight:700; font-size:13px; "
             "background:transparent; border:none;"
         )
         b_lay.addWidget(pwd_lbl)
@@ -187,18 +248,27 @@ class LoginDialog(QDialog):
         self.pwd_input.setPlaceholderText("הזן סיסמה")
         self.pwd_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.pwd_input.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self.pwd_input.setMinimumHeight(38)
+        self.pwd_input.setMinimumHeight(44)
+        self.pwd_input.setStyleSheet(
+            "QLineEdit{ background:#f3f6fb; border:1.5px solid #d8e2f0;"
+            "  border-radius:11px; padding:8px 14px; font-size:13px; color:#1f2937; }"
+            "QLineEdit:focus{ border-color:#1e88e5; background:#ffffff; }"
+        )
         self.pwd_input.returnPressed.connect(self.try_login)
         b_lay.addWidget(self.pwd_input)
 
         btn = QPushButton("כניסה  ←")
-        btn.setMinimumHeight(36)
+        btn.setMinimumHeight(46)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
         btn.setStyleSheet(
             "QPushButton{"
-            "  background:#1565c0; color:white; font-weight:700;"
-            "  font-size:14px; border-radius:6px; border:none;"
+            "  background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            "    stop:0 #2b95ef, stop:1 #1565c0);"
+            "  color:white; font-weight:800; font-size:15px;"
+            "  border-radius:12px; border:none;"
             "}"
-            "QPushButton:hover  { background:#1976d2; }"
+            "QPushButton:hover  { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            "    stop:0 #3ba0f5, stop:1 #1976d2); }"
             "QPushButton:pressed{ background:#0d47a1; padding-top:2px; }"
         )
         btn.clicked.connect(self.try_login)
@@ -211,7 +281,42 @@ class LoginDialog(QDialog):
         self.error_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         b_lay.addWidget(self.error_lbl)
 
-        outer.addWidget(body)
+        card_lay.addWidget(body)
+
+        # ── Close button (frameless window has no title bar) ───────────────────
+        self.close_btn = QPushButton("✕", card)
+        self.close_btn.setFixedSize(26, 26)
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.setStyleSheet(
+            "QPushButton{ color:rgba(255,255,255,0.85); background:transparent;"
+            "  border:none; font-size:14px; font-weight:700; border-radius:13px; }"
+            "QPushButton:hover{ background:rgba(255,255,255,0.22); color:white; }"
+        )
+        self.close_btn.move(12, 12)
+        self.close_btn.clicked.connect(self.reject)
+        self.close_btn.raise_()
+
+    def showEvent(self, e):
+        # Frameless windows aren't auto-centered — place on the active screen.
+        super().showEvent(e)
+        scr = self.screen() or QApplication.primaryScreen()
+        if scr is not None:
+            cg = scr.availableGeometry().center()
+            self.move(cg.x() - self.width() // 2, cg.y() - self.height() // 2)
+
+    # Drag-to-move (no title bar on a frameless window)
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            e.accept()
+
+    def mouseMoveEvent(self, e):
+        if self._drag_pos is not None and (e.buttons() & Qt.MouseButton.LeftButton):
+            self.move(e.globalPosition().toPoint() - self._drag_pos)
+            e.accept()
+
+    def mouseReleaseEvent(self, e):
+        self._drag_pos = None
 
     def try_login(self):
         entered = self.pwd_input.text()
@@ -230,19 +335,57 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(f"מנהל חלוקה  v{APP_VERSION}")
         self.setMinimumSize(1100, 700)
+        # Never let the minimum exceed a small screen's work area.
+        scr = QGuiApplication.primaryScreen()
+        if scr is not None:
+            a = scr.availableGeometry()
+            self.setMinimumSize(min(1100, a.width()), min(700, a.height()))
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         _set_window_icon(self)
 
         self._build_tabs()
         self._build_statusbar()
 
+    def show_smart(self):
+        """Open remembering last size/position; otherwise maximized (fills big
+        or ultrawide screens). Falls back to maximized if the saved geometry is
+        off-screen (e.g. a monitor that is no longer connected)."""
+        saved = db.get_setting("win_geometry") or ""
+        restored = False
+        if saved:
+            try:
+                restored = self.restoreGeometry(QByteArray.fromBase64(saved.encode("ascii")))
+            except Exception:
+                restored = False
+        if restored and self._geometry_on_screen():
+            self.show()
+        else:
+            self.showMaximized()
+
+    def _geometry_on_screen(self) -> bool:
+        fg = self.frameGeometry()
+        return any(scr.availableGeometry().intersects(fg)
+                   for scr in QGuiApplication.screens())
+
+    def closeEvent(self, e):
+        try:
+            db.set_setting("win_geometry",
+                           bytes(self.saveGeometry().toBase64()).decode("ascii"))
+        except Exception:
+            pass
+        super().closeEvent(e)
+
     def _build_tabs(self):
         self.tabs = QTabWidget()
         self.tabs.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.tabs.setMovable(True)   # tabs can be reordered by dragging
 
+        # "חלוקה השבוע" and "עדכון קבוצתי" are now ONE merged tab. weekly_tab is
+        # kept as an alias to the same widget so existing callers (one_time.py)
+        # and tests keep working.
         self.group_tab      = GroupUpdateTab(self)
-        self.weekly_tab     = WeeklyTab(self)
+        self.weekly_tab     = self.group_tab
+        self.dist_tab       = self.group_tab
         self.recipients_tab = RecipientsTab(self)
         self.one_time_tab   = OneTimeTab(self)
         self.tracking_tab   = TrackingTab(self)
@@ -253,8 +396,7 @@ class MainWindow(QMainWindow):
         # (widget, label, stable key). The key — not the position — is what we
         # persist, so a saved order survives even if tabs are later added/removed.
         tab_specs = [
-            (self.group_tab,      "עדכון קבוצתי",  "group"),
-            (self.weekly_tab,     "חלוקה השבוע",   "weekly"),
+            (self.group_tab,      "חלוקה ורישום",  "dist"),
             (self.recipients_tab, "מקבלים",        "recipients"),
             (self.one_time_tab,   "חד פעמי",       "one_time"),
             (self.tracking_tab,   "מעקב חלוקות",   "tracking"),
@@ -523,6 +665,18 @@ def _run():
     app = QApplication(sys.argv)
     app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
+    # ── Single-instance guard ─────────────────────────────────────────────────
+    # Prevents the app opening twice (e.g. an impatient double-click during the
+    # splash). Held for the process lifetime; released on exit or before a
+    # self-update relaunch (see settings._on_downloaded).
+    shm = QSharedMemory("ManhalHaluka-singleton-v1")
+    if shm.attach():          # clean up a stale segment from a crashed instance
+        shm.detach()
+    if not shm.create(1):     # another live instance already holds it
+        QMessageBox.information(None, "מנהל חלוקה", "התוכנה כבר פועלת.")
+        sys.exit(0)
+    app._single_instance = shm   # keep a reference alive
+
     _ico = resource_path("icon.ico")
     if os.path.exists(_ico):
         app.setWindowIcon(QIcon(_ico))
@@ -565,7 +719,7 @@ def _run():
         sys.exit(0)
 
     win = MainWindow()
-    win.show()
+    win.show_smart()
     # Check for updates shortly after the UI is up (background; non-blocking).
     QTimer.singleShot(1500, win._auto_check_updates)
     sys.exit(app.exec())

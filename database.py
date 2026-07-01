@@ -516,9 +516,17 @@ def get_areas() -> list:
 
 
 def get_weekly_list(days_ahead: int = 30, area_filter: str = "הכל"):
-    """Returns active non-one-time recipients sorted alphabetically."""
+    """Returns active recurring recipients due by the cutoff, sorted by name.
+
+    The cutoff ALWAYS reaches at least the upcoming distribution Wednesday
+    (inclusive), no matter which weekday the app is opened — otherwise, on the
+    day-before / day-of distribution (Tue/Wed) every regular whose next
+    distribution is that Wednesday would be filtered out and the list would look
+    empty. `days_ahead` can still widen the window beyond that for other callers.
+    """
     today = date.today()
-    cutoff = today + timedelta(days=days_ahead)
+    base_wed = today if today.weekday() == 2 else next_wednesday(today)
+    cutoff = max(today + timedelta(days=days_ahead), base_wed + timedelta(days=1))
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT * FROM recipients WHERE status='פעיל' "

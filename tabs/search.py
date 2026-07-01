@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLabel, QLineEdit, QAbstractItemView, QFormLayout, QFrame
+    QHeaderView, QLabel, QLineEdit, QAbstractItemView, QFormLayout, QFrame,
+    QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer
 import database as db
@@ -77,16 +78,24 @@ class SearchTab(QWidget):
         # Details frame
         frame = QFrame()
         frame.setObjectName("panel")
-        frame_lay = QHBoxLayout(frame)
+        # A VBox (not a single-child HBox) so the form spans the full card width
+        # and value labels get room to grow/wrap instead of clipping.
+        frame_lay = QVBoxLayout(frame)
         frame_lay.setContentsMargins(12, 10, 12, 10)
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         form.setSpacing(8)
+        form.setHorizontalSpacing(14)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.DontWrapRows)
 
         def lbl():
             w = QLabel("")
             w.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            w.setWordWrap(True)                    # long address/notes wrap instead of clip
+            w.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             return w
 
         self.l_name = lbl()

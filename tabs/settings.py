@@ -63,8 +63,8 @@ class SettingsTab(QWidget):
         scroll.setWidget(content)
 
         lay = QVBoxLayout(content)
-        lay.setSpacing(16)
-        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(6)
+        lay.setContentsMargins(10, 8, 10, 8)
 
         title = QLabel("הגדרות מערכת")
         title.setObjectName("title")
@@ -74,8 +74,8 @@ class SettingsTab(QWidget):
         sec_frame = QFrame()
         sec_frame.setObjectName("panel")
         sec_lay = QVBoxLayout(sec_frame)
-        sec_lay.setContentsMargins(14, 12, 14, 12)
-        sec_lay.setSpacing(10)
+        sec_lay.setContentsMargins(10, 7, 10, 7)
+        sec_lay.setSpacing(6)
 
         sec_title = QLabel("אבטחה")
         sec_title.setObjectName("section-header")
@@ -99,8 +99,8 @@ class SettingsTab(QWidget):
         upd_frame = QFrame()
         upd_frame.setObjectName("panel")
         upd_lay = QVBoxLayout(upd_frame)
-        upd_lay.setContentsMargins(14, 12, 14, 12)
-        upd_lay.setSpacing(10)
+        upd_lay.setContentsMargins(10, 7, 10, 7)
+        upd_lay.setSpacing(6)
 
         upd_title = QLabel("עדכון תוכנה")
         upd_title.setObjectName("section-header")
@@ -129,8 +129,8 @@ class SettingsTab(QWidget):
         w_frame = QFrame()
         w_frame.setObjectName("panel")
         w_lay = QVBoxLayout(w_frame)
-        w_lay.setContentsMargins(14, 12, 14, 12)
-        w_lay.setSpacing(10)
+        w_lay.setContentsMargins(10, 7, 10, 7)
+        w_lay.setSpacing(6)
 
         w_title = QLabel("משקלי ניקוד עדיפות")
         w_title.setObjectName("section-header")
@@ -146,7 +146,7 @@ class SettingsTab(QWidget):
 
         w_form = QFormLayout()
         w_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        w_form.setSpacing(8)
+        w_form.setSpacing(6)
         self._balancing = False
         self._weight_spins = {}
         for f in db.NEED_FACTORS:
@@ -182,8 +182,8 @@ class SettingsTab(QWidget):
         bk_frame = QFrame()
         bk_frame.setObjectName("panel")
         bk_lay = QVBoxLayout(bk_frame)
-        bk_lay.setContentsMargins(14, 12, 14, 12)
-        bk_lay.setSpacing(10)
+        bk_lay.setContentsMargins(10, 7, 10, 7)
+        bk_lay.setSpacing(6)
 
         bk_title = QLabel("גיבויים")
         bk_title.setObjectName("section-header")
@@ -191,7 +191,7 @@ class SettingsTab(QWidget):
 
         form_bk = QFormLayout()
         form_bk.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        form_bk.setSpacing(8)
+        form_bk.setSpacing(6)
         form_bk.setContentsMargins(0, 0, 0, 0)
 
         self.lbl_backup_folder = QLabel("")
@@ -208,7 +208,7 @@ class SettingsTab(QWidget):
         bk_lay.addLayout(form_bk)
 
         bk_btns = QHBoxLayout()
-        bk_btns.setSpacing(8)
+        bk_btns.setSpacing(6)
         btn_folder = QPushButton("בחר תיקייה")
         btn_folder.setObjectName("neutral")
         btn_folder.setToolTip("בחר את תיקיית הגיבוי האוטומטי")
@@ -238,8 +238,8 @@ class SettingsTab(QWidget):
             "QFrame#panel { border: 1.5px solid #fca5a5; }"
         )
         danger_lay = QVBoxLayout(danger_frame)
-        danger_lay.setContentsMargins(14, 12, 14, 12)
-        danger_lay.setSpacing(10)
+        danger_lay.setContentsMargins(10, 7, 10, 7)
+        danger_lay.setSpacing(6)
 
         danger_title = QLabel("⚠️ אזור מסוכן")
         danger_title.setObjectName("section-header")
@@ -265,9 +265,9 @@ class SettingsTab(QWidget):
         db_frame = QFrame()
         db_frame.setObjectName("panel")
         db_lay = QFormLayout(db_frame)
-        db_lay.setContentsMargins(14, 12, 14, 12)
+        db_lay.setContentsMargins(10, 7, 10, 7)
         db_lay.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        db_lay.setSpacing(8)
+        db_lay.setSpacing(6)
 
         db_title = QLabel("מידע מערכת")
         db_title.setObjectName("section-header")
@@ -570,6 +570,16 @@ class SettingsTab(QWidget):
                 QMessageBox.critical(self, "שגיאת עדכון",
                                      f"הורדת העדכון נכשלה:\n{result}")
             return
+        # Release the single-instance lock BEFORE relaunching, otherwise the new
+        # (updated) child process would see the lock still held and refuse to start.
+        _app = QApplication.instance()
+        _sm = getattr(_app, "_single_instance", None)
+        if _sm is not None:
+            try:
+                _sm.detach()
+            except Exception:
+                pass
+
         err = updater.apply_update(result)
         if err:
             QMessageBox.critical(self, "שגיאת עדכון", err)

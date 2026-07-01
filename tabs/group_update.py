@@ -4,21 +4,36 @@ from PyQt6.QtWidgets import (
     QSpinBox, QMessageBox, QAbstractItemView
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QFont
+from datetime import date
 from widgets import DateEdit
+import database as db
+from utils.backup import auto_backup_async
+from utils.excel_utils import export_distribution_to_excel
+from utils.print_view import print_distribution_list
+from utils.ui import busy_cursor, attach_empty_state, refresh_empty_state
+from styles import (OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG,
+                    SELECTED_BG, SELECTED_FG)
+
+# colours for one-time picks (+ reserve)
+_RESERVE_BG, _RESERVE_FG = "#ede7f6", "#5e35b1"
+_SMALL_BTN = "font-size:11px; min-height:24px; min-width:0; padding:3px 12px;"
+
 
 def _fdate(s: str) -> str:
     if s and len(s) >= 10 and s[4] == '-':
         return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
     return s or ""
-from PyQt6.QtGui import QColor, QFont
-from datetime import date
-import database as db
-from utils.backup import auto_backup_async
-from utils.excel_utils import export_distribution_to_excel
-from utils.print_view import print_distribution_list
-from utils.ui import busy_cursor
 
-COLS = ["✔", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3", "אזור", "נפשות", "הערות"]
+
+# Merged tab: viewing the week's list AND checking who received + recording it.
+COLS = ["✔", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3", "אזור",
+        "תדירות", "חלוקה הבאה", "נפשות", "הערות"]
+_COL_SOULS = 8
+_COL_NOTES = 9
+
+SCOPE_WEEK = "חלוקת השבוע"
+SCOPE_ALL = "כל הקבועים"
 
 
 class GroupUpdateTab(QWidget):
@@ -26,23 +41,52 @@ class GroupUpdateTab(QWidget):
         super().__init__(parent)
         self.main_win = parent
         self._rows_data = []
-        self._extra_ids: set = set()  # IDs added manually from one_time tab
+        self._extra_ids: set = set()     # one-time picks added from the one-time tab
+        self._reserve_ids: set = set()   # which of those are reserves
+        self._load_extras()
         self._build_ui()
         self.refresh()
+
+    # ── one-time-pick persistence (survive restart + save) ─────────────────────
+    def _load_extras(self):
+        def _parse(key):
+            raw = db.get_setting(key) or ""
+            return {int(x) for x in raw.split(",") if x.strip().isdigit()}
+        self._extra_ids = _parse("weekly_extra_ids")
+        self._reserve_ids = _parse("weekly_reserve_ids")
+
+    def _persist_extras(self):
+        db.set_setting("weekly_extra_ids", ",".join(str(i) for i in sorted(self._extra_ids)))
+        db.set_setting("weekly_reserve_ids", ",".join(str(i) for i in sorted(self._reserve_ids)))
+
+    def add_one_time_picks(self, recs: list) -> int:
+        """Called by the one-time tab. Records picks (persisted) and refreshes."""
+        added = 0
+        for rec in recs:
+            rid = rec.get("id")
+            if rid is None:
+                continue
+            if rid not in self._extra_ids:
+                added += 1
+            self._extra_ids.add(rid)
+            if rec.get("_reserve"):
+                self._reserve_ids.add(rid)
+            else:
+                self._reserve_ids.discard(rid)
+        self._persist_extras()
+        self.refresh()
+        return added
 
     def _build_ui(self):
         lay = QVBoxLayout(self)
         lay.setSpacing(8)
         lay.setContentsMargins(10, 10, 10, 10)
 
-        # Title
-        title = QLabel("עדכון קבוצתי — רישום חלוקה")
+        title = QLabel("חלוקה ורישום — רשימת החלוקה")
         title.setObjectName("title")
         lay.addWidget(title)
 
-        # Distribution details — panel card
-        # NOTE: use objectName selector so the rule applies ONLY to this widget
-        # and does NOT cascade to child inputs (QLineEdit, QDateEdit, QSpinBox).
+        # Distribution details — panel card (needed to record a distribution)
         details_card = QWidget()
         details_card.setObjectName("details-card")
         details_card.setStyleSheet(
@@ -86,27 +130,47 @@ class GroupUpdateTab(QWidget):
 
         lay.addWidget(details_card)
 
-        # Stats row
-        stats_row = QHBoxLayout()
+        # Filter row — scope toggle + area filter
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(_lbl("הצג:"))
+        self.scope_combo = QComboBox()
+        self.scope_combo.addItems([SCOPE_WEEK, SCOPE_ALL])
+        self.scope_combo.setToolTip("חלוקת השבוע = מי שאמור לקבל השבוע · כל הקבועים = כל המקבלים הקבועים")
+        self.scope_combo.currentTextChanged.connect(self.refresh)
+        filter_row.addWidget(self.scope_combo)
+
+        filter_row.addWidget(_lbl("אזור:"))
+        self.area_combo = QComboBox()
+        self.area_combo.currentTextChanged.connect(self.refresh)
+        filter_row.addWidget(self.area_combo)
+        self._reload_areas()
+
+        # legend
+        for color, text in [(SELECTED_FG, "● חד-פעמי"), (_RESERVE_FG, "● רזרבה")]:
+            l = QLabel(text); l.setStyleSheet(f"color:{color};")
+            filter_row.addWidget(l)
+
+        filter_row.addStretch()
         self.lbl_total = QLabel("סה\"כ ברשימה: 0")
         self.lbl_checked = QLabel("סומנו: 0")
         self.lbl_souls = QLabel("נפשות: 0")
         for lbl in [self.lbl_total, self.lbl_checked, self.lbl_souls]:
             lbl.setObjectName("subtitle")
-            stats_row.addWidget(lbl)
-        stats_row.addStretch()
+            filter_row.addWidget(lbl)
 
         btn_check_all = QPushButton("בחר הכל")
         btn_check_all.setObjectName("neutral")
+        btn_check_all.setStyleSheet(_SMALL_BTN)
         btn_check_all.clicked.connect(self._check_all)
-        stats_row.addWidget(btn_check_all)
+        filter_row.addWidget(btn_check_all)
 
         btn_uncheck_all = QPushButton("בטל הכל")
         btn_uncheck_all.setObjectName("neutral")
+        btn_uncheck_all.setStyleSheet(_SMALL_BTN)
         btn_uncheck_all.clicked.connect(self._uncheck_all)
-        stats_row.addWidget(btn_uncheck_all)
+        filter_row.addWidget(btn_uncheck_all)
 
-        lay.addLayout(stats_row)
+        lay.addLayout(filter_row)
 
         # Table
         self.table = QTableWidget()
@@ -122,6 +186,7 @@ class GroupUpdateTab(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._update_counts)
         lay.addWidget(self.table)
+        attach_empty_state(self.table, "אין מקבלים להצגה")
 
         # Bottom buttons
         bot = QHBoxLayout()
@@ -134,14 +199,16 @@ class GroupUpdateTab(QWidget):
         btn_save.clicked.connect(self._save)
         bot.addWidget(btn_save)
 
-        btn_export = QPushButton("ייצא לExcel")
-        btn_export.setObjectName("neutral")
-        btn_export.setToolTip("ייצא את הרשימה הנוכחית לקובץ Excel")
+        btn_export = QPushButton("ייצא ל-Excel")
+        btn_export.setObjectName("success")
+        btn_export.setStyleSheet(_SMALL_BTN)
+        btn_export.setToolTip("ייצא את הרשימה (המסומנים, או הכל אם אין סימון)")
         btn_export.clicked.connect(self._export_excel)
         bot.addWidget(btn_export)
 
         btn_print = QPushButton("הדפסה")
         btn_print.setObjectName("neutral")
+        btn_print.setStyleSheet(_SMALL_BTN)
         btn_print.setToolTip("הדפס רשימת חלוקה (A4 לאורך)")
         btn_print.clicked.connect(self._print)
         bot.addWidget(btn_print)
@@ -149,51 +216,127 @@ class GroupUpdateTab(QWidget):
         bot.addStretch()
         lay.addLayout(bot)
 
+    def _reload_areas(self):
+        prev = self.area_combo.currentText() if self.area_combo.count() else "הכל"
+        self.area_combo.blockSignals(True)
+        self.area_combo.clear()
+        self.area_combo.addItem("הכל")
+        for a in db.get_areas():
+            self.area_combo.addItem(a)
+        idx = self.area_combo.findText(prev)
+        self.area_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.area_combo.blockSignals(False)
+
+    # ── data ───────────────────────────────────────────────────────────────────
+    def _extra_recipients(self, area: str, base_ids: set) -> list:
+        """Fetch the persisted one-time picks from the DB (so they survive
+        restart), area-filtered, excluding any already in the base list."""
+        out = []
+        for rid in self._extra_ids:
+            if rid in base_ids:
+                continue
+            rec = db.get_recipient(rid)
+            if not rec:
+                continue
+            if area != "הכל" and (rec.get("area") or "") != area:
+                continue
+            rec = dict(rec)
+            rec["_reserve"] = rid in self._reserve_ids
+            out.append(rec)
+        return out
+
     def refresh(self):
-        # Exclude one-time recipients — they appear only when explicitly added from the one-time tab
-        base = [r for r in db.get_all_recipients(status_filter="פעיל")
-                if r.get("frequency") != "חד-פעמי"]
+        self._reload_areas()
+        area = self.area_combo.currentText() or "הכל"
+        scope = self.scope_combo.currentText() if hasattr(self, "scope_combo") else SCOPE_WEEK
+
+        if scope == SCOPE_ALL:
+            base = [r for r in db.get_all_recipients(status_filter="פעיל")
+                    if (r.get("frequency") or "") not in ("", "חד-פעמי")
+                    and (area == "הכל" or (r.get("area") or "") == area)]
+        else:  # nearest week
+            base = db.get_weekly_list(area_filter=area)
+
         base_ids = {r["id"] for r in base}
-        # Keep manually added one-time recipients that were selected from the one-time tab
-        extras = [r for r in self._rows_data if r["id"] in self._extra_ids and r["id"] not in base_ids]
+        extras = self._extra_recipients(area, base_ids)
         self._rows_data = base + extras
         self._populate()
 
+    def _row_style(self, rec: dict):
+        """Return (bg, fg, freq_disp, next_disp) for a row."""
+        rid = rec.get("id")
+        freq = rec.get("frequency", "") or ""
+        is_pick = rid in self._extra_ids or freq == "חד-פעמי"
+        if is_pick:
+            if rec.get("_reserve") or rid in self._reserve_ids:
+                return QColor(_RESERVE_BG), QColor(_RESERVE_FG), "חד-פעמי · רזרבה", ""
+            return QColor(SELECTED_BG), QColor(SELECTED_FG), "חד-פעמי", ""
+        # regular — colour by urgency
+        nd = rec.get("next_distribution") or ""
+        days_left = rec.get("days_left")
+        if days_left is None and nd:
+            try:
+                days_left = (date.fromisoformat(nd) - date.today()).days
+            except ValueError:
+                days_left = None
+        if days_left is not None and days_left < 0:
+            bg, fg = QColor(OVERDUE_BG), QColor(OVERDUE_FG)
+        elif days_left is not None and days_left <= 1:
+            bg, fg = QColor(TODAY_BG), QColor(TODAY_FG)
+        else:
+            bg, fg = QColor(WEEK_BG), QColor(WEEK_FG)
+        return bg, fg, freq, _fdate(nd)
+
     def _populate(self):
+        # Preserve the operator's current check marks across a rebuild (refresh
+        # fires on every scope/area change). Otherwise a pick that was unchecked
+        # would be silently re-checked and could be recorded by mistake.
+        prev = {}
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it is not None:
+                prev[it.data(Qt.ItemDataRole.UserRole)] = it.checkState()
+
         self.table.blockSignals(True)
-        # Drop old items in one batch BEFORE re-sizing. Calling setItem() over an
-        # existing checkable cell is pathologically slow (≈8s for 1000 rows); a
-        # clear first makes every refresh O(n) instead of freezing the app.
         self.table.clearContents()
         self.table.setRowCount(0)
         self.table.setRowCount(len(self._rows_data))
         for r, rec in enumerate(self._rows_data):
-            # Checkbox column
+            bg, fg, freq_disp, next_disp = self._row_style(rec)
+            rid = rec.get("id")
+
             chk = QTableWidgetItem()
             chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            # One-time recipients explicitly added from the "חד פעמי" tab arrive
-            # PRE-CHECKED (they were deliberately selected), so they're included in
-            # the issued/saved list. Regulars start unchecked (mark who came).
-            chk.setCheckState(Qt.CheckState.Checked if rec.get("id") in self._extra_ids
-                              else Qt.CheckState.Unchecked)
+            # Keep a row's existing mark if we've seen it before; a freshly-added
+            # one-time pick (not seen yet) arrives PRE-CHECKED, regulars unchecked.
+            if rid in prev:
+                chk.setCheckState(prev[rid])
+            else:
+                chk.setCheckState(Qt.CheckState.Checked if rid in self._extra_ids
+                                  else Qt.CheckState.Unchecked)
             chk.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            chk.setData(Qt.ItemDataRole.UserRole, rec["id"])
+            chk.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
             self.table.setItem(r, 0, chk)
 
             vals = [rec.get("full_name", ""), rec.get("phone1", ""),
                     rec.get("phone2", ""), rec.get("phone3", ""),
-                    rec.get("area", ""), str(rec.get("souls", "") or ""), ""]
+                    rec.get("area", ""), freq_disp, next_disp,
+                    str(rec.get("souls", "") or ""), ""]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if c < len(vals) - 1:
+                item.setBackground(bg)
+                item.setForeground(fg)
+                col = c + 1
+                if col != _COL_NOTES:   # everything but notes is read-only
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if c == 0:   # name — bold
                     nf = item.font(); nf.setBold(True); item.setFont(nf)
-                self.table.setItem(r, c + 1, item)
+                self.table.setItem(r, col, item)
 
         self.table.blockSignals(False)
         self._update_counts()
+        refresh_empty_state(self.table)
 
     def _update_counts(self):
         total = self.table.rowCount()
@@ -203,7 +346,7 @@ class GroupUpdateTab(QWidget):
             chk = self.table.item(r, 0)
             if chk and chk.checkState() == Qt.CheckState.Checked:
                 checked += 1
-                souls_item = self.table.item(r, 6)
+                souls_item = self.table.item(r, _COL_SOULS)
                 try:
                     souls += int(souls_item.text()) if souls_item else 0
                 except ValueError:
@@ -238,7 +381,7 @@ class GroupUpdateTab(QWidget):
                 rec_id = chk.data(Qt.ItemDataRole.UserRole)
                 rec = next((x for x in self._rows_data if x["id"] == rec_id), None)
                 if rec:
-                    notes_item = self.table.item(r, 7)
+                    notes_item = self.table.item(r, _COL_NOTES)
                     rec_copy = dict(rec)
                     rec_copy["notes"] = notes_item.text() if notes_item else ""
                     result.append(rec_copy)
@@ -255,10 +398,8 @@ class GroupUpdateTab(QWidget):
         qty         = self.qty_spin.value()
         distributor = self.dist_input.text().strip()
 
-        # ── אימות שדות חובה ─────────────────────────────────────────────────
         _ERR = "border: 2px solid #dc2626; background-color: #fff5f5;"
         errors = []
-
         if not what:
             self.what_input.setStyleSheet(_ERR)
             self.what_input.setToolTip("חובה למלא מה חולק")
@@ -266,7 +407,6 @@ class GroupUpdateTab(QWidget):
         else:
             self.what_input.setStyleSheet("")
             self.what_input.setToolTip("תיאור המוצר שחולק")
-
         if not distributor:
             self.dist_input.setStyleSheet(_ERR)
             self.dist_input.setToolTip("חובה למלא שם המחלק")
@@ -274,7 +414,6 @@ class GroupUpdateTab(QWidget):
         else:
             self.dist_input.setStyleSheet("")
             self.dist_input.setToolTip("שם האדם שביצע את החלוקה")
-
         if errors:
             QMessageBox.warning(self, "שדות חסרים", "• " + "\n• ".join(errors))
             return
@@ -283,22 +422,26 @@ class GroupUpdateTab(QWidget):
             db.bulk_add_distributions(checked, dist_date, what, qty, distributor)
             auto_backup_async()
 
-        # The added one-time recipients have now been distributed — drop them from
-        # the group list so they aren't shown (or re-saved) again next time.
+        # The one-time picks have now been distributed — drop them so they aren't
+        # shown or re-saved next time. Persist the cleared state.
         self._extra_ids.clear()
+        self._reserve_ids.clear()
+        self._persist_extras()
 
         msg = f"נשמרה חלוקה ל-{len(checked)} מקבלים"
         QMessageBox.information(self, "הצלחה", msg)
-        self._uncheck_all()
 
         if self.main_win:
             self.main_win.status_msg(msg)
             self.main_win.refresh_all()
 
-    def _export_excel(self):
+    def _get_export_rows(self):
+        """Rows to export/print: the checked set if any, else the whole list."""
         checked = self._get_checked_recipients()
-        if not checked:
-            checked = self._rows_data
+        return checked if checked else list(self._rows_data)
+
+    def _export_excel(self):
+        checked = self._get_export_rows()
         dist_date = _fdate(self.date_edit.get_iso())
         try:
             with busy_cursor():
@@ -308,8 +451,6 @@ class GroupUpdateTab(QWidget):
             QMessageBox.critical(self, "שגיאה", str(e))
 
     def _print(self):
-        checked = self._get_checked_recipients()
-        if not checked:
-            checked = self._rows_data
+        checked = self._get_export_rows()
         dist_date = _fdate(self.date_edit.get_iso())
         print_distribution_list(checked, dist_date, self)

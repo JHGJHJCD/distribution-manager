@@ -450,7 +450,7 @@ from main import MainWindow
 _win = MainWindow()
 _win.show()
 
-check("8 tabs", _win.tabs.count() == 8)
+check("7 tabs", _win.tabs.count() == 7)
 check("_extra_ids is set", isinstance(_win.group_tab._extra_ids, set))
 check("settings tab available", hasattr(_win, "settings_tab"))
 

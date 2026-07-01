@@ -1,20 +1,18 @@
 """ערוץ הודעות מהמשתמש למפתח.
 
-המשתמש יכול להשאיר הודעה על תקלה / בקשה דרך כפתור קטן בשורת המצב.
+המשתמש משאיר הודעה דרך כפתור קטן בשורת המצב. ההודעה:
+1. נשמרת תמיד מקומית — %APPDATA%\\ManhalHaluka\\feedback.jsonl (גיבוי שלא הולך
+   לאיבוד גם בלי רשת).
+2. נשלחת ברקע לטופס Google (ללא טוקן/הרשאות) — כך גם הודעות ממחשבי מתנדבים
+   אחרים מגיעות למפתח, ונאספות אוטומטית בגיליון התשובות.
 
-שני יעדים, משלימים:
-1. שמירה מקומית תמיד — קובץ JSONL ב-%APPDATA%\\ManhalHaluka\\feedback.jsonl
-   (גיבוי שלא הולך לאיבוד גם אם אין רשת).
-2. שליחה לגיטאב כ-Issue — אם הוטמע טוקן (ראה _secret.py). כך גם הודעות
-   ממחשבי מתנדבים אחרים מגיעות למפתח. השליחה רצה ב-thread ברקע כדי לא לתקוע
-   את הממשק, ואם היא נכשלת (אין רשת / אין טוקן) — נשארת השמירה המקומית.
-
-הטוקן והריפו לא נשמרים בקוד המקור הציבורי; הם מגיעים מ-_secret.py שאינו
-נכנס ל-git ומוטמע רק ב-EXE הבנוי.
+כתובת הטופס ומזהי השדות אינם סודיים (הם חלק מהטופס הציבורי), ולכן נשמרים כאן.
 """
 import os
 import json
 import threading
+import urllib.parse
+import urllib.request
 from datetime import datetime
 
 import database as db
@@ -24,12 +22,11 @@ try:
 except Exception:
     APP_VERSION = "?"
 
-# Embedded GitHub config — present only in the built EXE (not in the public repo).
-try:
-    from _secret import GH_FEEDBACK_TOKEN, GH_FEEDBACK_REPO  # type: ignore
-except Exception:
-    GH_FEEDBACK_TOKEN = None
-    GH_FEEDBACK_REPO = None
+# Google Form submission endpoint + field ids (extracted from the public form).
+GFORM_URL = ("https://docs.google.com/forms/d/e/"
+             "1FAIpQLScYbu4ziy7l558_RP6w48Bjt9vpHv-wf1l4OfBUlmDKKN2-Vg/formResponse")
+GFORM_FIELD_MESSAGE = "entry.1847752553"
+GFORM_FIELD_NAME = "entry.2127661925"
 
 FEEDBACK_PATH = os.path.join(db._data_dir(), "feedback.jsonl")
 
@@ -50,34 +47,20 @@ def _save_local(entry: dict) -> None:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
-def _post_github(entry: dict) -> bool:
-    """Create a GitHub issue for this feedback. Returns True on success.
-    Best-effort: any failure is swallowed (the local copy is the safety net)."""
-    if not (GH_FEEDBACK_TOKEN and GH_FEEDBACK_REPO):
-        return False
-    import urllib.request
-    title = f"משוב v{entry['version']}"
-    if entry["name"]:
-        title += f" — {entry['name']}"
-    body = (
-        f"{entry['message']}\n\n"
-        f"---\n"
-        f"זמן: {entry['ts']}\n"
-        f"שם: {entry['name'] or '—'}\n"
-        f"גרסה: {entry['version']}\n"
-        f"מחשב: {entry['host'] or '—'}"
-    )
-    data = json.dumps({"title": title, "body": body,
-                       "labels": ["feedback"]}).encode("utf-8")
+def _post_google_form(entry: dict) -> bool:
+    """Submit the feedback to the Google Form. Best-effort — any failure is
+    swallowed (the local copy is the safety net)."""
+    # Fold version/host into the message so they show up in the responses sheet.
+    msg = (f"{entry['message']}\n\n"
+           f"[v{entry['version']} · {entry['host'] or '—'} · {entry['ts']}]")
+    data = urllib.parse.urlencode({
+        GFORM_FIELD_MESSAGE: msg,
+        GFORM_FIELD_NAME: entry["name"],
+    }).encode("utf-8")
     req = urllib.request.Request(
-        f"https://api.github.com/repos/{GH_FEEDBACK_REPO}/issues",
-        data=data, method="POST",
-        headers={
-            "Authorization": f"Bearer {GH_FEEDBACK_TOKEN}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "ManhalHaluka-Feedback",
-            "Content-Type": "application/json",
-        },
+        GFORM_URL, data=data, method="POST",
+        headers={"User-Agent": "ManhalHaluka-Feedback",
+                 "Content-Type": "application/x-www-form-urlencoded"},
     )
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
@@ -87,14 +70,13 @@ def _post_github(entry: dict) -> bool:
 
 
 def save_feedback(message: str, name: str = "") -> None:
-    """שומר את ההודעה מקומית (סינכרוני) ושולח לגיטאב ברקע אם מוגדר טוקן."""
+    """שומר את ההודעה מקומית (סינכרוני) ושולח לטופס Google ברקע."""
     message = (message or "").strip()
     if not message:
         return
     entry = _entry(message, name)
     _save_local(entry)        # always — never lose a message
-    if GH_FEEDBACK_TOKEN and GH_FEEDBACK_REPO:
-        threading.Thread(target=_post_github, args=(entry,), daemon=True).start()
+    threading.Thread(target=_post_google_form, args=(entry,), daemon=True).start()
 
 
 def read_feedback() -> list:

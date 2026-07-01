@@ -323,15 +323,7 @@ class OneTimeTab(QWidget):
 
         if self.main_win and hasattr(self.main_win, "group_tab"):
             gt = self.main_win.group_tab
-            added = 0
-            for rec in selected:
-                if not any(r["id"] == rec["id"] for r in gt._rows_data):
-                    gt._rows_data.append(dict(rec))   # snapshot incl. _reserve flag
-                    gt._extra_ids.add(rec["id"])
-                    added += 1
-            gt._populate()
-            # they also join the weekly issuance list — refresh it next time it opens
-            if hasattr(self.main_win, "weekly_tab"):
-                self.main_win.weekly_tab._needs_refresh = True
+            # Records the picks (persisted so they survive restart) and refreshes.
+            added = gt.add_one_time_picks(selected)
             self.main_win.tabs.setCurrentWidget(gt)
             self.main_win.status_msg(f"נוספו {added} חד-פעמיים לרשימת החלוקה")
