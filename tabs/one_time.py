@@ -56,9 +56,9 @@ class OneTimeTab(QWidget):
         ctrl = QHBoxLayout()
         ctrl.addWidget(QLabel("סנן אזור:"))
         self.area_combo = QComboBox()
-        self.area_combo.addItems(["הכל", "בעלז", "נתיב"])
         self.area_combo.currentTextChanged.connect(self.refresh)
         ctrl.addWidget(self.area_combo)
+        self._reload_areas()
 
         ctrl.addWidget(QLabel("מוצרים זמינים:"))
         self.products_spin = QSpinBox()
@@ -92,9 +92,9 @@ class OneTimeTab(QWidget):
 
         # Legend
         legend = QHBoxLayout()
-        for color, text in [(OVERDUE_FG,   "● עדיפות ראשונה (3)"),
-                             (TODAY_FG,    "● עדיפות שנייה (2)"),
-                             (WEEK_FG,     "● לא בחלוקה (1 / בירור)"),
+        for color, text in [(OVERDUE_FG,   "● עדיפות ראשונה"),
+                             (TODAY_FG,    "● עדיפות שנייה"),
+                             (WEEK_FG,     "● לא בחלוקה / בירור"),
                              (SELECTED_FG, "● נבחר לחלוקה"),
                              (RESERVE_FG,  "● רזרבה")]:
             lbl = QLabel(text)
@@ -140,8 +140,20 @@ class OneTimeTab(QWidget):
         bot.addWidget(btn_add)
         lay.addLayout(bot)
 
+    def _reload_areas(self):
+        prev = self.area_combo.currentText() if self.area_combo.count() else "הכל"
+        self.area_combo.blockSignals(True)
+        self.area_combo.clear()
+        self.area_combo.addItem("הכל")
+        for a in db.get_areas():
+            self.area_combo.addItem(a)
+        idx = self.area_combo.findText(prev)
+        self.area_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.area_combo.blockSignals(False)
+
     def refresh(self):
-        area = self.area_combo.currentText()
+        self._reload_areas()
+        area = self.area_combo.currentText() or "הכל"
         self._rows_data = db.get_one_time_list(area_filter=area)
         self._populate()
 
@@ -217,7 +229,7 @@ class OneTimeTab(QWidget):
         else:
             in_dist_count = sum(1 for x in self._rows_data if x.get("in_distribution"))
             self.lbl_stats.setText(
-                f"בחלוקה (עדיפות 1+2): {in_dist_count}  |  סה\"כ ברשימה: {len(self._rows_data)}")
+                f"בחלוקה (ראשונה+שנייה): {in_dist_count}  |  סה\"כ ברשימה: {len(self._rows_data)}")
 
     def _on_check_changed(self):
         self._update_selected_count()
@@ -296,11 +308,11 @@ class OneTimeTab(QWidget):
         self._populate(suggested_n=n, reserve_n=reserve_n)
         msg = (
             f"סה\"כ מוצרים: {total}\n"
-            f"קבועים (קוד 4): {regular_count}\n"
+            f"קבועים: {regular_count}\n"
             f"נותר לחד-פעמיים: {n}\n"
-            f"מועמדים בעדיפות (1+2): {in_dist_count}\n\n"
+            f"מועמדים בעדיפות (ראשונה+שנייה): {in_dist_count}\n\n"
             f"סומנו {picked} עיקריים + {reserve_picked} רזרבה — לפי סדר עדיפות\n"
-            f"(ראשונה (3) קודם, אחר כך שנייה (2), ובתוך כל דרגה לפי ניקוד הצורך)."
+            f"(ראשונה קודם, אחר כך שנייה, ובתוך כל דרגה לפי ניקוד הצורך)."
         )
         if n > in_dist_count:
             msg += (f"\n\n⚠ יש יותר מוצרים ({n}) ממועמדי העדיפות ({in_dist_count}). "

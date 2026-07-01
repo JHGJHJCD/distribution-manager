@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QLabel, QLineEdit, QAbstractItemView, QFormLayout, QFrame,
-    QSizePolicy
+    QSizePolicy, QPushButton, QDialog
 )
 from PyQt6.QtCore import Qt, QTimer
 import database as db
@@ -55,6 +55,13 @@ class SearchTab(QWidget):
         self.count_lbl = QLabel("")
         self.count_lbl.setObjectName("subtitle")
         search_row.addWidget(self.count_lbl)
+
+        btn_all_dist = QPushButton("📋 כל החלוקות")
+        btn_all_dist.setObjectName("neutral")
+        btn_all_dist.setStyleSheet("font-size:11px; min-height:24px; min-width:0; padding:3px 12px;")
+        btn_all_dist.setToolTip("הצג את כל החלוקות שבוצעו (היסטוריה מלאה)")
+        btn_all_dist.clicked.connect(self._open_all_distributions)
+        search_row.addWidget(btn_all_dist)
         lay.addLayout(search_row)
 
         # Results table
@@ -150,6 +157,18 @@ class SearchTab(QWidget):
         hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.hist_table.verticalHeader().setVisible(False)
         lay.addWidget(self.hist_table)
+
+    def _open_all_distributions(self):
+        from tabs.tracking import TrackingTab
+        dlg = QDialog(self)
+        dlg.setWindowTitle("כל החלוקות — היסטוריה מלאה")
+        dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dlg.resize(1000, 640)
+        v = QVBoxLayout(dlg)
+        trk = TrackingTab(dlg)     # read-only; no main_win needed
+        trk.refresh()
+        v.addWidget(trk)
+        dlg.exec()
 
     def refresh(self):
         # Cache the full recipient list once; keystrokes filter this in-memory

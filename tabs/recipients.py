@@ -239,7 +239,28 @@ class RecipientsTab(QWidget):
         bot.addWidget(btn_end)
 
         bot.addStretch()
+
+        btn_dup = QPushButton("בדיקת כפילויות")
+        btn_dup.setObjectName("neutral")
+        btn_dup.setToolTip("סריקת שמות/טלפונים כפולים")
+        btn_dup.clicked.connect(self._open_dup_check)
+        bot.addWidget(btn_dup)
+
         lay.addLayout(bot)
+
+    def _open_dup_check(self):
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout
+        from tabs.review import ReviewTab
+        dlg = QDialog(self)
+        dlg.setWindowTitle("בדיקת נתונים — כפילויות")
+        dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dlg.resize(900, 600)
+        v = QVBoxLayout(dlg)
+        rev = ReviewTab(self.main_win)   # main_win so its edit/delete refresh work
+        rev.refresh()
+        v.addWidget(rev)
+        dlg.exec()
+        self.refresh()   # a duplicate may have been deleted
 
         self._rows_data = []
 

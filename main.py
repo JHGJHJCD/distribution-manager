@@ -23,9 +23,7 @@ from styles import EXTRA_QSS, QT_MATERIAL_EXTRA
 from tabs.recipients import RecipientsTab
 from tabs.group_update import GroupUpdateTab
 from tabs.one_time import OneTimeTab
-from tabs.tracking import TrackingTab
 from tabs.search import SearchTab
-from tabs.review import ReviewTab
 from tabs.settings import SettingsTab, _UpdateWorker
 
 from version import APP_VERSION
@@ -392,10 +390,11 @@ class MainWindow(QMainWindow):
         self.dist_tab       = self.group_tab
         self.recipients_tab = RecipientsTab(self)
         self.one_time_tab   = OneTimeTab(self)
-        self.tracking_tab   = TrackingTab(self)
         self.search_tab     = SearchTab(self)
-        self.review_tab     = ReviewTab(self)
         self.settings_tab   = SettingsTab(self)
+        # 'מעקב חלוקות' and 'בדיקת נתונים' are no longer permanent tabs — they open
+        # on demand from a button ('כל החלוקות' in חיפוש מהיר / 'בדיקת כפילויות'
+        # in מקבלים).
 
         # (widget, label, stable key). The key — not the position — is what we
         # persist, so a saved order survives even if tabs are later added/removed.
@@ -403,9 +402,7 @@ class MainWindow(QMainWindow):
             (self.group_tab,      "חלוקה ורישום",  "dist"),
             (self.recipients_tab, "מקבלים",        "recipients"),
             (self.one_time_tab,   "חד פעמי",       "one_time"),
-            (self.tracking_tab,   "מעקב חלוקות",   "tracking"),
             (self.search_tab,     "חיפוש מהיר",    "search"),
-            (self.review_tab,     "בדיקת נתונים",  "review"),
             (self.settings_tab,   "הגדרות",        "settings"),
         ]
         for widget, label, key in tab_specs:
