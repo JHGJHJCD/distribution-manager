@@ -39,7 +39,7 @@ ok("S1 weekly excludes one-timers initially",
 
 # ── Scenario 2: one-time priority + reserve → issued in BOTH tabs → record ─────
 ot = win.one_time_tab
-ot.refresh(); ot.products_spin.setValue(7); ot.reserve_spin.setValue(1); ot._calc_suggestion()
+ot.refresh(); ot.products_spin.setValue(3); ot.reserve_spin.setValue(1); ot._calc_suggestion()
 ot._add_to_group_update()
 gt_checked = [win.group_tab._rows_data[r]["full_name"] for r in range(win.group_tab.table.rowCount())
               if win.group_tab.table.item(r, 0) and win.group_tab.table.item(r, 0).checkState() == Qt.CheckState.Checked]

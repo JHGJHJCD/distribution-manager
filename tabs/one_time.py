@@ -299,7 +299,10 @@ class OneTimeTab(QWidget):
         if total <= 0:
             QMessageBox.information(self, "", "הכנס מספר מוצרים זמינים")
             return
-        n, regular_count = db.compute_suggested_n(total)
+        # The number of products IS the number of one-time recipients to mark
+        # (regulars are handled separately in 'חלוקה ורישום'). So N products →
+        # N main picks, by priority order, plus the reserve on top.
+        n = total
         reserve_n = self.reserve_spin.value()
         db.set_setting("reserve_count", str(reserve_n))   # remember as default
         in_dist_count = sum(1 for x in self._rows_data if x.get("in_distribution"))
@@ -307,9 +310,7 @@ class OneTimeTab(QWidget):
         reserve_picked = max(0, min(reserve_n, in_dist_count - picked))
         self._populate(suggested_n=n, reserve_n=reserve_n)
         msg = (
-            f"סה\"כ מוצרים: {total}\n"
-            f"קבועים: {regular_count}\n"
-            f"נותר לחד-פעמיים: {n}\n"
+            f"מוצרים זמינים: {total}\n"
             f"מועמדים בעדיפות (ראשונה+שנייה): {in_dist_count}\n\n"
             f"סומנו {picked} עיקריים + {reserve_picked} רזרבה — לפי סדר עדיפות\n"
             f"(ראשונה קודם, אחר כך שנייה, ובתוך כל דרגה לפי ניקוד הצורך)."
