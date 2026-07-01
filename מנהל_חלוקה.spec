@@ -16,6 +16,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('icon.ico', '.'),
+        ('org_logo.png', '.'),
         ('fonts', 'fonts'),
         *qt_material_data,
     ],

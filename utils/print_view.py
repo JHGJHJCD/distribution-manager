@@ -1,9 +1,19 @@
+import os
+import sys
 import html
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
-from PyQt6.QtGui import QTextDocument
+from PyQt6.QtGui import QTextDocument, QImage
+from PyQt6.QtCore import QUrl
 from datetime import date
 from typing import List, Dict
+
+
+def _resource_path(rel: str) -> str:
+    """Locate a bundled resource in both dev and frozen (onefile) modes."""
+    base = getattr(sys, "_MEIPASS",
+                   os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(base, rel)
 
 # Organisation name shown at the top of every printed distribution list.
 ORG_NAME = "קופה של צדקה הר יונה"
@@ -14,6 +24,7 @@ DISCLAIMER = ("⚠ דף זה הופק אוטומטית על־ידי מערכת �
 
 _PRINT_CSS = """
     body { font-family: 'Segoe UI', Arial; direction: rtl; font-size: 11pt; }
+    .logo { text-align: center; margin-bottom: 2px; }
     .org { text-align: center; font-size: 16pt; font-weight: bold; color: #1a4a7a; }
     h2 { text-align: center; color: #1a4a7a; margin-top: 2px; }
     .notice { text-align: center; font-size: 9pt; color: #b45309;
@@ -62,7 +73,7 @@ def _table_rows(rows: List[Dict]) -> str:
     return out
 
 
-def _build_html(recipients: List[Dict], dist_date: str) -> str:
+def _build_html(recipients: List[Dict], dist_date: str, has_logo: bool = False) -> str:
     """Build the printable HTML for a distribution list — right-to-left (Hebrew),
     with the fund name and a trial-system disclaimer. Recipients flagged
     `_reserve` are split into a separate, clearly-marked 'רזרבה' section kept in
@@ -79,8 +90,10 @@ def _build_html(recipients: List[Dict], dist_date: str) -> str:
             f"<table class='reserve'>{_THEAD}<tbody>{_table_rows(reserves)}</tbody></table>"
         )
 
+    logo_html = "<div class='logo'><img src='orglogo' width='150'></div>" if has_logo else ""
     return f"""
     <html><body>
+    {logo_html}
     <div class='org'>{_esc(ORG_NAME)}</div>
     <h2>רשימת חלוקה — {_esc(dist_date)}</h2>
     <div class='notice'>{_esc(DISCLAIMER)}</div>
@@ -101,5 +114,10 @@ def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWid
 
     doc = QTextDocument()
     doc.setDefaultStyleSheet(_PRINT_CSS)
-    doc.setHtml(_build_html(recipients, dist_date))
+    logo_path = _resource_path("org_logo.png")
+    has_logo = os.path.exists(logo_path)
+    if has_logo:
+        doc.addResource(QTextDocument.ResourceType.ImageResource,
+                        QUrl("orglogo"), QImage(logo_path))
+    doc.setHtml(_build_html(recipients, dist_date, has_logo))
     doc.print(printer)

@@ -55,45 +55,52 @@ def _load_app_fonts() -> str:
 
 # ─── Splash screen ───────────────────────────────────────────────────────────
 
-def _make_splash_pix(W=520, H=290) -> QPixmap:
+def _make_splash_pix(W=520, H=340) -> QPixmap:
     pix = QPixmap(W, H)
+    pix.fill(QColor("#ffffff"))
     p = QPainter(pix)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-    # Gradient background
-    g = QLinearGradient(0, 0, W, H)
-    g.setColorAt(0.0, QColor(21, 101, 192))
-    g.setColorAt(1.0, QColor(30, 136, 229))
-    p.fillRect(0, 0, W, H, g)
-
-    # App icon
-    ico = resource_path("icon.ico")
-    if os.path.exists(ico):
-        p.drawPixmap((W - 72) // 2, 22, QIcon(ico).pixmap(72, 72))
+    # Charity logo (navy + gold on transparent → reads well on white)
+    logo_path = resource_path("org_logo.png")
+    if os.path.exists(logo_path):
+        lp = QPixmap(logo_path).scaledToHeight(
+            156, Qt.TransformationMode.SmoothTransformation)
+        p.drawPixmap((W - lp.width()) // 2, 22, lp)
+        y = 22 + 156 + 8
+    else:
+        ico = resource_path("icon.ico")
+        if os.path.exists(ico):
+            p.drawPixmap((W - 72) // 2, 30, QIcon(ico).pixmap(72, 72))
+        y = 118
 
     # App name
-    p.setPen(QColor(255, 255, 255, 255))
-    f = QFont("Segoe UI", 26, QFont.Weight.Bold)
-    p.setFont(f)
-    p.drawText(QRect(0, 106, W, 44), Qt.AlignmentFlag.AlignCenter, "מנהל חלוקה")
+    p.setPen(QColor(21, 101, 192))
+    p.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
+    p.drawText(QRect(0, y, W, 34), Qt.AlignmentFlag.AlignCenter, "מנהל חלוקה")
 
     # Subtitle
-    p.setPen(QColor(255, 255, 255, 185))
-    p.setFont(QFont("Segoe UI", 11))
-    p.drawText(QRect(0, 156, W, 28), Qt.AlignmentFlag.AlignCenter,
+    p.setPen(QColor(110, 120, 140))
+    p.setFont(QFont("Segoe UI", 10))
+    p.drawText(QRect(0, y + 34, W, 22), Qt.AlignmentFlag.AlignCenter,
                "מערכת ניהול חלוקת מצרכים")
 
-    # Bottom strip
+    # Bottom blue strip
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(0, 0, 0, 55))
-    p.drawRect(0, H - 38, W, 38)
-    p.setPen(QColor(255, 255, 255, 140))
+    p.setBrush(QColor(21, 101, 192))
+    p.drawRect(0, H - 32, W, 32)
+    p.setPen(QColor(255, 255, 255, 225))
     p.setFont(QFont("Segoe UI", 9))
-    p.drawText(QRect(10, H - 38, W - 20, 38),
+    p.drawText(QRect(12, H - 32, W - 24, 32),
                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "טוען...")
-    p.drawText(QRect(10, H - 38, W - 20, 38),
+    p.drawText(QRect(12, H - 32, W - 24, 32),
                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                f"גרסה {APP_VERSION}")
+
+    # Thin frame
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.setPen(QColor(210, 220, 235))
+    p.drawRect(0, 0, W - 1, H - 1)
     p.end()
     return pix
 
@@ -421,8 +428,23 @@ class MainWindow(QMainWindow):
         # against the window's title bar.
         central = QWidget()
         c_lay = QVBoxLayout(central)
-        c_lay.setContentsMargins(6, 8, 6, 6)
-        c_lay.setSpacing(0)
+        c_lay.setContentsMargins(6, 6, 6, 6)
+        c_lay.setSpacing(4)
+
+        # Persistent branding strip — the charity logo, small, at the top-right.
+        _logo_path = resource_path("org_logo.png")
+        _lp = QPixmap(_logo_path) if os.path.exists(_logo_path) else QPixmap()
+        if not _lp.isNull():
+            strip = QWidget()
+            s_lay = QHBoxLayout(strip)
+            s_lay.setContentsMargins(6, 0, 6, 0)
+            logo_lbl = QLabel()
+            logo_lbl.setPixmap(_lp.scaledToHeight(
+                34, Qt.TransformationMode.SmoothTransformation))
+            s_lay.addWidget(logo_lbl)          # RTL → sits on the right
+            s_lay.addStretch()
+            c_lay.addWidget(strip)
+
         c_lay.addWidget(self.tabs)
         self.setCentralWidget(central)
 
