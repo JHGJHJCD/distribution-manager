@@ -440,9 +440,9 @@ class MainWindow(QMainWindow):
             s_lay.setContentsMargins(6, 0, 6, 0)
             logo_lbl = QLabel()
             logo_lbl.setPixmap(_lp.scaledToHeight(
-                34, Qt.TransformationMode.SmoothTransformation))
-            s_lay.addWidget(logo_lbl)          # RTL → sits on the right
+                46, Qt.TransformationMode.SmoothTransformation))
             s_lay.addStretch()
+            s_lay.addWidget(logo_lbl)          # RTL: stretch first → logo on the left
             c_lay.addWidget(strip)
 
         c_lay.addWidget(self.tabs)
