@@ -600,6 +600,42 @@ def _set_window_icon(widget):
         widget.setWindowIcon(QIcon(ico))
 
 
+def _hard_exit(code: int = 0):
+    """Exit WITHOUT the PyInstaller onefile bootloader's temp-dir cleanup, which
+    intermittently fails — a lingering network thread (startup update-check /
+    feedback) or a security filter (NetFree) holds a handle on a DLL inside the
+    _MEI temp dir, and the bootloader then pops a 'Failed to remove temporary
+    directory' warning. A hard exit is safe for our data: the DB is committed per
+    operation and backups use SQLite's Online Backup API (at worst a backup COPY
+    is left partial, never the source). The leftover _MEI dir is cleaned on the
+    next launch (_cleanup_prev_mei). In dev (unfrozen) we exit normally."""
+    if getattr(sys, "frozen", False):
+        try:
+            sys.stdout.flush(); sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(code if isinstance(code, int) else 0)
+    sys.exit(code)
+
+
+def _cleanup_prev_mei():
+    """Remove the previous run's onefile temp dir if a hard exit left it behind.
+    Targeted to the single path we recorded, so it never touches another app's
+    _MEI dir; keeps at most one stale dir around."""
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        cur = getattr(sys, "_MEIPASS", "") or ""
+        prev = db.get_setting("mei_last") or ""
+        if prev and prev != cur and os.path.isdir(prev):
+            import shutil
+            shutil.rmtree(prev, ignore_errors=True)
+        if cur:
+            db.set_setting("mei_last", cur)
+    except Exception:
+        pass
+
+
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 def _apply_theme(app: "QApplication"):
@@ -696,6 +732,7 @@ def _run():
     t0 = time.time()
 
     db.init_db()
+    _cleanup_prev_mei()   # remove a temp dir a prior hard exit may have left
 
     # Startup safety backup (non-blocking) — a restore point on every launch.
     try:
@@ -720,13 +757,13 @@ def _run():
     splash.finish(login)
 
     if login.exec() != QDialog.DialogCode.Accepted:
-        sys.exit(0)
+        _hard_exit(0)
 
     win = MainWindow()
     win.show_smart()
     # Check for updates shortly after the UI is up (background; non-blocking).
     QTimer.singleShot(1500, win._auto_check_updates)
-    sys.exit(app.exec())
+    _hard_exit(app.exec())
 
 
 if __name__ == "__main__":
