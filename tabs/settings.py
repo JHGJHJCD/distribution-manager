@@ -2,7 +2,7 @@ from datetime import datetime
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QLabel,
     QPushButton, QFrame, QMessageBox, QFileDialog, QInputDialog, QLineEdit,
     QProgressDialog, QApplication, QSpinBox, QScrollArea
 )
@@ -70,6 +70,15 @@ class SettingsTab(QWidget):
         title.setObjectName("title")
         lay.addWidget(title)
 
+        # Two-column block layout — compact, instead of full-width rows.
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        lay.addLayout(grid)
+        _AT = Qt.AlignmentFlag.AlignTop   # blocks sit at the top of their cell
+
         # ── Security section ──────────────────────────────
         sec_frame = QFrame()
         sec_frame.setObjectName("panel")
@@ -93,7 +102,7 @@ class SettingsTab(QWidget):
         btn_pwd.clicked.connect(self._change_password)
         pwd_row.addWidget(btn_pwd)
         sec_lay.addLayout(pwd_row)
-        lay.addWidget(sec_frame)
+        grid.addWidget(sec_frame, 0, 0, _AT)
 
         # ── Software update section ───────────────────────
         upd_frame = QFrame()
@@ -123,7 +132,7 @@ class SettingsTab(QWidget):
         self.lbl_update_status.setObjectName("subtitle")
         self.lbl_update_status.setWordWrap(True)
         upd_lay.addWidget(self.lbl_update_status)
-        lay.addWidget(upd_frame)
+        grid.addWidget(upd_frame, 0, 1, _AT)
 
         # ── Need-score weights section ────────────────────
         w_frame = QFrame()
@@ -176,7 +185,7 @@ class SettingsTab(QWidget):
         w_btns.addWidget(btn_reset_w)
         w_btns.addStretch()
         w_lay.addLayout(w_btns)
-        lay.addWidget(w_frame)
+        grid.addWidget(w_frame, 2, 0, _AT)
 
         # ── Backup section ────────────────────────────────
         bk_frame = QFrame()
@@ -229,7 +238,7 @@ class SettingsTab(QWidget):
 
         bk_btns.addStretch()
         bk_lay.addLayout(bk_btns)
-        lay.addWidget(bk_frame)
+        grid.addWidget(bk_frame, 1, 0, _AT)
 
         # ── Danger zone section ───────────────────────────
         danger_frame = QFrame()
@@ -259,7 +268,7 @@ class SettingsTab(QWidget):
         danger_btns.addWidget(btn_reset)
         danger_btns.addStretch()
         danger_lay.addLayout(danger_btns)
-        lay.addWidget(danger_frame)
+        grid.addWidget(danger_frame, 2, 1, _AT)
 
         # ── System info section ───────────────────────────
         db_frame = QFrame()
@@ -279,7 +288,7 @@ class SettingsTab(QWidget):
         self.lbl_db_path.setStyleSheet("color:#6b7280; font-size:11px;")
         self.lbl_db_path.setWordWrap(True)
         db_lay.addRow("מסד נתונים:", self.lbl_db_path)
-        lay.addWidget(db_frame)
+        grid.addWidget(db_frame, 1, 1, _AT)
 
         # ── Refresh ───────────────────────────────────────
         btn_refresh = QPushButton("רענן")
