@@ -381,12 +381,15 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str) ->
 
     alt_fill = PatternFill("solid", fgColor="F8FAFC")
     normal_fill = PatternFill("solid", fgColor="FFFFFF")
-    got_cell_fill = PatternFill("solid", fgColor="DCFCE7")
+    got_cell_fill = PatternFill("solid", fgColor="DCFCE7")     # green — received
+    reserve_cell_fill = PatternFill("solid", fgColor="FEF3C7")  # amber — reserve
     cell_align = Alignment(horizontal="right", vertical="center")
     _DATE_KEYS = {"last_distribution", "next_distribution", "birth_date", "spouse_birth_date"}
 
     for i, rec in enumerate(recipients, 1):
-        row = [i, "כן"]
+        is_reserve = bool(rec.get("_reserve"))
+        got = "רזרבה" if is_reserve else "כן"
+        row = [i, got]
         for key, _ in _FULL_FIELDS:
             if key == "priority":
                 row.append(_priority_text(rec))
@@ -401,7 +404,8 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str) ->
             cell.alignment = cell_align
             cell.fill = fill
             cell.border = border
-        ws[i + 1][1].fill = got_cell_fill   # the 'קיבל חלוקה' cell
+        # 'קיבל חלוקה' cell — green for received, amber for reserve (standby)
+        ws[i + 1][1].fill = reserve_cell_fill if is_reserve else got_cell_fill
         ws.row_dimensions[i + 1].height = 18
 
     # column widths — index, got, then a sensible width per field
