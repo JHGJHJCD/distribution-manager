@@ -599,6 +599,12 @@ class GroupUpdateTab(QWidget):
             QMessageBox.information(self, "", "אין מקבלים ברשימה לשליחה")
             return
 
+        if self._dispatch_volunteer_email(to_addr, dist_name, what, distributor):
+            QMessageBox.information(self, "נשלח", f"הרשימה נשלחה למתנדב בהצלחה ל-{to_addr}.")
+
+    def _dispatch_volunteer_email(self, to_addr, dist_name, what, distributor) -> bool:
+        """Build the volunteer checklist and email it. Returns True on success.
+        Shared by the 'שלח למתנדב' button and the post-print prompt."""
         dist_date_iso = self.date_edit.get_iso()
         dist_date_disp = _fdate(dist_date_iso)
         qty = self.qty_spin.value()
@@ -622,15 +628,16 @@ class GroupUpdateTab(QWidget):
                     "</div>"
                 )
                 from utils.print_view import _resource_path
+                import os
                 logo_path = _resource_path("org_logo.png")
                 email_utils.send_email(
                     to_addr, subject=f"רשימת חלוקה — {dist_name} ({dist_date_disp})",
                     html_body=html, attachment_path=path,
-                    inline_logo_path=logo_path if __import__("os").path.exists(logo_path) else None,
+                    inline_logo_path=logo_path if os.path.exists(logo_path) else None,
                 )
         except Exception as e:
             QMessageBox.critical(self, "שגיאת שליחה", f"השליחה נכשלה:\n{e}")
-            return
+            return False
 
         self._push_history("volunteer_emails_history", to_addr)
         self.volunteer_email_input.blockSignals(True)
@@ -638,8 +645,7 @@ class GroupUpdateTab(QWidget):
         self.volunteer_email_input.addItems(self._load_history("volunteer_emails_history"))
         self.volunteer_email_input.setCurrentText(to_addr)
         self.volunteer_email_input.blockSignals(False)
-
-        QMessageBox.information(self, "נשלח", f"הרשימה נשלחה למתנדב בהצלחה ל-{to_addr}.")
+        return True
 
     def _import_volunteer_results(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -724,3 +730,21 @@ class GroupUpdateTab(QWidget):
         checked = self._get_export_rows()
         dist_date = _fdate(self.date_edit.get_iso())
         print_distribution_list(checked, dist_date, self, dist_name=name)
+
+        # After printing, offer to also email the list to the volunteer — but only
+        # when email is set up and a volunteer address is present (else stay quiet).
+        to_addr = self.volunteer_email_input.currentText().strip()
+        if email_utils.is_configured() and to_addr and _EMAIL_RE.match(to_addr):
+            what = self.what_input.text().strip()
+            distributor = self.dist_input.currentText().strip()
+            if not what or not distributor:
+                return   # can't build a proper email without these; skip silently
+            reply = QMessageBox.question(
+                self, "שליחה למתנדב",
+                f"לשלוח את הרשימה גם למתנדב במייל ({to_addr})?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                if self._dispatch_volunteer_email(to_addr, name, what, distributor):
+                    QMessageBox.information(self, "נשלח", f"הרשימה נשלחה למתנדב ל-{to_addr}.")
