@@ -523,8 +523,8 @@ def export_volunteer_checklist_to_excel(recipients: List[Dict], dist_date: str,
 
     instr = ws["A4"]
     ws.merge_cells(f"A4:{last_col_letter}4")
-    instr.value = ("הוראות: ליד כל שם יש לבחור \"כן\"/\"לא\" בעמודת \"הגיע?\", ואפשר להוסיף "
-                   "הערה פרטנית. בסוף יש למלא הערה כללית על החלוקה למטה, ולשלוח את הקובץ חזרה.")
+    instr.value = ("הוראות: כל השמות מסומנים מראש \"כן\" (קיבל). יש לשנות ל\"לא\" רק את מי שלא הגיע. "
+                   "אפשר להוסיף הערה פרטנית לכל אחד. בסוף — למלא הערה כללית למטה ולשלוח את הקובץ חזרה.")
     instr.font = Font(size=10, italic=True, color="6B7280")
     instr.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     ws.row_dimensions[4].height = 30
@@ -567,9 +567,10 @@ def export_volunteer_checklist_to_excel(recipients: List[Dict], dist_date: str,
 
     for i, rec in enumerate(recipients, 1):
         r = _VOL_DATA_START_ROW + i - 1
+        # "הגיע?" defaults to "כן" — the volunteer only changes the few who didn't.
         vals = [rec.get("id", ""), i, rec.get("full_name", ""),
                 rec.get("phone1", ""), rec.get("phone2", ""), rec.get("phone3", ""),
-                rec.get("area", ""), rec.get("souls", ""), "", ""]
+                rec.get("area", ""), rec.get("souls", ""), "כן", ""]
         for c, v in enumerate(vals, 1):
             cell = ws.cell(r, c, v)
             cell.alignment = cell_align
@@ -645,9 +646,11 @@ def import_volunteer_checklist(path: str) -> dict:
         if name_cell is None and id_cell is None:
             continue   # a row the volunteer emptied/deleted — just skip it
 
-        came = ws.cell(r, _VOL_COL_CAME).value
-        came_yes = str(came or "").strip() in ("כן", "V", "v", "✓", "yes", "Yes")
-        if came_yes:
+        # "הגיע?" defaults to "כן"; a recipient counts as RECEIVED unless the
+        # volunteer explicitly marked "לא" (or cleared/crossed out the cell).
+        came = str(ws.cell(r, _VOL_COL_CAME).value or "").strip()
+        did_not_come = came in ("", "לא", "X", "x", "✗", "-", "no", "No")
+        if not did_not_come:
             rec = None
             try:
                 rid = int(id_cell) if id_cell not in (None, "") else None

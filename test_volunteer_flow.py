@@ -46,18 +46,20 @@ check("id column hidden", ws.column_dimensions[
     openpyxl.utils.get_column_letter(_VOL_COL_ID)].hidden is True)
 check("display title uses dd/mm/yyyy", "08/07/2026" in str(ws["A2"].value))
 
-print("\n=== simulate volunteer filling it in ===")
-# 3 came (rows 0-2), 1 explicitly did not (row 3), 1 left blank (row 4)
-for i in range(3):
-    ws.cell(_VOL_DATA_START_ROW + i, _VOL_COL_CAME, "כן")
+print("\n=== default is 'כן' — verify export pre-fills it ===")
+check("all 5 rows default to כן",
+      all(ws.cell(_VOL_DATA_START_ROW + i, _VOL_COL_CAME).value == "כן" for i in range(5)))
+
+print("\n=== simulate volunteer: cancel 2 (one 'לא', one cleared), rest stay 'כן' ===")
 ws.cell(_VOL_DATA_START_ROW, _VOL_COL_NOTE, "קיבל תוספת חלב")
-ws.cell(_VOL_DATA_START_ROW + 3, _VOL_COL_CAME, "לא")
+ws.cell(_VOL_DATA_START_ROW + 3, _VOL_COL_CAME, "לא")       # explicitly did not come
+ws.cell(_VOL_DATA_START_ROW + 4, _VOL_COL_CAME).value = None  # cleared cell = did not come
 ws.cell(_VOL_GENERAL_NOTE_ROW, 2, "החלוקה עברה בשלום, חסר סל אחד בסוף")
 wb.save(path)
 
 print("\n=== import it back ===")
 result = import_volunteer_checklist(path)
-check("3 received rows parsed", len(result["received"]) == 3, f"got {len(result['received'])}")
+check("3 received rows parsed (5 minus 2 cancelled)", len(result["received"]) == 3, f"got {len(result['received'])}")
 check("no unmatched rows", len(result["unmatched"]) == 0, str(result["unmatched"]))
 check("meta dist_date is ISO", result["meta"]["dist_date"] == "2026-07-08")
 check("meta what/distributor/dist_name correct",
@@ -66,14 +68,16 @@ check("meta what/distributor/dist_name correct",
 check("meta qty is int", result["meta"]["qty"] == 25)
 check("general note captured", "עברה בשלום" in result["meta"]["general_note"])
 check("per-recipient note captured", any("תוספת חלב" in (r["notes"] or "") for r in result["received"]))
-check("ids match originals", {r["id"] for r in result["received"]} == set(ids[:3]))
+check("ids match originals (the 3 left as כן)", {r["id"] for r in result["received"]} == set(ids[:3]))
 
 print("\n=== id-tampered fallback matches by name ===")
 path2 = export_volunteer_checklist_to_excel(recs, "2026-07-08", "בדיקת נפילה", "עוף", 10, "רותי")
 wb2 = openpyxl.load_workbook(path2)
 ws2 = wb2.worksheets[0]
-ws2.cell(_VOL_DATA_START_ROW, _VOL_COL_ID, None)   # blank the hidden id
-ws2.cell(_VOL_DATA_START_ROW, _VOL_COL_CAME, "כן")
+# isolate row 0: cancel the other rows so only the id-blanked row 0 is 'received'
+for i in range(1, len(recs)):
+    ws2.cell(_VOL_DATA_START_ROW + i, _VOL_COL_CAME, "לא")
+ws2.cell(_VOL_DATA_START_ROW, _VOL_COL_ID, None)   # blank the hidden id (stays default 'כן')
 wb2.save(path2)
 result2 = import_volunteer_checklist(path2)
 check("fallback-by-name recovered the row", len(result2["received"]) == 1
