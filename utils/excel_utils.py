@@ -13,6 +13,12 @@ def _app_dir() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _resource_path(rel: str) -> str:
+    """Locate a bundled resource (e.g. org_logo.png) in both dev and frozen mode."""
+    base = getattr(sys, "_MEIPASS", str(_app_dir()))
+    return os.path.join(base, rel)
+
+
 def _downloads_dir() -> Path:
     """The user's Downloads folder (where all exports go). Falls back to an
     'exports' folder next to the app if Downloads can't be resolved/created."""
@@ -444,3 +450,224 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
     path = str(exports_dir / filename)
     wb.save(path)
     return path
+
+
+# ─── Volunteer checklist (send-out / read-back round trip) ────────────────────
+# A minimal, privacy-conscious checklist a volunteer fills WITHOUT touching the
+# app: mark who came, a note per recipient, and one general note for the whole
+# round. A hidden hidden "meta" sheet carries the round's date/what/qty/
+# distributor/dist_name and the recipient id per row, so re-import needs no
+# re-typing and matches rows reliably even if the volunteer reorders/deletes
+# some rows.
+
+_VOL_HEADER_ROW = 9
+_VOL_DATA_START_ROW = 10
+_VOL_COLS = ["מזהה", "מס'", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3",
+            "אזור", "נפשות", "הגיע?", "הערה למקבל"]
+_VOL_COL_ID, _VOL_COL_NUM, _VOL_COL_NAME = 1, 2, 3
+_VOL_COL_PHONE1, _VOL_COL_PHONE2, _VOL_COL_PHONE3 = 4, 5, 6
+_VOL_COL_AREA, _VOL_COL_SOULS, _VOL_COL_CAME, _VOL_COL_NOTE = 7, 8, 9, 10
+_VOL_GENERAL_NOTE_ROW = 6   # top-left of the merged general-note input block
+
+
+def export_volunteer_checklist_to_excel(recipients: List[Dict], dist_date: str,
+                                        dist_name: str, what: str, qty,
+                                        distributor: str) -> str:
+    """Build a nicely styled, minimal checklist for a volunteer to fill by hand
+    (no app access needed): who came, a note per person, and one general note
+    for the round. Only the fields a volunteer needs are included — NOT the
+    full sensitive recipient record. Returns the saved file path."""
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.worksheet.datavalidation import DataValidation
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "רשימה למתנדב"
+    ws.sheet_view.rightToLeft = True
+
+    blue = "1565C0"
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor=blue)
+    header_align = Alignment(horizontal="right", vertical="center")
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    # ── Branded header block (text-based — no image dependency) ────────────
+    last_col_letter = get_column_letter(len(_VOL_COLS))
+    ws.merge_cells(f"A1:{last_col_letter}1")
+    org_cell = ws["A1"]
+    org_cell.value = "קופה של צדקה הר יונה — נוף הגליל"
+    org_cell.font = Font(bold=True, size=13, color=blue)
+    org_cell.alignment = Alignment(horizontal="center", vertical="center")
+    org_cell.fill = PatternFill("solid", fgColor="EEF4FF")
+    ws.row_dimensions[1].height = 26
+
+    dist_date_disp = _fmt_date(dist_date)
+
+    ws.merge_cells(f"A2:{last_col_letter}2")
+    title_cell = ws["A2"]
+    title_cell.value = f"{dist_name} — {dist_date_disp}"
+    title_cell.font = Font(bold=True, size=16, color="0D2A4A")
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[2].height = 30
+
+    ws.merge_cells(f"A3:{last_col_letter}3")
+    sub_cell = ws["A3"]
+    qty_txt = f"  ·  כמות: {qty}" if qty else ""
+    sub_cell.value = f"מה חולק: {what}{qty_txt}  ·  מחלק: {distributor}"
+    sub_cell.font = Font(size=11, color="475569")
+    sub_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[3].height = 20
+
+    instr = ws["A4"]
+    ws.merge_cells(f"A4:{last_col_letter}4")
+    instr.value = ("הוראות: ליד כל שם יש לבחור \"כן\"/\"לא\" בעמודת \"הגיע?\", ואפשר להוסיף "
+                   "הערה פרטנית. בסוף יש למלא הערה כללית על החלוקה למטה, ולשלוח את הקובץ חזרה.")
+    instr.font = Font(size=10, italic=True, color="6B7280")
+    instr.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    ws.row_dimensions[4].height = 30
+
+    # ── General note block (row 5 label + rows 6-7 merged input) ───────────
+    ws.merge_cells(f"B5:{last_col_letter}5")
+    note_label = ws["B5"]
+    note_label.value = "הערה כללית על כל החלוקה (למלא בסוף):"
+    note_label.font = Font(bold=True, size=11, color="92400E")
+    note_label.alignment = Alignment(horizontal="right", vertical="center")
+    note_label.fill = PatternFill("solid", fgColor="FEF3C7")
+
+    ws.merge_cells(f"B{_VOL_GENERAL_NOTE_ROW}:{last_col_letter}{_VOL_GENERAL_NOTE_ROW + 1}")
+    note_input = ws.cell(_VOL_GENERAL_NOTE_ROW, 2)
+    note_input.fill = PatternFill("solid", fgColor="FFFBEB")
+    note_input.alignment = Alignment(horizontal="right", vertical="top", wrap_text=True)
+    note_input.border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    ws.row_dimensions[_VOL_GENERAL_NOTE_ROW].height = 22
+    ws.row_dimensions[_VOL_GENERAL_NOTE_ROW + 1].height = 22
+
+    ws.row_dimensions[8].height = 8   # spacer
+
+    # ── Checklist table ──────────────────────────────────────────────────────
+    for c, h in enumerate(_VOL_COLS, 1):
+        cell = ws.cell(_VOL_HEADER_ROW, c, h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = border
+    ws.row_dimensions[_VOL_HEADER_ROW].height = 22
+
+    came_options = '"כן,לא"'
+    dv = DataValidation(type="list", formula1=came_options, allow_blank=True,
+                        showDropDown=False)
+    ws.add_data_validation(dv)
+
+    alt_fill = PatternFill("solid", fgColor="F8FAFC")
+    normal_fill = PatternFill("solid", fgColor="FFFFFF")
+    cell_align = Alignment(horizontal="right", vertical="center")
+
+    for i, rec in enumerate(recipients, 1):
+        r = _VOL_DATA_START_ROW + i - 1
+        vals = [rec.get("id", ""), i, rec.get("full_name", ""),
+                rec.get("phone1", ""), rec.get("phone2", ""), rec.get("phone3", ""),
+                rec.get("area", ""), rec.get("souls", ""), "", ""]
+        for c, v in enumerate(vals, 1):
+            cell = ws.cell(r, c, v)
+            cell.alignment = cell_align
+            cell.border = border
+            cell.fill = alt_fill if i % 2 == 0 else normal_fill
+        ws.cell(r, _VOL_COL_NAME).font = Font(bold=True)
+        dv.add(ws.cell(r, _VOL_COL_CAME))
+        ws.row_dimensions[r].height = 18
+
+    widths = {1: 8, 2: 6, 3: 24, 4: 15, 5: 15, 6: 15, 7: 10, 8: 8, 9: 10, 10: 28}
+    for col, width in widths.items():
+        ws.column_dimensions[get_column_letter(col)].width = width
+    ws.column_dimensions[get_column_letter(_VOL_COL_ID)].hidden = True
+    ws.freeze_panes = ws.cell(_VOL_HEADER_ROW + 1, 1).coordinate
+
+    # ── Hidden "meta" sheet — round details, read back automatically on import
+    meta = wb.create_sheet("meta")
+    meta["A1"], meta["B1"] = "dist_date", dist_date
+    meta["A2"], meta["B2"] = "what", what
+    meta["A3"], meta["B3"] = "qty", qty
+    meta["A4"], meta["B4"] = "distributor", distributor
+    meta["A5"], meta["B5"] = "dist_name", dist_name
+    meta.sheet_state = "hidden"
+
+    exports_dir = _downloads_dir()
+    _safe = "".join(c for c in (dist_name or "רשימה_למתנדב") if c not in '\\/:*?"<>|').strip() or "רשימה_למתנדב"
+    filename = f"{_safe}_{dist_date.replace('/', '-')}_{datetime.now().strftime('%H%M%S')}.xlsx"
+    path = str(exports_dir / filename)
+    wb.save(path)
+    return path
+
+
+def import_volunteer_checklist(path: str) -> dict:
+    """Read a volunteer's filled-in checklist (as produced by
+    export_volunteer_checklist_to_excel). Returns:
+    {
+      "meta": {dist_date, what, qty, distributor, dist_name},
+      "received": [ {id, full_name, area, souls, frequency, notes}, ... ]  # marked כן
+      "unmatched": [ row-name strings that could not be matched to a recipient ]
+    }
+    Matching: primarily by the hidden recipient id column; if that id doesn't
+    exist in the DB (edited/blank), falls back to an exact full_name match.
+    """
+    import openpyxl
+    import database as db
+
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb.worksheets[0]
+
+    meta = {"dist_date": "", "what": "", "qty": 0, "distributor": "", "dist_name": "",
+            "general_note": ""}
+    if "meta" in wb.sheetnames:
+        m = wb["meta"]
+        for row in m.iter_rows(min_row=1, max_row=5, values_only=True):
+            if not row or row[0] is None:
+                continue
+            key, val = row[0], row[1]
+            if key in meta:
+                meta[key] = val if val is not None else ""
+    try:
+        meta["qty"] = int(meta["qty"]) if meta["qty"] not in ("", None) else 0
+    except (TypeError, ValueError):
+        meta["qty"] = 0
+
+    general_note = ws.cell(_VOL_GENERAL_NOTE_ROW, 2).value
+    meta["general_note"] = (str(general_note).strip() if general_note else "")
+
+    received = []
+    unmatched = []
+    for r in range(_VOL_DATA_START_ROW, ws.max_row + 1):
+        name_cell = ws.cell(r, _VOL_COL_NAME).value
+        id_cell = ws.cell(r, _VOL_COL_ID).value
+        if name_cell is None and id_cell is None:
+            continue   # a row the volunteer emptied/deleted — just skip it
+
+        came = ws.cell(r, _VOL_COL_CAME).value
+        came_yes = str(came or "").strip() in ("כן", "V", "v", "✓", "yes", "Yes")
+        if came_yes:
+            rec = None
+            try:
+                rid = int(id_cell) if id_cell not in (None, "") else None
+            except (TypeError, ValueError):
+                rid = None
+            if rid is not None:
+                rec = db.get_recipient(rid)
+            if rec is None and name_cell:
+                candidates = [x for x in db.get_all_recipients()
+                             if (x.get("full_name") or "").strip() == str(name_cell).strip()]
+                rec = candidates[0] if len(candidates) == 1 else None
+            if rec is None:
+                unmatched.append(str(name_cell or f"שורה {r}"))
+            else:
+                note_cell = ws.cell(r, _VOL_COL_NOTE).value
+                received.append({
+                    "id": rec["id"], "full_name": rec.get("full_name", ""),
+                    "area": rec.get("area", ""), "souls": rec.get("souls", 0),
+                    "frequency": rec.get("frequency", ""),
+                    "notes": str(note_cell).strip() if note_cell else "",
+                })
+
+    return {"meta": meta, "received": received, "unmatched": unmatched}

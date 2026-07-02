@@ -11,6 +11,7 @@ import database as db
 from utils.backup import auto_backup, restore_from_backup
 from utils.ui import busy_cursor
 from utils import updater
+from utils import email_utils
 from version import APP_VERSION
 
 
@@ -290,6 +291,54 @@ class SettingsTab(QWidget):
         db_lay.addRow("מסד נתונים:", self.lbl_db_path)
         grid.addWidget(db_frame, 1, 1, _AT)
 
+        # ── Volunteer email section ────────────────────────
+        mail_frame = QFrame()
+        mail_frame.setObjectName("panel")
+        mail_lay = QVBoxLayout(mail_frame)
+        mail_lay.setContentsMargins(10, 7, 10, 7)
+        mail_lay.setSpacing(6)
+
+        mail_title = QLabel("מייל למתנדבים")
+        mail_title.setObjectName("section-header")
+        mail_lay.addWidget(mail_title)
+
+        mail_desc = QLabel(
+            "משמש לשליחה אוטומטית של רשימת חלוקה למתנדב (לשונית \"חלוקה ורישום\"). "
+            "ב-Gmail: הגדרות חשבון Google ← אבטחה ← אימות דו-שלבי ← סיסמאות אפליקציה.")
+        mail_desc.setObjectName("subtitle")
+        mail_desc.setWordWrap(True)
+        mail_lay.addWidget(mail_desc)
+
+        mail_form = QFormLayout()
+        mail_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        mail_form.setSpacing(6)
+        self.mail_email = QLineEdit()
+        self.mail_email.setPlaceholderText("your@gmail.com")
+        self.mail_password = QLineEdit()
+        self.mail_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.mail_password.setPlaceholderText("סיסמת אפליקציה")
+        mail_form.addRow("כתובת שולח:", self.mail_email)
+        mail_form.addRow("סיסמת אפליקציה:", self.mail_password)
+        mail_lay.addLayout(mail_form)
+
+        mail_btns = QHBoxLayout()
+        btn_mail_save = QPushButton("שמור")
+        btn_mail_save.setObjectName("primary")
+        btn_mail_save.clicked.connect(self._save_mail_settings)
+        mail_btns.addWidget(btn_mail_save)
+        btn_mail_test = QPushButton("שלח מייל בדיקה")
+        btn_mail_test.setObjectName("neutral")
+        btn_mail_test.clicked.connect(self._test_mail_settings)
+        mail_btns.addWidget(btn_mail_test)
+        mail_btns.addStretch()
+        mail_lay.addLayout(mail_btns)
+
+        self.lbl_mail_status = QLabel("")
+        self.lbl_mail_status.setObjectName("subtitle")
+        self.lbl_mail_status.setWordWrap(True)
+        mail_lay.addWidget(self.lbl_mail_status)
+        grid.addWidget(mail_frame, 3, 0, _AT)
+
         # ── Refresh ───────────────────────────────────────
         btn_refresh = QPushButton("רענן")
         btn_refresh.setObjectName("neutral")
@@ -324,6 +373,16 @@ class SettingsTab(QWidget):
             last_backup = "לא בוצע עדיין"
             self.lbl_last_backup.setStyleSheet("color:#9ca3af;")
         self.lbl_last_backup.setText(last_backup)
+
+        cfg = email_utils.get_smtp_config()
+        self.mail_email.setText(cfg["email"])
+        self.mail_password.setText(cfg["app_password"])
+        if email_utils.is_configured():
+            self.lbl_mail_status.setText("מוגדר ✓")
+            self.lbl_mail_status.setStyleSheet("color:#16a34a;")
+        else:
+            self.lbl_mail_status.setText("לא הוגדר עדיין")
+            self.lbl_mail_status.setStyleSheet("color:#9ca3af;")
 
     # ── Need-score weights ────────────────────────────────────────────────────
 
@@ -506,6 +565,33 @@ class SettingsTab(QWidget):
         if self.main_win and hasattr(self.main_win, "choose_backup_folder"):
             self.main_win.choose_backup_folder()
             self.refresh()
+
+    # ── Volunteer email settings ────────────────────────────────────────────────
+
+    def _save_mail_settings(self):
+        email = self.mail_email.text().strip()
+        password = self.mail_password.text()
+        if not email or not password:
+            QMessageBox.warning(self, "", "יש למלא כתובת מייל וסיסמת אפליקציה.")
+            return
+        email_utils.set_smtp_config(email, password)
+        self.refresh()
+        QMessageBox.information(self, "נשמר", "הגדרות המייל נשמרו ✓")
+
+    def _test_mail_settings(self):
+        self._save_mail_settings_silent()
+        with busy_cursor():
+            ok, msg = email_utils.test_connection()
+        if ok:
+            QMessageBox.information(self, "בדיקת מייל", msg)
+        else:
+            QMessageBox.warning(self, "בדיקת מייל", msg)
+
+    def _save_mail_settings_silent(self):
+        email = self.mail_email.text().strip()
+        password = self.mail_password.text()
+        if email and password:
+            email_utils.set_smtp_config(email, password)
 
     # ── Software update ───────────────────────────────────────────────────────
 

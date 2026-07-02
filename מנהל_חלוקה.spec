@@ -50,10 +50,17 @@ a = Analysis(
         'utils.print_view',
         'utils.ui',
         'utils.updater',
-        # ── networking (in-app updater) ──────────────────────────────────────
+        'utils.email_utils',
+        # ── networking (in-app updater + volunteer email) ─────────────────────
         'urllib.request',
         'json',
         'ssl',
+        'smtplib',
+        'email.mime.multipart',
+        'email.mime.text',
+        'email.mime.image',
+        'email.mime.application',
+        'email.utils',
         # ── PyQt6 submodules sometimes missed ────────────────────────────────
         'PyQt6.QtPrintSupport',
         'PyQt6.QtWidgets',

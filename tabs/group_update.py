@@ -1,7 +1,8 @@
+import re
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QLineEdit,
-    QSpinBox, QMessageBox, QAbstractItemView
+    QSpinBox, QMessageBox, QAbstractItemView, QFileDialog
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
@@ -9,11 +10,15 @@ from datetime import date
 from widgets import DateEdit
 import database as db
 from utils.backup import auto_backup_async
-from utils.excel_utils import export_distribution_to_excel, export_full_distribution_to_excel
+from utils.excel_utils import (export_distribution_to_excel, export_full_distribution_to_excel,
+                               export_volunteer_checklist_to_excel, import_volunteer_checklist)
 from utils.print_view import print_distribution_list
 from utils.ui import busy_cursor, attach_empty_state, refresh_empty_state
+from utils import email_utils
 from styles import (OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG,
                     SELECTED_BG, SELECTED_FG)
+
+_EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
 # colours for one-time picks (+ reserve)
 _RESERVE_BG, _RESERVE_FG = "#ede7f6", "#5e35b1"
@@ -158,6 +163,49 @@ class GroupUpdateTab(QWidget):
         details_row.addWidget(self.dist_input, 1)
 
         lay.addWidget(details_card)
+
+        # Volunteer card — send the current list to a volunteer to fill by email
+        # (they never touch the app), and import their filled results back.
+        vol_card = QWidget()
+        vol_card.setObjectName("volunteer-card")
+        vol_card.setStyleSheet(
+            "QWidget#volunteer-card { background:#f5f3ff; border:1px solid #ddd6fe; border-radius:8px; }"
+        )
+        vol_row = QHBoxLayout(vol_card)
+        vol_row.setSpacing(10)
+        vol_row.setContentsMargins(12, 7, 12, 7)
+
+        def _vlbl(text):
+            l = QLabel(text)
+            l.setStyleSheet("font-weight:700; color:#5b21b6; background:transparent; border:none;")
+            return l
+
+        vol_row.addWidget(_vlbl("שליחה למתנדב:"))
+        self.volunteer_email_input = QComboBox()
+        self.volunteer_email_input.setEditable(True)
+        self.volunteer_email_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.volunteer_email_input.setMinimumWidth(180)
+        self.volunteer_email_input.lineEdit().setPlaceholderText("אימייל המתנדב")
+        self.volunteer_email_input.setToolTip("כתובת המייל של המתנדב שימלא את הרשימה")
+        self.volunteer_email_input.addItems(self._load_history("volunteer_emails_history"))
+        self.volunteer_email_input.setCurrentText("")
+        vol_row.addWidget(self.volunteer_email_input, 1)
+
+        btn_send_vol = QPushButton("שלח למתנדב למילוי")
+        btn_send_vol.setObjectName("primary")
+        btn_send_vol.setStyleSheet(_SMALL_BTN)
+        btn_send_vol.setToolTip("שולח למתנדב במייל קובץ מעוצב עם הרשימה, למילוי בלי לגעת בתוכנה")
+        btn_send_vol.clicked.connect(self._send_to_volunteer)
+        vol_row.addWidget(btn_send_vol)
+
+        btn_import_vol = QPushButton("ייבוא תוצאות ממתנדב")
+        btn_import_vol.setObjectName("neutral")
+        btn_import_vol.setStyleSheet(_SMALL_BTN)
+        btn_import_vol.setToolTip("בחר את קובץ ה-Excel שהמתנדב מילא והחזיר — יירשם ישירות להיסטוריה")
+        btn_import_vol.clicked.connect(self._import_volunteer_results)
+        vol_row.addWidget(btn_import_vol)
+
+        lay.addWidget(vol_card)
 
         # Filter row — scope toggle + area filter
         filter_row = QHBoxLayout()
@@ -508,6 +556,155 @@ class GroupUpdateTab(QWidget):
             QMessageBox.information(self, "ייצוא הושלם", f"הקובץ נשמר:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "שגיאה", str(e))
+
+    # ── send list to a volunteer by email / import their filled results ────────
+
+    def _send_to_volunteer(self):
+        dist_name   = self.name_input.currentText().strip()
+        what        = self.what_input.text().strip()
+        distributor = self.dist_input.currentText().strip()
+        to_addr     = self.volunteer_email_input.currentText().strip()
+
+        _ERR = "border: 2px solid #dc2626; background-color: #fff5f5;"
+        errors = []
+        for widget, val, label in (
+            (self.name_input, dist_name, "שם החלוקה"),
+            (self.what_input, what, "מה חולק"),
+            (self.dist_input, distributor, "שם המחלק"),
+        ):
+            if not val:
+                widget.setStyleSheet(_ERR)
+                errors.append(f"{label}: שדה חובה")
+            else:
+                widget.setStyleSheet("")
+        if not to_addr:
+            self.volunteer_email_input.setStyleSheet(_ERR)
+            errors.append("אימייל מתנדב: שדה חובה")
+        elif not _EMAIL_RE.match(to_addr):
+            self.volunteer_email_input.setStyleSheet(_ERR)
+            errors.append("אימייל מתנדב: כתובת לא תקינה")
+        else:
+            self.volunteer_email_input.setStyleSheet("")
+        if errors:
+            QMessageBox.warning(self, "שדות חסרים", "• " + "\n• ".join(errors))
+            return
+
+        if not email_utils.is_configured():
+            QMessageBox.warning(
+                self, "שליחת מייל לא הוגדרה",
+                "יש להגדיר תחילה כתובת מייל שולח וסיסמת אפליקציה בלשונית הגדרות.")
+            return
+
+        if not self._rows_data:
+            QMessageBox.information(self, "", "אין מקבלים ברשימה לשליחה")
+            return
+
+        dist_date_iso = self.date_edit.get_iso()
+        dist_date_disp = _fdate(dist_date_iso)
+        qty = self.qty_spin.value()
+        try:
+            with busy_cursor():
+                # Store the ISO date (not the dd/mm/yyyy display string) so a
+                # later import can hand it straight to bulk_add_distributions /
+                # calculate_next_dist, which require ISO format.
+                path = export_volunteer_checklist_to_excel(
+                    self._rows_data, dist_date_iso, dist_name, what, qty, distributor)
+                html = (
+                    "<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
+                    "<div style='text-align:center;margin-bottom:10px;'>"
+                    "<img src='cid:logo' style='max-width:160px;'></div>"
+                    f"<p>שלום {distributor},</p>"
+                    f"<p>מצורפת רשימת החלוקה \"<b>{dist_name}</b>\" מתאריך {dist_date_disp}.</p>"
+                    "<p>נא לסמן ליד כל שם אם הגיע (\"כן\"/\"לא\"), ניתן להוסיף הערה לכל אחד, "
+                    "ובסוף למלא הערה כללית על החלוקה בקובץ עצמו.</p>"
+                    "<p>לאחר המילוי — נא לשלוח את הקובץ המצורף בחזרה למייל הזה.</p>"
+                    "<p style='color:#6b7280;font-size:12px;'>תודה על ההתנדבות!</p>"
+                    "</div>"
+                )
+                from utils.print_view import _resource_path
+                logo_path = _resource_path("org_logo.png")
+                email_utils.send_email(
+                    to_addr, subject=f"רשימת חלוקה — {dist_name} ({dist_date_disp})",
+                    html_body=html, attachment_path=path,
+                    inline_logo_path=logo_path if __import__("os").path.exists(logo_path) else None,
+                )
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאת שליחה", f"השליחה נכשלה:\n{e}")
+            return
+
+        self._push_history("volunteer_emails_history", to_addr)
+        self.volunteer_email_input.blockSignals(True)
+        self.volunteer_email_input.clear()
+        self.volunteer_email_input.addItems(self._load_history("volunteer_emails_history"))
+        self.volunteer_email_input.setCurrentText(to_addr)
+        self.volunteer_email_input.blockSignals(False)
+
+        QMessageBox.information(self, "נשלח", f"הרשימה נשלחה למתנדב בהצלחה ל-{to_addr}.")
+
+    def _import_volunteer_results(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "בחר קובץ שחזר מהמתנדב", "", "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            with busy_cursor():
+                result = import_volunteer_checklist(path)
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה בקריאת הקובץ", str(e))
+            return
+
+        received = result["received"]
+        unmatched = result["unmatched"]
+        meta = result["meta"]
+
+        if not received:
+            msg = "לא נמצא אף מקבל שסומן \"כן\" בקובץ."
+            if unmatched:
+                msg += f"\n\n⚠ {len(unmatched)} שורות לא זוהו: " + ", ".join(unmatched[:10])
+            QMessageBox.information(self, "אין מה לייבא", msg)
+            return
+
+        summary = (
+            f"חלוקה: {meta.get('dist_name') or '—'}\n"
+            f"תאריך: {meta.get('dist_date') or '—'}\n"
+            f"מה חולק: {meta.get('what') or '—'}  ·  מחלק: {meta.get('distributor') or '—'}\n\n"
+            f"יירשמו {len(received)} חלוקות שסומנו כ'הגיע'."
+        )
+        if meta.get("general_note"):
+            summary += f"\n\nהערה כללית מהמתנדב: {meta['general_note']}"
+        if unmatched:
+            summary += (f"\n\n⚠ {len(unmatched)} שורות לא זוהו ולא ייובאו: "
+                       + ", ".join(unmatched[:10]))
+        summary += "\n\nלאשר ייבוא להיסטוריה?"
+
+        reply = QMessageBox.question(
+            self, "אישור ייבוא", summary,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        general_suffix = (f" | הערה כללית: {meta['general_note']}"
+                          if meta.get("general_note") else "")
+        records = []
+        for r in received:
+            rec = dict(r)
+            rec["notes"] = (r.get("notes") or "") + general_suffix
+            records.append(rec)
+
+        with busy_cursor():
+            db.bulk_add_distributions(
+                records, meta.get("dist_date") or self.date_edit.get_iso(),
+                meta.get("what") or "", meta.get("qty") or 0,
+                meta.get("distributor") or "")
+            auto_backup_async()
+
+        QMessageBox.information(
+            self, "הצלחה", f"נרשמו {len(records)} חלוקות מהמתנדב להיסטוריה ✓")
+        if self.main_win:
+            self.main_win.status_msg(f"יובאו {len(records)} חלוקות ממתנדב")
+            self.main_win.refresh_all()
 
     def _print(self):
         name = self.name_input.currentText().strip()
