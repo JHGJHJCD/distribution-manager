@@ -78,7 +78,7 @@ win.search_tab.search_input.setText("פלוני א"); win.search_tab._run_search
 ok("S5 search finds the recipient", len(win.search_tab._results) >= 1)
 if win.search_tab._results:
     win.search_tab.results_table.setCurrentCell(0, 0)
-    ok("S5 details show a name", bool(win.search_tab.l_name.text()))
+    ok("S5 details show a name", "פלוני" in win.search_tab.profile_lbl.text())
 
 # ── Scenario 6: backup → reset → restore ──────────────────────────────────────
 from utils.backup import auto_backup, restore_from_backup
