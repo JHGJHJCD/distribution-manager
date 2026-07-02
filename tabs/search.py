@@ -1,19 +1,27 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QLabel, QLineEdit, QAbstractItemView, QFormLayout, QFrame,
-    QSizePolicy, QPushButton, QDialog
+    QSizePolicy, QPushButton, QMessageBox
 )
 from PyQt6.QtCore import Qt, QTimer
 import database as db
-from utils.ui import search_icon
+from utils.ui import (search_icon, busy_cursor, BadgeDelegate, HighlightDelegate,
+                      PRIORITY_BADGES, STATUS_BADGES)
+from utils.excel_utils import export_recipients_to_excel
+from utils.print_view import print_recipient_card
+
+_SMALL_BTN = "font-size:11px; min-height:24px; min-width:0; padding:3px 12px;"
+
 
 def _fdate(s: str) -> str:
     if s and len(s) >= 10 and s[4] == '-':
         return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
     return s or ""
 
+
 HIST_COLS = ["תאריך", "מה חולק", "כמות", "מחלק", "הערות"]
-RESULT_COLS = ["שם מלא", "טלפון", "ת״ז בעל", "ת״ז אשה", "אזור", "סטטוס"]
+RESULT_COLS = ["שם מלא", "טלפון", "עדיפות", "אזור", "סטטוס", "ת״ז בעל", "ת״ז אשה"]
+_COL_NAME, _COL_PHONE, _COL_PRIORITY, _COL_AREA, _COL_STATUS = 0, 1, 2, 3, 4
 
 
 def _first_phone(rec: dict) -> str:
@@ -24,11 +32,21 @@ def _first_phone(rec: dict) -> str:
     return ""
 
 
+def _priority_display(rec: dict) -> str:
+    """Hebrew priority label matching PRIORITY_BADGES keys (blank if none)."""
+    labels = {4: "קבוע", 3: "ראשונה", 2: "שנייה"}
+    pr = rec.get("priority")
+    if pr in labels:
+        return labels[pr]
+    return "בירור" if "בירור" in (rec.get("priority_raw") or "") else ""
+
+
 class SearchTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._all_rows: list = []         # cached on refresh, filtered in-memory
         self._results: list = []          # current result rows
+        self._current_rec_id = None       # selected recipient (for print card)
         self._filter_timer = QTimer()
         self._filter_timer.setSingleShot(True)
         self._filter_timer.timeout.connect(self._run_search)
@@ -56,12 +74,20 @@ class SearchTab(QWidget):
         self.count_lbl.setObjectName("subtitle")
         search_row.addWidget(self.count_lbl)
 
-        btn_all_dist = QPushButton("📋 כל החלוקות")
-        btn_all_dist.setObjectName("neutral")
-        btn_all_dist.setStyleSheet("font-size:11px; min-height:24px; min-width:0; padding:3px 12px;")
-        btn_all_dist.setToolTip("הצג את כל החלוקות שבוצעו (היסטוריה מלאה)")
-        btn_all_dist.clicked.connect(self._open_all_distributions)
-        search_row.addWidget(btn_all_dist)
+        btn_export = QPushButton("ייצוא לאקסל")
+        btn_export.setObjectName("success")
+        btn_export.setStyleSheet(_SMALL_BTN)
+        btn_export.setToolTip("ייצא את הרשימה המסוננת (התוצאות שמוצגות) לאקסל בתיקיית ההורדות")
+        btn_export.clicked.connect(self._export_results)
+        search_row.addWidget(btn_export)
+
+        self.btn_print_card = QPushButton("🖨 הדפס כרטיס")
+        self.btn_print_card.setObjectName("neutral")
+        self.btn_print_card.setStyleSheet(_SMALL_BTN)
+        self.btn_print_card.setToolTip("הדפס כרטיס עם פרטי המקבל הנבחר + היסטוריית החלוקות שלו")
+        self.btn_print_card.clicked.connect(self._print_card)
+        self.btn_print_card.setEnabled(False)
+        search_row.addWidget(self.btn_print_card)
         lay.addLayout(search_row)
 
         # Results table
@@ -73,20 +99,26 @@ class SearchTab(QWidget):
         self.results_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.results_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.results_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.results_table.setMaximumHeight(220)
+        self.results_table.setMaximumHeight(240)
         rhdr = self.results_table.horizontalHeader()
         rhdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        rhdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        rhdr.setSectionResizeMode(_COL_NAME, QHeaderView.ResizeMode.Stretch)
         rhdr.setResizeContentsPrecision(20)
         self.results_table.verticalHeader().setVisible(False)
+        # Coloured badges + search highlighting
+        self._hl = HighlightDelegate(self.results_table)
+        self.results_table.setItemDelegateForColumn(_COL_NAME, self._hl)
+        self.results_table.setItemDelegateForColumn(_COL_PHONE, self._hl)
+        self._pri_badge = BadgeDelegate(PRIORITY_BADGES, self.results_table)
+        self._st_badge = BadgeDelegate(STATUS_BADGES, self.results_table)
+        self.results_table.setItemDelegateForColumn(_COL_PRIORITY, self._pri_badge)
+        self.results_table.setItemDelegateForColumn(_COL_STATUS, self._st_badge)
         self.results_table.itemSelectionChanged.connect(self._on_result_selected)
         lay.addWidget(self.results_table)
 
         # Details frame
         frame = QFrame()
         frame.setObjectName("panel")
-        # A VBox (not a single-child HBox) so the form spans the full card width
-        # and value labels get room to grow/wrap instead of clipping.
         frame_lay = QVBoxLayout(frame)
         frame_lay.setContentsMargins(12, 10, 12, 10)
 
@@ -100,7 +132,7 @@ class SearchTab(QWidget):
         def lbl():
             w = QLabel("")
             w.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            w.setWordWrap(True)                    # long address/notes wrap instead of clip
+            w.setWordWrap(True)
             w.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             return w
@@ -154,30 +186,18 @@ class SearchTab(QWidget):
         hdr = self.hist_table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
+        hdr.setResizeContentsPrecision(20)
         self.hist_table.verticalHeader().setVisible(False)
         lay.addWidget(self.hist_table)
 
-    def _open_all_distributions(self):
-        from tabs.tracking import TrackingTab
-        dlg = QDialog(self)
-        dlg.setWindowTitle("כל החלוקות — היסטוריה מלאה")
-        dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        dlg.resize(1000, 640)
-        v = QVBoxLayout(dlg)
-        trk = TrackingTab(dlg)     # read-only; no main_win needed
-        trk.refresh()
-        v.addWidget(trk)
-        dlg.exec()
-
     def refresh(self):
-        # Cache the full recipient list once; keystrokes filter this in-memory
-        # instead of re-hitting the database on every character.
+        # Cache the full recipient list once; keystrokes filter this in-memory.
         self._all_rows = db.get_all_recipients()
         self._run_search()
 
     def _run_search(self):
         query = self.search_input.text()
+        self._hl.set_query(query)
         self._results = db.filter_recipients(self._all_rows, query)
         self._populate_results()
 
@@ -189,20 +209,19 @@ class SearchTab(QWidget):
         self.results_table.setRowCount(len(self._results))
         for r, rec in enumerate(self._results):
             vals = [rec.get("full_name", ""), _first_phone(rec),
-                    rec.get("id_number", "") or "", rec.get("spouse_id_number", "") or "",
-                    rec.get("area", "") or "", rec.get("status", "")]
+                    _priority_display(rec), rec.get("area", "") or "",
+                    rec.get("status", ""),
+                    rec.get("id_number", "") or "", rec.get("spouse_id_number", "") or ""]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(str(v) or "")
                 item.setTextAlignment(_ALIGN)
-                if c == 0:   # name — bold
+                if c == _COL_NAME:   # name — bold, carries the id
                     item.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
                     nf = item.font(); nf.setBold(True); item.setFont(nf)
                 self.results_table.setItem(r, c, item)
         self.results_table.blockSignals(False)
         self.count_lbl.setText(f"נמצאו: {len(self._results)}")
 
-        # Auto-select the top match so its details show immediately — preserving
-        # the old name-search feel where details appeared without an extra click.
         if self._results:
             self.results_table.setCurrentCell(0, 0)
         else:
@@ -214,7 +233,7 @@ class SearchTab(QWidget):
         if row < 0:
             self._clear_details()
             return
-        item = self.results_table.item(row, 0)
+        item = self.results_table.item(row, _COL_NAME)
         rec_id = item.data(Qt.ItemDataRole.UserRole) if item else None
         if rec_id:
             self._show_recipient(rec_id)
@@ -224,6 +243,8 @@ class SearchTab(QWidget):
         if not rec:
             self._clear_details()
             return
+        self._current_rec_id = rec_id
+        self.btn_print_card.setEnabled(True)
 
         self.l_name.setText(rec.get("full_name") or "")
         self.l_phone1.setText(rec.get("phone1") or "")
@@ -255,6 +276,8 @@ class SearchTab(QWidget):
                 self.hist_table.setItem(r, c, item)
 
     def _clear_details(self):
+        self._current_rec_id = None
+        self.btn_print_card.setEnabled(False)
         for lbl in [self.l_name, self.l_phone1, self.l_phone2, self.l_phone3,
                     self.l_id, self.l_spouse_id, self.l_address,
                     self.l_area, self.l_souls, self.l_freq, self.l_status,
@@ -262,3 +285,24 @@ class SearchTab(QWidget):
             lbl.setText("")
         self.hist_table.clearContents()
         self.hist_table.setRowCount(0)
+
+    def _export_results(self):
+        if not self._results:
+            QMessageBox.information(self, "", "אין תוצאות לייצוא")
+            return
+        try:
+            with busy_cursor():
+                path = export_recipients_to_excel(self._results)
+            QMessageBox.information(self, "ייצוא הושלם", f"הרשימה נשמרה בתיקיית ההורדות:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה", str(e))
+
+    def _print_card(self):
+        if not self._current_rec_id:
+            QMessageBox.information(self, "", "בחר מקבל תחילה")
+            return
+        rec = db.get_recipient(self._current_rec_id)
+        if not rec:
+            return
+        hist = db.get_distributions_for_recipient(self._current_rec_id)
+        print_recipient_card(rec, hist, self)

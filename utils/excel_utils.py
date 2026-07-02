@@ -452,6 +452,78 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
     return path
 
 
+def export_recipients_to_excel(recipients: List[Dict]) -> str:
+    """Export a (filtered) recipients list — every stored field — to Downloads.
+    Used by the search screen's 'ייצוא לאקסל'. Reuses _FULL_FIELDS. Returns path."""
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "מקבלים"
+    ws.sheet_view.rightToLeft = True
+
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor="2563EB")
+    header_align = Alignment(horizontal="right", vertical="center")
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    headers = ["מס'"] + [h for _, h in _FULL_FIELDS]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = border
+    ws.row_dimensions[1].height = 22
+
+    alt_fill = PatternFill("solid", fgColor="F8FAFC")
+    normal_fill = PatternFill("solid", fgColor="FFFFFF")
+    cell_align = Alignment(horizontal="right", vertical="center")
+    _DATE_KEYS = {"last_distribution", "next_distribution", "birth_date", "spouse_birth_date"}
+
+    for i, rec in enumerate(recipients, 1):
+        row = [i]
+        for key, _ in _FULL_FIELDS:
+            if key == "priority":
+                row.append(_priority_text(rec))
+            elif key in _DATE_KEYS:
+                row.append(_fmt_date(rec.get(key)))
+            else:
+                v = rec.get(key)
+                row.append("" if v is None else v)
+        ws.append(row)
+        fill = alt_fill if i % 2 == 0 else normal_fill
+        for cell in ws[i + 1]:
+            cell.alignment = cell_align
+            cell.fill = fill
+            cell.border = border
+        ws.row_dimensions[i + 1].height = 18
+
+    widths = [6] + [26 if k == "address" else 20 if k in ("full_name", "email", "synagogue")
+                    else 14 for k, _ in _FULL_FIELDS]
+    for col, width in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(col)].width = width
+
+    ncols = len(headers)
+    ws.insert_rows(1)
+    ws.merge_cells(f"A1:{get_column_letter(ncols)}1")
+    title_cell = ws["A1"]
+    title_cell.value = f"רשימת מקבלים — {datetime.now().strftime('%d/%m/%Y')}  ({len(recipients)})"
+    title_cell.font = Font(bold=True, size=14, color="1D4ED8")
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 28
+    ws.freeze_panes = "A3"
+
+    exports_dir = _downloads_dir()
+    filename = f"מקבלים_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.xlsx"
+    path = str(exports_dir / filename)
+    wb.save(path)
+    return path
+
+
 # ─── Volunteer checklist (send-out / read-back round trip) ────────────────────
 # A minimal, privacy-conscious checklist a volunteer fills WITHOUT touching the
 # app: mark who came, a note per recipient, and one general note for the whole

@@ -177,3 +177,99 @@ def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWid
         if doc.pageCount() <= 1:
             break
     doc.print(printer)
+
+
+_PRIORITY_LABELS = {4: "קבוע", 3: "עדיפות ראשונה", 2: "עדיפות שנייה"}
+
+
+def _priority_text(rec: Dict) -> str:
+    pr = rec.get("priority")
+    if pr in _PRIORITY_LABELS:
+        return _PRIORITY_LABELS[pr]
+    return "חובת בירור" if "בירור" in (rec.get("priority_raw") or "") else ""
+
+
+def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
+    """A single recipient's printable card: details block + distribution history."""
+    def _v(key):
+        return _esc(rec.get(key) or "")
+
+    phones = " / ".join(p for p in [rec.get("phone1"), rec.get("phone2"), rec.get("phone3")] if p)
+    rows = [
+        ("טלפונים", _esc(phones)),
+        ("ת.ז. בעל / אשה", f"{_v('id_number')} / {_v('spouse_id_number')}"),
+        ("כתובת", _v("address")),
+        ("אזור", _v("area")),
+        ("נפשות", _esc(rec.get("souls") or "")),
+        ("עדיפות", _esc(_priority_text(rec))),
+        ("תדירות", _v("frequency")),
+        ("סטטוס", _v("status")),
+        ("חלוקה אחרונה", _esc(_fmt(rec.get("last_distribution")))),
+        ("חלוקה הבאה", _esc(_fmt(rec.get("next_distribution")))),
+        ("הערות", _v("notes")),
+    ]
+    details = "".join(
+        f"<tr><th style='width:150px;background:#eef3ff;color:#1a4a7a;'>{label}</th>"
+        f"<td>{val}</td></tr>"
+        for label, val in rows
+    )
+
+    hist_rows = ""
+    for i, h in enumerate(history, 1):
+        hist_rows += (
+            f"<tr><td>{i}</td>"
+            f"<td>{_esc(_fmt(h.get('dist_date')))}</td>"
+            f"<td>{_esc(h.get('what_dist', ''))}</td>"
+            f"<td>{_esc(h.get('quantity', '') or '')}</td>"
+            f"<td>{_esc(h.get('distributor', ''))}</td>"
+            f"<td>{_esc(h.get('notes', ''))}</td></tr>"
+        )
+    hist_table = (
+        "<div class='reserve-h'>היסטוריית חלוקות</div>"
+        "<table><thead><tr>"
+        "<th>מס'</th><th>תאריך</th><th>מה חולק</th><th>כמות</th><th>מחלק</th><th>הערות</th>"
+        "</tr></thead><tbody>" + (hist_rows or
+            "<tr><td colspan='6' style='text-align:center;color:#888;'>אין חלוקות רשומות</td></tr>")
+        + "</tbody></table>"
+    )
+
+    logo_html = "<div class='logo'><img src='orglogo' width='130'></div>" if has_logo else ""
+    return f"""
+    <html><body>
+    {logo_html}
+    <div class='org'>{_esc(ORG_NAME)}</div>
+    <h2>כרטיס מקבל — {_esc(rec.get('full_name', ''))}</h2>
+    <table>{details}</table>
+    {hist_table}
+    <p class='footer'>הודפס: {date.today().strftime('%d/%m/%Y')} · סה\"כ חלוקות: {len(history)}</p>
+    </body></html>
+    """
+
+
+def _fmt(s) -> str:
+    s = str(s or "")
+    if len(s) >= 10 and s[4] == "-":
+        return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
+    return s
+
+
+def print_recipient_card(rec: Dict, history: List[Dict], parent: QWidget = None):
+    """Open the print dialog and print a single recipient's card + history."""
+    printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+    printer.setPageOrientation(QPageLayout.Orientation.Portrait)
+    printer.setPageMargins(QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter)
+
+    dlg = QPrintDialog(printer, parent)
+    if dlg.exec() != QPrintDialog.DialogCode.Accepted:
+        return
+
+    logo_path = _resource_path("org_logo.png")
+    has_logo = os.path.exists(logo_path)
+    doc = QTextDocument()
+    if has_logo:
+        doc.addResource(QTextDocument.ResourceType.ImageResource,
+                        QUrl("orglogo"), QImage(logo_path))
+    doc.setDefaultStyleSheet(_css(11))
+    doc.setHtml(_card_html(rec, history, has_logo))
+    doc.setPageSize(QSizeF(printer.pageLayout().paintRectPixels(printer.resolution()).size()))
+    doc.print(printer)

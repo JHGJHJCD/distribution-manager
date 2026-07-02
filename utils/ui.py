@@ -67,6 +67,49 @@ class BadgeDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+class HighlightDelegate(QStyledItemDelegate):
+    """Render a cell's text, highlighting the substring that matches the current
+    search query (bold + soft-yellow background). Set the query with set_query();
+    empty query renders normally."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._query = ""
+
+    def set_query(self, q: str):
+        self._query = (q or "").strip().lower()
+
+    # Horizontal cell padding — matches the QSS `QTableWidget::item { padding }`
+    # so the highlight rectangle lines up with where the text is actually drawn.
+    _PAD = 12
+
+    def paint(self, painter, option, index):
+        # Draw the cell normally first (background, alternating rows, selection,
+        # text) — then overlay a highlight on just the matched substring.
+        super().paint(painter, option, index)
+        text = index.data() or ""
+        q = self._query
+        pos = text.lower().find(q) if q else -1
+        if pos < 0 or not text:
+            return
+
+        painter.save()
+        fm = option.fontMetrics
+        before, match = text[:pos], text[pos:pos + len(q)]
+        r = option.rect
+        # RTL, right-aligned text: it starts at (right - pad) and runs leftwards.
+        x_text_right = r.right() - self._PAD
+        w_before = fm.horizontalAdvance(before)
+        w_match = fm.horizontalAdvance(match)
+        x_match_right = x_text_right - w_before
+        seg_rect = QRect(int(x_match_right - w_match), r.top(), int(w_match), r.height())
+        painter.fillRect(seg_rect, QColor(255, 235, 59, 150))   # translucent yellow
+        f = painter.font(); f.setBold(True); painter.setFont(f)
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        painter.setPen(option.palette.highlightedText().color() if selected else QColor("#7a5900"))
+        painter.drawText(seg_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, match)
+        painter.restore()
+
+
 class _ViewportResizeFilter(QObject):
     """Keeps an empty-state label filling its table's viewport on resize."""
     def __init__(self, label):
