@@ -15,16 +15,17 @@ PALETTE = {
     "blue_600": "#1976d2",   # אקסנט / hover
     "blue_400": "#42a5f5",   # קו אקסנט בהיר
     "blue_200": "#bbdefb",   # מסגרות
-    "blue_100": "#e3f2fd",   # רקעי-גוון / כותרת טבלה
+    "blue_100": "#e7f1fd",   # רקעי-גוון / כותרת טבלה
     "blue_050": "#eef4ff",   # רקע עמוד
-    # ניטרליים
-    "ink":      "#1f2937",   # טקסט ראשי
+    # ניטרליים — טון מודרני, אוורירי ורך יותר
+    "ink":      "#1e293b",   # טקסט ראשי (slate-800)
     "ink_soft": "#475569",   # טקסט משני
-    "muted":    "#6b7280",   # כותרות-משנה
-    "line":     "#e5e7eb",   # מסגרת ניטרלית
-    "line_2":   "#eef1f5",
+    "muted":    "#7b8794",   # כותרות-משנה
+    "line":     "#e8ecf2",   # מסגרת ניטרלית (רכה יותר)
+    "line_2":   "#eff2f7",
     "surface":  "#ffffff",
-    "field_bg": "#f8fafc",
+    "page":     "#f5f7fb",   # רקע עמוד נקי (כמעט-לבן בגוון כחלחל)
+    "field_bg": "#f6f8fc",
     # סמנטיים
     "danger":      "#d32f2f", "danger_dk": "#b71c1c", "danger_soft": "#ef9a9a",
     "success":     "#2e9e4f", "success_dk": "#1b7a37", "success_soft": "#a5d6a7",
@@ -40,11 +41,15 @@ FONT_STACK = "'Segoe UI','Tahoma',Arial,sans-serif"
 TOKENS = {
     **PALETTE,
     "font":       FONT_STACK,
-    "fs_title":   "20px",
-    "fs_section": "13px",
+    "fs_title":   "22px",
+    "fs_section": "14px",
     "fs_sub":     "12px",
     "fs_tab":     "13px",
-    "fs_table":   "12px",
+    "fs_table":   "13px",
+    # ── סקאלת פינות מעוגלות אחידה (מודרני, אוורירי) ──
+    "r_card":     "14px",
+    "r_ctl":      "10px",
+    "r_btn":      "9px",
 }
 
 # ── תבנית ה-QSS (משתמשת ב-$token; ל-QSS אין '$' משלו ולכן זה בטוח) ──────────
@@ -65,9 +70,9 @@ QLabel#title {
     font-size: $fs_title;
     font-weight: 800;
     color: $blue_700;
-    padding-bottom: 8px;
+    padding-bottom: 10px;
     border-bottom: 2px solid $blue_200;
-    margin-bottom: 4px;
+    margin-bottom: 6px;
 }
 
 QLabel#subtitle {
@@ -90,24 +95,24 @@ QFrame { background-color: transparent; border: none; }
 QFrame#panel {
     background-color: $surface;
     border: 1px solid $line;
-    border-radius: 10px;
+    border-radius: $r_card;
 }
 
 /* ════ Tab bar ════ */
 QTabWidget::pane {
     border: 1px solid $blue_200;
-    border-radius: 10px;
+    border-radius: $r_card;
     top: 4px;
 }
 QTabBar::tab {
     font-weight: 600;
     font-size: $fs_tab;
-    min-width: 100px;
-    padding: 9px 18px;
-    border-radius: 9px;
+    min-width: 108px;
+    padding: 10px 20px;
+    border-radius: $r_ctl;
     color: $ink_soft;
     background-color: transparent;
-    margin: 3px 3px 5px 3px;
+    margin: 3px 3px 6px 3px;
 }
 /* Note: position-qualified selectors (:top/:bottom/...) so we match
    qt-material's more-specific `QTabBar::tab:top:selected` rule and override its
@@ -142,7 +147,7 @@ QTableWidget, QTableView {
     background-color: $surface;
 }
 QTableWidget::item, QTableView::item {
-    padding: 9px 12px;
+    padding: 11px 14px;
     border: none;
     color: $ink;
 }
@@ -159,8 +164,8 @@ QTableWidget::item:selected:hover, QTableView::item:selected:hover {
 QHeaderView::section {
     font-weight: 700;
     font-size: $fs_table;
-    min-height: 40px;
-    padding: 9px 12px;
+    min-height: 44px;
+    padding: 11px 14px;
     border: none;
     border-bottom: 2px solid $blue_200;
     border-left: 1px solid $blue_100;
@@ -171,11 +176,11 @@ QHeaderView::section:hover { background-color: $blue_200; }
 
 /* ════ Buttons — hierarchy: primary / success / danger / ghost ════ */
 QPushButton {
-    border-radius: 7px;
+    border-radius: $r_btn;
     font-weight: 700;
-    min-width: 76px;
-    min-height: 30px;
-    padding: 6px 16px;
+    min-width: 80px;
+    min-height: 34px;
+    padding: 8px 18px;
 }
 QPushButton:focus { outline: none; }
 QPushButton:pressed { padding-top: 7px; padding-bottom: 5px; }
@@ -223,8 +228,12 @@ QPushButton#neutral:disabled { color: $muted; border-color: $line; }
 
 /* ════ Inputs — focus ring + hover ════ */
 QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QDateEdit, QSpinBox {
-    border-radius: 8px;
+    border-radius: $r_ctl;
+    padding: 7px 12px;
+    selection-background-color: $blue_200;
+    selection-color: $blue_900;
 }
+QLineEdit, QComboBox, QDateEdit, QSpinBox { min-height: 22px; }
 QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover,
 QComboBox:hover, QDateEdit:hover, QSpinBox:hover {
     border-color: $blue_400;
@@ -322,10 +331,10 @@ QCalendarWidget QSpinBox::up-button, QCalendarWidget QSpinBox::down-button {
     background-color: transparent; border: none;
 }
 
-/* ════ Main window — subtle blue-tinted background ════ */
+/* ════ Main window — clean near-white with a faint blue lift ════ */
 QMainWindow {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 $blue_050, stop:1 #eaf0fb);
+        stop:0 #fbfcfe, stop:1 $page);
 }
 
 /* ════ Status bar ════ */
@@ -342,9 +351,9 @@ QToolTip {
 QGroupBox {
     background-color: $surface;
     border: 1.5px solid $line;
-    border-radius: 10px;
-    margin-top: 16px;
-    padding-top: 12px;
+    border-radius: $r_card;
+    margin-top: 18px;
+    padding-top: 14px;
     font-weight: 700;
 }
 QGroupBox::title {
