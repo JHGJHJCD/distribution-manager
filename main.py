@@ -431,19 +431,36 @@ class MainWindow(QMainWindow):
         c_lay.setContentsMargins(6, 6, 6, 6)
         c_lay.setSpacing(4)
 
-        # Persistent branding strip — the charity logo, small, at the top-right.
+        # Persistent branded app-bar: a navy→blue band with the charity logo (on a
+        # white chip so it reads on the dark band) and the app name. Gives the whole
+        # app a clear, modern identity instead of a faint corner logo.
+        appbar = QFrame()
+        appbar.setObjectName("appbar")
+        appbar.setFixedHeight(68)
+        a_lay = QHBoxLayout(appbar)
+        a_lay.setContentsMargins(18, 8, 18, 8)
+        a_lay.setSpacing(14)
+
         _logo_path = resource_path("org_logo.png")
         _lp = QPixmap(_logo_path) if os.path.exists(_logo_path) else QPixmap()
         if not _lp.isNull():
-            strip = QWidget()
-            s_lay = QHBoxLayout(strip)
-            s_lay.setContentsMargins(6, 0, 6, 0)
             logo_lbl = QLabel()
+            logo_lbl.setObjectName("appbar_logo")
             logo_lbl.setPixmap(_lp.scaledToHeight(
-                46, Qt.TransformationMode.SmoothTransformation))
-            s_lay.addStretch()
-            s_lay.addWidget(logo_lbl)          # RTL: stretch first → logo on the left
-            c_lay.addWidget(strip)
+                44, Qt.TransformationMode.SmoothTransformation))
+            a_lay.addWidget(logo_lbl)          # RTL: first added → rightmost
+
+        _title_box = QVBoxLayout()
+        _title_box.setSpacing(0)
+        _t = QLabel("מנהל חלוקה")
+        _t.setObjectName("appbar_title")
+        _st = QLabel("קופה של צדקה הר יונה · נוף הגליל")
+        _st.setObjectName("appbar_sub")
+        _title_box.addWidget(_t)
+        _title_box.addWidget(_st)
+        a_lay.addLayout(_title_box)
+        a_lay.addStretch()
+        c_lay.addWidget(appbar)
 
         c_lay.addWidget(self.tabs)
         self.setCentralWidget(central)

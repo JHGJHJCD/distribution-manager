@@ -364,6 +364,29 @@ QGroupBox::title {
     font-size: $fs_sub;
     font-weight: 700;
 }
+
+/* ════ Branded top app-bar ════ */
+QFrame#appbar {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 $blue_900, stop:1 $blue_600);
+    border: none;
+    border-radius: $r_card;
+}
+QLabel#appbar_logo {
+    background-color: #ffffff;
+    border-radius: 10px;
+    padding: 5px;
+}
+QLabel#appbar_title {
+    color: #ffffff;
+    font-size: 21px;
+    font-weight: 800;
+}
+QLabel#appbar_sub {
+    color: rgba(255,255,255,0.82);
+    font-size: 12px;
+    font-weight: 600;
+}
 """)
 
 EXTRA_QSS = _QSS_TEMPLATE.substitute(TOKENS)
