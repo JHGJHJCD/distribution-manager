@@ -99,12 +99,14 @@ class GroupUpdateTab(QWidget):
             return
         total = 0
         names = []
+        received_ids = []
         for p in paths:
             try:
-                n, meta = self._apply_checklist_file(p, confirm=False)
+                n, meta, ids = self._apply_checklist_file(p, confirm=False)
             except Exception:
-                n, meta = 0, {}
+                n, meta, ids = 0, {}, []
             total += n
+            received_ids += ids
             if meta.get("dist_name"):
                 names.append(meta["dist_name"])
             try:
@@ -115,11 +117,29 @@ class GroupUpdateTab(QWidget):
             if self.main_win:
                 self.main_win.status_msg(f"התקבלו {total} חלוקות ממתנדב במייל ונרשמו אוטומטית ✓")
                 self.main_win.refresh_all()
+            # Tick the people the volunteer marked as 'הגיע' right here in the
+            # list, so the operator sees at a glance who received.
+            self._mark_received_in_table(received_ids)
             title = " · ".join(dict.fromkeys(names)) or "רשימת חלוקה"
             QMessageBox.information(
                 self, "תוצאות מתנדב התקבלו במייל",
                 f"התקבלה במייל רשימה שמולאה על ידי המתנדב ({title}).\n"
-                f"נרשמו אוטומטית {total} חלוקות להיסטוריה ✓")
+                f"נרשמו אוטומטית {total} חלוקות להיסטוריה ✓\n"
+                f"המקבלים שהגיעו סומנו ברשימה.")
+
+    def _mark_received_in_table(self, ids):
+        """Check the checkbox of every recipient the volunteer reported as
+        received, if they're present in the current list."""
+        idset = {int(i) for i in ids if i is not None}
+        if not idset:
+            return
+        self.table.blockSignals(True)
+        for r in range(self.table.rowCount()):
+            chk = self.table.item(r, 0)
+            if chk is not None and chk.data(Qt.ItemDataRole.UserRole) in idset:
+                chk.setCheckState(Qt.CheckState.Checked)
+        self.table.blockSignals(False)
+        self._update_counts()
 
     # ── one-time-pick persistence (survive restart + save) ─────────────────────
     def _load_extras(self):
@@ -732,7 +752,7 @@ class GroupUpdateTab(QWidget):
         """Read a filled volunteer checklist and record the received rows to
         history. When confirm=True, ask the operator first (manual file import);
         when confirm=False, import silently (automatic email pull). Returns
-        (records_written, meta)."""
+        (records_written, meta, received_ids)."""
         result = import_volunteer_checklist(path)
         received = result["received"]
         unmatched = result["unmatched"]
@@ -744,7 +764,7 @@ class GroupUpdateTab(QWidget):
                 if unmatched:
                     msg += f"\n\n⚠ {len(unmatched)} שורות לא זוהו: " + ", ".join(unmatched[:10])
                 QMessageBox.information(self, "אין מה לייבא", msg)
-            return 0, meta
+            return 0, meta, []
 
         if confirm:
             summary = (
@@ -765,7 +785,7 @@ class GroupUpdateTab(QWidget):
                 QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
-                return 0, meta
+                return 0, meta, []
 
         general_suffix = (f" | הערה כללית: {meta['general_note']}"
                           if meta.get("general_note") else "")
@@ -781,7 +801,7 @@ class GroupUpdateTab(QWidget):
                 meta.get("what") or "", meta.get("qty") or 0,
                 meta.get("distributor") or "")
             auto_backup_async()
-        return len(records), meta
+        return len(records), meta, [r.get("id") for r in received]
 
     def _import_volunteer_results(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -789,16 +809,19 @@ class GroupUpdateTab(QWidget):
         if not path:
             return
         try:
-            n, _meta = self._apply_checklist_file(path, confirm=True)
+            n, _meta, ids = self._apply_checklist_file(path, confirm=True)
         except Exception as e:
             QMessageBox.critical(self, "שגיאה בקריאת הקובץ", str(e))
             return
         if n:
-            QMessageBox.information(
-                self, "הצלחה", f"נרשמו {n} חלוקות מהמתנדב להיסטוריה ✓")
             if self.main_win:
-                self.main_win.status_msg(f"יובאו {n} חלוקות ממתנדב")
                 self.main_win.refresh_all()
+                self.main_win.status_msg(f"יובאו {n} חלוקות ממתנדב")
+            # Mark AFTER refresh (refresh rebuilds the table and would clear marks).
+            self._mark_received_in_table(ids)
+            QMessageBox.information(
+                self, "הצלחה", f"נרשמו {n} חלוקות מהמתנדב להיסטוריה ✓\n"
+                               f"המקבלים שהגיעו סומנו ברשימה.")
 
     def _print(self):
         name = self.name_input.currentText().strip()

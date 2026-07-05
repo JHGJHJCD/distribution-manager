@@ -284,9 +284,11 @@ class SettingsTab(QWidget):
         # password). External links open in the browser.
         mail_links = QLabel(
             "הגדרה חד-פעמית ב-Gmail (לפי הסדר):<br>"
-            "1. <a href=\"https://myaccount.google.com/signinoptions/two-step-verification?hl=he\">"
-            "הפעלת אימות דו-שלבי</a><br>"
-            "2. <a href=\"https://authenticator.cc/\">אפליקציית מאמת (Authenticator)</a><br>"
+            "1. <a href=\"https://authenticator.cc/\">התקנת אפליקציית מאמת (Authenticator)</a><br>"
+            "2. <a href=\"https://myaccount.google.com/signinoptions/two-step-verification?hl=he\">"
+            "הפעלת אימות דו-שלבי</a> "
+            "<span style=\"color:#b45309;\">— חשוב! בעת ההפעלה הורידו את קודי הגיבוי "
+            "ושמרו אותם במקום בטוח</span><br>"
             "3. <a href=\"https://myaccount.google.com/apppasswords\">הפקת סיסמת אפליקציה</a>")
         mail_links.setTextFormat(Qt.TextFormat.RichText)
         mail_links.setOpenExternalLinks(True)
