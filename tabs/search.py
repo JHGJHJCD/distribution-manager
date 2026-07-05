@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 import database as db
 from utils.ui import (search_icon, busy_cursor, BadgeDelegate, HighlightDelegate,
-                      PRIORITY_BADGES, STATUS_BADGES)
+                      PRIORITY_BADGES, STATUS_BADGES, ALIGN_RIGHT)
 from utils.excel_utils import export_recipients_to_excel
 from utils.print_view import print_recipient_card
 
@@ -78,6 +78,7 @@ class SearchTab(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setMinimumHeight(38)
         self.search_input.setPlaceholderText("חיפוש: שם, טלפון, ת״ז, כתובת, אימייל...")
+        self.search_input.setAlignment(ALIGN_RIGHT)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.textChanged.connect(lambda: self._filter_timer.start(200))
@@ -175,7 +176,7 @@ class SearchTab(QWidget):
         self._populate_results()
 
     def _populate_results(self):
-        _ALIGN = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        _ALIGN = ALIGN_RIGHT
         self.results_table.blockSignals(True)
         self.results_table.clearContents()
         self.results_table.setRowCount(0)
@@ -294,7 +295,7 @@ class SearchTab(QWidget):
                     entry.get("notes", "")]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                item.setTextAlignment(ALIGN_RIGHT)
                 self.hist_table.setItem(r, c, item)
 
     # ── actions ────────────────────────────────────────────────────────────────

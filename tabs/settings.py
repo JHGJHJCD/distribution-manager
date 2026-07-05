@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 
 import database as db
 from utils.backup import auto_backup, restore_from_backup
-from utils.ui import busy_cursor
+from utils.ui import busy_cursor, ALIGN_RIGHT
 from utils import updater
 from utils import email_utils
 from version import APP_VERSION
@@ -314,9 +314,11 @@ class SettingsTab(QWidget):
         mail_form.setSpacing(6)
         self.mail_email = QLineEdit()
         self.mail_email.setPlaceholderText("your@gmail.com")
+        self.mail_email.setAlignment(ALIGN_RIGHT)
         self.mail_password = QLineEdit()
         self.mail_password.setEchoMode(QLineEdit.EchoMode.Password)
         self.mail_password.setPlaceholderText("סיסמת אפליקציה")
+        self.mail_password.setAlignment(ALIGN_RIGHT)
         mail_form.addRow("כתובת שולח:", self.mail_email)
         mail_form.addRow("סיסמת אפליקציה:", self.mail_password)
         mail_lay.addLayout(mail_form)

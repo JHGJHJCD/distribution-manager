@@ -6,6 +6,23 @@ from PyQt6.QtCore import Qt, QObject, QEvent, QRect, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap, QIcon
 
 
+# ── RTL-safe right alignment ────────────────────────────────────────────────
+# In an RTL widget Qt flips logical AlignRight to VISUAL-LEFT, so Hebrew table
+# text drifted to the left edge of wide columns. AlignAbsolute disables the
+# flip: this constant always means "hug the right edge on screen".
+ALIGN_RIGHT = (Qt.AlignmentFlag.AlignRight
+               | Qt.AlignmentFlag.AlignAbsolute
+               | Qt.AlignmentFlag.AlignVCenter)
+
+
+def rtl_text_area(te) -> None:
+    """Make a QTextEdit/QPlainTextEdit start Hebrew-style: empty-state cursor on
+    the right and RTL paragraph flow (Qt otherwise parks the cursor left)."""
+    opt = te.document().defaultTextOption()
+    opt.setTextDirection(Qt.LayoutDirection.RightToLeft)
+    te.document().setDefaultTextOption(opt)
+
+
 # ── Coloured "pill" badges for table cells (priority / status) ─────────────────
 PRIORITY_BADGES = {
     "קבוע":   ("#e3f2fd", "#1565c0"),
@@ -197,6 +214,7 @@ class FeedbackDialog:
         msg = QPlainTextEdit()
         msg.setPlaceholderText("תאר כאן את הבעיה או הבקשה...")
         msg.setMinimumHeight(120)
+        rtl_text_area(msg)
         lay.addWidget(msg)
 
         btn_row = QHBoxLayout()

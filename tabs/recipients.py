@@ -36,7 +36,8 @@ def _fdate(s: str) -> str:
 from utils.backup import auto_backup_async, auto_backup
 from utils.excel_utils import import_from_excel
 from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state,
-                      BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, search_icon)
+                      BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, search_icon,
+                      ALIGN_RIGHT, rtl_text_area)
 
 COLS = ["מס'", "שם מלא", "עדיפות", "טלפון 1", "טלפון 2", "טלפון 3",
         "כתובת", "אזור", "נפשות", "תדירות", "חלוקה אחרונה",
@@ -147,6 +148,7 @@ class RecipientsTab(QWidget):
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("חיפוש לפי שם...")
+        self.search_input.setAlignment(ALIGN_RIGHT)
         self.search_input.setMaximumWidth(220)
         self.search_input.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.textChanged.connect(lambda: self._filter_timer.start(220))
@@ -284,7 +286,7 @@ class RecipientsTab(QWidget):
     def _populate(self, rows):
         _SUSPENDED = QColor(SUSPENDED_FG)
         _ENDED     = QColor(ENDED_FG)
-        _ALIGN     = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        _ALIGN     = ALIGN_RIGHT
 
         self.table.blockSignals(True)
         self.table.clearContents()
@@ -566,6 +568,7 @@ class RecipientDialog(QDialog):
         self.f_notes = QTextEdit()
         self.f_notes.setMaximumHeight(60)
         self.f_notes.setPlaceholderText("הערות")
+        rtl_text_area(self.f_notes)
 
         self.f_freq.currentTextChanged.connect(self._suggest_next)
         self.f_last_dist.dateChanged.connect(self._suggest_next)

@@ -233,6 +233,13 @@ QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QDateEdit, QSpinBox {
     selection-background-color: $blue_200;
     selection-color: $blue_900;
 }
+/* Empty fields in an RTL app still park the cursor on the LEFT (Qt follows the
+   keyboard layout, not the widget direction). Force right alignment so the
+   cursor and typed text start on the right, like Hebrew users expect. */
+/* AlignAbsolute matters: without it Qt flips AlignRight back to visual-left
+   for the placeholder text (the same RTL flip as in table cells). */
+QLineEdit { qproperty-alignment: 'AlignRight|AlignAbsolute|AlignVCenter'; }
+QAbstractSpinBox { qproperty-alignment: 'AlignRight|AlignAbsolute|AlignVCenter'; }
 QLineEdit, QComboBox, QDateEdit, QSpinBox { min-height: 22px; }
 QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover,
 QComboBox:hover, QDateEdit:hover, QSpinBox:hover {

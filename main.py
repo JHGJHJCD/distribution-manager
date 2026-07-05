@@ -475,12 +475,13 @@ class MainWindow(QMainWindow):
         self._apply_rtl_polish()
 
     def _apply_rtl_polish(self):
-        """Right-align every table header so the whole UI reads consistently RTL
-        (Qt centers header text by default, which looks LTR in a Hebrew app)."""
+        """Right-align every table header so the whole UI reads consistently RTL.
+        AlignAbsolute is required: in an RTL widget Qt flips plain AlignRight to
+        visual-left, which is exactly the bug we're fixing."""
         from PyQt6.QtWidgets import QTableView
+        from utils.ui import ALIGN_RIGHT
         for tv in self.findChildren(QTableView):
-            tv.horizontalHeader().setDefaultAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            tv.horizontalHeader().setDefaultAlignment(ALIGN_RIGHT)
 
     def _save_tab_order(self):
         order = [self.tabs.widget(i).objectName() for i in range(self.tabs.count())]
@@ -529,6 +530,9 @@ class MainWindow(QMainWindow):
         if hasattr(tab, "refresh") and getattr(tab, "_needs_refresh", True):
             tab.refresh()
             tab._needs_refresh = False
+        # Lazy-loaded tabs miss the startup RTL polish, so their table headers stay
+        # left-aligned (looks LTR in a Hebrew app). Re-apply on every tab show.
+        self._apply_rtl_polish()
 
     def refresh_all(self):
         for i in range(self.tabs.count()):

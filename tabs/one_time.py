@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 from datetime import date
 import database as db
-from utils.ui import attach_empty_state, refresh_empty_state
+from utils.ui import attach_empty_state, refresh_empty_state, ALIGN_RIGHT
 from styles import OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG, SELECTED_BG, SELECTED_FG
 
 def _fdate(s: str) -> str:
@@ -211,7 +211,7 @@ class OneTimeTab(QWidget):
 
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                item.setTextAlignment(ALIGN_RIGHT)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 item.setBackground(bg)
                 item.setForeground(fg)

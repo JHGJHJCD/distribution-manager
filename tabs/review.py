@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 import database as db
 from utils.backup import auto_backup_async
-from utils.ui import BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES
+from utils.ui import BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, ALIGN_RIGHT
 
 COLS = ["סוג", "מפתח", "שם מלא", "טלפון 1", "טלפון 2", "אזור", "עדיפות", "סטטוס"]
 
@@ -84,7 +84,7 @@ class ReviewTab(QWidget):
 
     def refresh(self):
         groups = db.find_duplicate_groups()
-        _ALIGN = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        _ALIGN = ALIGN_RIGHT
         # flatten groups → rows
         flat = []   # (group_index, type, key, rec)
         for gi, g in enumerate(groups):

@@ -13,7 +13,7 @@ from utils.backup import auto_backup_async
 from utils.excel_utils import (export_distribution_to_excel, export_full_distribution_to_excel,
                                export_volunteer_checklist_to_excel, import_volunteer_checklist)
 from utils.print_view import print_distribution_list
-from utils.ui import busy_cursor, attach_empty_state, refresh_empty_state
+from utils.ui import busy_cursor, attach_empty_state, refresh_empty_state, ALIGN_RIGHT
 from utils import email_utils
 from styles import (OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG,
                     SELECTED_BG, SELECTED_FG)
@@ -126,6 +126,7 @@ class GroupUpdateTab(QWidget):
         self.name_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.name_input.setMinimumWidth(150)
         self.name_input.lineEdit().setPlaceholderText("לדוגמה: חלוקת פסח")
+        self.name_input.lineEdit().setAlignment(ALIGN_RIGHT)
         self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה. אפשר לבחור משמות קודמים.")
         self.name_input.addItems(self._load_history("dist_names_history"))
         self.name_input.setCurrentText("")
@@ -140,6 +141,7 @@ class GroupUpdateTab(QWidget):
         details_row.addWidget(_lbl("מה חולק:"))
         self.what_input = QLineEdit()
         self.what_input.setPlaceholderText("סל מזון, עוף, ...")
+        self.what_input.setAlignment(ALIGN_RIGHT)
         self.what_input.setMinimumWidth(150)
         self.what_input.setToolTip("תיאור המוצר שחולק")
         details_row.addWidget(self.what_input, 2)
@@ -157,6 +159,7 @@ class GroupUpdateTab(QWidget):
         self.dist_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.dist_input.setMinimumWidth(130)
         self.dist_input.lineEdit().setPlaceholderText("שם המחלק")
+        self.dist_input.lineEdit().setAlignment(ALIGN_RIGHT)
         self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
         self.dist_input.addItems(self._load_history("distributors_history"))
         self.dist_input.setCurrentText(db.get_setting("last_distributor") or "")
@@ -186,6 +189,7 @@ class GroupUpdateTab(QWidget):
         self.volunteer_email_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.volunteer_email_input.setMinimumWidth(180)
         self.volunteer_email_input.lineEdit().setPlaceholderText("אימייל המתנדב")
+        self.volunteer_email_input.lineEdit().setAlignment(ALIGN_RIGHT)
         self.volunteer_email_input.setToolTip("כתובת המייל של המתנדב שימלא את הרשימה")
         self.volunteer_email_input.addItems(self._load_history("volunteer_emails_history"))
         self.volunteer_email_input.setCurrentText("")
@@ -401,7 +405,7 @@ class GroupUpdateTab(QWidget):
                     str(rec.get("souls", "") or ""), ""]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
-                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                item.setTextAlignment(ALIGN_RIGHT)
                 item.setBackground(bg)
                 item.setForeground(fg)
                 col = c + 1

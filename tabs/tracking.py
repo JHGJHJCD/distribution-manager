@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer
 import database as db
-from utils.ui import attach_empty_state, refresh_empty_state, search_icon
+from utils.ui import attach_empty_state, refresh_empty_state, search_icon, ALIGN_RIGHT
 
 def _fdate(s: str) -> str:
     if s and len(s) >= 10 and s[4] == '-':
@@ -90,7 +90,7 @@ class TrackingTab(QWidget):
         self._load_log()
 
     def _populate(self, rows):
-        _ALIGN = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        _ALIGN = ALIGN_RIGHT
         self.table.blockSignals(True)
         self.table.clearContents()
         self.table.setRowCount(0)
@@ -123,7 +123,7 @@ class TrackingTab(QWidget):
         self._apply_filter()
 
     def _load_log(self):
-        _ALIGN = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        _ALIGN = ALIGN_RIGHT
         logs = db.get_change_log(limit=100)
         self.log_table.blockSignals(True)
         self.log_table.clearContents()
