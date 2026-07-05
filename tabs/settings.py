@@ -280,6 +280,38 @@ class SettingsTab(QWidget):
         mail_desc.setWordWrap(True)
         mail_lay.addWidget(mail_desc)
 
+        # Helpful links for the one-time Gmail setup (2FA → authenticator → app
+        # password). External links open in the browser.
+        mail_links = QLabel(
+            "הגדרה חד-פעמית ב-Gmail (לפי הסדר):<br>"
+            "1. <a href=\"https://myaccount.google.com/signinoptions/two-step-verification?hl=he\">"
+            "הפעלת אימות דו-שלבי</a><br>"
+            "2. <a href=\"https://authenticator.cc/\">אפליקציית מאמת (Authenticator)</a><br>"
+            "3. <a href=\"https://myaccount.google.com/apppasswords\">הפקת סיסמת אפליקציה</a>")
+        mail_links.setTextFormat(Qt.TextFormat.RichText)
+        mail_links.setOpenExternalLinks(True)
+        mail_links.setWordWrap(True)
+        mail_links.setStyleSheet("font-size:12px;")
+        mail_lay.addWidget(mail_links)
+
+        mail_warn_row = QHBoxLayout()
+        mail_warn_row.setContentsMargins(0, 0, 0, 0)
+        mail_warn_row.setSpacing(6)
+        warn_ic = QLabel()
+        warn_ic.setPixmap(line_icon("danger", 16, "#b45309"))
+        warn_ic.setStyleSheet("background:transparent; border:none;")
+        warn_ic.setFixedWidth(18)
+        mail_warn_row.addWidget(warn_ic, 0, Qt.AlignmentFlag.AlignTop)
+        mail_warn = QLabel(
+            "אזהרה: אל תשנה הגדרות אבטחה בחשבון Google (אימות דו-שלבי / סיסמאות אפליקציה) "
+            "בלי להתייעץ עם מישהו שמבין בכך. שינוי שגוי עלול לחסום את הכניסה לחשבון.")
+        mail_warn.setWordWrap(True)
+        mail_warn.setStyleSheet("color:#b45309; font-size:12px; font-weight:600; "
+                                "background:#fffbeb; border:1px solid #fde68a; "
+                                "border-radius:6px; padding:6px 8px;")
+        mail_warn_row.addWidget(mail_warn, 1)
+        mail_lay.addLayout(mail_warn_row)
+
         mail_form = QFormLayout()
         mail_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         mail_form.setSpacing(6)
