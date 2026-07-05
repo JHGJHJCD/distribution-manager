@@ -264,8 +264,8 @@ QComboBox QAbstractItemView::item:hover { background-color: $blue_100; color: $b
 QCheckBox { background-color: transparent; }
 QCheckBox::indicator,
 QTableView::indicator, QTableWidget::indicator, QAbstractItemView::indicator {
-    width: 18px; height: 18px;
-    border-radius: 4px;
+    width: 22px; height: 22px;
+    border-radius: 5px;
     border: 2px solid #90a4ae;
     background-color: $surface;
 }
@@ -290,11 +290,11 @@ QAbstractItemView::indicator:disabled {
     border-color: $line;
 }
 
-/* ════ Scrollbars — overlay minimal ════ */
-QScrollBar:vertical   { background: transparent; width: 9px;  margin: 2px; }
-QScrollBar:horizontal { background: transparent; height: 9px; margin: 2px; }
+/* ════ Scrollbars — overlay minimal, wide enough to grab by finger (touch) ════ */
+QScrollBar:vertical   { background: transparent; width: 14px;  margin: 2px; }
+QScrollBar:horizontal { background: transparent; height: 14px; margin: 2px; }
 QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-    background: #c2cbd6; border-radius: 4px; min-height: 30px; min-width: 30px;
+    background: #c2cbd6; border-radius: 6px; min-height: 44px; min-width: 44px;
 }
 QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #97a3b2; }
 QScrollBar::handle:vertical:pressed, QScrollBar::handle:horizontal:pressed { background: $ink_soft; }

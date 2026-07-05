@@ -2,14 +2,25 @@ import html
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QSpinBox,
-    QAbstractItemView, QMessageBox, QDialog
+    QAbstractItemView, QMessageBox, QDialog, QLineEdit
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from datetime import date
 import database as db
-from utils.ui import attach_empty_state, refresh_empty_state, ALIGN_RIGHT
+from utils.ui import (attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
+                      search_icon, add_glow, enable_touch_scroll)
 from styles import OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG, SELECTED_BG, SELECTED_FG
+
+_SMALL_GREEN_BTN = (
+    "QPushButton{ background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+    "  stop:0 #43b563, stop:1 #2e9e4f); color:#ffffff; border:none;"
+    "  border-radius:9px; font-weight:800; font-size:12px;"
+    "  min-height:24px; min-width:70px; padding:3px 16px; }"
+    "QPushButton:hover{ background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+    "  stop:0 #4fc06e, stop:1 #1b7a37); }"
+    "QPushButton:pressed{ background:#1b7a37; }"
+)
 
 def _fdate(s: str) -> str:
     if s and len(s) >= 10 and s[4] == '-':
@@ -54,11 +65,17 @@ class OneTimeTab(QWidget):
 
         # Controls
         ctrl = QHBoxLayout()
-        ctrl.addWidget(QLabel("סנן אזור:"))
-        self.area_combo = QComboBox()
-        self.area_combo.currentTextChanged.connect(self.refresh)
-        ctrl.addWidget(self.area_combo)
-        self._reload_areas()
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.timeout.connect(self._apply_search)
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("חיפוש: שם, טלפון, ת״ז, כתובת, אזור...")
+        self.search_input.setAlignment(ALIGN_RIGHT)
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setMinimumWidth(240)
+        self.search_input.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
+        self.search_input.textChanged.connect(lambda: self._search_timer.start(180))
+        ctrl.addWidget(self.search_input)
 
         ctrl.addWidget(QLabel("מוצרים זמינים:"))
         self.products_spin = QSpinBox()
@@ -80,8 +97,11 @@ class OneTimeTab(QWidget):
         ctrl.addWidget(self.reserve_spin)
 
         btn_calc = QPushButton("חשב המלצה")
+        btn_calc.setStyleSheet(_SMALL_GREEN_BTN)
+        btn_calc.setToolTip("סמן אוטומטית את המומלצים לחלוקה לפי מספר המוצרים והעדיפות")
         btn_calc.clicked.connect(self._calc_suggestion)
         ctrl.addWidget(btn_calc)
+        add_glow(btn_calc, "#22c55e")   # gentle green halo to draw the eye
 
         ctrl.addStretch()
 
@@ -124,6 +144,7 @@ class OneTimeTab(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._on_check_changed)
         self.table.cellClicked.connect(self._on_cell_clicked)
+        enable_touch_scroll(self.table)
         lay.addWidget(self.table)
         attach_empty_state(self.table, "אין חד-פעמיים פעילים להצגה")
 
@@ -140,22 +161,28 @@ class OneTimeTab(QWidget):
         bot.addWidget(btn_add)
         lay.addLayout(bot)
 
-    def _reload_areas(self):
-        prev = self.area_combo.currentText() if self.area_combo.count() else "הכל"
-        self.area_combo.blockSignals(True)
-        self.area_combo.clear()
-        self.area_combo.addItem("הכל")
-        for a in db.get_areas():
-            self.area_combo.addItem(a)
-        idx = self.area_combo.findText(prev)
-        self.area_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.area_combo.blockSignals(False)
-
     def refresh(self):
-        self._reload_areas()
-        area = self.area_combo.currentText() or "הכל"
-        self._rows_data = db.get_one_time_list(area_filter=area)
+        # Full list (no area filter) — the free-text search below narrows it.
+        self._rows_data = db.get_one_time_list(area_filter="הכל")
         self._populate()
+
+    _SEARCH_KEYS = ("full_name", "phone1", "phone2", "phone3", "area",
+                    "id_number", "spouse_id_number", "address", "external_id",
+                    "priority_raw", "synagogue", "representative")
+
+    def _apply_search(self):
+        """Hide rows that don't match the free-text query (any field). Works as a
+        visibility filter so 'חשב המלצה' still ranks against the full list."""
+        q = self.search_input.text().strip().lower()
+        for r in range(self.table.rowCount()):
+            if r >= len(self._rows_data):
+                continue
+            if not q:
+                self.table.setRowHidden(r, False)
+                continue
+            rec = self._rows_data[r]
+            hay = " ".join(str(rec.get(k) or "") for k in self._SEARCH_KEYS).lower()
+            self.table.setRowHidden(r, q not in hay)
 
     def _populate(self, suggested_n: int = -1, reserve_n: int = 0):
         self.table.blockSignals(True)
@@ -222,6 +249,8 @@ class OneTimeTab(QWidget):
 
         self.table.blockSignals(False)
         refresh_empty_state(self.table)
+        if hasattr(self, "search_input"):
+            self._apply_search()   # keep the active text filter after a rebuild
         self._update_selected_count()
         if suggested_n >= 0:
             self.lbl_stats.setText(

@@ -37,7 +37,21 @@ from utils.backup import auto_backup_async, auto_backup
 from utils.excel_utils import import_from_excel
 from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state,
                       BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, search_icon,
-                      ALIGN_RIGHT, rtl_text_area)
+                      ALIGN_RIGHT, rtl_text_area, enable_touch_scroll)
+
+# Compact action buttons (≈50% shorter) — glossy gradients come from the
+# success/danger object names; this only tightens the size.
+_ACTION_BTN = "font-size:12px; min-height:24px; min-width:64px; padding:3px 14px;"
+# 'השהה' — a glossy amber button (its own gradient, no object name).
+_SUSPEND_BTN = (
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+    "  stop:0 #fbbf24, stop:1 #f59e0b); color:#ffffff; border:none;"
+    "  border-radius:9px; font-weight:700; font-size:12px;"
+    "  min-height:24px; min-width:64px; padding:3px 14px; }"
+    "QPushButton:hover{ background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+    "  stop:0 #fcd34d, stop:1 #d97706); }"
+    "QPushButton:pressed{ background:#b45309; }"
+)
 
 COLS = ["מס'", "שם מלא", "עדיפות", "טלפון 1", "טלפון 2", "טלפון 3",
         "כתובת", "אזור", "נפשות", "תדירות", "חלוקה אחרונה",
@@ -201,49 +215,53 @@ class RecipientsTab(QWidget):
         self.table.doubleClicked.connect(self._edit)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        # "שם מלא" — give it a generous fixed-but-resizable width so long names
+        # are never clipped (Stretch got squeezed to nothing next to 30+ columns).
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         # Sample only a few rows when auto-sizing columns. Default samples up to
         # 1000 rows × every column on each refresh — with thousands of recipients
         # that O(rows×cols) scan froze/crashed the app. A small precision keeps
         # the auto-fit look at constant cost.
         hdr.setResizeContentsPrecision(20)
         self.table.verticalHeader().setVisible(False)
+        self.table.setColumnWidth(1, 230)   # roomy name column (see resize mode above)
+        enable_touch_scroll(self.table)
         lay.addWidget(self.table)
         attach_empty_state(self.table, "אין מקבלים להצגה")
         # coloured pill badges for priority + status columns
         self.table.setItemDelegateForColumn(2, BadgeDelegate(PRIORITY_BADGES, self.table))
         self.table.setItemDelegateForColumn(12, BadgeDelegate(STATUS_BADGES, self.table))
 
-        # Bottom buttons
+        # Bottom buttons — trimmed to the three core actions (הפעל / השהה / מחק),
+        # smaller and glossy. Editing is still available by double-clicking a row.
         bot = QHBoxLayout()
-        btn_edit = QPushButton("ערוך")
-        btn_edit.clicked.connect(self._edit)
-        bot.addWidget(btn_edit)
-
-        btn_del = QPushButton("מחק")
-        btn_del.setObjectName("danger")
-        btn_del.clicked.connect(self._delete)
-        bot.addWidget(btn_del)
-
-        btn_suspend = QPushButton("השהה")
-        btn_suspend.setObjectName("neutral")
-        btn_suspend.clicked.connect(lambda: self._set_status("מושהה"))
-        bot.addWidget(btn_suspend)
+        bot.setSpacing(8)
 
         btn_activate = QPushButton("הפעל")
         btn_activate.setObjectName("success")
+        btn_activate.setStyleSheet(_ACTION_BTN)
+        btn_activate.setToolTip("סמן את המקבל הנבחר כפעיל")
         btn_activate.clicked.connect(lambda: self._set_status("פעיל"))
         bot.addWidget(btn_activate)
 
-        btn_end = QPushButton("סיים")
-        btn_end.setObjectName("danger")
-        btn_end.clicked.connect(lambda: self._set_status("הסתיים"))
-        bot.addWidget(btn_end)
+        btn_suspend = QPushButton("השהה")
+        btn_suspend.setStyleSheet(_SUSPEND_BTN)
+        btn_suspend.setToolTip("השהה זמנית את המקבל הנבחר")
+        btn_suspend.clicked.connect(lambda: self._set_status("מושהה"))
+        bot.addWidget(btn_suspend)
+
+        btn_del = QPushButton("מחק")
+        btn_del.setObjectName("danger")
+        btn_del.setStyleSheet(_ACTION_BTN)
+        btn_del.setToolTip("מחק את המקבל הנבחר")
+        btn_del.clicked.connect(self._delete)
+        bot.addWidget(btn_del)
 
         bot.addStretch()
 
         btn_dup = QPushButton("בדיקת כפילויות")
         btn_dup.setObjectName("neutral")
+        btn_dup.setStyleSheet("font-size:11px; min-height:24px; min-width:0; padding:3px 12px;")
         btn_dup.setToolTip("סריקת שמות/טלפונים כפולים")
         btn_dup.clicked.connect(self._open_dup_check)
         bot.addWidget(btn_dup)

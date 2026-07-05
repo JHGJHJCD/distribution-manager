@@ -1,10 +1,12 @@
+import os
 import re
+import tempfile
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QLineEdit,
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from datetime import date
 from widgets import DateEdit
@@ -13,8 +15,25 @@ from utils.backup import auto_backup_async
 from utils.excel_utils import (export_distribution_to_excel, export_full_distribution_to_excel,
                                export_volunteer_checklist_to_excel, import_volunteer_checklist)
 from utils.print_view import print_distribution_list
-from utils.ui import busy_cursor, attach_empty_state, refresh_empty_state, ALIGN_RIGHT
+from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
+                      enable_touch_scroll)
 from utils import email_utils
+
+
+class _InboxWorker(QThread):
+    """Polls the Gmail inbox (off the UI thread) for volunteer-checklist replies
+    and hands back the saved file paths."""
+    found = pyqtSignal(object)   # list[str] of saved file paths (may be empty)
+
+    def __init__(self, save_dir, parent=None):
+        super().__init__(parent)
+        self._save_dir = save_dir
+
+    def run(self):
+        try:
+            self.found.emit(email_utils.fetch_unseen_checklists(self._save_dir))
+        except Exception:
+            self.found.emit([])
 from styles import (OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG,
                     SELECTED_BG, SELECTED_FG)
 
@@ -51,6 +70,56 @@ class GroupUpdateTab(QWidget):
         self._load_extras()
         self._build_ui()
         self.refresh()
+        self._setup_inbox_poller()
+
+    # ── Auto-import: watch the inbox for volunteer replies ─────────────────────
+    def _setup_inbox_poller(self):
+        """Poll Gmail for volunteer-checklist replies and import them
+        automatically, so the operator never has to touch a file. Runs quietly in
+        the background whenever email is configured."""
+        self._inbox_worker = None
+        self._inbox_dir = os.path.join(tempfile.gettempdir(), "ManhalHaluka_inbox")
+        self._inbox_timer = QTimer(self)
+        self._inbox_timer.timeout.connect(self._poll_inbox)
+        # first check ~15s after launch, then every 2 minutes
+        QTimer.singleShot(15000, self._poll_inbox)
+        self._inbox_timer.start(120000)
+
+    def _poll_inbox(self):
+        if self._inbox_worker is not None and self._inbox_worker.isRunning():
+            return
+        if not email_utils.is_configured():
+            return
+        self._inbox_worker = _InboxWorker(self._inbox_dir, self)
+        self._inbox_worker.found.connect(self._on_inbox_found)
+        self._inbox_worker.start()
+
+    def _on_inbox_found(self, paths):
+        if not paths:
+            return
+        total = 0
+        names = []
+        for p in paths:
+            try:
+                n, meta = self._apply_checklist_file(p, confirm=False)
+            except Exception:
+                n, meta = 0, {}
+            total += n
+            if meta.get("dist_name"):
+                names.append(meta["dist_name"])
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+        if total:
+            if self.main_win:
+                self.main_win.status_msg(f"התקבלו {total} חלוקות ממתנדב במייל ונרשמו אוטומטית ✓")
+                self.main_win.refresh_all()
+            title = " · ".join(dict.fromkeys(names)) or "רשימת חלוקה"
+            QMessageBox.information(
+                self, "תוצאות מתנדב התקבלו במייל",
+                f"התקבלה במייל רשימה שמולאה על ידי המתנדב ({title}).\n"
+                f"נרשמו אוטומטית {total} חלוקות להיסטוריה ✓")
 
     # ── one-time-pick persistence (survive restart + save) ─────────────────────
     def _load_extras(self):
@@ -187,13 +256,14 @@ class GroupUpdateTab(QWidget):
         self.volunteer_email_input = QComboBox()
         self.volunteer_email_input.setEditable(True)
         self.volunteer_email_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        self.volunteer_email_input.setMinimumWidth(180)
+        self.volunteer_email_input.setMinimumWidth(150)
+        self.volunteer_email_input.setMaximumWidth(230)
         self.volunteer_email_input.lineEdit().setPlaceholderText("אימייל המתנדב")
         self.volunteer_email_input.lineEdit().setAlignment(ALIGN_RIGHT)
         self.volunteer_email_input.setToolTip("כתובת המייל של המתנדב שימלא את הרשימה")
         self.volunteer_email_input.addItems(self._load_history("volunteer_emails_history"))
         self.volunteer_email_input.setCurrentText("")
-        vol_row.addWidget(self.volunteer_email_input, 1)
+        vol_row.addWidget(self.volunteer_email_input)
 
         btn_send_vol = QPushButton("שלח למתנדב למילוי")
         btn_send_vol.setObjectName("primary")
@@ -202,12 +272,18 @@ class GroupUpdateTab(QWidget):
         btn_send_vol.clicked.connect(self._send_to_volunteer)
         vol_row.addWidget(btn_send_vol)
 
-        btn_import_vol = QPushButton("ייבוא תוצאות ממתנדב")
+        btn_import_vol = QPushButton("ייבוא ידני מקובץ")
         btn_import_vol.setObjectName("neutral")
         btn_import_vol.setStyleSheet(_SMALL_BTN)
-        btn_import_vol.setToolTip("בחר את קובץ ה-Excel שהמתנדב מילא והחזיר — יירשם ישירות להיסטוריה")
+        btn_import_vol.setToolTip("בדרך כלל לא צריך — תוצאות שהמתנדב שולח חזרה במייל נקלטות אוטומטית. "
+                                  "כפתור זה נועד לייבוא ידני של קובץ Excel שהתקבל בדרך אחרת.")
         btn_import_vol.clicked.connect(self._import_volunteer_results)
         vol_row.addWidget(btn_import_vol)
+
+        auto_hint = QLabel("↻ תוצאות שנשלחות חזרה במייל נקלטות אוטומטית")
+        auto_hint.setStyleSheet("color:#7c3aed; font-size:11px; background:transparent; border:none;")
+        vol_row.addWidget(auto_hint)
+        vol_row.addStretch()
 
         lay.addWidget(vol_card)
 
@@ -266,6 +342,7 @@ class GroupUpdateTab(QWidget):
         hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._update_counts)
+        enable_touch_scroll(self.table)
         lay.addWidget(self.table)
         attach_empty_state(self.table, "אין מקבלים להצגה")
 
@@ -651,49 +728,44 @@ class GroupUpdateTab(QWidget):
         self.volunteer_email_input.blockSignals(False)
         return True
 
-    def _import_volunteer_results(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "בחר קובץ שחזר מהמתנדב", "", "Excel (*.xlsx)")
-        if not path:
-            return
-        try:
-            with busy_cursor():
-                result = import_volunteer_checklist(path)
-        except Exception as e:
-            QMessageBox.critical(self, "שגיאה בקריאת הקובץ", str(e))
-            return
-
+    def _apply_checklist_file(self, path: str, confirm: bool):
+        """Read a filled volunteer checklist and record the received rows to
+        history. When confirm=True, ask the operator first (manual file import);
+        when confirm=False, import silently (automatic email pull). Returns
+        (records_written, meta)."""
+        result = import_volunteer_checklist(path)
         received = result["received"]
         unmatched = result["unmatched"]
         meta = result["meta"]
 
         if not received:
-            msg = "לא נמצא אף מקבל שסומן \"כן\" בקובץ."
+            if confirm:
+                msg = "לא נמצא אף מקבל שסומן \"כן\" בקובץ."
+                if unmatched:
+                    msg += f"\n\n⚠ {len(unmatched)} שורות לא זוהו: " + ", ".join(unmatched[:10])
+                QMessageBox.information(self, "אין מה לייבא", msg)
+            return 0, meta
+
+        if confirm:
+            summary = (
+                f"חלוקה: {meta.get('dist_name') or '—'}\n"
+                f"תאריך: {meta.get('dist_date') or '—'}\n"
+                f"מה חולק: {meta.get('what') or '—'}  ·  מחלק: {meta.get('distributor') or '—'}\n\n"
+                f"יירשמו {len(received)} חלוקות שסומנו כ'הגיע'."
+            )
+            if meta.get("general_note"):
+                summary += f"\n\nהערה כללית מהמתנדב: {meta['general_note']}"
             if unmatched:
-                msg += f"\n\n⚠ {len(unmatched)} שורות לא זוהו: " + ", ".join(unmatched[:10])
-            QMessageBox.information(self, "אין מה לייבא", msg)
-            return
-
-        summary = (
-            f"חלוקה: {meta.get('dist_name') or '—'}\n"
-            f"תאריך: {meta.get('dist_date') or '—'}\n"
-            f"מה חולק: {meta.get('what') or '—'}  ·  מחלק: {meta.get('distributor') or '—'}\n\n"
-            f"יירשמו {len(received)} חלוקות שסומנו כ'הגיע'."
-        )
-        if meta.get("general_note"):
-            summary += f"\n\nהערה כללית מהמתנדב: {meta['general_note']}"
-        if unmatched:
-            summary += (f"\n\n⚠ {len(unmatched)} שורות לא זוהו ולא ייובאו: "
-                       + ", ".join(unmatched[:10]))
-        summary += "\n\nלאשר ייבוא להיסטוריה?"
-
-        reply = QMessageBox.question(
-            self, "אישור ייבוא", summary,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
-            return
+                summary += (f"\n\n⚠ {len(unmatched)} שורות לא זוהו ולא ייובאו: "
+                           + ", ".join(unmatched[:10]))
+            summary += "\n\nלאשר ייבוא להיסטוריה?"
+            reply = QMessageBox.question(
+                self, "אישור ייבוא", summary,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return 0, meta
 
         general_suffix = (f" | הערה כללית: {meta['general_note']}"
                           if meta.get("general_note") else "")
@@ -709,12 +781,24 @@ class GroupUpdateTab(QWidget):
                 meta.get("what") or "", meta.get("qty") or 0,
                 meta.get("distributor") or "")
             auto_backup_async()
+        return len(records), meta
 
-        QMessageBox.information(
-            self, "הצלחה", f"נרשמו {len(records)} חלוקות מהמתנדב להיסטוריה ✓")
-        if self.main_win:
-            self.main_win.status_msg(f"יובאו {len(records)} חלוקות ממתנדב")
-            self.main_win.refresh_all()
+    def _import_volunteer_results(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "בחר קובץ שחזר מהמתנדב", "", "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            n, _meta = self._apply_checklist_file(path, confirm=True)
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה בקריאת הקובץ", str(e))
+            return
+        if n:
+            QMessageBox.information(
+                self, "הצלחה", f"נרשמו {n} חלוקות מהמתנדב להיסטוריה ✓")
+            if self.main_win:
+                self.main_win.status_msg(f"יובאו {n} חלוקות ממתנדב")
+                self.main_win.refresh_all()
 
     def _print(self):
         name = self.name_input.currentText().strip()

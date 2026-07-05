@@ -51,6 +51,181 @@ def search_icon(size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
+# ── Dignified line-icons (drawn at runtime; no emoji, no bundled assets) ───────
+from PyQt6.QtCore import QRectF, QPointF, QLineF   # noqa: E402
+
+
+def line_icon(name: str, size: int = 18, color: str = "#475569") -> QPixmap:
+    """Return a crisp, minimal line-icon pixmap for the given name. Used across
+    the UI wherever a small dignified glyph is wanted instead of an emoji."""
+    scale = 3   # supersample for crisp edges at small sizes
+    S = size * scale
+    pm = QPixmap(S, S)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(color)); pen.setWidthF(1.7 * scale)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+
+    def R(x, y, w, h):
+        return QRectF(x * S, y * S, w * S, h * S)
+
+    def L(x1, y1, x2, y2):
+        p.drawLine(QPointF(x1 * S, y1 * S), QPointF(x2 * S, y2 * S))
+
+    if name == "phone":
+        path = R(0.24, 0.16, 0.30, 0.68)
+        p.drawRoundedRect(path, 0.06 * S, 0.06 * S)
+        L(0.34, 0.74, 0.44, 0.74)
+    elif name == "id":
+        p.drawRoundedRect(R(0.14, 0.24, 0.72, 0.52), 0.06 * S, 0.06 * S)
+        p.drawEllipse(R(0.22, 0.36, 0.16, 0.16))
+        L(0.46, 0.40, 0.74, 0.40); L(0.46, 0.52, 0.74, 0.52); L(0.22, 0.62, 0.60, 0.62)
+    elif name in ("home", "address"):
+        p.drawPolyline([QPointF(0.16 * S, 0.48 * S), QPointF(0.50 * S, 0.20 * S),
+                        QPointF(0.84 * S, 0.48 * S)])
+        p.drawRect(R(0.26, 0.48, 0.48, 0.34))
+    elif name in ("users", "souls"):
+        p.drawEllipse(R(0.30, 0.20, 0.24, 0.24))
+        p.drawArc(R(0.22, 0.50, 0.40, 0.40), 0, 180 * 16)
+        p.drawArc(R(0.52, 0.30, 0.28, 0.24), 30 * 16, 120 * 16)
+        p.drawArc(R(0.56, 0.52, 0.30, 0.34), 300 * 16, 150 * 16)
+    elif name in ("calendar", "date"):
+        p.drawRoundedRect(R(0.18, 0.22, 0.64, 0.60), 0.05 * S, 0.05 * S)
+        L(0.18, 0.38, 0.82, 0.38)
+        L(0.32, 0.14, 0.32, 0.28); L(0.68, 0.14, 0.68, 0.28)
+    elif name in ("mail", "email"):
+        p.drawRoundedRect(R(0.16, 0.28, 0.68, 0.44), 0.04 * S, 0.04 * S)
+        p.drawPolyline([QPointF(0.16 * S, 0.32 * S), QPointF(0.50 * S, 0.54 * S),
+                        QPointF(0.84 * S, 0.32 * S)])
+    elif name in ("synagogue", "building"):
+        L(0.50, 0.12, 0.50, 0.26)                       # spire
+        L(0.44, 0.19, 0.56, 0.19)
+        p.drawRect(R(0.28, 0.30, 0.44, 0.52))
+        L(0.50, 0.42, 0.50, 0.82)
+        L(0.28, 0.56, 0.72, 0.56)
+    elif name in ("area", "pin", "map"):
+        p.drawArc(R(0.28, 0.16, 0.44, 0.44), 0, 360 * 16)
+        p.drawPolyline([QPointF(0.32 * S, 0.46 * S), QPointF(0.50 * S, 0.84 * S),
+                        QPointF(0.68 * S, 0.46 * S)])
+        p.drawEllipse(R(0.43, 0.30, 0.14, 0.14))
+    elif name in ("freq", "repeat"):
+        p.drawArc(R(0.22, 0.22, 0.56, 0.56), 40 * 16, 260 * 16)
+        p.drawPolyline([QPointF(0.66 * S, 0.16 * S), QPointF(0.80 * S, 0.28 * S),
+                        QPointF(0.64 * S, 0.36 * S)])
+    elif name in ("note", "notes"):
+        p.drawRoundedRect(R(0.24, 0.16, 0.52, 0.68), 0.05 * S, 0.05 * S)
+        L(0.34, 0.34, 0.66, 0.34); L(0.34, 0.48, 0.66, 0.48); L(0.34, 0.62, 0.54, 0.62)
+    elif name in ("hash", "count"):
+        L(0.34, 0.18, 0.28, 0.82); L(0.66, 0.18, 0.60, 0.82)
+        L(0.20, 0.38, 0.78, 0.38); L(0.18, 0.62, 0.76, 0.62)
+    elif name == "security":
+        p.drawPolyline([QPointF(0.50 * S, 0.14 * S), QPointF(0.80 * S, 0.26 * S),
+                        QPointF(0.80 * S, 0.52 * S)])
+        p.drawArc(R(0.20, 0.14, 0.60, 0.74), 0, -140 * 16)
+        L(0.20, 0.26, 0.20, 0.52); L(0.50, 0.14, 0.20, 0.26)
+        p.drawPolyline([QPointF(0.38 * S, 0.48 * S), QPointF(0.47 * S, 0.58 * S),
+                        QPointF(0.64 * S, 0.38 * S)])
+    elif name == "update":
+        p.drawArc(R(0.22, 0.22, 0.56, 0.56), 40 * 16, 280 * 16)
+        p.drawPolyline([QPointF(0.64 * S, 0.14 * S), QPointF(0.80 * S, 0.24 * S),
+                        QPointF(0.62 * S, 0.34 * S)])
+        L(0.50, 0.36, 0.50, 0.62)
+        p.drawPolyline([QPointF(0.40 * S, 0.52 * S), QPointF(0.50 * S, 0.64 * S),
+                        QPointF(0.60 * S, 0.52 * S)])
+    elif name in ("weights", "sliders"):
+        for yy, kx in ((0.30, 0.40), (0.50, 0.62), (0.70, 0.34)):
+            L(0.20, yy, 0.80, yy)
+            p.drawEllipse(R(kx - 0.05, yy - 0.05, 0.10, 0.10))
+    elif name in ("backup", "save"):
+        p.drawArc(R(0.20, 0.30, 0.60, 0.44), 0, 180 * 16)
+        L(0.20, 0.52, 0.20, 0.30); L(0.80, 0.52, 0.80, 0.30)
+        L(0.50, 0.20, 0.50, 0.58)
+        p.drawPolyline([QPointF(0.38 * S, 0.46 * S), QPointF(0.50 * S, 0.60 * S),
+                        QPointF(0.62 * S, 0.46 * S)])
+    elif name in ("danger", "warning"):
+        p.drawPolyline([QPointF(0.50 * S, 0.16 * S), QPointF(0.84 * S, 0.80 * S),
+                        QPointF(0.16 * S, 0.80 * S), QPointF(0.50 * S, 0.16 * S)])
+        L(0.50, 0.38, 0.50, 0.60)
+        p.drawEllipse(R(0.48, 0.68, 0.04, 0.04))
+    elif name == "lock":
+        p.drawRoundedRect(R(0.28, 0.44, 0.44, 0.38), 0.05 * S, 0.05 * S)
+        p.drawArc(R(0.34, 0.20, 0.32, 0.40), 0, 180 * 16)
+    else:
+        p.drawEllipse(R(0.2, 0.2, 0.6, 0.6))
+    p.end()
+    return pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                     Qt.TransformationMode.SmoothTransformation)
+
+
+def section_header(text: str, icon_name: str, color: str = "#475569",
+                   text_color: str = None, line_color: str = "#e8ecf2"):
+    """Build a section-header row = a dignified line-icon + the header label,
+    styled like the app's QLabel#section-header. Returns a QWidget."""
+    from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel
+    box = QWidget()
+    box.setObjectName("section-header-box")
+    row = QHBoxLayout(box)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(7)
+    ic = QLabel()
+    ic.setPixmap(line_icon(icon_name, 18, color))
+    ic.setStyleSheet("background:transparent; border:none;")
+    lbl = QLabel(text)
+    lbl.setObjectName("section-header")
+    lbl.setStyleSheet(f"border:none; color:{text_color};" if text_color else "border:none;")
+    row.addWidget(ic)
+    row.addWidget(lbl)
+    row.addStretch()
+    box.setStyleSheet(
+        "QWidget#section-header-box { border-bottom:2px solid %s; margin-bottom:2px; }" % line_color)
+    return box
+
+
+def add_glow(widget, color: str = "#22c55e", base: float = 10.0, peak: float = 26.0):
+    """Give a widget a soft coloured halo that gently pulses (like a breathing
+    glow) to draw the eye — used e.g. on the 'חשב המלצה' button. Returns the
+    running animation (kept referenced on the widget so it isn't GC'd)."""
+    from PyQt6.QtWidgets import QGraphicsDropShadowEffect
+    from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+    eff = QGraphicsDropShadowEffect(widget)
+    eff.setColor(QColor(color))
+    eff.setOffset(0, 0)
+    eff.setBlurRadius(base)
+    widget.setGraphicsEffect(eff)
+    anim = QPropertyAnimation(eff, b"blurRadius", widget)
+    anim.setDuration(1300)
+    anim.setStartValue(base)
+    anim.setKeyValueAt(0.5, peak)
+    anim.setEndValue(base)
+    anim.setLoopCount(-1)
+    anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+    anim.start()
+    widget._glow_anim = anim
+    widget._glow_effect = eff
+    return anim
+
+
+def enable_touch_scroll(widget) -> None:
+    """Make a scrollable widget (table/list/scroll-area) draggable by finger on a
+    touch screen — a left-press-and-drag kinetically scrolls it. Harmless with a
+    mouse (a normal click still selects; only a drag scrolls)."""
+    try:
+        from PyQt6.QtWidgets import QScroller, QAbstractItemView
+        target = widget.viewport() if hasattr(widget, "viewport") else widget
+        QScroller.grabGesture(
+            target, QScroller.ScrollerGestureType.LeftMouseButtonGesture)
+        if isinstance(widget, QAbstractItemView):
+            # a drag scrolls smoothly instead of rubber-band selecting
+            widget.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            widget.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+    except Exception:
+        pass
+
+
 class BadgeDelegate(QStyledItemDelegate):
     """Paint a cell's text as a soft rounded pill, coloured by its value
     (color_map: text → (bg_hex, fg_hex)). Unmapped/empty values render normally."""

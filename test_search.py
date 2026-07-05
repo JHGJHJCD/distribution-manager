@@ -45,14 +45,24 @@ print("\nTab-level (results table + auto-select):")
 from tabs.search import SearchTab
 tab = SearchTab()
 tab.refresh()   # cache rows
+def _details_text():
+    # header + all detail-row values, concatenated
+    parts = [tab.detail_header.text()]
+    for i in range(tab._detail_lay.count()):
+        w = tab._detail_lay.itemAt(i).widget()
+        if w is not None:
+            for lbl in w.findChildren(type(tab.detail_header)):
+                parts.append(lbl.text())
+    return " ".join(parts)
+
 tab.search_input.setText("יהודה"); tab._run_search()
-check("results table rows for 'יהודה'", tab.results_table.rowCount(), 2)
+check("results list rows for 'יהודה'", tab.results_list.count(), 2)
 tab.search_input.setText("123456789"); tab._run_search()
-check("results rows for husband id", tab.results_table.rowCount(), 1)
-check("auto-selected profile shows name", "יהודה כהן" in tab.profile_lbl.text(), True)
-check("husband id shown in profile", "123456789" in tab.profile_lbl.text(), True)
+check("results rows for husband id", tab.results_list.count(), 1)
+check("auto-selected profile shows name", "יהודה כהן" in _details_text(), True)
+check("husband id shown in profile", "123456789" in _details_text(), True)
 tab.search_input.setText("444555666"); tab._run_search()
-check("wife id → profile shows name", "יהודה לוי" in tab.profile_lbl.text(), True)
+check("wife id → profile shows name", "יהודה לוי" in _details_text(), True)
 
 print("\nRESULT:", "ALL PASS ✓" if ok else "FAILURES ✗")
 sys.exit(0 if ok else 1)

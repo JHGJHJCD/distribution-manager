@@ -330,6 +330,13 @@ class LoginDialog(QDialog):
     def try_login(self):
         entered = self.pwd_input.text()
         if db.verify_password(entered):
+            # Capture the length (not the password) so the settings screen can
+            # mask it with the right number of dots — useful for passwords that
+            # were set before this was tracked.
+            try:
+                db.set_setting("password_len", str(len(entered)))
+            except Exception:
+                pass
             self.accept()
         else:
             self.error_lbl.setText("❌  סיסמה שגויה — נסה שוב")

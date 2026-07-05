@@ -90,7 +90,87 @@ def get_connection():
     return conn
 
 
+def _db_integrity_ok(path: str) -> bool:
+    """True if the SQLite file opens and passes integrity_check."""
+    try:
+        c = sqlite3.connect(path)
+        try:
+            row = c.execute("PRAGMA integrity_check").fetchone()
+            return bool(row) and row[0] == "ok"
+        finally:
+            c.close()
+    except Exception:
+        return False
+
+
+def _db_recipient_count(path: str) -> int:
+    try:
+        c = sqlite3.connect(path)
+        try:
+            return c.execute("SELECT COUNT(*) FROM recipients").fetchone()[0]
+        finally:
+            c.close()
+    except Exception:
+        return -1
+
+
+def self_heal_db():
+    """Recover from a 'database disk image is malformed' before the app touches
+    the DB. Two stages, safest first:
+      1. A stale/mismatched WAL+SHM sidecar can make an otherwise-fine DB read as
+         malformed. Delete the sidecars and re-check — no data lost (a 0-byte or
+         orphaned WAL holds no committed rows).
+      2. If the DB itself is corrupt, restore the BEST backup (most recipients,
+         newest as tiebreak) and set the corrupt file aside as data.corrupt.db.
+    Never raises — a failure here just falls through to normal init."""
+    try:
+        if not os.path.exists(DB_PATH):
+            return
+        if _db_integrity_ok(DB_PATH):
+            return
+
+        # Stage 1: drop stale sidecars, retry.
+        for ext in ("-wal", "-shm"):
+            side = DB_PATH + ext
+            try:
+                if os.path.exists(side):
+                    os.remove(side)
+            except Exception:
+                pass
+        if _db_integrity_ok(DB_PATH):
+            return
+
+        # Stage 2: DB itself is bad — restore the best backup we have.
+        best, best_score = None, (-1, -1.0)
+        if os.path.isdir(BACKUP_DIR):
+            for name in os.listdir(BACKUP_DIR):
+                if not name.lower().endswith(".db"):
+                    continue
+                p = os.path.join(BACKUP_DIR, name)
+                if not _db_integrity_ok(p):
+                    continue
+                score = (_db_recipient_count(p), os.path.getmtime(p))
+                if score > best_score:
+                    best, best_score = p, score
+        if best is None:
+            return   # nothing to restore from — let init recreate schema
+
+        try:
+            corrupt = DB_PATH + ".corrupt.db"
+            if os.path.exists(corrupt):
+                os.remove(corrupt)
+            os.replace(DB_PATH, corrupt)
+        except Exception:
+            pass
+        import shutil
+        shutil.copy2(best, DB_PATH)
+    except Exception:
+        pass
+
+
 def init_db():
+    # Recover a corrupt/stale DB before opening it (stale WAL, malformed image).
+    self_heal_db()
     # Bring forward data from a pre-upgrade location BEFORE opening (which would
     # otherwise create an empty DB in the stable dir and hide the old data).
     migrate_legacy_db_if_needed()
@@ -254,6 +334,9 @@ def verify_password(plain: str) -> bool:
 def set_password(plain: str):
     """Store a new password as a salted hash."""
     set_setting("password", _hash_password(plain))
+    # Remember only the LENGTH (not the password) so the settings screen can show
+    # the correct number of mask dots. The hash itself reveals nothing about it.
+    set_setting("password_len", str(len(plain or "")))
 
 
 # ------------------------------------------------------------------------------- Settings ────────────────────────────────────────────────────────────────

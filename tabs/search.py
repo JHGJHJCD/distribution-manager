@@ -1,12 +1,13 @@
 import html as _html
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
-    QHeaderView, QLabel, QLineEdit, QAbstractItemView, QFrame,
-    QPushButton, QMessageBox
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QTableWidget,
+    QTableWidgetItem, QHeaderView, QLabel, QLineEdit, QAbstractItemView,
+    QFrame, QPushButton, QMessageBox, QListWidget, QListWidgetItem, QScrollArea
 )
 from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QFont
 import database as db
-from utils.ui import (search_icon, busy_cursor, BadgeDelegate, HighlightDelegate,
+from utils.ui import (search_icon, busy_cursor, line_icon, enable_touch_scroll,
                       PRIORITY_BADGES, STATUS_BADGES, ALIGN_RIGHT)
 from utils.excel_utils import export_recipients_to_excel
 from utils.print_view import print_recipient_card
@@ -21,8 +22,6 @@ def _fdate(s: str) -> str:
 
 
 HIST_COLS = ["תאריך", "מה חולק", "כמות", "מחלק", "הערות"]
-RESULT_COLS = ["שם מלא", "טלפון", "עדיפות", "אזור", "סטטוס", "ת״ז בעל", "ת״ז אשה"]
-_COL_NAME, _COL_PHONE, _COL_PRIORITY, _COL_AREA, _COL_STATUS = 0, 1, 2, 3, 4
 
 
 def _first_phone(rec: dict) -> str:
@@ -47,7 +46,7 @@ def _badge_span(text: str, colors: dict) -> str:
         return ""
     bg, fg = c
     return (f"<span style='background:{bg};color:{fg};padding:2px 12px;"
-            f"border-radius:9px;font-weight:700;font-size:12px'>{_html.escape(text)}</span>")
+            f"border-radius:9px;font-weight:700;font-size:13px'>{_html.escape(text)}</span>")
 
 
 class SearchTab(QWidget):
@@ -72,69 +71,77 @@ class SearchTab(QWidget):
         title.setObjectName("title")
         lay.addWidget(title)
 
-        # Search bar
-        search_row = QHBoxLayout()
-        search_row.setSpacing(8)
+        # Two columns: RIGHT = search + name list · LEFT = full details of the
+        # best match. (In an RTL layout the first-added widget sits on the right.)
+        main = QHBoxLayout()
+        main.setSpacing(12)
+        lay.addLayout(main, 1)
+
+        # ── Right column: the search box + name results ────────────────────────
+        left_panel = QFrame()
+        left_panel.setObjectName("panel")
+        left_panel.setFixedWidth(330)
+        lp = QVBoxLayout(left_panel)
+        lp.setContentsMargins(12, 12, 12, 12)
+        lp.setSpacing(8)
+
         self.search_input = QLineEdit()
-        self.search_input.setMinimumHeight(38)
+        self.search_input.setMinimumHeight(40)
         self.search_input.setPlaceholderText("חיפוש: שם, טלפון, ת״ז, כתובת, אימייל...")
         self.search_input.setAlignment(ALIGN_RIGHT)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
-        self.search_input.textChanged.connect(lambda: self._filter_timer.start(200))
-        search_row.addWidget(self.search_input, 1)
+        self.search_input.textChanged.connect(lambda: self._filter_timer.start(180))
+        lp.addWidget(self.search_input)
 
         self.count_lbl = QLabel("")
         self.count_lbl.setObjectName("subtitle")
-        self.count_lbl.setMinimumWidth(90)
-        search_row.addWidget(self.count_lbl)
+        lp.addWidget(self.count_lbl)
 
-        btn_export = QPushButton("ייצוא לאקסל")
+        self.results_list = QListWidget()
+        self.results_list.setObjectName("names-list")
+        self.results_list.setStyleSheet(
+            "QListWidget#names-list { border:1px solid #e5e7eb; border-radius:8px; }"
+            "QListWidget#names-list::item { padding:9px 12px; border-bottom:1px solid #f1f5f9; }"
+            "QListWidget#names-list::item:selected {"
+            "  background:#e7f1fd; color:#0d2a4a; border-left:3px solid #1565c0; }")
+        self.results_list.currentItemChanged.connect(self._on_result_selected)
+        enable_touch_scroll(self.results_list)
+        lp.addWidget(self.results_list, 1)
+
+        btn_export = QPushButton("ייצוא הרשימה לאקסל")
         btn_export.setObjectName("success")
         btn_export.setStyleSheet(_SMALL_BTN)
-        btn_export.setToolTip("ייצא את הרשימה המסוננת (התוצאות שמוצגות) לאקסל בתיקיית ההורדות")
+        btn_export.setToolTip("ייצא את הרשימה המסוננת (התוצאות) לאקסל בתיקיית ההורדות")
         btn_export.clicked.connect(self._export_results)
-        search_row.addWidget(btn_export)
-        lay.addLayout(search_row)
+        lp.addWidget(btn_export)
 
-        # Results table
-        self.results_table = QTableWidget()
-        self.results_table.setColumnCount(len(RESULT_COLS))
-        self.results_table.setHorizontalHeaderLabels(RESULT_COLS)
-        self.results_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.results_table.setAlternatingRowColors(True)
-        self.results_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.results_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.results_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.results_table.setMinimumHeight(170)
-        self.results_table.setMaximumHeight(250)
-        rhdr = self.results_table.horizontalHeader()
-        rhdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        rhdr.setSectionResizeMode(_COL_NAME, QHeaderView.ResizeMode.Stretch)
-        rhdr.setResizeContentsPrecision(20)
-        self.results_table.verticalHeader().setVisible(False)
-        self._hl = HighlightDelegate(self.results_table)
-        self.results_table.setItemDelegateForColumn(_COL_NAME, self._hl)
-        self.results_table.setItemDelegateForColumn(_COL_PHONE, self._hl)
-        self._pri_badge = BadgeDelegate(PRIORITY_BADGES, self.results_table)
-        self._st_badge = BadgeDelegate(STATUS_BADGES, self.results_table)
-        self.results_table.setItemDelegateForColumn(_COL_PRIORITY, self._pri_badge)
-        self.results_table.setItemDelegateForColumn(_COL_STATUS, self._st_badge)
-        self.results_table.itemSelectionChanged.connect(self._on_result_selected)
-        lay.addWidget(self.results_table)
+        main.addWidget(left_panel)
 
-        # Profile card (rich HTML) — the selected recipient's details
-        self.profile_card = QFrame()
-        self.profile_card.setObjectName("panel")
-        pc_lay = QVBoxLayout(self.profile_card)
-        pc_lay.setContentsMargins(16, 12, 16, 12)
-        self.profile_lbl = QLabel("")
-        self.profile_lbl.setTextFormat(Qt.TextFormat.RichText)
-        self.profile_lbl.setWordWrap(True)
-        self.profile_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.profile_lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
-        pc_lay.addWidget(self.profile_lbl)
-        lay.addWidget(self.profile_card)
+        # ── Left column: details of the selected / best-matching recipient ─────
+        right_panel = QVBoxLayout()
+        right_panel.setSpacing(8)
+        main.addLayout(right_panel, 1)
+
+        # Header (name + badges)
+        self.detail_header = QLabel("")
+        self.detail_header.setTextFormat(Qt.TextFormat.RichText)
+        self.detail_header.setWordWrap(True)
+        right_panel.addWidget(self.detail_header)
+
+        # Scrollable detail rows (icon + label + value)
+        self.detail_scroll = QScrollArea()
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.detail_scroll.setMaximumHeight(300)
+        enable_touch_scroll(self.detail_scroll)
+        self.detail_card = QFrame()
+        self.detail_card.setObjectName("panel")
+        self._detail_lay = QVBoxLayout(self.detail_card)
+        self._detail_lay.setContentsMargins(16, 12, 16, 12)
+        self._detail_lay.setSpacing(2)
+        self.detail_scroll.setWidget(self.detail_card)
+        right_panel.addWidget(self.detail_scroll)
 
         # History header row + print-card button
         hist_row = QHBoxLayout()
@@ -142,14 +149,14 @@ class SearchTab(QWidget):
         self.hist_title.setObjectName("section-header")
         hist_row.addWidget(self.hist_title)
         hist_row.addStretch()
-        self.btn_print_card = QPushButton("🖨 הדפס כרטיס")
+        self.btn_print_card = QPushButton("הדפס כרטיס")
         self.btn_print_card.setObjectName("neutral")
         self.btn_print_card.setStyleSheet(_SMALL_BTN)
         self.btn_print_card.setToolTip("הדפס כרטיס עם פרטי המקבל + היסטוריית החלוקות שלו")
         self.btn_print_card.clicked.connect(self._print_card)
         self.btn_print_card.setEnabled(False)
         hist_row.addWidget(self.btn_print_card)
-        lay.addLayout(hist_row)
+        right_panel.addLayout(hist_row)
 
         self.hist_table = QTableWidget()
         self.hist_table.setColumnCount(len(HIST_COLS))
@@ -162,7 +169,8 @@ class SearchTab(QWidget):
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setResizeContentsPrecision(20)
         self.hist_table.verticalHeader().setVisible(False)
-        lay.addWidget(self.hist_table, 1)
+        enable_touch_scroll(self.hist_table)
+        right_panel.addWidget(self.hist_table, 1)
 
     # ── data ───────────────────────────────────────────────────────────────────
     def refresh(self):
@@ -171,106 +179,79 @@ class SearchTab(QWidget):
 
     def _run_search(self):
         query = self.search_input.text()
-        self._hl.set_query(query)
         self._results = db.filter_recipients(self._all_rows, query)
         self._populate_results()
 
     def _populate_results(self):
-        _ALIGN = ALIGN_RIGHT
-        self.results_table.blockSignals(True)
-        self.results_table.clearContents()
-        self.results_table.setRowCount(0)
-        self.results_table.setRowCount(len(self._results))
-        for r, rec in enumerate(self._results):
-            vals = [rec.get("full_name", ""), _first_phone(rec),
-                    _priority_display(rec), rec.get("area", "") or "",
-                    rec.get("status", ""),
-                    rec.get("id_number", "") or "", rec.get("spouse_id_number", "") or ""]
-            for c, v in enumerate(vals):
-                item = QTableWidgetItem(str(v) or "")
-                item.setTextAlignment(_ALIGN)
-                if c == _COL_NAME:
-                    item.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
-                    nf = item.font(); nf.setBold(True); item.setFont(nf)
-                self.results_table.setItem(r, c, item)
-        self.results_table.blockSignals(False)
+        self.results_list.blockSignals(True)
+        self.results_list.clear()
+        for rec in self._results:
+            name = rec.get("full_name", "") or "—"
+            area = rec.get("area", "") or ""
+            label = f"{name}    ·  {area}" if area else name
+            item = QListWidgetItem(label)
+            item.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
+            f = item.font(); f.setBold(True); item.setFont(f)
+            self.results_list.addItem(item)
+        self.results_list.blockSignals(False)
         self.count_lbl.setText(f"נמצאו: {len(self._results)}")
 
         if self._results:
-            self.results_table.setCurrentCell(0, 0)
+            self.results_list.setCurrentRow(0)   # auto-show the best match
         else:
-            self.results_table.clearSelection()
             self._current_rec_id = None
             self.btn_print_card.setEnabled(False)
             self._show_empty_profile("לא נמצאו תוצאות")
 
-    def _on_result_selected(self):
-        row = self.results_table.currentRow()
-        if row < 0:
+    def _on_result_selected(self, cur, _prev=None):
+        if cur is None:
             return
-        item = self.results_table.item(row, _COL_NAME)
-        rec_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        rec_id = cur.data(Qt.ItemDataRole.UserRole)
         if rec_id:
             self._show_recipient(rec_id)
 
+    # ── details rendering ──────────────────────────────────────────────────────
+    def _clear_details(self):
+        while self._detail_lay.count():
+            it = self._detail_lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _add_detail_row(self, icon_name, label, value, ltr=False):
+        value = (str(value).strip() if value not in (None, "") else "")
+        if not value:
+            return
+        row = QWidget()
+        g = QHBoxLayout(row)
+        g.setContentsMargins(0, 4, 0, 4)
+        g.setSpacing(9)
+        ic = QLabel()
+        ic.setPixmap(line_icon(icon_name, 17, "#1565c0"))
+        ic.setFixedWidth(20)
+        ic.setStyleSheet("background:transparent; border:none;")
+        g.addWidget(ic)
+        lab = QLabel(label)
+        lab.setStyleSheet("color:#64748b; background:transparent; border:none;")
+        lab.setFixedWidth(96)
+        g.addWidget(lab)
+        val = QLabel(value)
+        val.setStyleSheet("color:#1f2937; font-weight:600; background:transparent; border:none;")
+        val.setWordWrap(True)
+        val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        if ltr:
+            val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            val.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        g.addWidget(val, 1)
+        self._detail_lay.addWidget(row)
+
     def _show_empty_profile(self, msg="בחר מקבל מהרשימה כדי לראות את פרטיו"):
-        self.profile_lbl.setText(
+        self.detail_header.setText(
             f"<div dir='rtl' style='color:#94a3b8;font-size:13px;padding:14px 0;'>{msg}</div>")
+        self._clear_details()
         self.hist_table.clearContents()
         self.hist_table.setRowCount(0)
         self.hist_title.setText("היסטוריית חלוקות")
-
-    def _profile_html(self, rec: dict, hist_count: int) -> str:
-        def esc(v):
-            return _html.escape(str(v if v is not None else ""))
-
-        name = esc(rec.get("full_name", ""))
-        pri = _badge_span(_priority_display(rec), PRIORITY_BADGES)
-        status = _badge_span(rec.get("status", ""), STATUS_BADGES)
-        phones = " / ".join(p for p in [rec.get("phone1"), rec.get("phone2"), rec.get("phone3")] if p)
-
-        # Two info columns: contact/household (right) + distribution/meta (left)
-        def cell(label, value, ltr=False):
-            value = esc(value)
-            v = f"<span dir='ltr'>{value}</span>" if (ltr and value) else (value or "—")
-            return (f"<tr><td style='color:#64748b;padding:3px 0 3px 10px;white-space:nowrap'>{label}</td>"
-                    f"<td style='color:#1f2937;font-weight:600;padding:3px 0'>{v}</td></tr>")
-
-        right = ("<table cellspacing='0' width='100%'>"
-                 + cell("טלפונים", phones, ltr=True)
-                 + cell("ת״ז בעל", rec.get("id_number"), ltr=True)
-                 + cell("ת״ז אשה", rec.get("spouse_id_number"), ltr=True)
-                 + cell("כתובת", rec.get("address"))
-                 + cell("אזור", rec.get("area"))
-                 + cell("נפשות", rec.get("souls"))
-                 + "</table>")
-        left = ("<table cellspacing='0' width='100%'>"
-                + cell("תדירות", rec.get("frequency"))
-                + cell("חלוקה אחרונה", _fdate(rec.get("last_distribution") or ""))
-                + cell("חלוקה הבאה", _fdate(rec.get("next_distribution") or ""))
-                + cell("סה״כ חלוקות", hist_count)
-                + cell("אימייל", rec.get("email"), ltr=True)
-                + cell("בית כנסת", rec.get("synagogue"))
-                + "</table>")
-
-        notes = esc(rec.get("notes") or "")
-        notes_block = (f"<div style='margin-top:8px;padding:8px 10px;background:#fffbeb;"
-                       f"border:1px solid #fde68a;border-radius:6px;color:#78350f'>"
-                       f"<b>הערות:</b> {notes}</div>") if notes else ""
-
-        return f"""
-        <div dir='rtl' style='font-family:Segoe UI,Arial;'>
-          <div style='font-size:19px;font-weight:800;color:#0d2a4a;'>
-            {name} &nbsp; {pri} &nbsp; {status}
-          </div>
-          <hr style='border:none;border-top:1px solid #e5e7eb;margin:8px 0;'>
-          <table width='100%'><tr>
-            <td width='50%' valign='top' style='padding-left:14px;'>{right}</td>
-            <td width='50%' valign='top'>{left}</td>
-          </tr></table>
-          {notes_block}
-        </div>
-        """
 
     def _show_recipient(self, rec_id):
         rec = db.get_recipient(rec_id)
@@ -283,9 +264,51 @@ class SearchTab(QWidget):
         self.btn_print_card.setEnabled(True)
 
         hist = db.get_distributions_for_recipient(rec["id"])
-        self.profile_lbl.setText(self._profile_html(rec, len(hist)))
-        self.hist_title.setText(f"היסטוריית חלוקות ({len(hist)})")
 
+        # Header — name + priority + status badges
+        name = _html.escape(rec.get("full_name", "") or "")
+        pri = _badge_span(_priority_display(rec), PRIORITY_BADGES)
+        status = _badge_span(rec.get("status", ""), STATUS_BADGES)
+        self.detail_header.setText(
+            f"<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
+            f"<span style='font-size:20px;font-weight:800;color:#0d2a4a;'>{name}</span>"
+            f" &nbsp; {pri} &nbsp; {status}</div>")
+
+        # Detail rows with dignified icons
+        self._clear_details()
+        phones = " / ".join(p for p in [rec.get("phone1"), rec.get("phone2"),
+                                        rec.get("phone3")] if p)
+        self._add_detail_row("phone", "טלפונים", phones, ltr=True)
+        self._add_detail_row("id", "ת״ז בעל", rec.get("id_number"), ltr=True)
+        self._add_detail_row("id", "ת״ז אשה", rec.get("spouse_id_number"), ltr=True)
+        self._add_detail_row("home", "כתובת", rec.get("address"))
+        self._add_detail_row("area", "אזור", rec.get("area"))
+        self._add_detail_row("users", "נפשות", rec.get("souls"))
+        self._add_detail_row("freq", "תדירות", rec.get("frequency"))
+        self._add_detail_row("calendar", "חלוקה אחרונה", _fdate(rec.get("last_distribution") or ""))
+        self._add_detail_row("calendar", "חלוקה הבאה", _fdate(rec.get("next_distribution") or ""))
+        self._add_detail_row("hash", "סה״כ חלוקות", len(hist))
+        self._add_detail_row("mail", "אימייל", rec.get("email"), ltr=True)
+        self._add_detail_row("synagogue", "בית כנסת", rec.get("synagogue"))
+        notes = (rec.get("notes") or "").strip()
+        if notes:
+            box = QFrame()
+            box.setStyleSheet("background:#fffbeb; border:1px solid #fde68a; border-radius:6px;")
+            bl = QHBoxLayout(box)
+            bl.setContentsMargins(10, 8, 10, 8)
+            bl.setSpacing(9)
+            ic = QLabel(); ic.setPixmap(line_icon("note", 17, "#92400e"))
+            ic.setFixedWidth(20); ic.setStyleSheet("background:transparent; border:none;")
+            bl.addWidget(ic)
+            nl = QLabel(notes)
+            nl.setWordWrap(True)
+            nl.setStyleSheet("color:#78350f; background:transparent; border:none;")
+            bl.addWidget(nl, 1)
+            self._detail_lay.addWidget(box)
+        self._detail_lay.addStretch()
+
+        # History
+        self.hist_title.setText(f"היסטוריית חלוקות ({len(hist)})")
         self.hist_table.clearContents()
         self.hist_table.setRowCount(0)
         self.hist_table.setRowCount(len(hist))

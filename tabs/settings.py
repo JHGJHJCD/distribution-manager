@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
 
 import database as db
 from utils.backup import auto_backup, restore_from_backup
-from utils.ui import busy_cursor, ALIGN_RIGHT
+from utils.ui import busy_cursor, ALIGN_RIGHT, section_header, line_icon, enable_touch_scroll
 from utils import updater
 from utils import email_utils
 from version import APP_VERSION
@@ -60,6 +60,7 @@ class SettingsTab(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         outer.addWidget(scroll)
+        enable_touch_scroll(scroll)   # finger-drag scrolling on a touch screen
         content = QWidget()
         scroll.setWidget(content)
 
@@ -87,13 +88,11 @@ class SettingsTab(QWidget):
         sec_lay.setContentsMargins(10, 7, 10, 7)
         sec_lay.setSpacing(6)
 
-        sec_title = QLabel("אבטחה")
-        sec_title.setObjectName("section-header")
-        sec_lay.addWidget(sec_title)
+        sec_lay.addWidget(section_header("אבטחה", "security", "#1565c0"))
 
         pwd_row = QHBoxLayout()
-        self.lbl_password = QLabel("●●●●●●●●")
-        self.lbl_password.setStyleSheet("color:#6b7280; letter-spacing:3px; font-size:14px;")
+        self.lbl_password = QLabel("••••")
+        self.lbl_password.setStyleSheet("color:#6b7280; letter-spacing:2px; font-size:15px;")
         pwd_row.addWidget(QLabel("סיסמה נוכחית:"))
         pwd_row.addWidget(self.lbl_password)
         pwd_row.addStretch()
@@ -112,9 +111,7 @@ class SettingsTab(QWidget):
         upd_lay.setContentsMargins(10, 7, 10, 7)
         upd_lay.setSpacing(6)
 
-        upd_title = QLabel("עדכון תוכנה")
-        upd_title.setObjectName("section-header")
-        upd_lay.addWidget(upd_title)
+        upd_lay.addWidget(section_header("עדכון תוכנה", "update", "#1565c0"))
 
         ver_row = QHBoxLayout()
         ver_row.addWidget(QLabel("גרסה נוכחית:"))
@@ -142,9 +139,7 @@ class SettingsTab(QWidget):
         w_lay.setContentsMargins(10, 7, 10, 7)
         w_lay.setSpacing(6)
 
-        w_title = QLabel("משקלי ניקוד עדיפות")
-        w_title.setObjectName("section-header")
-        w_lay.addWidget(w_title)
+        w_lay.addWidget(section_header("משקלי ניקוד עדיפות", "weights", "#1565c0"))
 
         w_desc = QLabel(
             "קביעת המשקל של כל נתון בחישוב 'ניקוד הצורך' שלפיו מדורגים המקבלים "
@@ -195,9 +190,7 @@ class SettingsTab(QWidget):
         bk_lay.setContentsMargins(10, 7, 10, 7)
         bk_lay.setSpacing(6)
 
-        bk_title = QLabel("גיבויים")
-        bk_title.setObjectName("section-header")
-        bk_lay.addWidget(bk_title)
+        bk_lay.addWidget(section_header("גיבויים", "backup", "#1565c0"))
 
         form_bk = QFormLayout()
         form_bk.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -251,10 +244,9 @@ class SettingsTab(QWidget):
         danger_lay.setContentsMargins(10, 7, 10, 7)
         danger_lay.setSpacing(6)
 
-        danger_title = QLabel("⚠️ אזור מסוכן")
-        danger_title.setObjectName("section-header")
-        danger_title.setStyleSheet("color:#dc2626; border-bottom-color:#fca5a5;")
-        danger_lay.addWidget(danger_title)
+        danger_lay.addWidget(section_header(
+            "אזור מסוכן", "danger", "#dc2626",
+            text_color="#dc2626", line_color="#fca5a5"))
 
         danger_desc = QLabel("מחיקת כל הנתונים — פעולה בלתי הפיכה. הגדרות המערכת (סיסמה, תיקיית גיבוי) נשמרות.")
         danger_desc.setObjectName("subtitle")
@@ -271,26 +263,6 @@ class SettingsTab(QWidget):
         danger_lay.addLayout(danger_btns)
         grid.addWidget(danger_frame, 2, 1, _AT)
 
-        # ── System info section ───────────────────────────
-        db_frame = QFrame()
-        db_frame.setObjectName("panel")
-        db_lay = QFormLayout(db_frame)
-        db_lay.setContentsMargins(10, 7, 10, 7)
-        db_lay.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        db_lay.setSpacing(6)
-
-        db_title = QLabel("מידע מערכת")
-        db_title.setObjectName("section-header")
-        db_lay.addRow(db_title)
-
-        self.lbl_db_path = QLabel("")
-        self.lbl_db_path.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.lbl_db_path.setStyleSheet("color:#6b7280; font-size:11px;")
-        self.lbl_db_path.setWordWrap(True)
-        db_lay.addRow("מסד נתונים:", self.lbl_db_path)
-        grid.addWidget(db_frame, 1, 1, _AT)
-
         # ── Volunteer email section ────────────────────────
         mail_frame = QFrame()
         mail_frame.setObjectName("panel")
@@ -298,12 +270,11 @@ class SettingsTab(QWidget):
         mail_lay.setContentsMargins(10, 7, 10, 7)
         mail_lay.setSpacing(6)
 
-        mail_title = QLabel("מייל למתנדבים")
-        mail_title.setObjectName("section-header")
-        mail_lay.addWidget(mail_title)
+        mail_lay.addWidget(section_header("מייל למתנדבים", "mail", "#1565c0"))
 
         mail_desc = QLabel(
-            "משמש לשליחה אוטומטית של רשימת חלוקה למתנדב (לשונית \"חלוקה ורישום\"). "
+            "משמש לשליחת רשימת חלוקה למתנדב, ולקליטה אוטומטית של התוצאות שהוא שולח "
+            "בחזרה במייל (לשונית \"חלוקה ורישום\"). "
             "ב-Gmail: הגדרות חשבון Google ← אבטחה ← אימות דו-שלבי ← סיסמאות אפליקציה.")
         mail_desc.setObjectName("subtitle")
         mail_desc.setWordWrap(True)
@@ -339,7 +310,7 @@ class SettingsTab(QWidget):
         self.lbl_mail_status.setObjectName("subtitle")
         self.lbl_mail_status.setWordWrap(True)
         mail_lay.addWidget(self.lbl_mail_status)
-        grid.addWidget(mail_frame, 3, 0, _AT)
+        grid.addWidget(mail_frame, 1, 1, _AT)
 
         # ── Refresh ───────────────────────────────────────
         btn_refresh = QPushButton("רענן")
@@ -351,7 +322,14 @@ class SettingsTab(QWidget):
         lay.addStretch()
 
     def refresh(self):
-        self.lbl_db_path.setText(db.DB_PATH)
+        # Show the password masked with the RIGHT number of dots (matches the
+        # real length) instead of a fixed 8. Length is recorded on login / change;
+        # if unknown yet, fall back to a neutral placeholder.
+        try:
+            plen = int(db.get_setting("password_len") or 0)
+        except (ValueError, TypeError):
+            plen = 0
+        self.lbl_password.setText("•" * plen if plen > 0 else "•••• (מוגדרת)")
         self._load_weights()
 
         folder = db.get_setting("backup_folder") or ""
