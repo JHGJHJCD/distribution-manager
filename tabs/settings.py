@@ -324,9 +324,22 @@ class SettingsTab(QWidget):
         self.mail_password.setEchoMode(QLineEdit.EchoMode.Password)
         self.mail_password.setPlaceholderText("סיסמת אפליקציה")
         self.mail_password.setAlignment(ALIGN_RIGHT)
+        self.mail_file_pw = QLineEdit()
+        self.mail_file_pw.setEchoMode(QLineEdit.EchoMode.Password)
+        self.mail_file_pw.setPlaceholderText("ריק = הקובץ לא מוגן")
+        self.mail_file_pw.setAlignment(ALIGN_RIGHT)
         mail_form.addRow("כתובת שולח:", self.mail_email)
         mail_form.addRow("סיסמת אפליקציה:", self.mail_password)
+        mail_form.addRow("סיסמה לקובץ המתנדב:", self.mail_file_pw)
         mail_lay.addLayout(mail_form)
+
+        mail_file_pw_hint = QLabel(
+            "הקובץ המצורף למתנדב יינעל בסיסמה זו (צריך אותה כדי לפתוח ב-Excel). "
+            "הסיסמה תופיע בגוף המייל כדי שהמתנדב יוכל לפתוח. השאר ריק כדי לא להגן על הקובץ.")
+        mail_file_pw_hint.setObjectName("subtitle")
+        mail_file_pw_hint.setWordWrap(True)
+        mail_file_pw_hint.setStyleSheet("font-size:11px;")
+        mail_lay.addWidget(mail_file_pw_hint)
 
         mail_btns = QHBoxLayout()
         btn_mail_save = QPushButton("שמור")
@@ -391,6 +404,7 @@ class SettingsTab(QWidget):
         cfg = email_utils.get_smtp_config()
         self.mail_email.setText(cfg["email"])
         self.mail_password.setText(cfg["app_password"])
+        self.mail_file_pw.setText(email_utils.get_checklist_password())
         if email_utils.is_configured():
             self.lbl_mail_status.setText("מוגדר ✓")
             self.lbl_mail_status.setStyleSheet("color:#16a34a;")
@@ -585,6 +599,8 @@ class SettingsTab(QWidget):
     def _save_mail_settings(self):
         email = self.mail_email.text().strip()
         password = self.mail_password.text()
+        # The file password is independent of the SMTP login — save it either way.
+        email_utils.set_checklist_password(self.mail_file_pw.text())
         if not email or not password:
             QMessageBox.warning(self, "", "יש למלא כתובת מייל וסיסמת אפליקציה.")
             return
@@ -604,6 +620,7 @@ class SettingsTab(QWidget):
     def _save_mail_settings_silent(self):
         email = self.mail_email.text().strip()
         password = self.mail_password.text()
+        email_utils.set_checklist_password(self.mail_file_pw.text())
         if email and password:
             email_utils.set_smtp_config(email, password)
 

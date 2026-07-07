@@ -716,12 +716,20 @@ class GroupUpdateTab(QWidget):
                 # calculate_next_dist, which require ISO format.
                 path = export_volunteer_checklist_to_excel(
                     self._rows_data, dist_date_iso, dist_name, what, qty, distributor)
+                file_pw = email_utils.get_checklist_password()
+                pw_block = (
+                    "<p style='background:#fffbeb;border:1px solid #fde68a;"
+                    "border-radius:6px;padding:8px 10px;'>"
+                    "🔒 הקובץ המצורף מוגן בסיסמה. לפתיחתו ב-Excel הזן את הסיסמה: "
+                    f"<b style='font-size:15px;letter-spacing:1px;'>{file_pw}</b></p>"
+                ) if file_pw else ""
                 html = (
                     "<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
                     "<div style='text-align:center;margin-bottom:10px;'>"
                     "<img src='cid:logo' style='max-width:160px;'></div>"
                     f"<p>שלום {distributor},</p>"
                     f"<p>מצורפת רשימת החלוקה \"<b>{dist_name}</b>\" מתאריך {dist_date_disp}.</p>"
+                    f"{pw_block}"
                     "<p>נא לסמן ליד כל שם אם הגיע (\"כן\"/\"לא\"), ניתן להוסיף הערה לכל אחד, "
                     "ובסוף למלא הערה כללית על החלוקה בקובץ עצמו.</p>"
                     "<p>לאחר המילוי — נא לשלוח את הקובץ המצורף בחזרה למייל הזה.</p>"

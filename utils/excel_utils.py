@@ -19,6 +19,53 @@ def _resource_path(rel: str) -> str:
     return os.path.join(base, rel)
 
 
+def _checklist_password() -> str:
+    """The open-password for the volunteer checklist file (empty = none)."""
+    try:
+        from utils import email_utils
+        return email_utils.get_checklist_password()
+    except Exception:
+        return ""
+
+
+def _encrypt_xlsx(path: str, password: str):
+    """Encrypt an .xlsx in place so it requires `password` to open in Excel.
+    No-op when password is empty. Uses msoffcrypto (pure-Python OOXML agile
+    encryption) — the same standard format Excel's own 'Encrypt with Password'
+    produces, so any Excel/LibreOffice/phone viewer prompts for it normally."""
+    if not password:
+        return
+    import io
+    import msoffcrypto
+    with open(path, "rb") as f:
+        plain = io.BytesIO(f.read())
+    off = msoffcrypto.OfficeFile(plain)
+    with open(path, "wb") as out:
+        off.encrypt(password, out)
+
+
+def _load_maybe_encrypted(path: str, **kw):
+    """openpyxl.load_workbook that transparently opens password-encrypted files.
+    Tries the file as-is first; if that fails and a checklist password is set,
+    decrypts in memory and loads that. Raises if it can't be opened either way."""
+    import openpyxl
+    try:
+        return openpyxl.load_workbook(path, **kw)
+    except Exception:
+        pw = _checklist_password()
+        if not pw:
+            raise
+        import io
+        import msoffcrypto
+        dec = io.BytesIO()
+        with open(path, "rb") as f:
+            off = msoffcrypto.OfficeFile(f)
+            off.load_key(password=pw)
+            off.decrypt(dec)
+        dec.seek(0)
+        return openpyxl.load_workbook(dec, **kw)
+
+
 def _downloads_dir() -> Path:
     """The user's Downloads folder (where all exports go). Falls back to an
     'exports' folder next to the app if Downloads can't be resolved/created."""
@@ -672,6 +719,9 @@ def export_volunteer_checklist_to_excel(recipients: List[Dict], dist_date: str,
     filename = f"{_safe}_{dist_date.replace('/', '-')}_{datetime.now().strftime('%H%M%S')}.xlsx"
     path = str(exports_dir / filename)
     wb.save(path)
+    # Lock the file with an open-password if one is configured (the volunteer
+    # gets the password in the email body). No-op when no password is set.
+    _encrypt_xlsx(path, _checklist_password())
     return path
 
 
@@ -686,10 +736,9 @@ def import_volunteer_checklist(path: str) -> dict:
     Matching: primarily by the hidden recipient id column; if that id doesn't
     exist in the DB (edited/blank), falls back to an exact full_name match.
     """
-    import openpyxl
     import database as db
 
-    wb = openpyxl.load_workbook(path, data_only=True)
+    wb = _load_maybe_encrypted(path, data_only=True)
     ws = wb.worksheets[0]
 
     meta = {"dist_date": "", "what": "", "qty": 0, "distributor": "", "dist_name": "",

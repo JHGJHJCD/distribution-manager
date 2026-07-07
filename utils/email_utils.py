@@ -48,6 +48,16 @@ def is_configured() -> bool:
     return bool(cfg["email"] and cfg["app_password"])
 
 
+def get_checklist_password() -> str:
+    """Password used to encrypt the volunteer checklist xlsx (open-password).
+    Empty string = no protection. Stored locally like the other settings."""
+    return db.get_setting("checklist_password") or ""
+
+
+def set_checklist_password(pw: str):
+    db.set_setting("checklist_password", pw or "")
+
+
 def _connect(cfg: dict) -> smtplib.SMTP:
     server = smtplib.SMTP(cfg["host"], cfg["port"], timeout=20)
     server.starttls()
@@ -129,14 +139,33 @@ def _decode_filename(raw) -> str:
 
 def _looks_like_checklist(payload: bytes) -> bool:
     """True if the xlsx bytes are one of OUR volunteer checklists (has the hidden
-    'meta' sheet). Cheap read-only structural check — never mutates anything."""
-    try:
-        import openpyxl
-        wb = openpyxl.load_workbook(BytesIO(payload), read_only=True)
+    'meta' sheet). Cheap read-only structural check — never mutates anything.
+    Handles both plain and password-encrypted files (the volunteer keeps the
+    open-password when they save & send the filled file back)."""
+    import openpyxl
+
+    def _has_meta(bio) -> bool:
+        wb = openpyxl.load_workbook(bio, read_only=True)
         try:
             return "meta" in wb.sheetnames
         finally:
             wb.close()
+
+    try:
+        return _has_meta(BytesIO(payload))
+    except Exception:
+        pass
+    pw = get_checklist_password()
+    if not pw:
+        return False
+    try:
+        import msoffcrypto
+        dec = BytesIO()
+        off = msoffcrypto.OfficeFile(BytesIO(payload))
+        off.load_key(password=pw)
+        off.decrypt(dec)
+        dec.seek(0)
+        return _has_meta(dec)
     except Exception:
         return False
 

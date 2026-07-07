@@ -32,6 +32,13 @@ a = Analysis(
         'openpyxl.utils',
         'openpyxl.utils.dataframe',
         'et_xmlfile',
+        # ── volunteer-file encryption (open-password) ────────────────────────
+        'msoffcrypto',
+        'msoffcrypto.format.ooxml',
+        'msoffcrypto.method.ecma376_agile',
+        'msoffcrypto.method.ecma376_standard',
+        'olefile',
+        'cryptography',
         # ── app modules ──────────────────────────────────────────────────────
         'database',
         'styles',
