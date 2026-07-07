@@ -43,6 +43,64 @@ def _tab_rect(win, key):
     return QRect(tl, r.size())
 
 
+# ── deep-tour helpers: switch to a tab, then spotlight a control inside it ─────
+
+def _tab_widget(win, key):
+    """Switch to the tab identified by `key` and return its content widget."""
+    tabs = win.tabs
+    for i in range(tabs.count()):
+        w = tabs.widget(i)
+        if w.objectName() == "tab_" + key:
+            tabs.setCurrentIndex(i)
+            return w
+    return None
+
+
+def _ensure_visible(w):
+    """If `w` lives inside a scroll area, scroll it into view so the spotlight
+    lands on something the user can actually see."""
+    from PyQt6.QtWidgets import QScrollArea
+    p = w.parent()
+    while p is not None:
+        if isinstance(p, QScrollArea):
+            try:
+                p.ensureWidgetVisible(w, 60, 60)
+            except Exception:
+                pass
+            return
+        p = p.parent()
+
+
+def _attr_rect(win, key, attr):
+    """Spotlight the widget stored as `tab.<attr>` on the given tab."""
+    tw = _tab_widget(win, key)
+    if tw is None:
+        return None
+    w = getattr(tw, attr, None)
+    if w is None:
+        return None
+    _ensure_visible(w)
+    return _widget_rect(win, w)
+
+
+def _btn_rect(win, key, text):
+    """Spotlight a QPushButton on the given tab, matched by its label. Prefers an
+    exact text match, then a 'contains' match (so 'שמור' won't grab
+    'שמור משקלים')."""
+    from PyQt6.QtWidgets import QPushButton
+    tw = _tab_widget(win, key)
+    if tw is None:
+        return None
+    btns = [b for b in tw.findChildren(QPushButton)]
+    target = next((b for b in btns if b.text().replace("&", "").strip() == text), None)
+    if target is None:
+        target = next((b for b in btns if text in b.text().replace("&", "")), None)
+    if target is None:
+        return None
+    _ensure_visible(target)
+    return _widget_rect(win, target)
+
+
 def build_default_steps(win):
     """The default guided-tour script for the main window. Each step is a dict:
     title, text and a `rect(win)` callable returning the highlight rectangle
@@ -98,6 +156,170 @@ def build_default_steps(win):
             "rect": lambda w: None,
         },
     ]
+
+
+def build_extended_steps(win):
+    """The deep 'explain every button' tour. Walks tab-by-tab and spotlights each
+    important control with a detailed plain-Hebrew explanation. If a target can't
+    be located its callout is simply shown centered (no spotlight)."""
+    S = []
+
+    def step(title, text, rect):
+        S.append({"title": title, "text": text, "rect": rect})
+
+    step("סיור מורחב — כל כפתור בתוכנה 📖",
+         "בסיור הזה נעבור <b>אחד-אחד</b> על הכפתורים והשדות החשובים בכל לשונית, "
+         "עם הסבר מלא מה כל אחד עושה. אפשר לדלג או לחזור אחורה בכל שלב.",
+         lambda w: None)
+
+    # ── לשונית: חלוקה ורישום ─────────────────────────────────────────────────
+    step("לשונית \"חלוקה ורישום\"",
+         "כאן עושים את כל תהליך החלוקה: בוחרים את המקבלים, ממלאים את פרטי החלוקה, "
+         "שולחים למתנדב, מדפיסים, ורושמים מי קיבל. נעבור על השדות לפי הסדר.",
+         lambda w: _tab_rect(w, "dist"))
+    step("שם החלוקה",
+         "שם/מטרת החלוקה — למשל \"חלוקת פסח\". חובה למלא לפני הדפסה או שליחה. "
+         "אפשר לבחור משמות קודמים מהרשימה הנפתחת.",
+         lambda w: _attr_rect(w, "dist", "name_input"))
+    step("תאריך החלוקה",
+         "התאריך שבו מבוצעת החלוקה. ימי רביעי מסומנים בכחול (יום החלוקה הקבוע).",
+         lambda w: _attr_rect(w, "dist", "date_edit"))
+    step("מה חולק",
+         "תיאור קצר של מה מחלקים — \"סל מזון\", \"עוף\", וכו'. מופיע בראש הרשימה "
+         "המודפסת ובמעקב.",
+         lambda w: _attr_rect(w, "dist", "what_input"))
+    step("כמות",
+         "כמה יחידות מכל פריט (אופציונלי). מופיע ברשימה למתנדב.",
+         lambda w: _attr_rect(w, "dist", "qty_spin"))
+    step("שם המחלק",
+         "מי מבצע את החלוקה בפועל. נשמר במעקב ומופיע במייל למתנדב.",
+         lambda w: _attr_rect(w, "dist", "dist_input"))
+    step("היקף הרשימה",
+         "בוחר אילו מקבלים להציג: החלוקה הקרובה בלבד או כל המקבלים. משנה את "
+         "הרשימה שבטבלה למטה.",
+         lambda w: _attr_rect(w, "dist", "scope_combo"))
+    step("סינון לפי אזור",
+         "מציג רק מקבלים מאזור מסוים — נוח לחלק את העבודה בין מתנדבים לפי שכונות.",
+         lambda w: _attr_rect(w, "dist", "area_combo"))
+    step("אימייל המתנדב",
+         "כתובת המייל של המתנדב שיקבל את הרשימה למילוי. אפשר לבחור מכתובות "
+         "קודמות. נדרש רק לשליחה במייל.",
+         lambda w: _attr_rect(w, "dist", "volunteer_email_input"))
+    step("כפתור \"שלח למתנדב למילוי\"",
+         "שולח למתנדב מייל עם קובץ אקסל של הרשימה. הוא מסמן מי הגיע, ממלא הערות, "
+         "ושולח חזרה — והתוכנה קולטת את זה אוטומטית. (הקובץ יכול להיות נעול בסיסמה — "
+         "ראה הגדרות ← מייל למתנדבים.)",
+         lambda w: _btn_rect(w, "dist", "שלח למתנדב"))
+    step("כפתור \"ייבוא ידני מקובץ\"",
+         "אם קיבלת את קובץ האקסל הממולא בדרך אחרת (לא במייל) — כאן בוחרים אותו "
+         "ידנית מהמחשב כדי לרשום מי קיבל.",
+         lambda w: _btn_rect(w, "dist", "ייבוא ידני"))
+    step("כפתורי \"בחר הכל\" / \"בטל הכל\"",
+         "מסמנים או מבטלים את כל השורות בטבלה בבת אחת — מהיר כשרוצים לכלול/להוציא "
+         "את כולם ואז לתקן ידנית מעטים.",
+         lambda w: _btn_rect(w, "dist", "בחר הכל"))
+    step("כפתור \"שמור חלוקה למעקב + ייצוא לאקסל\"",
+         "רושם את החלוקה הזו בהיסטוריה (מי קיבל, מתי, מה) <b>וגם</b> מוריד קובץ "
+         "אקסל של הרשימה לתיקיית ההורדות. זה הכפתור המרכזי לתיעוד חלוקה.",
+         lambda w: _btn_rect(w, "dist", "שמור חלוקה"))
+    step("כפתור \"ייצא ל-Excel (רשימה קצרה)\"",
+         "מוריד רק את הרשימה (בלי לרשום למעקב) — נוח להדפסה או שליחה מהירה.",
+         lambda w: _btn_rect(w, "dist", "ייצא ל-Excel"))
+    step("כפתור \"הדפסה\"",
+         "מדפיס את רשימת החלוקה בעימוד מסודר עם הלוגו — מוכן לחלוקה ידנית.",
+         lambda w: _btn_rect(w, "dist", "הדפסה"))
+
+    # ── לשונית: מקבלים ───────────────────────────────────────────────────────
+    step("לשונית \"מקבלים\"",
+         "מאגר כל המשפחות/המקבלים. כאן מוסיפים, עורכים, מסננים ובודקים כפילויות.",
+         lambda w: _tab_rect(w, "recipients"))
+    step("שדה החיפוש",
+         "מקלידים שם, טלפון, ת\"ז או כתובת — הטבלה מסתננת מיד למי שמתאים.",
+         lambda w: _attr_rect(w, "recipients", "search_input"))
+    step("סינון לפי סטטוס / עדיפות",
+         "מציג רק מקבלים פעילים/מושהים, או לפי דרגת עדיפות — למיקוד מהיר ברשימה.",
+         lambda w: _attr_rect(w, "recipients", "status_filter"))
+    step("כפתור \"+ הוסף מקבל\"",
+         "פותח טופס להוספת משפחה/מקבל חדש — שם, טלפונים, כתובת, נפשות, ועדיפות.",
+         lambda w: _btn_rect(w, "recipients", "הוסף מקבל"))
+    step("כפתור \"יבוא מ-Excel\"",
+         "מייבא רשימת מקבלים שלמה מקובץ אקסל בבת אחת — חוסך הקלדה ידנית.",
+         lambda w: _btn_rect(w, "recipients", "יבוא מ-Excel"))
+    step("כפתורי \"הפעל\" / \"השהה\" / \"מחק\"",
+         "פועלים על השורה המסומנת: <b>הפעל/השהה</b> מכניס או מוציא מקבל מהחלוקות "
+         "בלי למחוק את הנתונים; <b>מחק</b> מוחק לצמיתות. לעריכת פרטים — לחיצה כפולה "
+         "על השורה.",
+         lambda w: _btn_rect(w, "recipients", "השהה"))
+    step("כפתור \"בדיקת כפילויות\"",
+         "מזהה מקבלים שאולי הוזנו פעמיים (שם/טלפון דומים) כדי לנקות את הרשימה.",
+         lambda w: _btn_rect(w, "recipients", "בדיקת כפילויות"))
+
+    # ── לשונית: חד פעמי ──────────────────────────────────────────────────────
+    step("לשונית \"חד פעמי\"",
+         "לחלוקה חד-פעמית: התוכנה מדרגת מי הכי זקוק לפי ניקוד צורך, ואתה בוחר.",
+         lambda w: _tab_rect(w, "one_time"))
+    step("שדה החיפוש",
+         "מסנן את הרשימה לפי שם/טלפון/כתובת/אזור — בלי לשנות את החישוב.",
+         lambda w: _attr_rect(w, "one_time", "search_input"))
+    step("כפתור \"חשב המלצה\"",
+         "מריץ את ניקוד הצורך ומדרג את המקבלים — מי שהכי מזמן לא קיבל ובעל עדיפות "
+         "גבוהה עולה למעלה.",
+         lambda w: _btn_rect(w, "one_time", "חשב המלצה"))
+    step("כפתור \"הוסף נבחרים לעדכון קבוצתי\"",
+         "מעביר את מי שסימנת ללשונית \"חלוקה ורישום\" כדי לשלוח/להדפיס/לרשום אותם.",
+         lambda w: _btn_rect(w, "one_time", "הוסף נבחרים"))
+
+    # ── לשונית: חיפוש מהיר ───────────────────────────────────────────────────
+    step("לשונית \"חיפוש מהיר\"",
+         "חיפוש מקבל בודד וצפייה בכל הפרטים וההיסטוריה שלו במקום אחד.",
+         lambda w: _tab_rect(w, "search"))
+    step("שדה החיפוש",
+         "מקלידים שם והרשימה מימין מציגה התאמות. לחיצה על שם מציגה את כל פרטיו.",
+         lambda w: _attr_rect(w, "search", "search_input"))
+    step("כפתור \"ייצוא הרשימה לאקסל\"",
+         "מוריד את תוצאות החיפוש הנוכחיות לקובץ אקסל.",
+         lambda w: _btn_rect(w, "search", "ייצוא הרשימה"))
+    step("כפתור \"הדפס כרטיס\"",
+         "מדפיס כרטיס מסודר של המקבל שנבחר — פרטים והיסטוריית חלוקות.",
+         lambda w: _btn_rect(w, "search", "הדפס כרטיס"))
+
+    # ── לשונית: הגדרות ───────────────────────────────────────────────────────
+    step("לשונית \"הגדרות\"",
+         "כל ההגדרות: סיסמה, משקלי ניקוד, גיבויים, מייל למתנדבים, עדכונים.",
+         lambda w: _tab_rect(w, "settings"))
+    step("כפתור \"שנה סיסמה\"",
+         "משנה את סיסמת הכניסה לתוכנה. צריך להזין קודם את הסיסמה הנוכחית.",
+         lambda w: _btn_rect(w, "settings", "שנה סיסמה"))
+    step("כפתור \"בדוק עדכונים\"",
+         "בודק מול השרת אם יש גרסה חדשה של התוכנה ומתקין בלחיצה. (קורה גם "
+         "אוטומטית בכל פתיחה.)",
+         lambda w: _btn_rect(w, "settings", "בדוק עדכונים"))
+    step("הגדרות המייל למתנדבים",
+         "כתובת השולח וסיסמת האפליקציה (Gmail) שדרכן נשלחים המיילים. כאן גם "
+         "<b>הסיסמה לקובץ המתנדב</b> — נעילת קובץ האקסל שנשלח.",
+         lambda w: _attr_rect(w, "settings", "mail_email"))
+    step("כפתורי \"שמור\" / \"שלח מייל בדיקה\"",
+         "<b>שמור</b> — שומר את הגדרות המייל. <b>שלח מייל בדיקה</b> — בודק שהחיבור "
+         "עובד לפני שליחה אמיתית.",
+         lambda w: _btn_rect(w, "settings", "שלח מייל בדיקה"))
+    step("גיבוי: \"בחר תיקייה\" / \"גבה עכשיו\" / \"שחזר מגיבוי\"",
+         "התוכנה מגבה אוטומטית בכל פתיחה. כאן אפשר לבחור תיקיית גיבוי, לגבות "
+         "עכשיו ידנית, או לשחזר נתונים מגיבוי קודם.",
+         lambda w: _btn_rect(w, "settings", "גבה עכשיו"))
+    step("כפתור \"אפס את כל הנתונים\" ⚠",
+         "מוחק את <b>כל</b> המקבלים וההיסטוריה ומחזיר את התוכנה למצב ריק. פעולה "
+         "מסוכנת — יש להשתמש רק אם באמת רוצים להתחיל מאפס (יש גיבוי לפני).",
+         lambda w: _btn_rect(w, "settings", "אפס את כל הנתונים"))
+    step("כפתור \"✉ השאר הודעה למפתח\"",
+         "<b>זה הכפתור שחיפשת!</b> לחיצה עליו פותחת חלון לכתיבת בקשה או דיווח על "
+         "בעיה, שנשלח ישירות למפתח. (יש כפתור נוסף זהה גם בתחתית המסך, משמאל.)",
+         lambda w: _btn_rect(w, "settings", "השאר הודעה"))
+
+    step("סיימנו את הסיור המורחב! 🎉",
+         "עכשיו אתה מכיר כל כפתור בתוכנה. אפשר לפתוח שוב כל סיור מהכפתור ❓ "
+         "שלמעלה מימין. בהצלחה!",
+         lambda w: None)
+    return S
 
 
 class GuidedTour(QWidget):

@@ -360,13 +360,25 @@ class SettingsTab(QWidget):
         mail_lay.addWidget(self.lbl_mail_status)
         grid.addWidget(mail_frame, 1, 1, _AT)
 
-        # ── Refresh ───────────────────────────────────────
+        # ── Bottom row: feedback + refresh ────────────────────────────────────
+        bottom_row = QHBoxLayout()
+        # A second, easy-to-find entry point to the feedback dialog (the small
+        # one lives in the status bar; users look for it here in Settings).
+        self.btn_feedback = QPushButton("✉ השאר הודעה למפתח")
+        self.btn_feedback.setObjectName("primary")
+        self.btn_feedback.setToolTip("דווח על בעיה או השאר בקשה — נשלח למפתח")
+        self.btn_feedback.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_feedback.clicked.connect(self._open_feedback)
+        bottom_row.addWidget(self.btn_feedback)
+        bottom_row.addStretch()
+
         btn_refresh = QPushButton("רענן")
         btn_refresh.setObjectName("neutral")
         btn_refresh.setMaximumWidth(110)
         btn_refresh.setToolTip("טען מחדש את פרטי ההגדרות")
         btn_refresh.clicked.connect(self.refresh)
-        lay.addWidget(btn_refresh, alignment=Qt.AlignmentFlag.AlignLeft)
+        bottom_row.addWidget(btn_refresh)
+        lay.addLayout(bottom_row)
         lay.addStretch()
 
     def refresh(self):
@@ -589,6 +601,10 @@ class SettingsTab(QWidget):
     def _change_password(self):
         if self.main_win and hasattr(self.main_win, "change_password"):
             self.main_win.change_password()
+
+    def _open_feedback(self):
+        from utils.ui import FeedbackDialog
+        FeedbackDialog.open(self)
 
     def _choose_backup_folder(self):
         if self.main_win and hasattr(self.main_win, "choose_backup_folder"):

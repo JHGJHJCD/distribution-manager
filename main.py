@@ -471,12 +471,17 @@ class MainWindow(QMainWindow):
         # Guided-tour launcher — always reachable round "?" button on the app bar.
         tour_btn = QPushButton("❓ סיור מודרך")
         tour_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        tour_btn.setToolTip("סיור קצר שמסביר את חלקי התוכנה")
+        tour_btn.setToolTip("סיור שמסביר את חלקי התוכנה")
         tour_btn.setStyleSheet(
             "QPushButton{background:rgba(255,255,255,0.18); color:white; border:none;"
             "border-radius:16px; padding:6px 16px; font-size:13px; font-weight:600;}"
-            "QPushButton:hover{background:rgba(255,255,255,0.32);}")
-        tour_btn.clicked.connect(self.start_tour)
+            "QPushButton:hover{background:rgba(255,255,255,0.32);}"
+            "QPushButton::menu-indicator{width:0px;}")
+        from PyQt6.QtWidgets import QMenu
+        tour_menu = QMenu(tour_btn)
+        tour_menu.addAction("סיור מהיר (סקירה כללית)", self.start_tour)
+        tour_menu.addAction("סיור מורחב (הסבר על כל כפתור)", self.start_extended_tour)
+        tour_btn.setMenu(tour_menu)
         a_lay.addWidget(tour_btn)
         c_lay.addWidget(appbar)
 
@@ -546,9 +551,15 @@ class MainWindow(QMainWindow):
 
     # ── Guided tour (onboarding) ──────────────────────────────────────────────
     def start_tour(self):
-        """Launch the step-by-step guided tour over the main window."""
+        """Launch the short overview guided tour over the main window."""
         from utils.tour import GuidedTour
         self._tour = GuidedTour(self)   # keep a reference alive
+        self._tour.start()
+
+    def start_extended_tour(self):
+        """Launch the deep 'explain every button' tour."""
+        from utils.tour import GuidedTour, build_extended_steps
+        self._tour = GuidedTour(self, build_extended_steps(self))
         self._tour.start()
 
     def maybe_offer_tour(self):
