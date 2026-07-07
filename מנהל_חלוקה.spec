@@ -58,6 +58,7 @@ a = Analysis(
         'utils.ui',
         'utils.updater',
         'utils.email_utils',
+        'utils.tour',
         # ── networking (in-app updater + volunteer email) ─────────────────────
         'urllib.request',
         'json',

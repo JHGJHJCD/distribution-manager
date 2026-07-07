@@ -467,6 +467,17 @@ class MainWindow(QMainWindow):
         _title_box.addWidget(_st)
         a_lay.addLayout(_title_box)
         a_lay.addStretch()
+
+        # Guided-tour launcher — always reachable round "?" button on the app bar.
+        tour_btn = QPushButton("❓ סיור מודרך")
+        tour_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        tour_btn.setToolTip("סיור קצר שמסביר את חלקי התוכנה")
+        tour_btn.setStyleSheet(
+            "QPushButton{background:rgba(255,255,255,0.18); color:white; border:none;"
+            "border-radius:16px; padding:6px 16px; font-size:13px; font-weight:600;}"
+            "QPushButton:hover{background:rgba(255,255,255,0.32);}")
+        tour_btn.clicked.connect(self.start_tour)
+        a_lay.addWidget(tour_btn)
         c_lay.addWidget(appbar)
 
         c_lay.addWidget(self.tabs)
@@ -523,6 +534,7 @@ class MainWindow(QMainWindow):
         fb_btn.setToolTip("דווח על בעיה או השאר בקשה למפתח")
         fb_btn.clicked.connect(self._open_feedback)
         sb.addWidget(fb_btn)
+        self._fb_btn = fb_btn   # referenced by the guided tour
 
         ver_lbl = QLabel(f"v{APP_VERSION}  ")
         ver_lbl.setStyleSheet("color:#9ca3af; font-size:11px;")
@@ -531,6 +543,29 @@ class MainWindow(QMainWindow):
     def _open_feedback(self):
         from utils.ui import FeedbackDialog
         FeedbackDialog.open(self)
+
+    # ── Guided tour (onboarding) ──────────────────────────────────────────────
+    def start_tour(self):
+        """Launch the step-by-step guided tour over the main window."""
+        from utils.tour import GuidedTour
+        self._tour = GuidedTour(self)   # keep a reference alive
+        self._tour.start()
+
+    def maybe_offer_tour(self):
+        """On the very first run, gently offer the tour once. Afterwards it is
+        only reachable from the ❓ button."""
+        if db.get_setting("tour_seen"):
+            return
+        ask = QMessageBox.question(
+            self, "ברוך הבא! 👋",
+            "זו הפעם הראשונה בתוכנה?\nרוצה סיור קצר (פחות מדקה) שיראה לך מה יש בכל מקום?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ask == QMessageBox.StandardButton.Yes:
+            self.start_tour()
+        else:
+            db.set_setting("tour_seen", "1")
 
     def _on_tab_changed(self, idx):
         tab = self.tabs.widget(idx)
@@ -810,6 +845,8 @@ def _run():
     win.show_smart()
     # Check for updates shortly after the UI is up (background; non-blocking).
     QTimer.singleShot(1500, win._auto_check_updates)
+    # First-run: offer the guided tour once (after the window has settled).
+    QTimer.singleShot(700, win.maybe_offer_tour)
     _hard_exit(app.exec())
 
 
