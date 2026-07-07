@@ -9,6 +9,7 @@
 """
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
+    QGraphicsDropShadowEffect,
 )
 from PyQt6.QtCore import Qt, QRect, QRectF, QPoint, QEvent
 from PyQt6.QtGui import QPainter, QColor, QPainterPath, QPen
@@ -19,9 +20,9 @@ import database as db
 # ── helpers to locate a highlight rectangle in the main window's coordinates ──
 
 def _widget_rect(win, w):
-    """Rectangle of widget `w` expressed in `win` coordinates, or None if it is
-    not currently visible."""
-    if w is None or not w.isVisible():
+    """Rectangle of widget `w` expressed in `win` coordinates, or None if it has
+    no real size yet (e.g. not laid out)."""
+    if w is None or w.width() <= 0 or w.height() <= 0:
         return None
     tl = win.mapFromGlobal(w.mapToGlobal(QPoint(0, 0)))
     return QRect(tl, w.size())
@@ -84,9 +85,10 @@ def build_default_steps(win):
             "rect": lambda w: _tab_rect(w, "settings"),
         },
         {
-            "title": "נתקעת? השאר הודעה",
-            "text": ("הכפתור הזה שולח דיווח על בעיה או בקשה למפתח. תמיד זמין בתחתית "
-                     "המסך."),
+            "title": "נתקעת? השאר הודעה 💬",
+            "text": ("<b>בתחתית המסך</b> (משמאל למטה) יש כפתור <b>\"✉ השאר הודעה\"</b>. "
+                     "לחיצה עליו פותחת חלון קטן שבו אפשר לכתוב בקשה או לדווח על בעיה — "
+                     "וזה נשלח ישירות למפתח."),
             "rect": lambda w: _widget_rect(w, getattr(w, "_fb_btn", None)),
         },
         {
@@ -101,6 +103,8 @@ def build_default_steps(win):
 class GuidedTour(QWidget):
     """Semi-transparent spotlight overlay that walks the user through `steps`."""
 
+    _BOX_W = 460   # callout card width (px)
+
     def __init__(self, win, steps=None):
         super().__init__(win)
         self.win = win
@@ -109,57 +113,89 @@ class GuidedTour(QWidget):
         self._spot = None
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
-        # The callout card (title + text + buttons). A real child widget so its
-        # text stays crisp and its buttons are clickable.
+
+        # ── The callout card ─────────────────────────────────────────────────
+        # A real child widget so text stays crisp and buttons are clickable.
+        # Fixed width, height grows to fit the (word-wrapped) text — see
+        # _apply_step, which pins the label widths so nothing gets clipped.
         self.box = QFrame(self)
         self.box.setObjectName("tourBox")
         self.box.setStyleSheet(
-            "#tourBox{background:#ffffff; border:1px solid #dbe3ef;"
-            "border-radius:12px;}")
-        self.box.setFixedWidth(390)
+            "#tourBox{background:#ffffff; border:1px solid #e2e8f0;"
+            "border-radius:16px;}")
+        self.box.setFixedWidth(self._BOX_W)
+        shadow = QGraphicsDropShadowEffect(self.box)
+        shadow.setBlurRadius(38)
+        shadow.setOffset(0, 10)
+        shadow.setColor(QColor(15, 23, 42, 120))
+        self.box.setGraphicsEffect(shadow)
 
         lay = QVBoxLayout(self.box)
-        lay.setContentsMargins(18, 16, 18, 14)
-        lay.setSpacing(8)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
 
+        # Header band (navy→blue) with the step title, rounded to match the card.
+        header = QFrame()
+        header.setObjectName("tourHead")
+        header.setStyleSheet(
+            "#tourHead{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #0d2a4a, stop:1 #1565c0);"
+            "border-top-left-radius:16px; border-top-right-radius:16px;}")
+        h_lay = QVBoxLayout(header)
+        h_lay.setContentsMargins(22, 14, 22, 14)
         self.lbl_title = QLabel()
-        self.lbl_title.setStyleSheet("font-size:16px; font-weight:700; color:#0d2a4a;")
+        self.lbl_title.setStyleSheet(
+            "font-size:17px; font-weight:800; color:#ffffff; background:transparent;")
         self.lbl_title.setWordWrap(True)
-        self.lbl_text = QLabel()
-        self.lbl_text.setStyleSheet("font-size:13px; color:#374151;")
-        self.lbl_text.setWordWrap(True)
-        lay.addWidget(self.lbl_title)
-        lay.addWidget(self.lbl_text)
+        h_lay.addWidget(self.lbl_title)
+        lay.addWidget(header)
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
+        # Body: the explanation text.
+        body = QVBoxLayout()
+        body.setContentsMargins(22, 16, 22, 6)
+        self.lbl_text = QLabel()
+        self.lbl_text.setStyleSheet(
+            "font-size:14px; color:#334155; background:transparent;")
+        self.lbl_text.setWordWrap(True)
+        self.lbl_text.setTextFormat(Qt.TextFormat.RichText)
+        body.addWidget(self.lbl_text)
+        lay.addLayout(body)
+
+        # Footer: progress on the right, navigation on the left.
+        foot = QHBoxLayout()
+        foot.setContentsMargins(22, 8, 18, 16)
+        foot.setSpacing(8)
         self.lbl_prog = QLabel()
-        self.lbl_prog.setStyleSheet("font-size:12px; color:#9ca3af;")
+        self.lbl_prog.setStyleSheet(
+            "font-size:12px; color:#94a3b8; background:transparent; font-weight:600;")
         self.btn_skip = QPushButton("דלג")
-        self.btn_prev = QPushButton("הקודם")
+        self.btn_prev = QPushButton("→ הקודם")
         self.btn_next = QPushButton("הבא")
-        for b in (self.btn_skip, self.btn_prev):
-            b.setStyleSheet(
-                "QPushButton{background:#eef2f7; color:#334155; border:none;"
-                "border-radius:8px; padding:6px 14px; font-size:13px;}"
-                "QPushButton:hover{background:#e2e8f0;}")
+        self.btn_skip.setStyleSheet(
+            "QPushButton{background:transparent; color:#94a3b8; border:none;"
+            "padding:8px 10px; font-size:13px;}"
+            "QPushButton:hover{color:#475569;}")
+        self.btn_prev.setStyleSheet(
+            "QPushButton{background:#eef2f7; color:#334155; border:none;"
+            "border-radius:9px; padding:8px 16px; font-size:13px; font-weight:600;}"
+            "QPushButton:hover{background:#e2e8f0;}")
         self.btn_next.setStyleSheet(
-            "QPushButton{background:#1565c0; color:white; border:none;"
-            "border-radius:8px; padding:6px 18px; font-size:13px; font-weight:600;}"
-            "QPushButton:hover{background:#1976d2;}")
+            "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            "stop:0 #1976d2, stop:1 #1565c0); color:white; border:none;"
+            "border-radius:9px; padding:8px 22px; font-size:14px; font-weight:700;}"
+            "QPushButton:hover{background:#1565c0;}")
         for b in (self.btn_skip, self.btn_prev, self.btn_next):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_skip.clicked.connect(self.finish)
         self.btn_prev.clicked.connect(self._prev)
         self.btn_next.clicked.connect(self._next)
 
-        # RTL order: progress on the right, then skip, prev, next on the left.
-        btn_row.addWidget(self.lbl_prog)
-        btn_row.addStretch()
-        btn_row.addWidget(self.btn_skip)
-        btn_row.addWidget(self.btn_prev)
-        btn_row.addWidget(self.btn_next)
-        lay.addLayout(btn_row)
+        foot.addWidget(self.lbl_prog)
+        foot.addStretch()
+        foot.addWidget(self.btn_skip)
+        foot.addWidget(self.btn_prev)
+        foot.addWidget(self.btn_next)
+        lay.addLayout(foot)
 
         self.win.installEventFilter(self)
 
@@ -196,9 +232,16 @@ class GuidedTour(QWidget):
         step = self.steps[self.i]
         self.lbl_title.setText(step["title"])
         self.lbl_text.setText(step["text"])
-        self.lbl_prog.setText(f"{self.i + 1} / {len(self.steps)}")
+        self.lbl_prog.setText(f"שלב {self.i + 1} מתוך {len(self.steps)}")
         self.btn_prev.setVisible(self.i > 0)
         self.btn_next.setText("סיום ✓" if self.i == len(self.steps) - 1 else "הבא ←")
+        # Pin the label widths to the card's inner width so word-wrap reports the
+        # correct height — without this the box can size too short and clip text.
+        inner = self._BOX_W - 44
+        self.lbl_title.setFixedWidth(inner)
+        self.lbl_text.setFixedWidth(inner)
+        self.lbl_title.setMinimumHeight(self.lbl_title.heightForWidth(inner))
+        self.lbl_text.setMinimumHeight(self.lbl_text.heightForWidth(inner))
         try:
             self._spot = step["rect"](self.win)
         except Exception:
