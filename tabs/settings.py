@@ -335,7 +335,8 @@ class SettingsTab(QWidget):
 
         mail_file_pw_hint = QLabel(
             "הקובץ המצורף למתנדב יינעל בסיסמה זו (צריך אותה כדי לפתוח ב-Excel). "
-            "הסיסמה תופיע בגוף המייל כדי שהמתנדב יוכל לפתוח. השאר ריק כדי לא להגן על הקובץ.")
+            "הסיסמה לא נכתבת במייל — מסרו אותה למתנדב פעם אחת בעל-פה / בווטסאפ. "
+            "השאר ריק כדי לא להגן על הקובץ.")
         mail_file_pw_hint.setObjectName("subtitle")
         mail_file_pw_hint.setWordWrap(True)
         mail_file_pw_hint.setStyleSheet("font-size:11px;")

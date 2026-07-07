@@ -717,11 +717,14 @@ class GroupUpdateTab(QWidget):
                 path = export_volunteer_checklist_to_excel(
                     self._rows_data, dist_date_iso, dist_name, what, qty, distributor)
                 file_pw = email_utils.get_checklist_password()
+                # NOTE: the password itself is deliberately NOT written in the
+                # email — anyone with access to the mailbox would otherwise see
+                # it. The volunteer receives the password out-of-band (phone /
+                # WhatsApp, once). We only note that the file is protected.
                 pw_block = (
                     "<p style='background:#fffbeb;border:1px solid #fde68a;"
                     "border-radius:6px;padding:8px 10px;'>"
-                    "🔒 הקובץ המצורף מוגן בסיסמה. לפתיחתו ב-Excel הזן את הסיסמה: "
-                    f"<b style='font-size:15px;letter-spacing:1px;'>{file_pw}</b></p>"
+                    "🔒 הקובץ המצורף מוגן בסיסמה. הזן את הסיסמה שנמסרה לך כדי לפתוח אותו ב-Excel.</p>"
                 ) if file_pw else ""
                 html = (
                     "<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
