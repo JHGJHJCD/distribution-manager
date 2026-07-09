@@ -60,6 +60,8 @@ a = Analysis(
         'utils.updater',
         'utils.email_utils',
         'utils.tour',
+        'utils.feedback',
+        'utils._secret',   # gitignored; bundled only when present on build machine
         # ── networking (in-app updater + volunteer email) ─────────────────────
         'urllib.request',
         'json',

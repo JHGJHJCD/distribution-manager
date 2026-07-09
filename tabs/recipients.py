@@ -720,6 +720,14 @@ class RecipientDialog(QDialog):
             elif "בירור" in raw:
                 p_idx = next((i for i, o in enumerate(_PRIORITY_OPTIONS) if "בירור" in o[0]), 0)
             self.f_priority.setCurrentIndex(p_idx)
+        else:
+            # Add mode: default to a WEEKLY / קבוע recipient so a newly added
+            # person actually enters the distribution list. With the previous
+            # blank defaults, the recipient was saved but filtered out of the
+            # weekly issuance (get_weekly_list drops frequency='') — so it looked
+            # like "adding from the software doesn't work, only Excel does".
+            self.f_freq.setCurrentText("שבועי")
+            self.f_priority.setCurrentText("קבוע")
 
         btns = QHBoxLayout()
         btn_ok = QPushButton("שמור")
@@ -748,6 +756,18 @@ class RecipientDialog(QDialog):
             QMessageBox.warning(self, "יש לתקן לפני שמירה",
                                 "• " + "\n• ".join(errors))
             return
+        # Safety net: a blank frequency means the recipient will NOT show up in
+        # the weekly distribution list. Warn instead of silently hiding them.
+        if not self.f_freq.currentText().strip():
+            reply = QMessageBox.question(
+                self, "ללא תדירות",
+                "לא נבחרה תדירות חלוקה — המקבל יישמר אבל לא יופיע ברשימת החלוקה.\n\n"
+                "לשמור בכל זאת?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
         self.accept()
 
     def _collect_errors(self) -> list[str]:

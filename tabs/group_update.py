@@ -194,6 +194,7 @@ class GroupUpdateTab(QWidget):
         self._reserve_ids: set = set()   # which of those are reserves
         self._load_extras()
         self._build_ui()
+        self._update_mode_controls()
         self.refresh()
         self._setup_inbox_poller()
 
@@ -444,6 +445,44 @@ class GroupUpdateTab(QWidget):
         # ── Toolbar over the recipient list ───────────────────────────────────
         toolbar = QHBoxLayout()
         toolbar.setSpacing(12)
+
+        # Regulars distribution mode: schedule / none / scored-by-need
+        self.mode_combo = QComboBox()
+        self.mode_combo.setMinimumHeight(42)
+        self.mode_combo.setToolTip(
+            "כיצד להתייחס לקבועים בחלוקה זו:\n"
+            "• רגיל — קבועים אוטומטית לפי לוח זמנים\n"
+            "• בלי קבועים — קבועים לא מקבלים\n"
+            "• קבועים לפי ניקוד — כל הקבועים מדורגים לפי ניקוד צורך, כמו חד-פעמי")
+        for label, val in (("רגיל — קבועים לפי לוח זמנים", "schedule"),
+                           ("בלי קבועים", "none"),
+                           ("קבועים לפי ניקוד", "scored")):
+            self.mode_combo.addItem(label, val)
+        cur_mode = db.get_regulars_mode()
+        idx = self.mode_combo.findData(cur_mode)
+        self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        toolbar.addLayout(_field("מצב חלוקה לקבועים", self.mode_combo, maxw=240))
+
+        # Scored-mode only: mark the top-N leaders by available portions
+        self.portions_spin = QSpinBox()
+        self.portions_spin.setRange(0, 100000)
+        self.portions_spin.setMinimumHeight(42)
+        self.portions_spin.setToolTip("כמה מנות זמינות לחלוקה — מסמן את המובילים בניקוד עד למספר זה")
+        try:
+            self.portions_spin.setValue(int(db.get_setting("scored_portions") or 0))
+        except (TypeError, ValueError):
+            self.portions_spin.setValue(0)
+        self._portions_field = _field("מנות זמינות", self.portions_spin, maxw=130)
+        toolbar.addLayout(self._portions_field)
+
+        self.btn_mark_leaders = QPushButton("סמן מובילים")
+        self.btn_mark_leaders.setStyleSheet(_BTN_SUCCESS)
+        self.btn_mark_leaders.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mark_leaders.setToolTip("מסמן את בעלי הניקוד הגבוה ביותר עד למספר המנות הזמינות")
+        self.btn_mark_leaders.clicked.connect(self._mark_leaders)
+        toolbar.addWidget(self.btn_mark_leaders)
+
         self.search_input = QLineEdit()
         self.search_input.setMinimumHeight(42)
         self.search_input.setMaximumWidth(520)
@@ -581,11 +620,52 @@ class GroupUpdateTab(QWidget):
             out.append(rec)
         return out
 
+    # ── distribution-mode for regulars (schedule / none / scored) ──────────────
+    def _current_mode(self) -> str:
+        data = self.mode_combo.currentData()
+        return data if data in ("schedule", "none", "scored") else "schedule"
+
+    def _on_mode_changed(self, *_):
+        db.set_setting("dist_regulars_mode", self._current_mode())
+        self._update_mode_controls()
+        self.refresh()
+
+    def _update_mode_controls(self):
+        """Show the 'available portions' spin + 'mark leaders' button only in the
+        scored mode, where ranking-by-need is what drives the selection."""
+        scored = self._current_mode() == "scored"
+        self.portions_spin.setVisible(scored)
+        self.btn_mark_leaders.setVisible(scored)
+        for i in range(self._portions_field.count()):
+            w = self._portions_field.itemAt(i).widget()
+            if w is not None:
+                w.setVisible(scored)
+
+    def _mark_leaders(self):
+        """Check the top-N recipients by need-score, N = available portions."""
+        n = self.portions_spin.value()
+        db.set_setting("scored_portions", str(n))
+        ranked = sorted(self._rows_data,
+                        key=lambda r: -(r.get("need_score") or 0))
+        self._checked_ids = {r.get("id") for r in ranked[:n] if r.get("id") is not None}
+        self._populate()
+
     def refresh(self):
-        base = db.get_weekly_list(area_filter="הכל")
+        mode = self._current_mode()
+        if mode == "none":
+            base = []
+        elif mode == "scored":
+            base = db.get_regulars_scored(area_filter="הכל")
+        else:
+            base = db.get_weekly_list(area_filter="הכל")
         base_ids = {r["id"] for r in base}
         extras = self._extra_recipients(base_ids)
         self._rows_data = base + extras
+        if mode == "scored":
+            # give the one-time picks a need_score too, so the whole list ranks
+            # on the same scale, then order everyone by need (highest first).
+            db._annotate_need_scores(extras)
+            self._rows_data.sort(key=lambda r: -(r.get("need_score") or 0))
         live = {r.get("id") for r in self._rows_data}
         # Newly-appeared one-time picks arrive pre-checked; anyone already seen
         # keeps whatever tick state the operator left them in.
@@ -611,11 +691,16 @@ class GroupUpdateTab(QWidget):
         """Return (bg, fg, freq_disp, next_disp) for a row."""
         rid = rec.get("id")
         freq = rec.get("frequency", "") or ""
+        score = rec.get("need_score")
+        score_txt = f"ניקוד {round(score)}" if score is not None else ""
         is_pick = rid in self._extra_ids or freq == "חד-פעמי"
         if is_pick:
             if rec.get("_reserve") or rid in self._reserve_ids:
-                return QColor(_RESERVE_BG), QColor(_RESERVE_FG), "חד-פעמי · רזרבה", ""
-            return QColor(SELECTED_BG), QColor(SELECTED_FG), "חד-פעמי", ""
+                return QColor(_RESERVE_BG), QColor(_RESERVE_FG), "חד-פעמי · רזרבה", score_txt
+            return QColor(SELECTED_BG), QColor(SELECTED_FG), "חד-פעמי", score_txt
+        # scored regular — neutral tint, ranked by need-score not by date
+        if rec.get("_scored_regular"):
+            return QColor("#f1f5f9"), QColor("#334155"), freq, score_txt
         # regular — colour by urgency
         nd = rec.get("next_distribution") or ""
         days_left = rec.get("days_left")

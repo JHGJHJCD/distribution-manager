@@ -755,10 +755,52 @@ def get_one_time_list(area_filter: str = "הכל"):
     return in_dist + others
 
 
+def get_regulars_scored(area_filter: str = "הכל"):
+    """Regulars (frequency != חד-פעמי / not empty) ranked by need-score for the
+    'קבועים לפי ניקוד' distribution mode: every active regular gets a need_score
+    (same scoring the one-time list uses) and the list is ordered by that score
+    (desc), NOT by the schedule. Each row is flagged `_scored_regular` so the UI
+    can style/label it distinctly."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM recipients WHERE status='פעיל' "
+            "AND frequency != 'חד-פעמי' AND frequency != '' ORDER BY full_name"
+        ).fetchall()
+    result = []
+    for r in rows:
+        r = dict(r)
+        if area_filter != "הכל" and r.get("area", "") != area_filter:
+            continue
+        ld_str = r.get("last_distribution") or ""
+        try:
+            ld = date.fromisoformat(ld_str) if ld_str else date(2000, 1, 1)
+        except ValueError:
+            ld = date(2000, 1, 1)
+        r["last_dist_date"] = ld
+        r["days_since"] = (date.today() - ld).days
+        r["_scored_regular"] = True
+        result.append(r)
+    _annotate_need_scores(result)
+    # highest need first; tie-break by longest-waiting then largest family
+    result.sort(key=lambda x: (-(x.get("need_score") or 0),
+                               -x["days_since"], -(x.get("souls") or 0)))
+    return result
+
+
+def get_regulars_mode() -> str:
+    """Distribution mode for regulars: 'schedule' (default, auto by timetable),
+    'none' (regulars excluded) or 'scored' (regulars ranked by need-score)."""
+    mode = get_setting("dist_regulars_mode") or "schedule"
+    return mode if mode in ("schedule", "none", "scored") else "schedule"
+
+
 def compute_suggested_n(total_products: int) -> tuple[int, int]:
     """Returns (n_for_one_time, regular_count). Regulars (frequency != חד-פעמי,
     e.g. code-4 קבוע) are served first; the rest of the products go to the
-    one-time priority list."""
+    one-time priority list. In 'none'/'scored' modes regulars are no longer
+    auto-served first, so regular_count is 0 and all products feed the list."""
+    if get_regulars_mode() != "schedule":
+        return max(0, total_products), 0
     with get_connection() as conn:
         regular_count = conn.execute(
             "SELECT COUNT(*) as c FROM recipients WHERE status='פעיל' "
