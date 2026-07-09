@@ -376,6 +376,7 @@ class RecipientsTab(QWidget):
             auto_backup_async()
             self.refresh()
             if self.main_win:
+                self.main_win.refresh_all()
                 self.main_win.status_msg("מקבל חדש נוסף")
 
     def _edit(self):
@@ -390,6 +391,7 @@ class RecipientsTab(QWidget):
             auto_backup_async()
             self.refresh()
             if self.main_win:
+                self.main_win.refresh_all()
                 self.main_win.status_msg("פרטי מקבל עודכנו")
 
     def _delete(self):
@@ -409,6 +411,7 @@ class RecipientsTab(QWidget):
                 auto_backup_async()
                 self.refresh()
                 if self.main_win:
+                    self.main_win.refresh_all()
                     self.main_win.status_msg(f"{name} נמחק")
             except ValueError as e:
                 force_reply = QMessageBox.question(
@@ -423,6 +426,7 @@ class RecipientsTab(QWidget):
                     auto_backup_async()
                     self.refresh()
                     if self.main_win:
+                        self.main_win.refresh_all()
                         self.main_win.status_msg(f"{name} נמחק (כולל היסטוריה)")
 
     def _set_status(self, status: str):
@@ -434,6 +438,7 @@ class RecipientsTab(QWidget):
         auto_backup_async()
         self.refresh()
         if self.main_win:
+            self.main_win.refresh_all()
             self.main_win.status_msg(f"סטטוס שונה ל: {status}")
 
     def _import_excel(self):
