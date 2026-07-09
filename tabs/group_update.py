@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
     QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QColor, QFont, QIcon
 from datetime import date
 from widgets import DateEdit, ProductsEditor
@@ -89,6 +89,15 @@ _BTN_GHOST   = (
     " border-radius:9px; font-weight:700; font-size:13.5px; padding:0 16px; min-height:38px;}"
     "QPushButton:hover{background:#f8fafc; border-color:#c2cee0;}"
     "QPushButton:pressed{background:#eef2f8;}")
+# The hero action of this screen — printing the distribution list. A rich indigo
+# gradient, larger size and heavier weight make it the single most prominent
+# button in the bottom bar (paired with a soft drop-shadow, added in code).
+_BTN_PRINT   = (
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #6366f1,stop:1 #4338ca);"
+    " color:#fff; border:none; border-radius:12px; font-weight:900; font-size:16px;"
+    " letter-spacing:0.3px; padding:0 30px; min-height:52px;}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #818cf8,stop:1 #4f46e5);}"
+    "QPushButton:pressed{background:#3730a3;}")
 _CHIP_QSS    = ("QLabel{background:#eef2f8; color:#475569; border:none; border-radius:16px;"
                 " padding:5px 13px; font-size:12.5px; font-weight:700;}")
 _CHIP_GREEN  = ("QLabel{background:#e6f6ef; color:#059669; border:none; border-radius:16px;"
@@ -534,25 +543,21 @@ class GroupUpdateTab(QWidget):
         btn_save.clicked.connect(self._save)
         bar.addWidget(btn_save)
 
-        btn_export = QPushButton(" יצוא לאקסל")
-        btn_export.setObjectName("success")
-        btn_export.setStyleSheet(_BTN_SUCCESS)
-        btn_export.setMinimumHeight(46)
-        btn_export.setMinimumWidth(150)
-        btn_export.setIcon(QIcon(line_icon("download", 18, "#ffffff")))
-        btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_export.setToolTip("ייצא רשימה בסיסית (המסומנים, או הכל אם אין סימון)")
-        btn_export.clicked.connect(self._export_excel)
-        bar.addWidget(btn_export)
-
-        btn_print = QPushButton(" הדפסה")
-        btn_print.setObjectName("neutral")
-        btn_print.setStyleSheet(_BTN_GHOST)
-        btn_print.setMinimumHeight(46)
-        btn_print.setMinimumWidth(130)
-        btn_print.setIcon(QIcon(line_icon("print", 18, "#475569")))
+        btn_print = QPushButton("  הדפסה לחלוקה")
+        btn_print.setObjectName("primary")
+        btn_print.setStyleSheet(_BTN_PRINT)
+        btn_print.setMinimumHeight(54)
+        btn_print.setMinimumWidth(230)
+        btn_print.setIcon(QIcon(line_icon("print", 22, "#ffffff")))
+        btn_print.setIconSize(QSize(22, 22))
         btn_print.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_print.setToolTip("הדפס רשימת חלוקה (A4 לאורך)")
+        btn_print.setToolTip("הדפס את רשימת החלוקה המסומנת (A4)")
+        _print_glow = QGraphicsDropShadowEffect(btn_print)
+        _print_glow.setBlurRadius(22)
+        _print_glow.setXOffset(0)
+        _print_glow.setYOffset(4)
+        _print_glow.setColor(QColor(67, 56, 202, 120))
+        btn_print.setGraphicsEffect(_print_glow)
         btn_print.clicked.connect(self._print)
         bar.addWidget(btn_print)
 

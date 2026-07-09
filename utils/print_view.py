@@ -45,7 +45,8 @@ def _css(fs: int = 11) -> str:
                  margin-top: 12px; border-bottom: 1px solid #f0c890; padding-bottom: 3px; }}
     table.reserve th {{ background-color: #b45309; border-color: #92400e; }}
     .footer {{ text-align: center; font-size: {small}pt; color: #888; margin-top: 6px; }}
-    .chk {{ text-align: center; font-size: {fs + 3}pt; }}
+    .chk {{ text-align: center; font-size: {fs + 4}pt; width: {fs * 3}px; color: #305090; }}
+    .num {{ text-align: center; width: {fs * 3}px; color: #555; }}
     .resgrid {{ width: 100%; border-collapse: collapse; margin-top: 6px; direction: rtl; }}
     .resgrid td {{ border: 1px solid #f0c890; padding: {pad}px 8px; text-align: right;
                   font-size: {fs}pt; vertical-align: top; }}
@@ -54,8 +55,12 @@ def _css(fs: int = 11) -> str:
 
 _PRINT_CSS = _css(11)   # default (kept for any external caller)
 
+# Column order is written left-to-right in SOURCE, which lands right-to-left on
+# the printed page. So the checkmark column, written LAST, prints as the first
+# (right-most) column — where the distributor marks כן/לא by hand.
 _THEAD = ("<thead><tr>"
-          "<th>✓ ביצוע</th><th>אזור</th><th>טלפון / ים</th><th>שם מלא</th><th>מס'</th>"
+          "<th>אזור</th><th>טלפון / ים</th><th>שם מלא</th>"
+          "<th class='num'>מס'</th><th class='chk'>✓ סימון</th>"
           "</tr></thead>")
 
 
@@ -66,9 +71,9 @@ def _esc(v) -> str:
 
 
 def _table_rows(rows: List[Dict]) -> str:
-    # Columns are emitted RIGHT-TO-LEFT (✓/אזור/טלפון/שם/מס') because Qt's
-    # QTextDocument lays table columns in source order regardless of dir/layout —
-    # reversing the source order is what puts the index column on the right.
+    # Emitted in SOURCE order אזור/טלפון/שם/מס'/✓ — QTextDocument lays columns in
+    # source order regardless of RTL, so this prints (right→left) as
+    # ✓ · מס' · שם · טלפון · אזור, putting the manual-mark column on the right.
     out = ""
     for i, rec in enumerate(rows, 1):
         phones = " / ".join(
@@ -77,11 +82,11 @@ def _table_rows(rows: List[Dict]) -> str:
         )
         out += (
             f"<tr>"
-            f"<td class='chk'>☐</td>"
             f"<td>{_esc(rec.get('area', ''))}</td>"
             f"<td>{_esc(phones)}</td>"
             f"<td><b>{_esc(rec.get('full_name', ''))}</b></td>"
-            f"<td>{i}</td>"
+            f"<td class='num'>{i}</td>"
+            f"<td class='chk'>☐</td>"
             f"</tr>"
         )
     return out
@@ -167,14 +172,16 @@ def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWid
         doc.addResource(QTextDocument.ResourceType.ImageResource,
                         QUrl("orglogo"), QImage(logo_path))
 
-    # Auto-shrink to save the distributor pages: start at a comfortable size and
-    # step the font down until the whole list fits on ONE page, or we hit a
-    # readable floor (then a very long list still spans the fewest pages it can).
-    for fs in (11, 10, 9, 8, 7, 6):
+    # Layout target: up to ~60 recipients per page. Compute the minimum pages
+    # needed at that cap, then pick the LARGEST (most readable) font that fits the
+    # list into that many pages — filling each page well without cramming past 60.
+    n_main = sum(1 for r in recipients if not r.get("_reserve"))
+    target_pages = max(1, (n_main + 59) // 60)
+    for fs in (12, 11, 10, 9, 8, 7):
         doc.setDefaultStyleSheet(_css(fs))
         doc.setHtml(html)
         doc.setPageSize(page_size)
-        if doc.pageCount() <= 1:
+        if doc.pageCount() <= target_pages:
             break
     doc.print(printer)
 
