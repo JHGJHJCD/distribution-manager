@@ -23,3 +23,6 @@ _shot_review.py
 
 # embedded secrets (token for GitHub feedback) — never commit
 _secret.py
+
+build.log
+.vs/

@@ -13,6 +13,8 @@ import time
 import random
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
+
 os.environ["PYTHONUTF8"] = "1"
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
@@ -79,10 +81,10 @@ def main():
         # this is the real usage where refresh_all() fires after every save and
         # re-populates an already-populated table (the path that froze the app).
         rec = RecipientsTab(win); win.setCentralWidget(rec); win.show(); app.processEvents()
-        # WeeklyTab was merged into GroupUpdateTab. The old weekly-list render is
-        # now the SCOPE_WEEK scope; the full "all regulars" render is SCOPE_ALL.
-        wk = GroupUpdateTab(win); wk.scope_combo.setCurrentText(SCOPE_WEEK)
-        gp = GroupUpdateTab(win); gp.scope_combo.setCurrentText(SCOPE_ALL)
+        # WeeklyTab was merged into GroupUpdateTab (now the weekly list + quick
+        # search). Two instances keep the render path under load.
+        wk = GroupUpdateTab(win)
+        gp = GroupUpdateTab(win)
 
         for tab, label in ((rec, "recipients"), (wk, "weekly"), (gp, "group")):
             win.setCentralWidget(tab)

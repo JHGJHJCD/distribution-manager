@@ -228,8 +228,26 @@ def init_db():
             quantity        INTEGER,
             distributor     TEXT,
             notes           TEXT,
+            batch_id        INTEGER,
             created_at      TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (recipient_id) REFERENCES recipients(id) ON DELETE SET NULL
+        );
+
+        -- One row per distribution EVENT (a batch): the shared header data plus
+        -- the multi-product breakdown and a single general note for the whole
+        -- distribution. The per-recipient rows in `distributions` link back via
+        -- batch_id. Powers the "חלוקות" tab.
+        CREATE TABLE IF NOT EXISTS dist_batches (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            dist_name       TEXT DEFAULT '',
+            dist_date       TEXT NOT NULL,
+            products        TEXT DEFAULT '',
+            quantity        INTEGER DEFAULT 0,
+            distributor     TEXT DEFAULT '',
+            general_note    TEXT DEFAULT '',
+            recipient_count INTEGER DEFAULT 0,
+            souls_total     INTEGER DEFAULT 0,
+            created_at      TEXT DEFAULT (datetime('now'))
         );
 
         CREATE TABLE IF NOT EXISTS change_log (
@@ -280,6 +298,12 @@ def init_db():
             if col not in columns:
                 conn.execute(f"ALTER TABLE recipients ADD COLUMN {col} {definition}")
 
+        # Distributions: link each per-recipient row to its batch (added later,
+        # so an older DB needs the column back-filled as NULL).
+        dist_cols = {row["name"] for row in conn.execute("PRAGMA table_info(distributions)")}
+        if "batch_id" not in dist_cols:
+            conn.execute("ALTER TABLE distributions ADD COLUMN batch_id INTEGER")
+
         # Indexes are created AFTER the column migrations so that an older DB
         # (missing a column an index references) is upgraded first, not crashed.
         conn.executescript("""
@@ -293,6 +317,10 @@ def init_db():
             ON distributions(recipient_name);
         CREATE INDEX IF NOT EXISTS idx_distributions_date
             ON distributions(dist_date);
+        CREATE INDEX IF NOT EXISTS idx_distributions_batch
+            ON distributions(batch_id);
+        CREATE INDEX IF NOT EXISTS idx_dist_batches_date
+            ON dist_batches(dist_date);
         """)
 
         # ── Password migration ────────────────────────────────────────────────
@@ -642,68 +670,13 @@ def get_weekly_list(days_ahead: int = 30, area_filter: str = "הכל"):
 # ------------------------------------------------------------------------------- One-time recipients ──────────────────────────────────────────────────────
 
 # ─── Need-score (priority ranking within a tier) ──────────────────────────────
-# The need-score (0–100, higher = needier = served earlier within a tier) is a
-# weighted blend of several recipient data points. Each factor's weight is a
-# user-tunable knob stored in `settings` (see get_need_weights/set_need_weights
-# and the "משקלי ניקוד" panel in the Settings tab). Weights are RELATIVE — they
-# are normalized at scoring time, so any non-negative numbers work and 0 means
-# "ignore this data point".
-#
-# Each factor: key, Hebrew label, recipient field, direction, value parser.
-#   dir "low"  → a LOWER value means MORE need (e.g. הכנסות, פנוי לנפש)
-#   dir "high" → a HIGHER value means MORE need (e.g. נפשות, הוצאות, ילדים)
-NEED_FACTORS = [
-    {"key": "money",    "label": "מצוקה כלכלית (פנוי לנפש)", "field": "per_soul",         "dir": "low",  "kind": "money"},
-    {"key": "souls",    "label": "גודל משפחה (נפשות)",        "field": "souls",            "dir": "high", "kind": "int"},
-    {"key": "recency",  "label": "ותק (ימים מאז חלוקה)",      "field": "days_since",       "dir": "high", "kind": "int"},
-    {"key": "income",   "label": "הכנסות נמוכות",             "field": "income",           "dir": "low",  "kind": "money"},
-    {"key": "housing",  "label": "הוצאות דיור",               "field": "housing_expenses", "dir": "high", "kind": "money"},
-    {"key": "medical",  "label": "הוצאות רפואיות",            "field": "medical_expenses", "dir": "high", "kind": "money"},
-]
-# NOTE: "מספר ילדים" was intentionally NOT made a separate factor — household
-# size is already captured by נפשות (souls), so weighting both double-counts it.
-
-# Default weights (percent, sum = 100). The original three factors keep their
-# historical balance; the added financial factors default to 0 so existing
-# rankings are unchanged until the user gives them weight in the Settings tab.
-DEFAULT_NEED_WEIGHTS = {
-    "money": 34.0, "souls": 33.0, "recency": 33.0,
-    "income": 0.0, "housing": 0.0, "medical": 0.0,
-}
-
-# Priority codes that participate in the one-time priority distribution. Code 3
-# = first priority, code 2 = second. Everything else (1/0/none/חובת בירור) is
-# kept as data but excluded from the auto-distribution.
-PRIORITY_TIERS = (3, 2)
-
-
-def _need_num(val, kind):
-    """Extract a number from a recipient field for scoring. kind 'money' tolerates
-    currency symbols, commas and spaces ('5,000 ₪' → 5000.0). Returns None when
-    there is no usable number."""
-    if val is None:
-        return None
-    if isinstance(val, (int, float)):
-        return float(val)
-    s = str(val).strip()
-    if not s or s == "None":
-        return None
-    if kind == "money":
-        s = s.replace(",", "")
-        kept = "".join(ch for ch in s if ch.isdigit() or ch == ".")
-        if kept.count(".") > 1:                       # keep only the first dot
-            head, _, tail = kept.partition(".")
-            kept = head + "." + tail.replace(".", "")
-        if not any(ch.isdigit() for ch in kept):
-            return None
-        try:
-            return float(kept)
-        except ValueError:
-            return None
-    try:
-        return float(s)
-    except (ValueError, TypeError):
-        return None
+# The scoring logic itself (factors, parsing, normalization) is pure business
+# logic and lives in scoring.py. This module keeps only the DB side (reading /
+# writing the user-tunable weights) plus re-exports so existing callers and
+# tests keep working via `db.NEED_FACTORS`, `db._need_num`, etc.
+import scoring
+from scoring import (NEED_FACTORS, DEFAULT_NEED_WEIGHTS, PRIORITY_TIERS,
+                     _need_num, _norm)
 
 
 def get_need_weights() -> dict:
@@ -740,65 +713,12 @@ def set_need_weights(weights: dict):
                          ("need_w_" + key, str(w)))
 
 
-def _norm(v, lo, hi):
-    if hi <= lo:
-        return 0.5
-    x = (v - lo) / (hi - lo)
-    return 0.0 if x < 0 else 1.0 if x > 1 else x
-
-
 def _annotate_need_scores(rows, weights: dict = None):
-    """Add 'need_score' (0–100) to each row, normalized within `rows`. Every
-    factor in NEED_FACTORS with a positive weight contributes its (normalized)
-    share; missing data → that component is neutral (0.5) so it neither helps nor
-    hurts. `weights` defaults to the user-configured weights from settings."""
+    """Thin wrapper over scoring.annotate_need_scores — fills in the
+    user-configured weights from settings when none are given."""
     if weights is None:
         weights = get_need_weights()
-    active = [f for f in NEED_FACTORS if weights.get(f["key"], 0) > 0]
-    total_w = sum(weights.get(f["key"], 0) for f in active)
-    # Nothing weighted → fall back to defaults so the list still ranks sensibly.
-    if total_w <= 0:
-        weights = DEFAULT_NEED_WEIGHTS
-        active = [f for f in NEED_FACTORS if weights.get(f["key"], 0) > 0]
-        total_w = sum(weights.get(f["key"], 0) for f in active)
-
-    # Pre-compute each active factor's min/max for in-list normalization. For a
-    # 'low' factor (less = needier) only positive values count, so an empty field
-    # stays neutral instead of looking like the neediest.
-    ranges = {}
-    for f in active:
-        vals = []
-        for r in rows:
-            v = _need_num(r.get(f["field"]), f["kind"])
-            if v is None or (f["dir"] == "low" and v <= 0):
-                continue
-            vals.append(v)
-        ranges[f["key"]] = (min(vals), max(vals)) if vals else (0.0, 0.0)
-
-    for r in rows:
-        acc = 0.0
-        parts = []   # per-factor breakdown for the "why this score" view
-        for f in active:
-            v = _need_num(r.get(f["field"]), f["kind"])
-            missing = v is None or (f["dir"] == "low" and v <= 0)
-            if missing:
-                comp = 0.5                       # missing → neutral
-            else:
-                lo, hi = ranges[f["key"]]
-                comp = _norm(v, lo, hi)
-                if f["dir"] == "low":
-                    comp = 1.0 - comp
-            w = weights.get(f["key"], 0)
-            acc += w * comp
-            parts.append({
-                "label": f["label"],
-                "value": "—" if missing else r.get(f["field"]),
-                "weight_pct": round(100 * w / total_w),
-                "points": round(100 * w * comp / total_w, 1),
-            })
-        r["need_score"] = round(100 * acc / total_w, 1)
-        r["_score_parts"] = parts
-    return rows
+    return scoring.annotate_need_scores(rows, weights)
 
 
 def get_one_time_list(area_filter: str = "הכל"):
@@ -851,18 +771,38 @@ def compute_suggested_n(total_products: int) -> tuple[int, int]:
 # ─── Distributions (history) ─────────────────────────────────────────────────
 
 def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
-                           quantity, distributor: str):
-    """Add many distributions at once and update recipients' last/next distribution."""
+                           quantity, distributor: str,
+                           dist_name: str = "", general_note: str = ""):
+    """Add many distributions at once and update recipients' last/next distribution.
+
+    Also records ONE batch row (the distribution event) that the "חלוקות" tab
+    lists — capturing the shared header, the multi-product breakdown (carried in
+    `what_dist`), and a single general note for the whole distribution. Each
+    per-recipient row links back to the batch via batch_id. Returns the batch id."""
+    souls_total = 0
+    for rec in records:
+        try:
+            souls_total += int(rec.get("souls", 0) or 0)
+        except (ValueError, TypeError):
+            pass
     with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO dist_batches "
+            "(dist_name, dist_date, products, quantity, distributor, general_note, "
+            " recipient_count, souls_total) VALUES (?,?,?,?,?,?,?,?)",
+            (dist_name or "", dist_date, what_dist, quantity or 0, distributor or "",
+             general_note or "", len(records), souls_total)
+        )
+        batch_id = cur.lastrowid
         for rec in records:
             conn.execute(
                 "INSERT INTO distributions "
-                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
+                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (rec.get("id"), rec.get("full_name", ""), dist_date,
                  rec.get("area", ""), rec.get("souls", 0),
                  what_dist, quantity, distributor,
-                 rec.get("notes", ""))
+                 rec.get("notes", ""), batch_id)
             )
             freq = rec.get("frequency", "")
             nw = "" if freq == "חד-פעמי" else calculate_next_dist(dist_date, freq).isoformat()
@@ -872,6 +812,36 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
                 "UPDATE recipients SET last_distribution=?, next_distribution=?, weekly_status='' WHERE id=?",
                 (dist_date, nw, rec.get("id"))
             )
+    return batch_id
+
+
+def get_distribution_batches(limit: int = 500):
+    """Every distribution event (batch), newest first — one row per distribution
+    for the 'חלוקות' tab."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM dist_batches ORDER BY dist_date DESC, id DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_batch_recipients(batch_id: int):
+    """The per-recipient rows recorded under one batch (who received)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM distributions WHERE batch_id=? ORDER BY recipient_name COLLATE NOCASE",
+            (batch_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_batch(batch_id: int):
+    """Delete a distribution batch AND its per-recipient history rows. Does NOT
+    roll back recipients' last/next distribution dates (kept as recorded)."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM distributions WHERE batch_id=?", (batch_id,))
+        conn.execute("DELETE FROM dist_batches WHERE id=?", (batch_id,))
 
 
 def get_distributions(recipient_name: str = None, limit: int = 1000):

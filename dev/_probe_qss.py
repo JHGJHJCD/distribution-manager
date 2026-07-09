@@ -2,7 +2,7 @@
 (incl. editable combos + spinboxes), (2) QTextEdit empty-cursor side in RTL,
 (3) table AlignAbsolute fix works end-to-end through the real tabs."""
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 from PyQt6.QtWidgets import (QApplication, QLineEdit, QTextEdit, QComboBox,
                              QSpinBox)
 from PyQt6.QtCore import Qt

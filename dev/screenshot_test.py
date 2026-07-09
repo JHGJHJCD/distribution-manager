@@ -3,7 +3,7 @@
 מריץ על DB האמיתי (קריאה בלבד — אין שמירה).
 """
 import sys, os, time
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QTimer, Qt

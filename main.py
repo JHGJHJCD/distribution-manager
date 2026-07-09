@@ -24,6 +24,7 @@ from tabs.recipients import RecipientsTab
 from tabs.group_update import GroupUpdateTab
 from tabs.one_time import OneTimeTab
 from tabs.search import SearchTab
+from tabs.distributions import DistributionsTab
 from tabs.settings import SettingsTab, _UpdateWorker
 
 from version import APP_VERSION
@@ -405,6 +406,7 @@ class MainWindow(QMainWindow):
         self.recipients_tab = RecipientsTab(self)
         self.one_time_tab   = OneTimeTab(self)
         self.search_tab     = SearchTab(self)
+        self.distributions_tab = DistributionsTab(self)
         self.settings_tab   = SettingsTab(self)
         # 'מעקב חלוקות' and 'בדיקת נתונים' are no longer permanent tabs — they open
         # on demand from a button ('כל החלוקות' in חיפוש מהיר / 'בדיקת כפילויות'
@@ -417,6 +419,7 @@ class MainWindow(QMainWindow):
             (self.recipients_tab, "מקבלים",        "recipients"),
             (self.one_time_tab,   "חד פעמי",       "one_time"),
             (self.search_tab,     "חיפוש מהיר",    "search"),
+            (self.distributions_tab, "חלוקות",     "distributions"),
             (self.settings_tab,   "הגדרות",        "settings"),
         ]
         for widget, label, key in tab_specs:

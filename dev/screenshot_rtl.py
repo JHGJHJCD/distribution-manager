@@ -1,7 +1,7 @@
 """RTL/readability audit shots — names files by the tab's objectName so the
 mapping is unambiguous, and focuses a text field to reveal cursor position."""
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QTimer, Qt
@@ -46,7 +46,7 @@ def go():
     # reveal cursor: focus the first editable text field on this tab
     if key == "tab_dist":
         try:
-            le = win.group_tab.what_input
+            le = win.group_tab.search_input
             le.setFocus(); le.setText("");
         except Exception:
             pass

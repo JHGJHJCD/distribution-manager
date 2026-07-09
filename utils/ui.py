@@ -154,6 +154,53 @@ def line_icon(name: str, size: int = 18, color: str = "#475569") -> QPixmap:
     elif name == "lock":
         p.drawRoundedRect(R(0.28, 0.44, 0.44, 0.38), 0.05 * S, 0.05 * S)
         p.drawArc(R(0.34, 0.20, 0.32, 0.40), 0, 180 * 16)
+    elif name in ("download", "export"):
+        L(0.50, 0.16, 0.50, 0.58)
+        p.drawPolyline([QPointF(0.36 * S, 0.44 * S), QPointF(0.50 * S, 0.60 * S),
+                        QPointF(0.64 * S, 0.44 * S)])
+        p.drawPolyline([QPointF(0.22 * S, 0.72 * S), QPointF(0.22 * S, 0.82 * S),
+                        QPointF(0.78 * S, 0.82 * S), QPointF(0.78 * S, 0.72 * S)])
+    elif name in ("upload", "import"):
+        L(0.50, 0.60, 0.50, 0.18)
+        p.drawPolyline([QPointF(0.36 * S, 0.32 * S), QPointF(0.50 * S, 0.18 * S),
+                        QPointF(0.64 * S, 0.32 * S)])
+        p.drawPolyline([QPointF(0.22 * S, 0.72 * S), QPointF(0.22 * S, 0.82 * S),
+                        QPointF(0.78 * S, 0.82 * S), QPointF(0.78 * S, 0.72 * S)])
+    elif name == "print":
+        p.drawPolyline([QPointF(0.30 * S, 0.34 * S), QPointF(0.30 * S, 0.16 * S),
+                        QPointF(0.70 * S, 0.16 * S), QPointF(0.70 * S, 0.34 * S)])
+        p.drawRoundedRect(R(0.18, 0.34, 0.64, 0.30), 0.05 * S, 0.05 * S)
+        p.drawRect(R(0.30, 0.60, 0.40, 0.24))
+        p.drawEllipse(R(0.70, 0.42, 0.05, 0.05))
+    elif name == "send":
+        p.drawPolyline([QPointF(0.84 * S, 0.16 * S), QPointF(0.16 * S, 0.46 * S),
+                        QPointF(0.46 * S, 0.56 * S), QPointF(0.84 * S, 0.16 * S)])
+        p.drawPolyline([QPointF(0.46 * S, 0.56 * S), QPointF(0.46 * S, 0.82 * S),
+                        QPointF(0.60 * S, 0.64 * S)])
+    elif name in ("plus", "add"):
+        L(0.50, 0.22, 0.50, 0.78); L(0.22, 0.50, 0.78, 0.50)
+    elif name in ("doc", "file"):
+        p.drawPolyline([QPointF(0.28 * S, 0.14 * S), QPointF(0.60 * S, 0.14 * S),
+                        QPointF(0.74 * S, 0.30 * S), QPointF(0.74 * S, 0.86 * S),
+                        QPointF(0.28 * S, 0.86 * S), QPointF(0.28 * S, 0.14 * S)])
+        p.drawPolyline([QPointF(0.60 * S, 0.14 * S), QPointF(0.60 * S, 0.30 * S),
+                        QPointF(0.74 * S, 0.30 * S)])
+        L(0.38, 0.50, 0.64, 0.50); L(0.38, 0.64, 0.58, 0.64)
+    elif name in ("box", "package", "products"):
+        p.drawPolyline([QPointF(0.50 * S, 0.14 * S), QPointF(0.82 * S, 0.32 * S),
+                        QPointF(0.82 * S, 0.68 * S), QPointF(0.50 * S, 0.86 * S),
+                        QPointF(0.18 * S, 0.68 * S), QPointF(0.18 * S, 0.32 * S),
+                        QPointF(0.50 * S, 0.14 * S)])
+        p.drawPolyline([QPointF(0.18 * S, 0.32 * S), QPointF(0.50 * S, 0.50 * S),
+                        QPointF(0.82 * S, 0.32 * S)])
+        L(0.50, 0.50, 0.50, 0.86)
+    elif name in ("trash", "delete"):
+        L(0.22, 0.28, 0.78, 0.28)
+        p.drawPolyline([QPointF(0.40 * S, 0.28 * S), QPointF(0.40 * S, 0.20 * S),
+                        QPointF(0.60 * S, 0.20 * S), QPointF(0.60 * S, 0.28 * S)])
+        p.drawPolyline([QPointF(0.30 * S, 0.28 * S), QPointF(0.34 * S, 0.82 * S),
+                        QPointF(0.66 * S, 0.82 * S), QPointF(0.70 * S, 0.28 * S)])
+        L(0.44, 0.40, 0.45, 0.72); L(0.56, 0.40, 0.55, 0.72)
     else:
         p.drawEllipse(R(0.2, 0.2, 0.6, 0.6))
     p.end()

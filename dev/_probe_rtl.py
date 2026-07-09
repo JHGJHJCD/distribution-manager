@@ -1,7 +1,7 @@
 """Runtime probe: why does the one-time table render names visually-left while
 the dist table renders them visually-right, given identical AlignRight code?"""
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 import database as db

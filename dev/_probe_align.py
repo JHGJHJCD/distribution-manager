@@ -2,7 +2,7 @@
 with and without AlignAbsolute? And where does the cursor sit in an empty
 QLineEdit in an RTL app, with and without explicit alignment?"""
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 from PyQt6.QtWidgets import QApplication, QTableWidget, QTableWidgetItem, QLineEdit
 from PyQt6.QtCore import Qt
 from styles import EXTRA_QSS

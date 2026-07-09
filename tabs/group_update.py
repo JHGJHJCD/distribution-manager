@@ -4,19 +4,20 @@ import tempfile
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QLineEdit,
-    QSpinBox, QMessageBox, QAbstractItemView, QFileDialog
+    QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
+    QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor, QFont, QIcon
 from datetime import date
-from widgets import DateEdit
+from widgets import DateEdit, ProductsEditor
 import database as db
 from utils.backup import auto_backup_async
 from utils.excel_utils import (export_distribution_to_excel, export_full_distribution_to_excel,
                                export_volunteer_checklist_to_excel, import_volunteer_checklist)
 from utils.print_view import print_distribution_list
 from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
-                      enable_touch_scroll)
+                      enable_touch_scroll, search_icon, line_icon)
 from utils import email_utils
 
 
@@ -43,6 +44,118 @@ _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 _RESERVE_BG, _RESERVE_FG = "#ede7f6", "#5e35b1"
 _SMALL_BTN = "font-size:11px; min-height:24px; min-width:0; padding:3px 12px;"
 
+# Glossy "glass" select-all / clear-all buttons (green = select, red = clear).
+_GLASS_GREEN_BTN = (
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+    " stop:0 #34d399, stop:0.5 #10b981, stop:1 #059669);"
+    " color:white; font-weight:800; font-size:12px; border:none;"
+    " border-radius:9px; padding:5px 16px;}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+    " stop:0 #6ee7b7, stop:0.5 #34d399, stop:1 #10b981);}"
+    "QPushButton:pressed{background:#047857; padding-top:6px;}")
+_GLASS_RED_BTN = (
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+    " stop:0 #f87171, stop:0.5 #ef4444, stop:1 #dc2626);"
+    " color:white; font-weight:800; font-size:12px; border:none;"
+    " border-radius:9px; padding:5px 16px;}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+    " stop:0 #fca5a5, stop:0.5 #f87171, stop:1 #ef4444);}"
+    "QPushButton:pressed{background:#b91c1c; padding-top:6px;}")
+
+# ── 2026 redesign palette + reusable button styles (visual only) ─────────────
+_BG          = "#f5f7fb"
+_CARD_QSS    = ("QFrame#ui-card{background:#ffffff; border:1px solid #e6eaf2;"
+                " border-radius:12px;}")
+_BTN_PRIMARY = (
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2b95ef,stop:1 #1565c0);"
+    " color:#fff; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
+    " padding:0 18px; min-height:38px;}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #3ba0f5,stop:1 #1976d2);}"
+    "QPushButton:pressed{background:#0d47a1;}")
+_BTN_SUCCESS = (
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #34d399,stop:1 #059669);"
+    " color:#fff; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
+    " padding:0 18px; min-height:38px;}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #6ee7b7,stop:1 #10b981);}"
+    "QPushButton:pressed{background:#047857;}")
+_BTN_DANGER  = (
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f87171,stop:1 #dc2626);"
+    " color:#fff; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
+    " padding:0 18px; min-height:38px;}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #fca5a5,stop:1 #ef4444);}"
+    "QPushButton:pressed{background:#b91c1c;}")
+_BTN_GHOST   = (
+    "QPushButton{background:#ffffff; color:#1f2937; border:1px solid #d7dfea;"
+    " border-radius:9px; font-weight:700; font-size:13.5px; padding:0 16px; min-height:38px;}"
+    "QPushButton:hover{background:#f8fafc; border-color:#c2cee0;}"
+    "QPushButton:pressed{background:#eef2f8;}")
+_CHIP_QSS    = ("QLabel{background:#eef2f8; color:#475569; border:none; border-radius:16px;"
+                " padding:5px 13px; font-size:12.5px; font-weight:700;}")
+_CHIP_GREEN  = ("QLabel{background:#e6f6ef; color:#059669; border:none; border-radius:16px;"
+                " padding:5px 13px; font-size:12.5px; font-weight:700;}")
+
+
+def _card_shadow(widget):
+    """Subtle elevation — a soft outer shadow drawn by a wrapper, NOT a
+    QGraphicsDropShadowEffect (that effect breaks a card's minimum-height
+    negotiation inside a flex layout and squeezes the content). The card's own
+    hairline border plus this shadow read as a lifted card."""
+    widget.setStyleSheet(widget.styleSheet() +
+                         " QFrame#ui-card, QFrame#bottom-bar{}")  # no-op hook
+    # Real soft shadow via a graphics effect is avoided; the hairline border on
+    # the card already defines it on the grey surface.
+
+
+def _make_card(title: str, icon_name: str = None, hint: str = None, shadow: bool = True):
+    """A white rounded card with a header row. Returns (frame, content_layout)
+    where content_layout is a QVBoxLayout to add the card's body into."""
+    frame = QFrame()
+    frame.setObjectName("ui-card")
+    frame.setStyleSheet(_CARD_QSS)
+    # Fixed height (= content) so a card never balloons to fill spare space and
+    # open big internal gaps; spare vertical space goes to the list instead.
+    frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    if shadow:
+        _card_shadow(frame)
+    outer = QVBoxLayout(frame)
+    outer.setContentsMargins(18, 9, 18, 9)
+    outer.setSpacing(7)
+
+    head = QHBoxLayout()
+    head.setSpacing(9)
+    if icon_name:
+        ic = QLabel()
+        ic.setPixmap(line_icon(icon_name, 20, "#1e78d6"))
+        ic.setStyleSheet("background:transparent; border:none;")
+        head.addWidget(ic)
+    tl = QLabel(title)
+    tl.setStyleSheet("color:#0d3b73; font-size:15px; font-weight:800; background:transparent; border:none;")
+    head.addWidget(tl)
+    if hint:
+        hl = QLabel(hint)
+        hl.setStyleSheet("color:#94a3b8; font-size:12px; background:transparent; border:none;")
+        head.addStretch()
+        head.addWidget(hl)
+    else:
+        head.addStretch()
+    outer.addLayout(head)
+    return frame, outer
+
+
+def _field(label_text: str, widget, maxw: int = None):
+    """Label-over-field column (returns a QVBoxLayout) with a uniform field height."""
+    box = QVBoxLayout()
+    box.setSpacing(5)
+    lab = QLabel(label_text)
+    lab.setStyleSheet("color:#64748b; font-size:12.5px; font-weight:700; background:transparent; border:none;")
+    box.addWidget(lab)
+    widget.setMinimumHeight(38)
+    widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    if maxw:
+        widget.setMaximumWidth(maxw)
+    box.addWidget(widget)
+    return box
+
 
 def _fdate(s: str) -> str:
     if s and len(s) >= 10 and s[4] == '-':
@@ -64,7 +177,10 @@ class GroupUpdateTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_win = parent
-        self._rows_data = []
+        self._rows_data = []             # full weekly + one-time list (unfiltered)
+        self._checked_ids: set = set()   # who is currently ticked (survives search)
+        self._seen_ids: set = set()      # ids already shown (for pre-checking new picks)
+        self._search_text = ""           # quick-search filter over the list
         self._extra_ids: set = set()     # one-time picks added from the one-time tab
         self._reserve_ids: set = set()   # which of those are reserves
         self._load_extras()
@@ -186,30 +302,35 @@ class GroupUpdateTab(QWidget):
         return added
 
     def _build_ui(self):
-        lay = QVBoxLayout(self)
-        lay.setSpacing(8)
-        lay.setContentsMargins(10, 10, 10, 10)
+        # ── 2026 redesign: cards on a soft grey surface + a sticky bottom bar.
+        #    Layout/visuals only — every widget, signal and method is unchanged.
+        self.setObjectName("group-tab")
+        self.setStyleSheet(f"QWidget#group-tab{{background:{_BG};}}")
 
-        title = QLabel("חלוקה ורישום — רשימת החלוקה")
-        title.setObjectName("title")
-        lay.addWidget(title)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # Distribution details — panel card (needed to record a distribution)
-        details_card = QWidget()
-        details_card.setObjectName("details-card")
-        details_card.setStyleSheet(
-            "QWidget#details-card { background:#ffffff; border:1px solid #e5e7eb; border-radius:8px; }"
-        )
-        details_row = QHBoxLayout(details_card)
-        details_row.setSpacing(14)
-        details_row.setContentsMargins(12, 8, 12, 8)
+        # The detail/product/volunteer cards live in their own scroll region (so
+        # a long product list never squeezes anything else); the recipient list
+        # gets the remaining vertical space (stretch=1) with its own internal
+        # scroll. The bottom bar stays pinned below everything.
+        surface = QVBoxLayout()
+        surface.setContentsMargins(20, 16, 20, 6)
+        surface.setSpacing(10)
 
-        def _lbl(text):
-            l = QLabel(text)
-            l.setStyleSheet("font-weight:700; color:#374151; background:transparent; border:none;")
-            return l
+        top_content = QWidget()
+        top_content.setStyleSheet("background:transparent;")
+        top_col = QVBoxLayout(top_content)
+        top_col.setContentsMargins(0, 0, 0, 0)
+        top_col.setSpacing(10)
 
-        details_row.addWidget(_lbl("שם החלוקה:"))
+        # ── Card 1: distribution details ──────────────────────────────────────
+        card1, c1 = _make_card("פרטי החלוקה", "doc")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(8)
+
         self.name_input = QComboBox()
         self.name_input.setEditable(True)
         self.name_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -219,30 +340,11 @@ class GroupUpdateTab(QWidget):
         self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה. אפשר לבחור משמות קודמים.")
         self.name_input.addItems(self._load_history("dist_names_history"))
         self.name_input.setCurrentText("")
-        details_row.addWidget(self.name_input, 2)
 
-        details_row.addWidget(_lbl("תאריך:"))
         self.date_edit = DateEdit(allow_empty=False)
         self.date_edit.setMinimumWidth(130)
         self.date_edit.setToolTip("תאריך ביצוע החלוקה — ימי רביעי מסומנים בכחול")
-        details_row.addWidget(self.date_edit)
 
-        details_row.addWidget(_lbl("מה חולק:"))
-        self.what_input = QLineEdit()
-        self.what_input.setPlaceholderText("סל מזון, עוף, ...")
-        self.what_input.setAlignment(ALIGN_RIGHT)
-        self.what_input.setMinimumWidth(150)
-        self.what_input.setToolTip("תיאור המוצר שחולק")
-        details_row.addWidget(self.what_input, 2)
-
-        details_row.addWidget(_lbl("כמות:"))
-        self.qty_spin = QSpinBox()
-        self.qty_spin.setRange(0, 9999)
-        self.qty_spin.setMinimumWidth(70)
-        self.qty_spin.setToolTip("כמות יחידות שחולקו")
-        details_row.addWidget(self.qty_spin)
-
-        details_row.addWidget(_lbl("מחלק:"))
         self.dist_input = QComboBox()
         self.dist_input.setEditable(True)
         self.dist_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -252,163 +354,216 @@ class GroupUpdateTab(QWidget):
         self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
         self.dist_input.addItems(self._load_history("distributors_history"))
         self.dist_input.setCurrentText(db.get_setting("last_distributor") or "")
-        details_row.addWidget(self.dist_input, 1)
 
-        lay.addWidget(details_card)
+        self.note_input = QLineEdit()
+        self.note_input.setPlaceholderText("הערה כללית שתישמר עם החלוקה (לא חובה)")
+        self.note_input.setAlignment(ALIGN_RIGHT)
+        self.note_input.setToolTip("הערה על כל החלוקה — נשמרת בלשונית 'חלוקות' ומצורפת לכל מקבל")
 
-        # Volunteer card — send the current list to a volunteer to fill by email
-        # (they never touch the app), and import their filled results back.
-        vol_card = QWidget()
-        vol_card.setObjectName("volunteer-card")
-        vol_card.setStyleSheet(
-            "QWidget#volunteer-card { background:#f5f3ff; border:1px solid #ddd6fe; border-radius:8px; }"
-        )
-        vol_row = QHBoxLayout(vol_card)
-        vol_row.setSpacing(10)
-        vol_row.setContentsMargins(12, 7, 12, 7)
+        grid.addLayout(_field("שם החלוקה", self.name_input), 0, 0)
+        grid.addLayout(_field("תאריך", self.date_edit), 0, 1)
+        grid.addLayout(_field("מחלק", self.dist_input), 0, 2)
+        grid.addLayout(_field("הערה כללית לחלוקה", self.note_input), 1, 0, 1, 3)
+        grid.setColumnStretch(0, 2)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+        c1.addLayout(grid)
+        top_col.addWidget(card1)
 
-        def _vlbl(text):
-            l = QLabel(text)
-            l.setStyleSheet("font-weight:700; color:#5b21b6; background:transparent; border:none;")
-            return l
+        # ── Card 2: products ──────────────────────────────────────────────────
+        card2, c2 = _make_card("מה מחלקים", "box", hint="הכמות היא לכל אדם")
+        self.products = ProductsEditor()
+        self.products.setToolTip("רשום כל מוצר שחולק ואת הכמות שכל אדם מקבל ממנו. "
+                                 "אפשר להוסיף כמה מוצרים לאותה חלוקה.")
+        c2.addWidget(self.products)
+        top_col.addWidget(card2)
 
-        vol_row.addWidget(_vlbl("שליחה למתנדב:"))
+        # ── Card 3: volunteer messaging ───────────────────────────────────────
+        card3, c3 = _make_card("שליחה למתנדב", "mail")
+        vol_row = QHBoxLayout()
+        vol_row.setSpacing(12)
         self.volunteer_email_input = QComboBox()
         self.volunteer_email_input.setEditable(True)
         self.volunteer_email_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.volunteer_email_input.setMinimumWidth(150)
-        self.volunteer_email_input.setMaximumWidth(230)
+        self.volunteer_email_input.setMaximumWidth(300)
         self.volunteer_email_input.lineEdit().setPlaceholderText("אימייל המתנדב")
         self.volunteer_email_input.lineEdit().setAlignment(ALIGN_RIGHT)
         self.volunteer_email_input.setToolTip("כתובת המייל של המתנדב שימלא את הרשימה")
         self.volunteer_email_input.addItems(self._load_history("volunteer_emails_history"))
         self.volunteer_email_input.setCurrentText("")
-        vol_row.addWidget(self.volunteer_email_input)
+        vol_row.addLayout(_field("אימייל המתנדב", self.volunteer_email_input, maxw=300))
 
-        btn_send_vol = QPushButton("שלח למתנדב למילוי")
+        btn_send_vol = QPushButton(" שלח למתנדב")
         btn_send_vol.setObjectName("primary")
-        btn_send_vol.setStyleSheet(_SMALL_BTN)
+        btn_send_vol.setStyleSheet(_BTN_PRIMARY)
+        btn_send_vol.setIcon(QIcon(line_icon("send", 18, "#ffffff")))
+        btn_send_vol.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_send_vol.setToolTip("שולח למתנדב במייל קובץ מעוצב עם הרשימה, למילוי בלי לגעת בתוכנה")
         btn_send_vol.clicked.connect(self._send_to_volunteer)
-        vol_row.addWidget(btn_send_vol)
+        vol_row.addWidget(btn_send_vol, 0, Qt.AlignmentFlag.AlignBottom)
 
-        btn_import_vol = QPushButton("ייבוא ידני מקובץ")
+        btn_import_vol = QPushButton(" יבוא ידני")
         btn_import_vol.setObjectName("neutral")
-        btn_import_vol.setStyleSheet(_SMALL_BTN)
+        btn_import_vol.setStyleSheet(_BTN_GHOST)
+        btn_import_vol.setIcon(QIcon(line_icon("upload", 18, "#475569")))
+        btn_import_vol.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_import_vol.setToolTip("בדרך כלל לא צריך — תוצאות שהמתנדב שולח חזרה במייל נקלטות אוטומטית. "
                                   "כפתור זה נועד לייבוא ידני של קובץ Excel שהתקבל בדרך אחרת.")
         btn_import_vol.clicked.connect(self._import_volunteer_results)
-        vol_row.addWidget(btn_import_vol)
-
-        auto_hint = QLabel("↻ תוצאות שנשלחות חזרה במייל נקלטות אוטומטית")
-        auto_hint.setStyleSheet("color:#7c3aed; font-size:11px; background:transparent; border:none;")
-        vol_row.addWidget(auto_hint)
+        vol_row.addWidget(btn_import_vol, 0, Qt.AlignmentFlag.AlignBottom)
         vol_row.addStretch()
+        c3.addLayout(vol_row)
 
-        lay.addWidget(vol_card)
+        auto_hint = QLabel("↻ תוצאות שהמתנדב שולח חזרה במייל נקלטות אוטומטית")
+        auto_hint.setStyleSheet("color:#7c3aed; font-size:12px; background:transparent; border:none;")
+        c3.addWidget(auto_hint)
+        top_col.addWidget(card3)
 
-        # Filter row — scope toggle + area filter
-        filter_row = QHBoxLayout()
-        filter_row.addWidget(_lbl("הצג:"))
-        self.scope_combo = QComboBox()
-        self.scope_combo.addItems([SCOPE_WEEK, SCOPE_ALL])
-        self.scope_combo.setToolTip("חלוקת השבוע = מי שאמור לקבל השבוע · כל הקבועים = כל המקבלים הקבועים")
-        self.scope_combo.currentTextChanged.connect(self.refresh)
-        filter_row.addWidget(self.scope_combo)
+        # The three detail cards scroll within their own bounded region — so a
+        # long product list (or a short window) never squeezes the recipient
+        # list or bottom bar out of view.
+        top_scroll = QScrollArea()
+        top_scroll.setWidgetResizable(True)
+        top_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        top_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        top_scroll.viewport().setStyleSheet("background:transparent;")
+        top_scroll.setWidget(top_content)
+        surface.addWidget(top_scroll)
 
-        filter_row.addWidget(_lbl("אזור:"))
-        self.area_combo = QComboBox()
-        self.area_combo.currentTextChanged.connect(self.refresh)
-        filter_row.addWidget(self.area_combo)
-        self._reload_areas()
-
-        # legend
-        for color, text in [(SELECTED_FG, "● חד-פעמי"), (_RESERVE_FG, "● רזרבה")]:
-            l = QLabel(text); l.setStyleSheet(f"color:{color};")
-            filter_row.addWidget(l)
-
-        filter_row.addStretch()
-        self.lbl_total = QLabel("סה\"כ ברשימה: 0")
-        self.lbl_checked = QLabel("סומנו: 0")
-        self.lbl_souls = QLabel("נפשות: 0")
-        for lbl in [self.lbl_total, self.lbl_checked, self.lbl_souls]:
-            lbl.setObjectName("subtitle")
-            filter_row.addWidget(lbl)
+        # ── Toolbar over the recipient list ───────────────────────────────────
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(12)
+        self.search_input = QLineEdit()
+        self.search_input.setMinimumHeight(42)
+        self.search_input.setMaximumWidth(520)
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setPlaceholderText("חיפוש מהיר ברשימה: שם, טלפון, אזור, ת״ז...")
+        self.search_input.setAlignment(ALIGN_RIGHT)
+        self.search_input.addAction(search_icon(20), QLineEdit.ActionPosition.LeadingPosition)
+        self.search_input.setStyleSheet(
+            "QLineEdit{background:#ffffff; border:1px solid #d7dfea; border-radius:11px;"
+            " padding:0 14px; font-size:14px;} QLineEdit:focus{border-color:#1e78d6;}")
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.timeout.connect(self._apply_search)
+        self.search_input.textChanged.connect(lambda: self._search_timer.start(180))
+        toolbar.addWidget(self.search_input, 1)
 
         btn_check_all = QPushButton("בחר הכל")
-        btn_check_all.setObjectName("neutral")
-        btn_check_all.setStyleSheet(_SMALL_BTN)
+        btn_check_all.setStyleSheet(_BTN_SUCCESS)
+        btn_check_all.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_check_all.clicked.connect(self._check_all)
-        filter_row.addWidget(btn_check_all)
+        toolbar.addWidget(btn_check_all)
 
         btn_uncheck_all = QPushButton("בטל הכל")
-        btn_uncheck_all.setObjectName("neutral")
-        btn_uncheck_all.setStyleSheet(_SMALL_BTN)
+        btn_uncheck_all.setStyleSheet(_BTN_DANGER)
+        btn_uncheck_all.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_uncheck_all.clicked.connect(self._uncheck_all)
-        filter_row.addWidget(btn_uncheck_all)
+        toolbar.addWidget(btn_uncheck_all)
 
-        lay.addLayout(filter_row)
+        toolbar.addStretch()
+        self.lbl_checked = QLabel("סומנו: 0")
+        self.lbl_total = QLabel("סה\"כ ברשימה: 0")
+        self.lbl_souls = QLabel("נפשות: 0")
+        self.lbl_checked.setStyleSheet(_CHIP_GREEN)
+        self.lbl_total.setStyleSheet(_CHIP_QSS)
+        self.lbl_souls.setStyleSheet(_CHIP_QSS)
+        for lbl in (self.lbl_checked, self.lbl_total, self.lbl_souls):
+            toolbar.addWidget(lbl)
+        surface.addLayout(toolbar)
 
-        # Table
+        # ── Recipient list (tall card, sticky header, internal scroll) ────────
+        list_card = QFrame()
+        list_card.setObjectName("ui-card")
+        list_card.setStyleSheet(_CARD_QSS)
+        lc = QVBoxLayout(list_card)
+        lc.setContentsMargins(1, 1, 1, 1)
+        lc.setSpacing(0)
+
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
         self.table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setShowGrid(False)
+        self.table.setStyleSheet(
+            "QTableWidget{background:#ffffff; border:none; border-radius:12px; gridline-color:#eef2f7;}"
+            "QHeaderView::section{background:#f4f7fc; color:#64748b; font-weight:700;"
+            " border:none; border-bottom:1px solid #e6eaf2; padding:11px 10px;}"
+            "QTableWidget::item{padding:6px 8px; border-bottom:1px solid #f1f4f9;}"
+            "QTableWidget::item:selected{background:#eaf3ff; color:#0d3b73;}")
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
-        self.table.itemChanged.connect(self._update_counts)
+        self.table.itemChanged.connect(self._on_item_changed)
         enable_touch_scroll(self.table)
-        lay.addWidget(self.table)
+        lc.addWidget(self.table)
         attach_empty_state(self.table, "אין מקבלים להצגה")
+        list_card.setMinimumHeight(160)   # always usable; stretches on tall windows
+        surface.addWidget(list_card, 1)   # stretch → the list is the tallest area
 
-        # Bottom buttons
-        bot = QHBoxLayout()
-        bot.setSpacing(8)
+        root.addLayout(surface, 1)
 
-        btn_save = QPushButton("שמור חלוקה למעקב + ייצוא לאקסל")
+        # ── Sticky bottom action bar ──────────────────────────────────────────
+        bottom_wrap = QWidget()
+        bw = QHBoxLayout(bottom_wrap)
+        bw.setContentsMargins(20, 4, 20, 12)
+        bw.setSpacing(0)
+        bottom_bar = QFrame()
+        bottom_bar.setObjectName("bottom-bar")
+        bottom_bar.setStyleSheet(
+            "QFrame#bottom-bar{background:#ffffff; border:1px solid #e6eaf2; border-radius:14px;}")
+        _card_shadow(bottom_bar)
+        bar = QHBoxLayout(bottom_bar)
+        bar.setContentsMargins(16, 10, 16, 10)
+        bar.setSpacing(12)
+
+        btn_save = QPushButton(" שמור חלוקה")
         btn_save.setObjectName("primary")
-        btn_save.setMinimumHeight(34)
+        btn_save.setStyleSheet(_BTN_PRIMARY)
+        btn_save.setMinimumHeight(46)
+        btn_save.setMinimumWidth(170)
+        btn_save.setIcon(QIcon(line_icon("save", 18, "#ffffff")))
+        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setToolTip("רושם את החלוקה למעקב ומייצא אוטומטית אקסל מלא לתיקיית ההורדות")
         btn_save.clicked.connect(self._save)
-        bot.addWidget(btn_save)
+        bar.addWidget(btn_save)
 
-        btn_export = QPushButton("ייצא ל-Excel (רשימה קצרה)")
+        btn_export = QPushButton(" יצוא לאקסל")
         btn_export.setObjectName("success")
-        btn_export.setStyleSheet(_SMALL_BTN)
+        btn_export.setStyleSheet(_BTN_SUCCESS)
+        btn_export.setMinimumHeight(46)
+        btn_export.setMinimumWidth(150)
+        btn_export.setIcon(QIcon(line_icon("download", 18, "#ffffff")))
+        btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_export.setToolTip("ייצא רשימה בסיסית (המסומנים, או הכל אם אין סימון)")
         btn_export.clicked.connect(self._export_excel)
-        bot.addWidget(btn_export)
+        bar.addWidget(btn_export)
 
-        btn_print = QPushButton("הדפסה")
+        btn_print = QPushButton(" הדפסה")
         btn_print.setObjectName("neutral")
-        btn_print.setStyleSheet(_SMALL_BTN)
+        btn_print.setStyleSheet(_BTN_GHOST)
+        btn_print.setMinimumHeight(46)
+        btn_print.setMinimumWidth(130)
+        btn_print.setIcon(QIcon(line_icon("print", 18, "#475569")))
+        btn_print.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_print.setToolTip("הדפס רשימת חלוקה (A4 לאורך)")
         btn_print.clicked.connect(self._print)
-        bot.addWidget(btn_print)
+        bar.addWidget(btn_print)
 
-        bot.addStretch()
-        lay.addLayout(bot)
-
-    def _reload_areas(self):
-        prev = self.area_combo.currentText() if self.area_combo.count() else "הכל"
-        self.area_combo.blockSignals(True)
-        self.area_combo.clear()
-        self.area_combo.addItem("הכל")
-        for a in db.get_areas():
-            self.area_combo.addItem(a)
-        idx = self.area_combo.findText(prev)
-        self.area_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.area_combo.blockSignals(False)
+        bar.addStretch()
+        bw.addWidget(bottom_bar)
+        root.addWidget(bottom_wrap)
 
     # ── data ───────────────────────────────────────────────────────────────────
-    def _extra_recipients(self, area: str, base_ids: set) -> list:
+    def _extra_recipients(self, base_ids: set) -> list:
         """Fetch the persisted one-time picks from the DB (so they survive
-        restart), area-filtered, excluding any already in the base list."""
+        restart), excluding any already in the base list."""
         out = []
         for rid in self._extra_ids:
             if rid in base_ids:
@@ -416,28 +571,35 @@ class GroupUpdateTab(QWidget):
             rec = db.get_recipient(rid)
             if not rec:
                 continue
-            if area != "הכל" and (rec.get("area") or "") != area:
-                continue
             rec = dict(rec)
             rec["_reserve"] = rid in self._reserve_ids
             out.append(rec)
         return out
 
     def refresh(self):
-        self._reload_areas()
-        area = self.area_combo.currentText() or "הכל"
-        scope = self.scope_combo.currentText() if hasattr(self, "scope_combo") else SCOPE_WEEK
-
-        if scope == SCOPE_ALL:
-            base = [r for r in db.get_all_recipients(status_filter="פעיל")
-                    if (r.get("frequency") or "") not in ("", "חד-פעמי")
-                    and (area == "הכל" or (r.get("area") or "") == area)]
-        else:  # nearest week
-            base = db.get_weekly_list(area_filter=area)
-
+        base = db.get_weekly_list(area_filter="הכל")
         base_ids = {r["id"] for r in base}
-        extras = self._extra_recipients(area, base_ids)
+        extras = self._extra_recipients(base_ids)
         self._rows_data = base + extras
+        live = {r.get("id") for r in self._rows_data}
+        # Newly-appeared one-time picks arrive pre-checked; anyone already seen
+        # keeps whatever tick state the operator left them in.
+        for rid in self._extra_ids:
+            if rid not in self._seen_ids and rid in live:
+                self._checked_ids.add(rid)
+        self._seen_ids = set(live)
+        self._checked_ids &= live      # forget ticks for people no longer listed
+        self._populate()
+
+    def _visible_rows(self):
+        """The list rows currently shown — the whole list, or the quick-search
+        subset when a search term is active (matches any recipient field)."""
+        if not self._search_text:
+            return self._rows_data
+        return db.filter_recipients(self._rows_data, self._search_text, limit=100000)
+
+    def _apply_search(self):
+        self._search_text = self.search_input.text().strip()
         self._populate()
 
     def _row_style(self, rec: dict):
@@ -466,34 +628,23 @@ class GroupUpdateTab(QWidget):
         return bg, fg, freq, _fdate(nd)
 
     def _populate(self):
-        # Preserve the operator's current check marks across a rebuild (refresh
-        # fires on every scope/area change). Otherwise a pick that was unchecked
-        # would be silently re-checked and could be recorded by mistake.
-        prev = {}
-        for r in range(self.table.rowCount()):
-            it = self.table.item(r, 0)
-            if it is not None:
-                prev[it.data(Qt.ItemDataRole.UserRole)] = it.checkState()
-
+        rows = self._visible_rows()
         self.table.blockSignals(True)
         self.table.clearContents()
         self.table.setRowCount(0)
-        self.table.setRowCount(len(self._rows_data))
-        for r, rec in enumerate(self._rows_data):
+        self.table.setRowCount(len(rows))
+        for r, rec in enumerate(rows):
             bg, fg, freq_disp, next_disp = self._row_style(rec)
             rid = rec.get("id")
 
             chk = QTableWidgetItem()
             chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
-            # Keep a row's existing mark if we've seen it before; a freshly-added
-            # one-time pick (not seen yet) arrives PRE-CHECKED, regulars unchecked.
-            if rid in prev:
-                chk.setCheckState(prev[rid])
-            else:
-                chk.setCheckState(Qt.CheckState.Checked if rid in self._extra_ids
-                                  else Qt.CheckState.Unchecked)
+            # Tick state is held in _checked_ids so it survives search filtering
+            # (a checked person hidden by a search stays checked and gets saved).
+            chk.setCheckState(Qt.CheckState.Checked if rid in self._checked_ids
+                              else Qt.CheckState.Unchecked)
             chk.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            chk.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
+            chk.setData(Qt.ItemDataRole.UserRole, rid)
             self.table.setItem(r, 0, chk)
 
             vals = [rec.get("full_name", ""), rec.get("phone1", ""),
@@ -516,53 +667,61 @@ class GroupUpdateTab(QWidget):
         self._update_counts()
         refresh_empty_state(self.table)
 
+    def _on_item_changed(self, item):
+        """Keep _checked_ids in sync when the operator ticks/unticks a row."""
+        if item.column() == 0:
+            rid = item.data(Qt.ItemDataRole.UserRole)
+            if rid is not None:
+                if item.checkState() == Qt.CheckState.Checked:
+                    self._checked_ids.add(rid)
+                else:
+                    self._checked_ids.discard(rid)
+        self._update_counts()
+
     def _update_counts(self):
-        total = self.table.rowCount()
-        checked = 0
+        total = len(self._rows_data)
+        checked = len(self._checked_ids)
         souls = 0
-        for r in range(total):
-            chk = self.table.item(r, 0)
-            if chk and chk.checkState() == Qt.CheckState.Checked:
-                checked += 1
-                souls_item = self.table.item(r, _COL_SOULS)
+        for rec in self._rows_data:
+            if rec.get("id") in self._checked_ids:
                 try:
-                    souls += int(souls_item.text()) if souls_item else 0
-                except ValueError:
+                    souls += int(rec.get("souls", 0) or 0)
+                except (ValueError, TypeError):
                     pass
         self.lbl_total.setText(f"סה\"כ ברשימה: {total}")
         self.lbl_checked.setText(f"סומנו: {checked}")
         self.lbl_souls.setText(f"נפשות: {souls}")
 
     def _check_all(self):
-        self.table.blockSignals(True)
-        for r in range(self.table.rowCount()):
-            chk = self.table.item(r, 0)
-            if chk:
-                chk.setCheckState(Qt.CheckState.Checked)
-        self.table.blockSignals(False)
-        self._update_counts()
+        """Tick every row currently shown (respects an active search)."""
+        for rec in self._visible_rows():
+            rid = rec.get("id")
+            if rid is not None:
+                self._checked_ids.add(rid)
+        self._populate()
 
     def _uncheck_all(self):
-        self.table.blockSignals(True)
-        for r in range(self.table.rowCount()):
-            chk = self.table.item(r, 0)
-            if chk:
-                chk.setCheckState(Qt.CheckState.Unchecked)
-        self.table.blockSignals(False)
-        self._update_counts()
+        for rec in self._visible_rows():
+            self._checked_ids.discard(rec.get("id"))
+        self._populate()
 
     def _get_checked_recipients(self):
-        result = []
+        # Inline-edited notes come from the visible table; checked-but-hidden
+        # rows fall back to their stored notes.
+        note_by_id = {}
         for r in range(self.table.rowCount()):
             chk = self.table.item(r, 0)
-            if chk and chk.checkState() == Qt.CheckState.Checked:
-                rec_id = chk.data(Qt.ItemDataRole.UserRole)
-                rec = next((x for x in self._rows_data if x["id"] == rec_id), None)
-                if rec:
-                    notes_item = self.table.item(r, _COL_NOTES)
-                    rec_copy = dict(rec)
-                    rec_copy["notes"] = notes_item.text() if notes_item else ""
-                    result.append(rec_copy)
+            if chk is not None:
+                note_it = self.table.item(r, _COL_NOTES)
+                note_by_id[chk.data(Qt.ItemDataRole.UserRole)] = note_it.text() if note_it else ""
+        result = []
+        for rec in self._rows_data:
+            rid = rec.get("id")
+            if rid in self._checked_ids:
+                rec_copy = dict(rec)
+                if rid in note_by_id:
+                    rec_copy["notes"] = note_by_id[rid]
+                result.append(rec_copy)
         return result
 
     def _save(self):
@@ -571,21 +730,20 @@ class GroupUpdateTab(QWidget):
             QMessageBox.information(self, "", "לא סומן אף מקבל")
             return
 
-        dist_date   = self.date_edit.get_iso()
-        what        = self.what_input.text().strip()
-        qty         = self.qty_spin.value()
-        distributor = self.dist_input.currentText().strip()
-        dist_name   = self.name_input.currentText().strip()
+        dist_date    = self.date_edit.get_iso()
+        what         = self.products.products_display()
+        qty          = self.products.total_qty()
+        distributor  = self.dist_input.currentText().strip()
+        dist_name    = self.name_input.currentText().strip()
+        general_note = self.note_input.text().strip()
 
         _ERR = "border: 2px solid #dc2626; background-color: #fff5f5;"
         errors = []
-        if not what:
-            self.what_input.setStyleSheet(_ERR)
-            self.what_input.setToolTip("חובה למלא מה חולק")
-            errors.append("מה חולק: שדה חובה")
+        if self.products.is_empty():
+            self.products.setStyleSheet("QLineEdit{" + _ERR + "}")
+            errors.append("מה חולק: יש לרשום לפחות מוצר אחד")
         else:
-            self.what_input.setStyleSheet("")
-            self.what_input.setToolTip("תיאור המוצר שחולק")
+            self.products.setStyleSheet("")
         if not distributor:
             self.dist_input.setStyleSheet(_ERR)
             self.dist_input.setToolTip("חובה למלא שם המחלק")
@@ -597,10 +755,17 @@ class GroupUpdateTab(QWidget):
             QMessageBox.warning(self, "שדות חסרים", "• " + "\n• ".join(errors))
             return
 
+        # A general note is recorded on the batch AND appended to each recipient.
+        if general_note:
+            suffix = f" | הערה כללית: {general_note}"
+            for rec in checked:
+                rec["notes"] = (rec.get("notes") or "") + suffix
+
         export_path = None
         export_err = None
         with busy_cursor():
-            db.bulk_add_distributions(checked, dist_date, what, qty, distributor)
+            db.bulk_add_distributions(checked, dist_date, what, qty, distributor,
+                                      dist_name=dist_name, general_note=general_note)
             auto_backup_async()
             # Merged action: also export a full Excel (of who received) to Downloads.
             try:
@@ -619,6 +784,10 @@ class GroupUpdateTab(QWidget):
         self._extra_ids.clear()
         self._reserve_ids.clear()
         self._persist_extras()
+        # Reset the entry fields + ticks for a clean next distribution.
+        self._checked_ids.clear()
+        self.note_input.clear()
+        self.products.clear()
 
         msg = f"נשמרה חלוקה ל-{len(checked)} מקבלים."
         if export_path:
@@ -662,7 +831,7 @@ class GroupUpdateTab(QWidget):
 
     def _send_to_volunteer(self):
         dist_name   = self.name_input.currentText().strip()
-        what        = self.what_input.text().strip()
+        what        = self.products.products_display()
         distributor = self.dist_input.currentText().strip()
         to_addr     = self.volunteer_email_input.currentText().strip()
 
@@ -670,7 +839,6 @@ class GroupUpdateTab(QWidget):
         errors = []
         for widget, val, label in (
             (self.name_input, dist_name, "שם החלוקה"),
-            (self.what_input, what, "מה חולק"),
             (self.dist_input, distributor, "שם המחלק"),
         ):
             if not val:
@@ -678,6 +846,11 @@ class GroupUpdateTab(QWidget):
                 errors.append(f"{label}: שדה חובה")
             else:
                 widget.setStyleSheet("")
+        if self.products.is_empty():
+            self.products.setStyleSheet("QLineEdit{" + _ERR + "}")
+            errors.append("מה חולק: יש לרשום לפחות מוצר אחד")
+        else:
+            self.products.setStyleSheet("")
         if not to_addr:
             self.volunteer_email_input.setStyleSheet(_ERR)
             errors.append("אימייל מתנדב: שדה חובה")
@@ -708,7 +881,7 @@ class GroupUpdateTab(QWidget):
         Shared by the 'שלח למתנדב' button and the post-print prompt."""
         dist_date_iso = self.date_edit.get_iso()
         dist_date_disp = _fdate(dist_date_iso)
-        qty = self.qty_spin.value()
+        qty = self.products.total_qty()
         try:
             with busy_cursor():
                 # Store the ISO date (not the dd/mm/yyyy display string) so a
@@ -810,7 +983,9 @@ class GroupUpdateTab(QWidget):
             db.bulk_add_distributions(
                 records, meta.get("dist_date") or self.date_edit.get_iso(),
                 meta.get("what") or "", meta.get("qty") or 0,
-                meta.get("distributor") or "")
+                meta.get("distributor") or "",
+                dist_name=meta.get("dist_name") or "",
+                general_note=meta.get("general_note") or "")
             auto_backup_async()
         return len(records), meta, [r.get("id") for r in received]
 
@@ -857,7 +1032,7 @@ class GroupUpdateTab(QWidget):
         # when email is set up and a volunteer address is present (else stay quiet).
         to_addr = self.volunteer_email_input.currentText().strip()
         if email_utils.is_configured() and to_addr and _EMAIL_RE.match(to_addr):
-            what = self.what_input.text().strip()
+            what = self.products.products_display()
             distributor = self.dist_input.currentText().strip()
             if not what or not distributor:
                 return   # can't build a proper email without these; skip silently

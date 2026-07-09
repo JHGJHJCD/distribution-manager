@@ -1,6 +1,6 @@
 """RTL visual audit — real Hebrew via WA_DontShowOnScreen + grab()."""
 import sys, os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QFont

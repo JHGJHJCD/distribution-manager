@@ -16,6 +16,8 @@ import sys
 import time
 import random
 import tempfile
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # project root
 import traceback
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -39,7 +41,6 @@ from PyQt6.QtCore import Qt
 from tabs.group_update import GroupUpdateTab, SCOPE_WEEK, SCOPE_ALL
 from tabs.recipients import RecipientsTab
 from tabs.one_time import OneTimeTab
-from tabs.tracking import TrackingTab
 from tabs.search import SearchTab
 
 # ── data generation ────────────────────────────────────────────────────────────
@@ -173,20 +174,18 @@ def exercise(app, n, rng, report):
     weekly = GroupUpdateTab(fm)
     recipients = RecipientsTab(fm)
     one_time = OneTimeTab(fm)
-    tracking = TrackingTab(fm)
     search = SearchTab(fm)
 
     timed(report, "recipients.refresh", n, recipients.refresh)
     timed(report, "weekly.refresh", n, weekly.refresh)
     timed(report, "one_time.refresh", n, one_time.refresh)
-    timed(report, "tracking.refresh", n, tracking.refresh)
     timed(report, "search.refresh", n, search.refresh)
     timed(report, "group.refresh", n, group.refresh)
 
     # Re-populate the SAME instances several times — this is the refresh_all()
     # path (fires after every save) that re-fills an already-populated table.
     for tab, label in ((recipients, "recipients"), (weekly, "weekly"),
-                       (one_time, "one_time"), (group, "group"), (tracking, "tracking")):
+                       (one_time, "one_time"), (group, "group")):
         for k in range(3):
             timed(report, f"{label}.repopulate", n, tab.refresh)
 
@@ -214,11 +213,11 @@ def exercise(app, n, rng, report):
     timed(report, "recipients.filter", n, _filter_recipients)
 
     def _weekly_controls():
-        # scope + area toggles each trigger a real refresh() on the merged tab
-        weekly.scope_combo.setCurrentText(SCOPE_ALL)
-        weekly.area_combo.setCurrentText("בעלז")
-        weekly.area_combo.setCurrentText("הכל")
-        weekly.scope_combo.setCurrentText(SCOPE_WEEK)
+        # the merged tab now filters via a quick-search box (any recipient field)
+        weekly.search_input.setText(rng.choice(HEB))
+        weekly._apply_search()
+        weekly.search_input.setText("")
+        weekly._apply_search()
     timed(report, "weekly.controls", n, _weekly_controls)
 
     def _one_time_calc():
@@ -226,13 +225,6 @@ def exercise(app, n, rng, report):
         n_sug, _ = db.compute_suggested_n(one_time.products_spin.value())
         one_time._populate(suggested_n=n_sug)
     timed(report, "one_time.calc", n, _one_time_calc)
-
-    def _tracking_filter():
-        tracking.search.setText(rng.choice(HEB))
-        tracking._apply_filter()
-        tracking.search.setText("")
-        tracking._apply_filter()
-    timed(report, "tracking.filter", n, _tracking_filter)
 
     def _search_select():
         # multi-field search: names, partial text, and digit (phone/id) queries
@@ -258,7 +250,6 @@ def exercise(app, n, rng, report):
 
     # summary + queries after distributions exist
     timed(report, "db.get_summary", n, db.get_summary)
-    timed(report, "tracking.refresh.post", n, tracking.refresh)
 
     # excel export of a large list
     def _export():
@@ -272,7 +263,7 @@ def exercise(app, n, rng, report):
     timed(report, "excel.export", n, _export)
 
     # clean up widgets
-    for w in (group, weekly, recipients, one_time, tracking, search):
+    for w in (group, weekly, recipients, one_time, search):
         w.deleteLater()
     app.processEvents()
 
