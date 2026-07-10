@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QLineEdit,
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
-    QFrame, QGridLayout, QGraphicsDropShadowEffect
+    QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QColor, QFont, QIcon
@@ -431,11 +431,28 @@ class GroupUpdateTab(QWidget):
         c3.addWidget(auto_hint)
         top_col.addWidget(card3)
 
-        # The detail cards sit directly on the surface (no scroll region of their
-        # own) — they are fixed-height cards, so the ONLY scrollbar on this screen
-        # is the recipient list's. That single bar is exactly what the operator
-        # expects, and it vanishes by itself once the whole list fits the window.
-        surface.addWidget(top_content)
+        # ── ONE scroll region for the entire body ─────────────────────────────
+        # The detail cards + toolbar + recipient list all live inside a single
+        # QScrollArea, and the table is sized to its own rows (its scrollbars are
+        # off). Result: exactly ONE scrollbar on the screen — it shows only when
+        # the content doesn't fit, and disappears on a large screen. As the user
+        # scrolls, the fixed-height cards move up out of the way so the list fills
+        # the view (15 rows and well beyond), which the cards' hard minimum height
+        # never allowed when they were pinned in place.
+        self._scroll_body = QScrollArea()
+        self._scroll_body.setWidgetResizable(True)
+        self._scroll_body.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll_body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_body.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        self._scroll_body.viewport().setStyleSheet("background:transparent;")
+        enable_touch_scroll(self._scroll_body)
+
+        scroll_content = QWidget()
+        scroll_content.setStyleSheet("background:transparent;")
+        body = QVBoxLayout(scroll_content)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(10)
+        body.addWidget(top_content)
 
         # ── Toolbar over the recipient list ───────────────────────────────────
         toolbar = QHBoxLayout()
@@ -515,7 +532,7 @@ class GroupUpdateTab(QWidget):
         self.lbl_souls.setStyleSheet(_CHIP_QSS)
         for lbl in (self.lbl_checked, self.lbl_total, self.lbl_souls):
             toolbar.addWidget(lbl)
-        surface.addLayout(toolbar)
+        body.addLayout(toolbar)
 
         # ── Recipient list (tall card, sticky header, internal scroll) ────────
         list_card = QFrame()
@@ -545,15 +562,19 @@ class GroupUpdateTab(QWidget):
         hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(34)  # uniform row height
+        # The table has NO vertical scrollbar of its own — it is sized to fit all
+        # its rows and the single body scrollbar does the scrolling. This is what
+        # removes the second scrollbar the user complained about.
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.table.itemChanged.connect(self._on_item_changed)
-        enable_touch_scroll(self.table)
         lc.addWidget(self.table)
         attach_empty_state(self.table, "אין מקבלים להצגה")
-        # Tall enough to show ~15 recipients (34px rows + header) so the list is
-        # the star of the screen; still stretches to fill a large window, where
-        # its scrollbar then disappears on its own.
-        list_card.setMinimumHeight(560)
-        surface.addWidget(list_card, 1)   # stretch → the list is the tallest area
+        body.addWidget(list_card)
+        body.addStretch(0)   # keep everything top-aligned when the body is short
+
+        self._scroll_body.setWidget(scroll_content)
+        surface.addWidget(self._scroll_body, 1)
 
         root.addLayout(surface, 1)
 
@@ -756,6 +777,17 @@ class GroupUpdateTab(QWidget):
         self.table.blockSignals(False)
         self._update_counts()
         refresh_empty_state(self.table)
+        self._resize_table_height()
+
+    def _resize_table_height(self):
+        """Size the table to hold ALL its rows (no inner scroll) so the single
+        body scrollbar is the only one. Grows with the list; a small floor keeps
+        the empty-state readable."""
+        rows = self.table.rowCount()
+        row_h = self.table.verticalHeader().defaultSectionSize()
+        header_h = self.table.horizontalHeader().height() or 44
+        total = header_h + max(rows, 4) * row_h + 4
+        self.table.setFixedHeight(total)
 
     def _on_item_changed(self, item):
         """Keep _checked_ids in sync when the operator ticks/unticks a row."""
