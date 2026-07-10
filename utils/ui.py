@@ -93,6 +93,9 @@ def line_icon(name: str, size: int = 18, color: str = "#475569") -> QPixmap:
         p.drawArc(R(0.22, 0.50, 0.40, 0.40), 0, 180 * 16)
         p.drawArc(R(0.52, 0.30, 0.28, 0.24), 30 * 16, 120 * 16)
         p.drawArc(R(0.56, 0.52, 0.30, 0.34), 300 * 16, 150 * 16)
+    elif name in ("user", "person", "name"):
+        p.drawEllipse(R(0.36, 0.18, 0.28, 0.28))          # head
+        p.drawArc(R(0.24, 0.52, 0.52, 0.52), 0, 180 * 16)  # shoulders
     elif name in ("calendar", "date"):
         p.drawRoundedRect(R(0.18, 0.22, 0.64, 0.60), 0.05 * S, 0.05 * S)
         L(0.18, 0.38, 0.82, 0.38)
@@ -206,6 +209,81 @@ def line_icon(name: str, size: int = 18, color: str = "#475569") -> QPixmap:
     p.end()
     return pm.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
                      Qt.TransformationMode.SmoothTransformation)
+
+
+def reveal_in_folder(path: str) -> None:
+    """Open the file's containing folder in Windows Explorer with the file
+    selected, so the user sees exactly where their export landed. Fails quietly
+    (never raises) — an export is still a success even if the folder won't open."""
+    import os
+    import sys
+    import subprocess
+    try:
+        norm = os.path.normpath(path)
+        if sys.platform.startswith("win"):
+            subprocess.Popen(["explorer", "/select,", norm])
+        else:
+            # non-Windows fallback: just open the containing directory
+            folder = os.path.dirname(norm) or "."
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            subprocess.Popen([opener, folder])
+    except Exception:
+        try:
+            os.startfile(os.path.dirname(os.path.normpath(path)))  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+# Map a column-header text → a line-icon name, by keyword. Ordered: the FIRST
+# keyword found in the header wins, so more specific terms come before generic
+# ones (e.g. 'בית כנסת' before a bare fallback).
+_HEADER_ICON_RULES = [
+    ("בית כנסת", "synagogue"),
+    ("מה חולק", "box"),
+    ("אימייל", "mail"), ("מייל", "mail"),
+    ("טלפון", "phone"), ("נייד", "phone"),
+    ("כתובת", "address"), ("רחוב", "address"),
+    ("אזור", "area"), ("קהילה", "area"),
+    ("נפשות", "users"),
+    ("תדירות", "freq"),
+    ("חלוקה הבאה", "calendar"), ("חלוקה אחרונה", "calendar"),
+    ("תאריך", "calendar"), ("לידה", "calendar"),
+    ("הער", "note"),   # matches both הערה and הערות
+    ("מחלק", "user"),
+    ("שם", "user"),
+    ("סטטוס", "security"),
+    ("כמות", "hash"), ("ניקוד", "hash"),
+    ("מספר", "hash"), ("מס'", "hash"),
+]
+
+
+def _header_icon_name(text: str):
+    t = (text or "").strip()
+    if not t:
+        return None
+    for kw, icon in _HEADER_ICON_RULES:
+        if kw in t:
+            return icon
+    return None
+
+
+def apply_header_icons(table, color: str = "#64748b", size: int = 16) -> None:
+    """Add a dignified line-icon to each column header of a QTableWidget, chosen
+    from the header text by keyword (see _HEADER_ICON_RULES). Columns with no
+    matching keyword (checkbox column, 'סוג', 'עדיפות', ...) are left icon-less —
+    a wrong icon reads worse than none. Reuses the app's built-in line_icon set,
+    so there is no external icon-library dependency."""
+    from PyQt6.QtWidgets import QTableWidgetItem
+    for c in range(table.columnCount()):
+        item = table.horizontalHeaderItem(c)
+        text = item.text() if item is not None else ""
+        icon_name = _header_icon_name(text)
+        if not icon_name:
+            continue
+        if item is None:
+            item = QTableWidgetItem(text)
+            table.setHorizontalHeaderItem(c, item)
+        item.setIcon(QIcon(line_icon(icon_name, size, color)))
 
 
 def section_header(text: str, icon_name: str, color: str = "#475569",

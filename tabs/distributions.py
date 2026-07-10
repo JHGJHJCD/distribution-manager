@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 import database as db
 from utils.ui import (attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
-                      enable_touch_scroll)
+                      enable_touch_scroll, apply_header_icons)
 
 _SMALL_BTN = "font-size:11px; min-height:24px; min-width:0; padding:3px 12px;"
 
@@ -118,6 +118,7 @@ class DistributionsTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
+        apply_header_icons(self.table)
         self.table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)

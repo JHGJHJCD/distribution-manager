@@ -106,9 +106,45 @@ def _make_splash_pix(W=520, H=340) -> QPixmap:
     return pix
 
 
-def _show_splash(app: "QApplication") -> QSplashScreen:
-    splash = QSplashScreen(_make_splash_pix(),
-                           Qt.WindowType.WindowStaysOnTopHint)
+class _Splash(QSplashScreen):
+    """Splash screen with a smoothly-filling progress bar (a 'stick that fills
+    up') above the bottom strip, for a real sense of loading progress."""
+
+    def __init__(self, pix: QPixmap):
+        super().__init__(pix, Qt.WindowType.WindowStaysOnTopHint)
+        self._progress = 0.0   # 0..100
+
+    def set_progress(self, value: float):
+        self._progress = max(0.0, min(100.0, float(value)))
+        self.repaint()
+
+    def drawContents(self, painter: QPainter):
+        super().drawContents(painter)
+        W = self.width()
+        H = self.height()
+        pad = 40
+        bar_h = 9
+        y = H - 32 - bar_h - 9   # sit just above the bottom blue strip
+        track = QRectF(pad, y, W - 2 * pad, bar_h)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # track (empty part)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(224, 231, 243))
+        painter.drawRoundedRect(track, bar_h / 2, bar_h / 2)
+        # filled part
+        frac = self._progress / 100.0
+        if frac > 0:
+            fill_w = max(bar_h, (W - 2 * pad) * frac)
+            fill = QRectF(pad, y, fill_w, bar_h)
+            grad = QLinearGradient(fill.left(), 0, fill.right(), 0)
+            grad.setColorAt(0.0, QColor(47, 139, 232))
+            grad.setColorAt(1.0, QColor(21, 101, 192))
+            painter.setBrush(QBrush(grad))
+            painter.drawRoundedRect(fill, bar_h / 2, bar_h / 2)
+
+
+def _show_splash(app: "QApplication") -> _Splash:
+    splash = _Splash(_make_splash_pix())
     splash.show()
     app.processEvents()
     return splash
@@ -827,7 +863,20 @@ def _run():
     splash = _show_splash(app)
     t0 = time.time()
 
+    # Smoothly animate the progress bar toward a moving target that the real
+    # startup steps advance — so it always looks like genuine progress.
+    _target = {"v": 12}
+    _anim = QTimer()
+
+    def _tick():
+        cur = splash._progress
+        if cur < _target["v"]:
+            splash.set_progress(min(_target["v"], cur + 2.0))
+    _anim.timeout.connect(_tick)
+    _anim.start(25)
+
     db.init_db()
+    _target["v"] = 45
     _cleanup_prev_mei()   # remove a temp dir a prior hard exit may have left
 
     # Startup safety backup (non-blocking) — a restore point on every launch.
@@ -836,6 +885,7 @@ def _run():
         auto_backup_async()
     except Exception:
         pass
+    _target["v"] = 70
 
     # Remove the previous EXE left behind by a self-update, if any.
     try:
@@ -843,11 +893,16 @@ def _run():
         cleanup_old()
     except Exception:
         pass
+    _target["v"] = 92
 
-    # Keep splash visible for at least 1.8 s
+    # Keep splash visible for at least 1.8 s (the animator keeps filling it).
     remaining = max(0, 1800 - int((time.time() - t0) * 1000))
     if remaining:
         _wait_ms(remaining)
+
+    _anim.stop()
+    splash.set_progress(100)
+    app.processEvents()
 
     login = LoginDialog()
     splash.finish(login)

@@ -9,7 +9,7 @@ from PyQt6.QtGui import QColor
 from datetime import date
 import database as db
 from utils.ui import (attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
-                      search_icon, add_glow, enable_touch_scroll)
+                      search_icon, add_glow, enable_touch_scroll, apply_header_icons)
 from styles import OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG, SELECTED_BG, SELECTED_FG
 
 _SMALL_GREEN_BTN = (
@@ -131,6 +131,7 @@ class OneTimeTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
+        apply_header_icons(self.table)
         _score_hdr = self.table.horizontalHeaderItem(3)  # "ניקוד"
         if _score_hdr:
             _score_hdr.setToolTip("ניקוד הצורך — משוקלל לפי 'משקלי ניקוד' בלשונית הגדרות")

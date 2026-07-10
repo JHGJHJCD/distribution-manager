@@ -256,9 +256,58 @@ QComboBox:disabled, QDateEdit:disabled, QSpinBox:disabled {
     color: $muted;
 }
 
-/* ════ ComboBox dropdown items ════ */
-QComboBox QAbstractItemView::item { padding: 8px 12px; border-radius: 4px; }
-QComboBox QAbstractItemView::item:hover { background-color: $blue_100; color: $blue_700; }
+/* ════ ComboBox — modern field + floating popup ════ */
+QComboBox {
+    background-color: $surface;
+    border: 1.5px solid $line;
+    border-radius: $r_ctl;
+    padding: 7px 14px;
+    min-height: 22px;
+    color: $ink;
+}
+QComboBox:hover { border-color: $blue_400; }
+QComboBox:focus, QComboBox:on { border-color: $blue_600; }
+QComboBox:on       { background-color: #fafeff; }
+QComboBox:disabled { background-color: $field_bg; color: $muted; }
+
+/* drop-down button — in RTL it sits on the LEFT; give it its own rounded hit area */
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: left center;
+    width: 30px;
+    margin: 3px;
+    border: none;
+    border-radius: 8px;
+}
+QComboBox::drop-down:hover { background-color: $blue_100; }
+QComboBox::down-arrow          { width: 14px; height: 14px; }
+QComboBox::down-arrow:disabled { width: 14px; height: 14px; }
+
+/* the popup list — a floating rounded card with airy, pill-shaped rows */
+QComboBox QAbstractItemView {
+    border: 1px solid $line;
+    border-radius: $r_ctl;
+    background-color: $surface;
+    padding: 6px;
+    outline: none;
+    selection-background-color: transparent;   /* rows draw their own highlight */
+}
+QComboBox QAbstractItemView::item {
+    min-height: 34px;
+    padding: 9px 16px;
+    margin: 2px 3px;
+    border-radius: 8px;
+    color: $ink;
+    background-color: transparent;
+}
+QComboBox QAbstractItemView::item:hover {
+    background-color: $blue_100;
+    color: $blue_700;
+}
+QComboBox QAbstractItemView::item:selected {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e88e5, stop:1 $blue_700);
+    color: #ffffff;
+}
 
 /* ════ CheckBox + item-view checkboxes (tables) ════ */
 QCheckBox { background-color: transparent; }

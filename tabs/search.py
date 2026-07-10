@@ -8,7 +8,8 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
 import database as db
 from utils.ui import (search_icon, busy_cursor, line_icon, enable_touch_scroll,
-                      PRIORITY_BADGES, STATUS_BADGES, ALIGN_RIGHT)
+                      PRIORITY_BADGES, STATUS_BADGES, ALIGN_RIGHT, reveal_in_folder,
+                      apply_header_icons)
 from utils.excel_utils import export_recipients_to_excel
 from utils.print_view import print_recipient_card
 
@@ -161,6 +162,7 @@ class SearchTab(QWidget):
         self.hist_table = QTableWidget()
         self.hist_table.setColumnCount(len(HIST_COLS))
         self.hist_table.setHorizontalHeaderLabels(HIST_COLS)
+        apply_header_icons(self.hist_table)
         self.hist_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.hist_table.setAlternatingRowColors(True)
         self.hist_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -329,7 +331,9 @@ class SearchTab(QWidget):
         try:
             with busy_cursor():
                 path = export_recipients_to_excel(self._results)
-            QMessageBox.information(self, "ייצוא הושלם", f"הרשימה נשמרה בתיקיית ההורדות:\n{path}")
+            reveal_in_folder(path)   # open Downloads with the file selected
+            QMessageBox.information(self, "ייצוא הושלם",
+                                    f"הרשימה נשמרה בתיקיית ההורדות ונפתחה התיקייה:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "שגיאה", str(e))
 

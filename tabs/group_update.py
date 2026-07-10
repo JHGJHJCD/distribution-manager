@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QLineEdit,
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
-    QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea
+    QFrame, QGridLayout, QGraphicsDropShadowEffect
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QColor, QFont, QIcon
@@ -17,7 +17,8 @@ from utils.excel_utils import (export_distribution_to_excel, export_full_distrib
                                export_volunteer_checklist_to_excel, import_volunteer_checklist)
 from utils.print_view import print_distribution_list
 from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
-                      enable_touch_scroll, search_icon, line_icon)
+                      enable_touch_scroll, search_icon, line_icon, reveal_in_folder,
+                      apply_header_icons)
 from utils import email_utils
 
 
@@ -430,17 +431,11 @@ class GroupUpdateTab(QWidget):
         c3.addWidget(auto_hint)
         top_col.addWidget(card3)
 
-        # The three detail cards scroll within their own bounded region — so a
-        # long product list (or a short window) never squeezes the recipient
-        # list or bottom bar out of view.
-        top_scroll = QScrollArea()
-        top_scroll.setWidgetResizable(True)
-        top_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        top_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        top_scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
-        top_scroll.viewport().setStyleSheet("background:transparent;")
-        top_scroll.setWidget(top_content)
-        surface.addWidget(top_scroll)
+        # The detail cards sit directly on the surface (no scroll region of their
+        # own) — they are fixed-height cards, so the ONLY scrollbar on this screen
+        # is the recipient list's. That single bar is exactly what the operator
+        # expects, and it vanishes by itself once the whole list fits the window.
+        surface.addWidget(top_content)
 
         # ── Toolbar over the recipient list ───────────────────────────────────
         toolbar = QHBoxLayout()
@@ -533,6 +528,7 @@ class GroupUpdateTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
+        apply_header_icons(self.table)
         self.table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -548,11 +544,15 @@ class GroupUpdateTab(QWidget):
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(34)  # uniform row height
         self.table.itemChanged.connect(self._on_item_changed)
         enable_touch_scroll(self.table)
         lc.addWidget(self.table)
         attach_empty_state(self.table, "אין מקבלים להצגה")
-        list_card.setMinimumHeight(160)   # always usable; stretches on tall windows
+        # Tall enough to show ~15 recipients (34px rows + header) so the list is
+        # the star of the screen; still stretches to fill a large window, where
+        # its scrollbar then disappears on its own.
+        list_card.setMinimumHeight(560)
         surface.addWidget(list_card, 1)   # stretch → the list is the tallest area
 
         root.addLayout(surface, 1)
@@ -879,9 +879,11 @@ class GroupUpdateTab(QWidget):
         self.note_input.clear()
         self.products.clear()
 
+        if export_path:
+            reveal_in_folder(export_path)   # open Downloads with the file selected
         msg = f"נשמרה חלוקה ל-{len(checked)} מקבלים."
         if export_path:
-            msg += f"\n\nקובץ אקסל מלא נשמר בתיקיית ההורדות:\n{export_path}"
+            msg += f"\n\nקובץ אקסל מלא נשמר בתיקיית ההורדות ונפתחה התיקייה:\n{export_path}"
         elif export_err:
             msg += f"\n\n⚠ הרישום נשמר, אך ייצוא האקסל נכשל:\n{export_err}"
         QMessageBox.information(self, "הצלחה", msg)
@@ -913,7 +915,9 @@ class GroupUpdateTab(QWidget):
         try:
             with busy_cursor():
                 path = export_distribution_to_excel(checked, dist_date)
-            QMessageBox.information(self, "ייצוא הושלם", f"הקובץ נשמר:\n{path}")
+            reveal_in_folder(path)   # open Downloads with the file selected
+            QMessageBox.information(self, "ייצוא הושלם",
+                                    f"הקובץ נשמר בתיקיית ההורדות ונפתחה התיקייה:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "שגיאה", str(e))
 

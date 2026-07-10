@@ -7,7 +7,8 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
 import database as db
 from utils.backup import auto_backup_async
-from utils.ui import BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, ALIGN_RIGHT
+from utils.ui import (BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, ALIGN_RIGHT,
+                      apply_header_icons)
 
 COLS = ["סוג", "מפתח", "שם מלא", "טלפון 1", "טלפון 2", "אזור", "עדיפות", "סטטוס"]
 
@@ -57,6 +58,7 @@ class ReviewTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
+        apply_header_icons(self.table)
         self.table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)

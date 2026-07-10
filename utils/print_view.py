@@ -2,9 +2,9 @@ import os
 import sys
 import html
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
+from PyQt6.QtPrintSupport import QPrinter, QPrintPreviewDialog
 from PyQt6.QtGui import QTextDocument, QImage, QPageLayout
-from PyQt6.QtCore import QUrl, QSizeF, QMarginsF
+from PyQt6.QtCore import QUrl, QSizeF, QMarginsF, Qt
 from datetime import date
 from typing import List, Dict
 
@@ -144,46 +144,56 @@ def _build_html(recipients: List[Dict], dist_date: str, has_logo: bool = False,
     """
 
 
+def _preview(printer: QPrinter, render, parent: QWidget, title: str):
+    """Show a full print-preview dialog (RTL, Hebrew) whose pages are drawn by
+    `render(printer)`. The user prints from the dialog's own toolbar."""
+    dlg = QPrintPreviewDialog(printer, parent)
+    dlg.setWindowTitle(title)
+    dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+    dlg.resize(900, 720)
+    dlg.paintRequested.connect(render)
+    dlg.exec()
+
+
 def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWidget = None,
                             dist_name: str = ""):
-    """Open print dialog and print distribution list — portrait, right-to-left."""
+    """Open a print PREVIEW of the distribution list — portrait, right-to-left —
+    so the user sees exactly what will print before sending it to the printer."""
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
     printer.setPageOrientation(QPageLayout.Orientation.Portrait)
     # Reasonable margins so nothing is clipped at the page edges.
     printer.setPageMargins(QMarginsF(10, 10, 10, 10), QPageLayout.Unit.Millimeter)
 
-    dlg = QPrintDialog(printer, parent)
-    if dlg.exec() != QPrintDialog.DialogCode.Accepted:
-        return
-
     logo_path = _resource_path("org_logo.png")
     has_logo = os.path.exists(logo_path)
     html = _build_html(recipients, dist_date, has_logo, dist_name)
-    page_size = QSizeF(printer.pageLayout().paintRectPixels(printer.resolution()).size())
 
-    doc = QTextDocument()
-    # Measure against the PRINTER's resolution so pageCount() is accurate (without
-    # this the doc measures at screen DPI and the fit loop would be fooled).
-    try:
-        doc.documentLayout().setPaintDevice(printer)
-    except Exception:
-        pass
-    if has_logo:
-        doc.addResource(QTextDocument.ResourceType.ImageResource,
-                        QUrl("orglogo"), QImage(logo_path))
+    def render(pr: QPrinter):
+        page_size = QSizeF(pr.pageLayout().paintRectPixels(pr.resolution()).size())
+        doc = QTextDocument()
+        # Measure against the PRINTER's resolution so pageCount() is accurate
+        # (without this the doc measures at screen DPI and the fit loop is fooled).
+        try:
+            doc.documentLayout().setPaintDevice(pr)
+        except Exception:
+            pass
+        if has_logo:
+            doc.addResource(QTextDocument.ResourceType.ImageResource,
+                            QUrl("orglogo"), QImage(logo_path))
+        # Layout target: up to ~60 recipients per page. Compute the minimum pages
+        # needed at that cap, then pick the LARGEST (most readable) font that fits
+        # the list into that many pages — filling each page without cramming.
+        n_main = sum(1 for r in recipients if not r.get("_reserve"))
+        target_pages = max(1, (n_main + 59) // 60)
+        for fs in (12, 11, 10, 9, 8, 7):
+            doc.setDefaultStyleSheet(_css(fs))
+            doc.setHtml(html)
+            doc.setPageSize(page_size)
+            if doc.pageCount() <= target_pages:
+                break
+        doc.print(pr)
 
-    # Layout target: up to ~60 recipients per page. Compute the minimum pages
-    # needed at that cap, then pick the LARGEST (most readable) font that fits the
-    # list into that many pages — filling each page well without cramming past 60.
-    n_main = sum(1 for r in recipients if not r.get("_reserve"))
-    target_pages = max(1, (n_main + 59) // 60)
-    for fs in (12, 11, 10, 9, 8, 7):
-        doc.setDefaultStyleSheet(_css(fs))
-        doc.setHtml(html)
-        doc.setPageSize(page_size)
-        if doc.pageCount() <= target_pages:
-            break
-    doc.print(printer)
+    _preview(printer, render, parent, "תצוגה מקדימה — רשימת חלוקה")
 
 
 _PRIORITY_LABELS = {4: "קבוע", 3: "עדיפות ראשונה", 2: "עדיפות שנייה"}
@@ -261,22 +271,23 @@ def _fmt(s) -> str:
 
 
 def print_recipient_card(rec: Dict, history: List[Dict], parent: QWidget = None):
-    """Open the print dialog and print a single recipient's card + history."""
+    """Open a print PREVIEW of a single recipient's card + history."""
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
     printer.setPageOrientation(QPageLayout.Orientation.Portrait)
     printer.setPageMargins(QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter)
 
-    dlg = QPrintDialog(printer, parent)
-    if dlg.exec() != QPrintDialog.DialogCode.Accepted:
-        return
-
     logo_path = _resource_path("org_logo.png")
     has_logo = os.path.exists(logo_path)
-    doc = QTextDocument()
-    if has_logo:
-        doc.addResource(QTextDocument.ResourceType.ImageResource,
-                        QUrl("orglogo"), QImage(logo_path))
-    doc.setDefaultStyleSheet(_css(11))
-    doc.setHtml(_card_html(rec, history, has_logo))
-    doc.setPageSize(QSizeF(printer.pageLayout().paintRectPixels(printer.resolution()).size()))
-    doc.print(printer)
+    card_html = _card_html(rec, history, has_logo)
+
+    def render(pr: QPrinter):
+        doc = QTextDocument()
+        if has_logo:
+            doc.addResource(QTextDocument.ResourceType.ImageResource,
+                            QUrl("orglogo"), QImage(logo_path))
+        doc.setDefaultStyleSheet(_css(11))
+        doc.setHtml(card_html)
+        doc.setPageSize(QSizeF(pr.pageLayout().paintRectPixels(pr.resolution()).size()))
+        doc.print(pr)
+
+    _preview(printer, render, parent, "תצוגה מקדימה — כרטיס מקבל")

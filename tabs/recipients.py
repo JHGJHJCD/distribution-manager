@@ -37,7 +37,8 @@ from utils.backup import auto_backup_async, auto_backup
 from utils.excel_utils import import_from_excel
 from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state,
                       BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, search_icon,
-                      ALIGN_RIGHT, rtl_text_area, enable_touch_scroll)
+                      ALIGN_RIGHT, rtl_text_area, enable_touch_scroll,
+                      apply_header_icons)
 
 # Compact action buttons (≈50% shorter) — glossy gradients come from the
 # success/danger object names; this only tightens the size.
@@ -208,6 +209,7 @@ class RecipientsTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
+        apply_header_icons(self.table)
         self.table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
