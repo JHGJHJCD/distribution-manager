@@ -34,6 +34,9 @@ _app_dir = _data_dir
 
 DB_PATH = os.path.join(_data_dir(), "data.db")
 BACKUP_DIR = os.path.join(_data_dir(), "backups")
+# User-supplied top-bar logo, stored in the writable data dir (NOT inside the EXE
+# bundle) so each charity can drop in its own logo and it survives updates.
+USER_LOGO_PATH = os.path.join(_data_dir(), "org_logo.png")
 
 
 def _legacy_db_candidates() -> list:

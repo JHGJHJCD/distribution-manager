@@ -94,8 +94,8 @@ QFrame { background-color: transparent; border: none; }
 
 QFrame#panel {
     background-color: $surface;
-    border: 1px solid $line;
-    border-radius: $r_card;
+    border: 1px solid $line_2;
+    border-radius: 16px;
 }
 
 /* ════ Tab bar ════ */
@@ -138,12 +138,12 @@ QTabBar::tab:left:selected:hover, QTabBar::tab:right:selected:hover {
 
 /* ════ Tables — roomier rows for readability ════ */
 QTableWidget, QTableView {
-    border-radius: 8px;
+    border-radius: 10px;
     outline: none;
     show-decoration-selected: 1;
     gridline-color: $line_2;
     font-size: $fs_table;
-    alternate-background-color: #f7faff;
+    alternate-background-color: #f8fafc;   /* neutral slate, not baby-blue */
     background-color: $surface;
 }
 QTableWidget::item, QTableView::item {
@@ -151,28 +151,30 @@ QTableWidget::item, QTableView::item {
     border: none;
     color: $ink;
 }
-QTableWidget::item:hover, QTableView::item:hover { background-color: $blue_100; }
+QTableWidget::item:hover, QTableView::item:hover { background-color: #eef4fc; }
 QTableWidget::item:selected, QTableView::item:selected,
 QTableWidget::item:selected:focus, QTableView::item:selected:focus {
-    background-color: $blue_200;
+    background-color: #dbeafe;
     color: $blue_900;
 }
 QTableWidget::item:selected:hover, QTableView::item:selected:hover {
-    background-color: #90caf9;
+    background-color: #bfdbfe;
     color: $blue_900;
 }
+/* Premium table header: clean neutral surface with a crisp blue accent underline
+   (instead of a saturated blue fill) — reads like a modern data table. */
 QHeaderView::section {
     font-weight: 700;
     font-size: $fs_table;
     min-height: 44px;
     padding: 11px 14px;
     border: none;
-    border-bottom: 2px solid $blue_200;
-    border-left: 1px solid $blue_100;
-    background-color: $blue_100;
+    border-bottom: 2px solid $blue_400;
+    border-left: 1px solid $line_2;
+    background-color: #f3f6fb;
     color: $blue_700;
 }
-QHeaderView::section:hover { background-color: $blue_200; }
+QHeaderView::section:hover { background-color: #e8eef8; }
 
 /* ════ Buttons — hierarchy: primary / success / danger / ghost ════ */
 QPushButton {
@@ -187,7 +189,7 @@ QPushButton:pressed { padding-top: 7px; padding-bottom: 5px; }
 
 /* PRIMARY — the single dominant action per screen (subtle glossy gradient) */
 QPushButton#primary {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e88e5, stop:1 $blue_700);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2f86e6, stop:1 #123f8f);
     color: #ffffff;
     border: none;
     font-weight: 800;
@@ -423,25 +425,27 @@ QGroupBox::title {
 
 /* ════ Branded top app-bar ════ */
 QFrame#appbar {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 $blue_900, stop:1 $blue_600);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #0a2f6b, stop:0.55 $blue_700, stop:1 #2f86e6);
     border: none;
     border-radius: $r_card;
 }
 QLabel#appbar_logo {
     background-color: #ffffff;
-    border-radius: 10px;
-    padding: 5px;
+    border-radius: 12px;
+    padding: 6px;
 }
 QLabel#appbar_title {
     color: #ffffff;
-    font-size: 21px;
+    font-size: 22px;
     font-weight: 800;
+    letter-spacing: 0.6px;
 }
 QLabel#appbar_sub {
-    color: rgba(255,255,255,0.82);
+    color: rgba(255,255,255,0.88);
     font-size: 12px;
     font-weight: 600;
+    letter-spacing: 0.3px;
 }
 """)
 

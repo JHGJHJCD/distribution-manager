@@ -383,9 +383,37 @@ class LoginDialog(QDialog):
 
 # ─── Main window ─────────────────────────────────────────────────────────────
 
+class _DragBar(QFrame):
+    """The app-bar doubles as the window's title bar: press-and-drag moves the
+    window (native move → Aero Snap works), double-click toggles maximize."""
+
+    def __init__(self, win):
+        super().__init__()
+        self._win = win
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            h = self._win.windowHandle()
+            if h is not None:
+                h.startSystemMove()          # native drag (keeps snap)
+                return
+        super().mousePressEvent(e)
+
+    def mouseDoubleClickEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._win.toggle_max_restore()
+            return
+        super().mouseDoubleClickEvent(e)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        # Frameless custom title bar (unified app-bar, no native Windows caption).
+        # On by default on Windows; set "frameless_window"="0" in the DB as an
+        # escape hatch to fall back to the native title bar on a problem machine.
+        self._frameless = (sys.platform == "win32"
+                           and db.get_setting("frameless_window") != "0")
         self.setWindowTitle(f"מנהל חלוקה  v{APP_VERSION}")
         self.setMinimumSize(1100, 700)
         # Never let the minimum exceed a small screen's work area.
@@ -403,6 +431,10 @@ class MainWindow(QMainWindow):
         """Open remembering last size/position; otherwise maximized (fills big
         or ultrawide screens). Falls back to maximized if the saved geometry is
         off-screen (e.g. a monitor that is no longer connected)."""
+        if self._frameless:
+            from utils import win_frameless
+            win_frameless.setup(self)          # strip native title bar, keep frame
+
         saved = db.get_setting("win_geometry") or ""
         restored = False
         if saved:
@@ -414,6 +446,7 @@ class MainWindow(QMainWindow):
             self.show()
         else:
             self.showMaximized()
+        self._sync_max_button()
 
     def _geometry_on_screen(self) -> bool:
         fg = self.frameGeometry()
@@ -475,33 +508,36 @@ class MainWindow(QMainWindow):
         central = QWidget()
         c_lay = QVBoxLayout(central)
         c_lay.setContentsMargins(6, 6, 6, 6)
-        c_lay.setSpacing(4)
+        # Room below the app-bar so its soft drop-shadow lands in clear space and
+        # isn't painted over by the tab row directly beneath it.
+        c_lay.setSpacing(18)
 
         # Persistent branded app-bar: a navy→blue band with the charity logo (on a
         # white chip so it reads on the dark band) and the app name. Gives the whole
         # app a clear, modern identity instead of a faint corner logo.
-        appbar = QFrame()
+        appbar = _DragBar(self)
         appbar.setObjectName("appbar")
         appbar.setFixedHeight(68)
         a_lay = QHBoxLayout(appbar)
-        a_lay.setContentsMargins(18, 8, 18, 8)
+        a_lay.setContentsMargins(18, 8, 12, 8)
         a_lay.setSpacing(14)
 
-        _logo_path = resource_path("org_logo.png")
-        _lp = QPixmap(_logo_path) if os.path.exists(_logo_path) else QPixmap()
-        if not _lp.isNull():
-            logo_lbl = QLabel()
-            logo_lbl.setObjectName("appbar_logo")
-            logo_lbl.setPixmap(_lp.scaledToHeight(
-                44, Qt.TransformationMode.SmoothTransformation))
-            a_lay.addWidget(logo_lbl)          # RTL: first added → rightmost
+        # Logo label is always created (even if empty) so it can be swapped live
+        # from Settings. Source order: user logo in the data dir → bundled default.
+        logo_lbl = QLabel()
+        logo_lbl.setObjectName("appbar_logo")
+        self._appbar_logo_lbl = logo_lbl
+        a_lay.addWidget(logo_lbl)              # RTL: first added → rightmost
+        self._load_appbar_logo()
 
         _title_box = QVBoxLayout()
         _title_box.setSpacing(0)
-        _t = QLabel("מנהל חלוקה")
+        _t = QLabel(db.get_setting("org_title") or "מנהל חלוקה")
         _t.setObjectName("appbar_title")
-        _st = QLabel("קופה של צדקה הר יונה · נוף הגליל")
+        _st = QLabel(db.get_setting("org_subtitle") or "קופה של צדקה הר יונה · נוף הגליל")
         _st.setObjectName("appbar_sub")
+        self._appbar_title_lbl = _t
+        self._appbar_sub_lbl = _st
         _title_box.addWidget(_t)
         _title_box.addWidget(_st)
         a_lay.addLayout(_title_box)
@@ -522,10 +558,20 @@ class MainWindow(QMainWindow):
         tour_menu.addAction("סיור מורחב (הסבר על כל כפתור)", self.start_extended_tour)
         tour_btn.setMenu(tour_menu)
         a_lay.addWidget(tour_btn)
+
+        # Custom window controls (minimize / maximize / close) only when the
+        # frameless title bar is active — otherwise the native title bar has them.
+        if self._frameless:
+            self._build_window_buttons(a_lay)
+
         c_lay.addWidget(appbar)
 
         c_lay.addWidget(self.tabs)
         self.setCentralWidget(central)
+
+        # שכבת עומק+תנועה: צל רך לסרגל-העל, והרמה מונפשת לכפתורים הראשיים בעץ הנוכחי.
+        from utils import effects
+        effects.apply_depth(central)
 
         # After restoring a custom order the tab now at position 0 may not be the
         # one that self-refreshed in __init__, so refresh whatever is shown first.
@@ -535,6 +581,76 @@ class MainWindow(QMainWindow):
             cur._needs_refresh = False
 
         self._apply_rtl_polish()
+
+    def _load_appbar_logo(self):
+        """Fill the top-bar logo from the user's logo (data dir) if present, else
+        the bundled default. Hides the chip entirely when neither exists. Safe to
+        call again after the user changes the logo in Settings."""
+        lbl = getattr(self, "_appbar_logo_lbl", None)
+        if lbl is None:
+            return
+        user_logo = db.USER_LOGO_PATH
+        path = user_logo if os.path.exists(user_logo) else resource_path("org_logo.png")
+        pix = QPixmap(path) if os.path.exists(path) else QPixmap()
+        if pix.isNull():
+            lbl.clear()
+            lbl.setVisible(False)
+            return
+        lbl.setPixmap(pix.scaledToHeight(44, Qt.TransformationMode.SmoothTransformation))
+        lbl.setVisible(True)
+
+    # ── Frameless window: custom title-bar controls + native message handling ──
+
+    def _build_window_buttons(self, layout):
+        """Minimize / maximize / close buttons for the custom title bar."""
+        def _mk(glyph, slot, close=False):
+            b = QPushButton(glyph)
+            b.setFixedSize(46, 40)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            hover = "#e03e3e" if close else "rgba(255,255,255,0.20)"
+            press = "#c02828" if close else "rgba(255,255,255,0.32)"
+            b.setStyleSheet(
+                "QPushButton{background:transparent; color:#ffffff; border:none;"
+                " border-radius:9px; font-size:15px; font-weight:600;}"
+                f"QPushButton:hover{{background:{hover};}}"
+                f"QPushButton:pressed{{background:{press};}}")
+            b.clicked.connect(slot)
+            layout.addWidget(b)
+            return b
+
+        _mk("–", self.showMinimized)                       # –
+        self._btn_max = _mk("☐", self.toggle_max_restore)  # ☐
+        _mk("✕", self.close, close=True)                   # ✕
+
+    def toggle_max_restore(self):
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def _sync_max_button(self):
+        btn = getattr(self, "_btn_max", None)
+        if btn is not None:
+            btn.setText("❐" if self.isMaximized() else "☐")  # ❐ / ☐
+            btn.setToolTip("שחזר" if self.isMaximized() else "הגדל")
+
+    def changeEvent(self, e):
+        from PyQt6.QtCore import QEvent
+        if e.type() == QEvent.Type.WindowStateChange:
+            self._sync_max_button()
+        super().changeEvent(e)
+
+    def nativeEvent(self, eventType, message):
+        if self._frameless and eventType == b"windows_generic_MSG":
+            from utils import win_frameless
+            handled, result = win_frameless.handle(self, message)
+            if handled:
+                return True, result
+        # NOTE: never call super().nativeEvent() here — on PyQt6 6.11 that
+        # re-entry access-violates. Returning (False, 0) = "not handled", which
+        # lets Qt/Windows do their own default processing.
+        return (False, 0)
 
     def _apply_rtl_polish(self):
         """Right-align every table header so the whole UI reads consistently RTL.
@@ -625,6 +741,10 @@ class MainWindow(QMainWindow):
         # Lazy-loaded tabs miss the startup RTL polish, so their table headers stay
         # left-aligned (looks LTR in a Hebrew app). Re-apply on every tab show.
         self._apply_rtl_polish()
+        # עומק+תנועה: מעטרים כרטיסים/כפתורים בלשונית שרק עכשיו נטענה, ומעבר-דהייה עדין.
+        from utils import effects
+        effects.apply_depth(tab)
+        effects.fade_in(tab)
 
     def refresh_all(self):
         for i in range(self.tabs.count()):

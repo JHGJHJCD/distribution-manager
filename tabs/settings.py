@@ -360,6 +360,60 @@ class SettingsTab(QWidget):
         mail_lay.addWidget(self.lbl_mail_status)
         grid.addWidget(mail_frame, 1, 1, _AT)
 
+        # ── Organization / branding section ───────────────────
+        # Makes the app charity-agnostic: the name shown on the top bar is data,
+        # not a hardcoded string, so the same program fits any tzedaka fund.
+        org_frame = QFrame()
+        org_frame.setObjectName("panel")
+        org_lay = QVBoxLayout(org_frame)
+        org_lay.setContentsMargins(10, 7, 10, 7)
+        org_lay.setSpacing(6)
+        org_lay.addWidget(section_header("שם הארגון (סרגל עליון)", "org", "#1565c0"))
+        org_desc = QLabel("הכיתוב שמופיע בראש התוכנה. שנה אותו כדי להתאים לכל קופת צדקה.")
+        org_desc.setObjectName("subtitle")
+        org_desc.setWordWrap(True)
+        org_lay.addWidget(org_desc)
+
+        org_form = QFormLayout()
+        org_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        org_form.setSpacing(6)
+        self.org_title = QLineEdit()
+        self.org_title.setPlaceholderText("מנהל חלוקה")
+        self.org_title.setAlignment(ALIGN_RIGHT)
+        self.org_subtitle = QLineEdit()
+        self.org_subtitle.setPlaceholderText("שם הקופה · יישוב")
+        self.org_subtitle.setAlignment(ALIGN_RIGHT)
+        org_form.addRow("כותרת:", self.org_title)
+        org_form.addRow("כותרת משנה:", self.org_subtitle)
+        org_lay.addLayout(org_form)
+
+        # Logo row: pick an image file → copied into the data dir and shown live.
+        logo_row = QHBoxLayout()
+        logo_row.setSpacing(6)
+        logo_lbl = QLabel("לוגו:")
+        logo_row.addWidget(logo_lbl)
+        self.lbl_logo_status = QLabel("")
+        self.lbl_logo_status.setObjectName("subtitle")
+        logo_row.addWidget(self.lbl_logo_status, 1)
+        btn_logo = QPushButton("החלף לוגו…")
+        btn_logo.setObjectName("neutral")
+        btn_logo.clicked.connect(self._choose_logo)
+        logo_row.addWidget(btn_logo)
+        self.btn_logo_reset = QPushButton("אפס")
+        self.btn_logo_reset.setObjectName("neutral")
+        self.btn_logo_reset.clicked.connect(self._reset_logo)
+        logo_row.addWidget(self.btn_logo_reset)
+        org_lay.addLayout(logo_row)
+
+        org_btns = QHBoxLayout()
+        btn_org_save = QPushButton("שמור")
+        btn_org_save.setObjectName("primary")
+        btn_org_save.clicked.connect(self._save_branding)
+        org_btns.addWidget(btn_org_save)
+        org_btns.addStretch()
+        org_lay.addLayout(org_btns)
+        grid.addWidget(org_frame, 3, 0, _AT)
+
         # ── Bottom row: feedback + refresh ────────────────────────────────────
         bottom_row = QHBoxLayout()
         # A second, easy-to-find entry point to the feedback dialog (the small
@@ -413,6 +467,10 @@ class SettingsTab(QWidget):
             last_backup = "לא בוצע עדיין"
             self.lbl_last_backup.setStyleSheet("color:#9ca3af;")
         self.lbl_last_backup.setText(last_backup)
+
+        self.org_title.setText(db.get_setting("org_title") or "")
+        self.org_subtitle.setText(db.get_setting("org_subtitle") or "")
+        self._refresh_logo_status()
 
         cfg = email_utils.get_smtp_config()
         self.mail_email.setText(cfg["email"])
@@ -610,6 +668,53 @@ class SettingsTab(QWidget):
         if self.main_win and hasattr(self.main_win, "choose_backup_folder"):
             self.main_win.choose_backup_folder()
             self.refresh()
+
+    # ── Organization / branding ─────────────────────────────────────────────────
+
+    def _save_branding(self):
+        db.set_setting("org_title", self.org_title.text().strip())
+        db.set_setting("org_subtitle", self.org_subtitle.text().strip())
+        # Live-update the top bar without a restart.
+        mw = self.main_win
+        if mw is not None and hasattr(mw, "_appbar_title_lbl"):
+            mw._appbar_title_lbl.setText(self.org_title.text().strip() or "מנהל חלוקה")
+            mw._appbar_sub_lbl.setText(
+                self.org_subtitle.text().strip() or "קופה של צדקה הר יונה · נוף הגליל")
+        QMessageBox.information(self, "נשמר", "שם הארגון עודכן ✓")
+
+    def _choose_logo(self):
+        import shutil
+        path, _ = QFileDialog.getOpenFileName(
+            self, "בחר תמונת לוגו", "", "תמונות (*.png *.jpg *.jpeg *.bmp)")
+        if not path:
+            return
+        try:
+            shutil.copyfile(path, db.USER_LOGO_PATH)
+        except Exception as e:
+            QMessageBox.warning(self, "שגיאה", f"לא ניתן להעתיק את הלוגו:\n{e}")
+            return
+        self._apply_logo_change()
+
+    def _reset_logo(self):
+        import os
+        try:
+            if os.path.exists(db.USER_LOGO_PATH):
+                os.remove(db.USER_LOGO_PATH)
+        except Exception:
+            pass
+        self._apply_logo_change()
+
+    def _apply_logo_change(self):
+        mw = self.main_win
+        if mw is not None and hasattr(mw, "_load_appbar_logo"):
+            mw._load_appbar_logo()
+        self._refresh_logo_status()
+
+    def _refresh_logo_status(self):
+        import os
+        custom = os.path.exists(db.USER_LOGO_PATH)
+        self.lbl_logo_status.setText("לוגו מותאם אישית ✓" if custom else "לוגו ברירת מחדל")
+        self.btn_logo_reset.setEnabled(custom)
 
     # ── Volunteer email settings ────────────────────────────────────────────────
 

@@ -61,6 +61,8 @@ a = Analysis(
         'utils.email_utils',
         'utils.tour',
         'utils.feedback',
+        'utils.effects',
+        'utils.win_frameless',
         'utils._secret',   # gitignored; bundled only when present on build machine
         # ── networking (in-app updater + volunteer email) ─────────────────────
         'urllib.request',
