@@ -2,6 +2,14 @@
 import os, sys, tempfile
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["PYTHONUTF8"] = "1"
+# Force UTF-8 console output so the ✓/→ characters in the report never crash the
+# test on a legacy Windows code page (cp1255). Setting PYTHONUTF8 above is too
+# late — the interpreter reads it only at startup — so reconfigure the streams.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 import database as db
 _TMP = os.path.join(tempfile.gettempdir(), "search_test.db")
 for e in ("", "-wal", "-shm"):

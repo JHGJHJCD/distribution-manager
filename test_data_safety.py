@@ -2,6 +2,14 @@
 """Verify data-safety: legacy-DB migration + default automatic backups."""
 import os, sys, tempfile, sqlite3, shutil
 os.environ["PYTHONUTF8"] = "1"
+# Force UTF-8 console output so the ✓/✗ characters in the report never crash the
+# test on a legacy Windows code page (cp1255). Setting PYTHONUTF8 above is too
+# late — the interpreter reads it only at startup — so reconfigure the streams.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 import database as db
 
 WORK = os.path.join(tempfile.gettempdir(), "ms_safety")

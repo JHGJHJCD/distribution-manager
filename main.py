@@ -13,8 +13,8 @@ from PyQt6.QtWidgets import (
     QPushButton, QMessageBox, QWidget, QStatusBar, QFrame, QSplashScreen,
     QGraphicsDropShadowEffect
 )
-from PyQt6.QtCore import (Qt, QRect, QRectF, QPoint, QByteArray, QSharedMemory,
-                          QTimer, QEventLoop)
+from PyQt6.QtCore import (Qt, QRect, QRectF, QPoint, QPointF, QByteArray,
+                          QSharedMemory, QTimer, QEventLoop)
 from PyQt6.QtGui import (QFont, QIcon, QColor, QPixmap, QPainter, QLinearGradient,
                          QPen, QBrush, QGuiApplication)
 
@@ -383,6 +383,82 @@ class LoginDialog(QDialog):
 
 # ─── Main window ─────────────────────────────────────────────────────────────
 
+class _WinCtrlButton(QWidget):
+    """Custom-painted minimize / maximize / restore / close button for the
+    frameless title bar. Drawn with QPainter (thin strokes, perfectly centred)
+    so it stays crisp and small like a native Windows 11 caption button —
+    instead of oversized text glyphs that sit off-baseline."""
+
+    def __init__(self, kind, on_click, parent=None):
+        super().__init__(parent)
+        self._kind = kind            # 'min' | 'max' | 'restore' | 'close'
+        self._on_click = on_click
+        self._hover = False
+        self._down = False
+        self.setFixedSize(40, 30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def set_kind(self, kind):
+        self._kind = kind
+        self.update()
+
+    def enterEvent(self, e):
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, e):
+        self._hover = False
+        self.update()
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._down = True
+            self.update()
+
+    def mouseReleaseEvent(self, e):
+        was_down = self._down
+        self._down = False
+        self.update()
+        if was_down and self.rect().contains(e.position().toPoint()):
+            self._on_click()
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = self.rect()
+        # Hover / pressed background (close → red, others → soft white).
+        if self._hover or self._down:
+            if self._kind == "close":
+                bg = QColor("#c02828") if self._down else QColor("#e03e3e")
+            else:
+                bg = QColor(255, 255, 255, 95 if self._down else 60)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(bg)
+            p.drawRoundedRect(QRectF(r).adjusted(3, 2, -3, -2), 7, 7)
+        # Glyph — thin white stroke, centred on the pixel grid. Force NoBrush so
+        # the square glyphs are drawn as outlines only (the hover block above may
+        # have left a fill brush set).
+        pen = QPen(QColor("#ffffff"))
+        pen.setWidthF(1.3)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        cx, cy = r.center().x() + 0.5, r.center().y() + 0.5
+        s = 4.5
+        if self._kind == "min":
+            p.drawLine(QPointF(cx - s, cy), QPointF(cx + s, cy))
+        elif self._kind == "close":
+            p.drawLine(QPointF(cx - s, cy - s), QPointF(cx + s, cy + s))
+            p.drawLine(QPointF(cx - s, cy + s), QPointF(cx + s, cy - s))
+        elif self._kind == "restore":
+            # two overlapping squares (Windows "restore down" icon)
+            p.drawRect(QRectF(cx - s + 1.5, cy - s - 0.5, 2 * s - 1.5, 2 * s - 1.5))
+            p.drawRect(QRectF(cx - s - 1, cy - s + 2, 2 * s - 1.5, 2 * s - 1.5))
+        else:   # 'max'
+            p.drawRect(QRectF(cx - s, cy - s, 2 * s, 2 * s))
+        p.end()
+
+
 class _DragBar(QFrame):
     """The app-bar doubles as the window's title bar: press-and-drag moves the
     window (native move → Aero Snap works), double-click toggles maximize."""
@@ -602,26 +678,20 @@ class MainWindow(QMainWindow):
     # ── Frameless window: custom title-bar controls + native message handling ──
 
     def _build_window_buttons(self, layout):
-        """Minimize / maximize / close buttons for the custom title bar."""
-        def _mk(glyph, slot, close=False):
-            b = QPushButton(glyph)
-            b.setFixedSize(46, 40)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            hover = "#e03e3e" if close else "rgba(255,255,255,0.20)"
-            press = "#c02828" if close else "rgba(255,255,255,0.32)"
-            b.setStyleSheet(
-                "QPushButton{background:transparent; color:#ffffff; border:none;"
-                " border-radius:9px; font-size:15px; font-weight:600;}"
-                f"QPushButton:hover{{background:{hover};}}"
-                f"QPushButton:pressed{{background:{press};}}")
-            b.clicked.connect(slot)
-            layout.addWidget(b)
-            return b
+        """Minimize / maximize / close buttons for the custom title bar —
+        small, crisp, QPainter-drawn caption controls (see _WinCtrlButton)."""
+        layout.addSpacing(4)
+        _min = _WinCtrlButton("min", self.showMinimized)
+        _min.setToolTip("מזער")
+        layout.addWidget(_min, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        _mk("–", self.showMinimized)                       # –
-        self._btn_max = _mk("☐", self.toggle_max_restore)  # ☐
-        _mk("✕", self.close, close=True)                   # ✕
+        self._btn_max = _WinCtrlButton("max", self.toggle_max_restore)
+        self._btn_max.setToolTip("הגדל")
+        layout.addWidget(self._btn_max, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        _close = _WinCtrlButton("close", self.close)
+        _close.setToolTip("סגור")
+        layout.addWidget(_close, 0, Qt.AlignmentFlag.AlignVCenter)
 
     def toggle_max_restore(self):
         if self.isMaximized():
@@ -632,7 +702,7 @@ class MainWindow(QMainWindow):
     def _sync_max_button(self):
         btn = getattr(self, "_btn_max", None)
         if btn is not None:
-            btn.setText("❐" if self.isMaximized() else "☐")  # ❐ / ☐
+            btn.set_kind("restore" if self.isMaximized() else "max")
             btn.setToolTip("שחזר" if self.isMaximized() else "הגדל")
 
     def changeEvent(self, e):

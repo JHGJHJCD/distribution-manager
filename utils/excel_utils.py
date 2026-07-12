@@ -108,6 +108,25 @@ def _normalize_phone(val: str) -> str:
     return val
 
 
+# Hebrew final-form letters → their regular forms, so a substring match isn't
+# defeated by ן↔נ etc. (e.g. "אלמן" ends in a final nun but "אלמנה" uses a
+# regular nun — without this they wouldn't match).
+_HEB_FINALS = str.maketrans("ךםןףץ", "כמנפצ")
+
+# Marital-status roots (final letters normalized) that mean a ONE-adult
+# household. Matched as substrings so masculine/feminine spellings are both
+# covered (גרוש/גרושה, אלמן/אלמנה, רווק/רווקה, פרוד/פרודה).
+_SINGLE_PARENT_MARKERS = ("גרוש", "אלמנ", "רווק", "פרוד", "חד הורי", "חד-הורי", "לא נשוי")
+
+
+def _adults_in_household(marital_status) -> int:
+    """How many adults to count toward נפשות for this household. A single-parent
+    status (divorced/widowed/single/separated) → 1 adult; anything else,
+    including a blank/unknown status (the common case), → 2 (a couple)."""
+    s = str(marital_status or "").strip().translate(_HEB_FINALS)
+    return 1 if any(m in s for m in _SINGLE_PARENT_MARKERS) else 2
+
+
 def import_from_excel(path: str) -> List[Dict]:
     """Read recipients from תבנית ליהודה format Excel file."""
     import openpyxl
@@ -248,9 +267,13 @@ def import_from_excel(path: str) -> List[Dict]:
         house  = cell("house_num")
         address = (street + " " + house).strip() if street else house
 
-        # Souls: ילדים בבית + 2 parents
+        # Souls: children at home + the adults in the household. A single-parent
+        # household (divorced/widowed/single) has ONE adult, not two — counting a
+        # second adult would over-state נפשות and skew the need-score. A blank or
+        # unknown status defaults to two (a couple — the common case).
         children_home = _int_cell("children_home")
-        souls = children_home + 2
+        marital = cell("marital_status")
+        souls = children_home + _adults_in_household(marital)
 
         # Priority code → priority number + frequency.
         # 4 = קבוע → weekly regular flow; 3/2/1/0 = one-time (priority tiers);
@@ -300,7 +323,7 @@ def import_from_excel(path: str) -> List[Dict]:
             "children_home":     children_home,
             "children_married":  _int_cell("children_married"),
             "children_total":    _int_cell("children_total"),
-            "marital_status":    cell("marital_status"),
+            "marital_status":    marital,
             "email":             cell("email"),
             "synagogue":         cell("synagogue"),
             "housing_expenses":  cell("housing_expenses"),

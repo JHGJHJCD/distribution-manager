@@ -3,6 +3,14 @@
 end-to-end (counts, frequency mapping, ranking, need-score). Touches no real data."""
 import os, sys, tempfile
 os.environ["PYTHONUTF8"] = "1"
+# Force UTF-8 console output so the ✓/→ characters in the report never crash the
+# test on a legacy Windows code page (cp1255). Setting PYTHONUTF8 above is too
+# late — the interpreter reads it only at startup — so reconfigure the streams.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 import database as db
 db.DB_PATH = os.path.join(tempfile.gettempdir(), "prio_test.db")
 db.BACKUP_DIR = os.path.join(tempfile.gettempdir(), "prio_test_bk")
@@ -36,6 +44,14 @@ check("code 3 → frequency חד-פעמי", all(r.get("frequency") == "חד-פע
 check("code 2 → frequency חד-פעמי", all(r.get("frequency") == "חד-פעמי" for r in rows if r.get("priority") == 2))
 check("חובת בירור → חד-פעמי + no digit", all(
     r.get("frequency") == "חד-פעמי" for r in rows if "בירור" in (r.get("priority_raw") or "")))
+
+# ── souls = children-at-home + adults, adults inferred from marital status ──────
+from utils.excel_utils import _adults_in_household as _adults
+check("married → 2 adults",        _adults("נשוי") == 2 and _adults("נשואה") == 2)
+check("blank/unknown → 2 adults",  _adults("") == 2 and _adults(None) == 2 and _adults("לא ידוע") == 2)
+check("divorced → 1 adult",        _adults("גרוש") == 1 and _adults("גרושה") == 1)
+check("widow(er) → 1 adult",       _adults("אלמן") == 1 and _adults("אלמנה") == 1)  # final-nun normalization
+check("single/separated → 1 adult", _adults("רווק") == 1 and _adults("רווקה") == 1 and _adults("פרוד") == 1)
 
 # ── load into DB (replace) ─────────────────────────────────────────────────────
 db.reset_all_data()

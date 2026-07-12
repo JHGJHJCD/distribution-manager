@@ -26,7 +26,7 @@ def _css(fs: int = 11) -> str:
     """Print stylesheet at a given base font size (pt). Cell padding scales with
     the font so a smaller font also packs rows tighter — this lets a long list be
     shrunk to fit fewer pages (see the fit loop in print_distribution_list)."""
-    pad = max(2, fs // 3)
+    pad = max(1, fs // 4)          # tighter rows so more people fit per page
     small = max(7, fs - 2)
     return f"""
     body {{ font-family: 'Segoe UI', Arial; direction: rtl; font-size: {fs}pt; }}
@@ -37,15 +37,15 @@ def _css(fs: int = 11) -> str:
               border: 1px solid #f0c890; background-color: #fff8ec;
               padding: 4px; margin: 6px 0; }}
     table {{ width: 100%; border-collapse: collapse; margin-top: 8px; direction: rtl; }}
-    th {{ background-color: #1a4a7a; color: white; padding: {pad}px; text-align: right;
+    th {{ background-color: #1a4a7a; color: white; padding: {pad}px {pad + 2}px; text-align: right;
          border: 1px solid #305090; font-size: {fs}pt; }}
-    td {{ padding: {pad}px; text-align: right; border: 1px solid #aac; font-size: {fs}pt; }}
+    td {{ padding: {pad}px {pad + 2}px; text-align: right; border: 1px solid #aac; font-size: {fs}pt; }}
     tr:nth-child(even) {{ background-color: #eef3ff; }}
     .reserve-h {{ text-align: right; color: #b45309; font-size: {fs + 1}pt; font-weight: bold;
                  margin-top: 12px; border-bottom: 1px solid #f0c890; padding-bottom: 3px; }}
     table.reserve th {{ background-color: #b45309; border-color: #92400e; }}
     .footer {{ text-align: center; font-size: {small}pt; color: #888; margin-top: 6px; }}
-    .chk {{ text-align: center; font-size: {fs + 4}pt; width: {fs * 3}px; color: #305090; }}
+    .chk {{ text-align: center; font-size: {fs + 1}pt; width: {fs * 2}px; color: #305090; }}
     .num {{ text-align: center; width: {fs * 3}px; color: #555; }}
     .resgrid {{ width: 100%; border-collapse: collapse; margin-top: 6px; direction: rtl; }}
     .resgrid td {{ border: 1px solid #f0c890; padding: {pad}px 8px; text-align: right;
@@ -149,9 +149,15 @@ def _preview(printer: QPrinter, render, parent: QWidget, title: str):
     `render(printer)`. The user prints from the dialog's own toolbar."""
     dlg = QPrintPreviewDialog(printer, parent)
     dlg.setWindowTitle(title)
-    dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-    dlg.resize(900, 720)
+    # NOTE: do NOT force RightToLeft on the dialog itself — that reverses the
+    # preview toolbar and pushed the print button off the visible area (the user
+    # had to widen the window to reach it). The page CONTENT is already RTL via
+    # the HTML (direction:rtl), so the printout is unaffected.
     dlg.paintRequested.connect(render)
+    # Open maximized so the full toolbar — including the print button — and a
+    # large, readable preview are visible immediately.
+    dlg.resize(1100, 800)
+    dlg.setWindowState(Qt.WindowState.WindowMaximized)
     dlg.exec()
 
 
@@ -180,12 +186,14 @@ def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWid
         if has_logo:
             doc.addResource(QTextDocument.ResourceType.ImageResource,
                             QUrl("orglogo"), QImage(logo_path))
-        # Layout target: up to ~60 recipients per page. Compute the minimum pages
-        # needed at that cap, then pick the LARGEST (most readable) font that fits
-        # the list into that many pages — filling each page without cramming.
+        # Layout target: pack the list tightly — up to ~85 recipients per page.
+        # Compute the minimum pages needed at that density, then pick the LARGEST
+        # font that still fits the list into that many pages, so each page is
+        # filled (many people per page) while staying as readable as possible.
+        PER_PAGE = 85
         n_main = sum(1 for r in recipients if not r.get("_reserve"))
-        target_pages = max(1, (n_main + 59) // 60)
-        for fs in (12, 11, 10, 9, 8, 7):
+        target_pages = max(1, (n_main + PER_PAGE - 1) // PER_PAGE)
+        for fs in (12, 11, 10, 9, 8, 7, 6):
             doc.setDefaultStyleSheet(_css(fs))
             doc.setHtml(html)
             doc.setPageSize(page_size)

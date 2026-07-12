@@ -5,6 +5,14 @@ distributions land in history correctly. Touches only a TEMP db."""
 import os, sys, tempfile
 os.environ["PYTHONUTF8"] = "1"
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# Force UTF-8 console output so the ✓/✗ characters in the report never crash the
+# test on a legacy Windows code page (cp1255). Setting PYTHONUTF8 above is too
+# late — the interpreter reads it only at startup — so reconfigure the streams.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 import database as db
 db.DB_PATH = os.path.join(tempfile.gettempdir(), "vol_flow_test.db")
 db.BACKUP_DIR = os.path.join(tempfile.gettempdir(), "vol_flow_test_bk")
