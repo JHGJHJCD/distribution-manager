@@ -634,7 +634,10 @@ class GroupUpdateTab(QWidget):
             if rid in base_ids:
                 continue
             rec = db.get_recipient(rid)
-            if not rec:
+            # Drop a saved one-time pick that was since deleted OR is no longer
+            # active (suspended/ended) — otherwise a recipient removed from the
+            # active roster would silently reappear on the list and in the print.
+            if not rec or rec.get("status") != "פעיל":
                 continue
             rec = dict(rec)
             rec["_reserve"] = rid in self._reserve_ids

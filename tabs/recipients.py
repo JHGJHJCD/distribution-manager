@@ -585,7 +585,6 @@ class RecipientDialog(QDialog):
         self.f_priority.setToolTip("עדיפות בחלוקה: קבוע · עדיפות ראשונה · עדיפות שנייה · "
                                    "חובת בירור (ריק = לא בחלוקה)")
 
-        self.f_start_date = DateEdit(allow_empty=True)
         self.f_last_dist  = DateEdit(allow_empty=True)
         self.f_next_dist  = DateEdit(allow_empty=True)
         self.f_next_dist.setToolTip("מחושב אוטומטית לפי תדירות — ניתן לשנות")
@@ -614,12 +613,10 @@ class RecipientDialog(QDialog):
         f1.addRow("סטטוס:", self.f_status)
         # On ADD these are meaningless and only add noise: 'חלוקה אחרונה' is set
         # automatically when a distribution is recorded (a new recipient has none
-        # yet), 'חלוקה הבאה' is auto-computed from the frequency (✦), and
-        # 'תאריך התחלה' isn't used by any scheduling/display logic. Keep them only
-        # when editing an existing recipient (to view or correct). The widgets are
-        # still created above, so get_data()/validation keep working (empty on add).
+        # yet) and 'חלוקה הבאה' is auto-computed from the frequency (✦). Keep them
+        # only when editing an existing recipient (to view or correct). The widgets
+        # are still created above, so get_data()/validation keep working.
         if rec is not None:
-            f1.addRow("תאריך התחלה:", self.f_start_date)
             f1.addRow("חלוקה אחרונה:", self.f_last_dist)
             f1.addRow("חלוקה הבאה ✦:", self.f_next_dist)
         f1.addRow("הערות:", self.f_notes)
@@ -691,7 +688,6 @@ class RecipientDialog(QDialog):
             self.f_freq.setCurrentIndex(max(0, self.f_freq.findText(rec.get("frequency") or "")))
             self.f_status.setCurrentIndex(max(0, self.f_status.findText(rec.get("status") or "פעיל")))
             self.f_notes.setPlainText(rec.get("notes") or "")
-            self.f_start_date.set_from_iso(rec.get("start_date") or "")
             self.f_last_dist.set_from_iso(rec.get("last_distribution") or "")
             self.f_next_dist.set_from_iso(rec.get("next_distribution") or "")
 
@@ -839,7 +835,6 @@ class RecipientDialog(QDialog):
             "souls":              self.f_souls.value(),
             "frequency":          self.f_freq.currentText(),
             "status":             self.f_status.currentText(),
-            "start_date":         self.f_start_date.get_iso(),
             "last_distribution":  self.f_last_dist.get_iso(),
             "next_distribution":  self.f_next_dist.get_iso(),
             "notes":              self.f_notes.toPlainText().strip(),

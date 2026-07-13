@@ -629,22 +629,29 @@ def get_areas() -> list:
     return [r[0] for r in rows]
 
 
-def get_weekly_list(days_ahead: int = 30, area_filter: str = "הכל"):
+def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
     """Returns active recurring recipients due by the cutoff, sorted by name.
 
-    The cutoff ALWAYS reaches at least the upcoming distribution Wednesday
-    (inclusive), no matter which weekday the app is opened — otherwise, on the
-    day-before / day-of distribution (Tue/Wed) every regular whose next
-    distribution is that Wednesday would be filtered out and the list would look
-    empty. `days_ahead` can still widen the window beyond that for other callers.
+    By default the window reaches ONLY the upcoming distribution Wednesday
+    (inclusive) — so THIS week's list shows just those actually due now. A
+    bi-weekly/monthly recipient who was served last week has a next-distribution
+    further out and is therefore NOT shown again until their turn. `days_ahead`
+    can still widen the window for other callers (reports/tests). The cutoff
+    always includes the upcoming Wednesday no matter which weekday the app is
+    opened, so the list is never empty on the day-before/day-of distribution.
+
+    "Regular" = anyone who is not one-time: a real recurring frequency, OR marked
+    priority 'קבוע' (4) even if the frequency field was left blank — otherwise a
+    person tagged קבוע without a frequency would silently drop off the list.
     """
     today = date.today()
     base_wed = today if today.weekday() == 2 else next_wednesday(today)
-    cutoff = max(today + timedelta(days=days_ahead), base_wed + timedelta(days=1))
+    cutoff = max(today + timedelta(days=days_ahead), base_wed)
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT * FROM recipients WHERE status='פעיל' "
-            "AND frequency != 'חד-פעמי' AND frequency != '' ORDER BY full_name"
+            "AND frequency != 'חד-פעמי' AND (frequency != '' OR priority = 4) "
+            "ORDER BY full_name"
         ).fetchall()
         result = []
         updates = []
@@ -767,7 +774,8 @@ def get_regulars_scored(area_filter: str = "הכל"):
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT * FROM recipients WHERE status='פעיל' "
-            "AND frequency != 'חד-פעמי' AND frequency != '' ORDER BY full_name"
+            "AND frequency != 'חד-פעמי' AND (frequency != '' OR priority = 4) "
+            "ORDER BY full_name"
         ).fetchall()
     result = []
     for r in rows:
@@ -807,7 +815,7 @@ def compute_suggested_n(total_products: int) -> tuple[int, int]:
     with get_connection() as conn:
         regular_count = conn.execute(
             "SELECT COUNT(*) as c FROM recipients WHERE status='פעיל' "
-            "AND frequency != 'חד-פעמי' AND frequency != ''"
+            "AND frequency != 'חד-פעמי' AND (frequency != '' OR priority = 4)"
         ).fetchone()["c"]
     n = max(0, total_products - regular_count)
     return n, regular_count
