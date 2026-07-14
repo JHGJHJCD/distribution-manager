@@ -154,6 +154,34 @@ db.add_recipient({"full_name": "עתידי", "status": "פעיל", "frequency": 
 _wk = [r["full_name"] for r in db.get_weekly_list()]
 ok("weekly list excludes a future-dated last_distribution", "עתידי" not in _wk, str(_wk))
 
+# ── ותק: never-received counts from REGISTRATION date, not the year-2000 epoch ─
+_vet = {"last_distribution": "", "start_date": (_today - timedelta(days=500)).isoformat()}
+_new = {"last_distribution": "", "start_date": (_today - timedelta(days=5)).isoformat()}
+ok("recency: veteran (registered long ago) waits ~500d", db.recency_days(_vet) == 500, str(db.recency_days(_vet)))
+ok("recency: newcomer waits ~5d (not 26 years)", db.recency_days(_new) == 5, str(db.recency_days(_new)))
+ok("recency: a received date takes precedence over registration",
+   db.recency_days({"last_distribution": (_today - timedelta(days=3)).isoformat(),
+                    "start_date": (_today - timedelta(days=500)).isoformat()}) == 3)
+ok("recency: future registration clamps to 0",
+   db.recency_days({"start_date": (_today + timedelta(days=9)).isoformat()}) == 0)
+# and in a real ranking, the veteran outranks the newcomer on ותק alone
+_rank = selection.rank_by_need(
+    [{"id": "new", "full_name": "חדש", "frequency": "חד-פעמי", "priority": 3,
+      "days_since": db.recency_days(_new)},
+     {"id": "vet", "full_name": "ותיק", "frequency": "חד-פעמי", "priority": 3,
+      "days_since": db.recency_days(_vet)}],
+    {"recency": 100.0})
+ok("recency: veteran outranks newcomer on ותק", [r["id"] for r in _rank] == ["vet", "new"],
+   str([r["id"] for r in _rank]))
+
+# ── tie-break: EQUAL need → longest-waiting wins, not the alphabet ─────────────
+_tie = selection.rank_by_need(
+    [{"id": "early", "full_name": "אבי", "souls": "5", "days_since": 10},
+     {"id": "late",  "full_name": "תמר", "souls": "5", "days_since": 900}],
+    {"souls": 100.0})   # recency weight 0 → identical score; only the tie-break differs
+ok("tie-break: equal need → longest-waiting first (beats alphabetical 'אבי')",
+   [r["id"] for r in _tie] == ["late", "early"], str([r["full_name"] for r in _tie]))
+
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

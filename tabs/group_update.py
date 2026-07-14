@@ -661,7 +661,7 @@ class GroupUpdateTab(QWidget):
             except ValueError:
                 ld = date(2000, 1, 1)
             rec["last_dist_date"] = ld
-            rec["days_since"] = (date.today() - ld).days
+            rec["days_since"] = db.recency_days(rec)   # registration-based ותק
             out.append(rec)
         return out
 

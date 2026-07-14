@@ -745,6 +745,28 @@ def _annotate_need_scores(rows, weights: dict = None):
     return scoring.annotate_need_scores(rows, weights)
 
 
+def recency_days(rec: dict, today: date = None) -> int:
+    """Days used for the ותק (recency) need factor. Counts from the last
+    distribution; for someone who NEVER received, from their REGISTRATION date
+    (start_date, falling back to created_at) — NOT an arbitrary year-2000 epoch,
+    which made every never-served recipient look 26 years overdue and flattened
+    the recency scale for everyone who HAS received. So a freshly-registered
+    recipient starts with little 'waiting' credit and earns it over time, while a
+    veteran who registered long ago and never received ranks as genuinely overdue.
+    A future date (data-entry error) clamps to 0, never a negative wait."""
+    today = today or date.today()
+    for key in ("last_distribution", "start_date", "created_at"):
+        s = str(rec.get(key) or "").strip()
+        if not s:
+            continue
+        try:
+            d = date.fromisoformat(s[:10])   # created_at is 'YYYY-MM-DD HH:MM:SS'
+        except ValueError:
+            continue
+        return max(0, (today - d).days)
+    return 0
+
+
 def get_one_time_list(area_filter: str = "הכל"):
     """One-time recipients ranked for the priority distribution: priority-3 first
     then priority-2, each ordered by need-score (desc). Other codes
@@ -764,7 +786,7 @@ def get_one_time_list(area_filter: str = "הכל"):
         except ValueError:
             ld = date(2000, 1, 1)
         r["last_dist_date"] = ld
-        r["days_since"] = (date.today() - ld).days
+        r["days_since"] = recency_days(r)
         r["in_distribution"] = r.get("priority") in PRIORITY_TIERS
         result.append(r)
 
@@ -803,7 +825,7 @@ def get_regulars_scored(area_filter: str = "הכל"):
         except ValueError:
             ld = date(2000, 1, 1)
         r["last_dist_date"] = ld
-        r["days_since"] = (date.today() - ld).days
+        r["days_since"] = recency_days(r)
         r["_scored_regular"] = True
         result.append(r)
     # Highest need first, ties by NAME only — the one pure ranking used everywhere.
@@ -843,7 +865,7 @@ def get_scored_all(area_filter: str = "הכל"):
         except ValueError:
             ld = date(2000, 1, 1)
         r["last_dist_date"] = ld
-        r["days_since"] = (today - ld).days
+        r["days_since"] = recency_days(r, today)
         result.append(r)
     # Highest need first, ties by NAME only — the one pure ranking used everywhere.
     return selection.rank_by_need(result, get_need_weights())

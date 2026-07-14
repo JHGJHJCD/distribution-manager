@@ -59,10 +59,15 @@ def rank_by_need(rows: list, weights: dict) -> list:
     Used by the MERGED 'קבועים לפי ניקוד' mode: priority tier is deliberately NOT
     in the sort key — there it only gates who is a candidate. Once in, the order
     is pure need-score.
+    Tie-break (operator's choice): equal need → whoever has WAITED LONGEST
+    (days_since, desc) takes the last portion; name only as a final, stable
+    fallback — so equal-need recipients aren't decided by the alphabet.
     RULE 4: families with missing data sink to the bottom, because scoring gives a
     missing factor 0 points (not a neutral half)."""
     scoring.annotate_need_scores(rows, weights)
-    return sorted(rows, key=lambda r: (-(r.get("need_score") or 0), r.get("full_name") or ""))
+    return sorted(rows, key=lambda r: (-(r.get("need_score") or 0),
+                                       -(r.get("days_since") or 0),
+                                       r.get("full_name") or ""))
 
 
 def rank_one_time_priority(rows: list, weights: dict) -> list:
@@ -71,10 +76,12 @@ def rank_one_time_priority(rows: list, weights: dict) -> list:
     before every שנייה(2); need-score only orders WITHIN a tier; ties by NAME.
 
     This is the ordering the חד-פעמי tab's 'חשב המלצה' uses, distinct from the
-    merged scored mode (rank_by_need)."""
+    merged scored mode (rank_by_need). Tie-break within a tier+score: whoever has
+    WAITED LONGEST (days_since, desc), then name as a final stable fallback."""
     scoring.annotate_need_scores(rows, weights)
     return sorted(rows, key=lambda r: (-(r.get("priority") or 0),
                                        -(r.get("need_score") or 0),
+                                       -(r.get("days_since") or 0),
                                        r.get("full_name") or ""))
 
 
