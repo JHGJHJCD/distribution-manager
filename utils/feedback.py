@@ -138,6 +138,39 @@ def save_feedback(message: str, name: str = "") -> None:
     threading.Thread(target=_send_online, args=(entry,), daemon=True).start()
 
 
+# The developer's inbox — used by the optional "send a copy to my email" path in
+# the feedback dialog (bug #20). Sending uses the app's own SMTP settings.
+DEV_EMAIL = "xvxv99996@gmail.com"
+
+
+def email_to_dev(message: str, name: str = "") -> tuple[bool, str]:
+    """Send the feedback message straight to the developer's email using the
+    configured SMTP account. Returns (ok, error_message). Synchronous so the
+    dialog can tell the user whether it actually went out."""
+    message = (message or "").strip()
+    if not message:
+        return False, "הודעה ריקה"
+    try:
+        from utils import email_utils
+    except Exception as e:
+        return False, str(e)
+    if not email_utils.is_configured():
+        return False, "שליחת מייל לא הוגדרה (ראה לשונית הגדרות ← מייל למתנדבים)."
+    entry = _entry(message, name)
+    body = (
+        "<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
+        "<p><b>התקבלה הודעה מהמשתמש:</b></p>"
+        f"<p style='white-space:pre-wrap;'>{message}</p><hr>"
+        f"<p style='color:#6b7280;font-size:12px;'>מאת: {entry['name'] or 'אנונימי'} · "
+        f"גרסה v{entry['version']} · {entry['host'] or '—'} · {entry['ts']}</p></div>")
+    try:
+        email_utils.send_email(DEV_EMAIL, subject="הודעה למפתח — מנהל חלוקה",
+                               html_body=body)
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
 def read_feedback() -> list:
     """קורא את כל ההודעות המקומיות (לשימוש המפתח). מתעלם משורות פגומות."""
     out = []

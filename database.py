@@ -671,18 +671,25 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
             r["_status"] = r.get("weekly_status", "") or ""
             r["days_left"] = (nd - today).days
             # A regular is on this week's list if their turn is due by the cutoff,
-            # OR they were already served within the last few days — so recording
-            # a distribution to a regular doesn't make them vanish the same week
-            # and you can still hand them another round (bug 2).
+            # OR they were already served for THIS week's cycle — so recording a
+            # distribution to a regular doesn't make them vanish the same week and
+            # you can still hand them another round (bug 2).
             ld_str2 = r.get("last_distribution") or ""
             try:
                 ld2 = date.fromisoformat(ld_str2) if ld_str2 else None
             except ValueError:
                 ld2 = None
-            # 0 <= … guards against a FUTURE last_distribution (data-entry error):
-            # a future date would make the diff negative — also ≤ 6 — and wrongly
-            # keep the recipient on every week's list forever.
-            served_recently = ld2 is not None and 0 <= (today - ld2).days <= 6
+            # "Served for this cycle" = last_distribution falls anywhere from the
+            # last 6 days up to the UPCOMING distribution Wednesday (base_wed).
+            # Including that near-future window is essential: the operator normally
+            # dates a distribution on the coming Wednesday, which pushes
+            # next_distribution a week out — without this the regular would vanish
+            # from the list the instant the distribution is saved (bug: קבועים
+            # disappear after one distribution). Dates BEYOND base_wed (a real
+            # data-entry error) are still excluded, so a stray far-future date
+            # can't pin someone to every week's list forever.
+            served_recently = (ld2 is not None
+                               and (today - timedelta(days=6)) <= ld2 <= base_wed)
             if nd <= cutoff or served_recently:
                 result.append(r)
         if updates:
@@ -963,21 +970,58 @@ def get_batch_recipients(batch_id: int):
         return [dict(r) for r in rows]
 
 
+def _recompute_recipient_dates(conn, rec_id):
+    """Re-derive a recipient's last_distribution / next_distribution from the
+    distribution rows that REMAIN for them, after some history was deleted.
+
+    This keeps the two stores in sync: the `distributions` history table and the
+    denormalized `recipients.last_distribution` field. Without it, deleting a
+    distribution left the recipient's last_distribution pointing at an event that
+    no longer exists — so the one-time / weekly lists still showed them as
+    "received" on a date whose record was gone (the 'two data sources out of
+    sync' bug). last becomes the newest remaining dist_date (or empty if none);
+    next is recomputed from it by the recipient's frequency."""
+    row = conn.execute("SELECT frequency FROM recipients WHERE id=?", (rec_id,)).fetchone()
+    if not row:
+        return
+    freq = row["frequency"] or ""
+    last_row = conn.execute(
+        "SELECT MAX(dist_date) AS m FROM distributions WHERE recipient_id=?", (rec_id,)
+    ).fetchone()
+    last = (last_row["m"] if last_row else "") or ""
+    if last and freq and freq != "חד-פעמי":
+        nxt = calculate_next_dist(last, freq).isoformat()
+    else:
+        nxt = ""
+    conn.execute("UPDATE recipients SET last_distribution=?, next_distribution=? WHERE id=?",
+                 (last, nxt, rec_id))
+
+
 def delete_batch(batch_id: int):
-    """Delete a distribution batch AND its per-recipient history rows. Does NOT
-    roll back recipients' last/next distribution dates (kept as recorded)."""
+    """Delete a distribution batch AND its per-recipient history rows, then roll
+    back each affected recipient's last/next distribution to whatever history
+    REMAINS (keeps the denormalized dates in sync with the history table)."""
     with get_connection() as conn:
+        rec_ids = [r["recipient_id"] for r in conn.execute(
+            "SELECT DISTINCT recipient_id FROM distributions "
+            "WHERE batch_id=? AND recipient_id IS NOT NULL", (batch_id,))]
         conn.execute("DELETE FROM distributions WHERE batch_id=?", (batch_id,))
         conn.execute("DELETE FROM dist_batches WHERE id=?", (batch_id,))
+        for rid in rec_ids:
+            _recompute_recipient_dates(conn, rid)
 
 
 def delete_distribution(dist_id: int):
     """Delete a single distribution history record by its id. Used by the search
     tab to remove stray/old records (including legacy rows that carry no batch
-    link and so can't be removed from the 'חלוקות' batch view). Does NOT roll
-    back the recipient's last/next distribution dates."""
+    link and so can't be removed from the 'חלוקות' batch view). Rolls back the
+    recipient's last/next distribution to the remaining history."""
     with get_connection() as conn:
+        row = conn.execute("SELECT recipient_id FROM distributions WHERE id=?",
+                           (dist_id,)).fetchone()
         conn.execute("DELETE FROM distributions WHERE id=?", (dist_id,))
+        if row and row["recipient_id"] is not None:
+            _recompute_recipient_dates(conn, row["recipient_id"])
 
 
 def get_distributions(recipient_name: str = None, limit: int = 1000):

@@ -484,9 +484,9 @@ _orig_info = _QMB.information
 _QMB.information = staticmethod(lambda *a, **k: None)   # don't block on the popup
 db.add_recipient({"full_name": "__ot_issued__", "status": "פעיל",
                   "frequency": "חד-פעמי", "priority": 3, "souls": 5})
+db.set_setting("available_products", "999")
+db.set_setting("reserve_count", "0")
 _win.one_time_tab.refresh()
-_win.one_time_tab.products_spin.setValue(999)
-_win.one_time_tab.reserve_spin.setValue(0)
 _win.one_time_tab._calc_suggestion()
 _win.one_time_tab._add_to_group_update()
 _QMB.information = _orig_info

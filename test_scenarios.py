@@ -40,7 +40,9 @@ ok("S1 weekly excludes one-timers initially",
 # ── Scenario 2: one-time main + reserve → main CHECKED, reserve STANDBY (RULE 3)
 # 8 products, 5 regulars served first → 3 slots for one-timers (main), +1 reserve.
 ot = win.one_time_tab
-ot.refresh(); ot.products_spin.setValue(8); ot.reserve_spin.setValue(1); ot._calc_suggestion()
+# 'מוצרים זמינים'/'רזרבה' now live in the group tab (shared via settings).
+db.set_setting("available_products", "8"); db.set_setting("reserve_count", "1")
+ot.refresh(); ot._calc_suggestion()
 ot._add_to_group_update()
 gt = win.group_tab
 gt_checked = [gt._rows_data[r]["full_name"] for r in range(gt.table.rowCount())
@@ -57,7 +59,7 @@ ok("S2 reserve still flagged for the print", any(r.get("_reserve") for r in gt._
 ok("S2 print INCLUDES the reserve section (standby handed to distributor)",
    "רזרבה — לפי סדר עדיפות" in _build_html(gt._get_export_rows(), "10/06/2026"))
 # record the distribution from group_update
-gt.products.set_products([("סל מזון", 1)]); gt.dist_input.setCurrentText("מחלק א")
+gt.dist_input.setCurrentText("מחלק א")
 n_before = len(db.get_distributions())
 gt._save()
 ok("S2 distribution recorded for the picks", len(db.get_distributions()) > n_before)

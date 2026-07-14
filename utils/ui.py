@@ -480,9 +480,11 @@ class FeedbackDialog:
     def open(parent=None):
         from PyQt6.QtWidgets import (
             QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-            QPlainTextEdit, QPushButton, QMessageBox,
+            QPlainTextEdit, QPushButton, QMessageBox, QCheckBox,
         )
+        from utils import feedback as _feedback
         from utils.feedback import save_feedback
+        from utils import email_utils
 
         dlg = QDialog(parent)
         dlg.setWindowTitle("השארת הודעה למפתח")
@@ -517,6 +519,17 @@ class FeedbackDialog:
         rtl_text_area(msg)
         lay.addWidget(msg)
 
+        # Optional: also email the message straight to the developer (bug #20).
+        # Enabled only when the app's email is configured.
+        _mail_ready = email_utils.is_configured()
+        chk_email = QCheckBox("שלח את ההודעה גם למייל של המפתח")
+        chk_email.setChecked(_mail_ready)
+        chk_email.setEnabled(_mail_ready)
+        if not _mail_ready:
+            chk_email.setToolTip("כדי לשלוח במייל יש להגדיר תחילה מייל בלשונית "
+                                 "הגדרות ← מייל למתנדבים")
+        lay.addWidget(chk_email)
+
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         cancel = QPushButton("ביטול")
@@ -538,7 +551,14 @@ class FeedbackDialog:
             except Exception as e:
                 QMessageBox.warning(dlg, "שגיאה", f"שמירת ההודעה נכשלה:\n{e}")
                 return
-            QMessageBox.information(dlg, "תודה!", "ההודעה נשמרה ותטופל. תודה רבה!")
+            note = "ההודעה נשמרה ותטופל. תודה רבה!"
+            if chk_email.isChecked():
+                with busy_cursor():
+                    ok, err = _feedback.email_to_dev(text, name_edit.text())
+                note += ("\n\nההודעה נשלחה גם למייל של המפתח ✓" if ok
+                         else f"\n\n⚠ שליחת המייל למפתח נכשלה: {err}\n"
+                              "(ההודעה נשמרה בכל זאת ותגיע דרך ערוץ אחר.)")
+            QMessageBox.information(dlg, "תודה!", note)
             dlg.accept()
 
         send.clicked.connect(_do_send)

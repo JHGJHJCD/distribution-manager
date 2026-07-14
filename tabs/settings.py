@@ -181,7 +181,7 @@ class SettingsTab(QWidget):
         w_btns.addWidget(btn_reset_w)
         w_btns.addStretch()
         w_lay.addLayout(w_btns)
-        grid.addWidget(w_frame, 2, 0, _AT)
+        grid.addWidget(w_frame, 1, 1, _AT)
 
         # ── Backup section ────────────────────────────────
         bk_frame = QFrame()
@@ -261,7 +261,7 @@ class SettingsTab(QWidget):
         danger_btns.addWidget(btn_reset)
         danger_btns.addStretch()
         danger_lay.addLayout(danger_btns)
-        grid.addWidget(danger_frame, 2, 1, _AT)
+        grid.addWidget(danger_frame, 3, 0, 1, 2, _AT)   # full-width bottom strip
 
         # ── Volunteer email section ────────────────────────
         mail_frame = QFrame()
@@ -358,7 +358,7 @@ class SettingsTab(QWidget):
         self.lbl_mail_status.setObjectName("subtitle")
         self.lbl_mail_status.setWordWrap(True)
         mail_lay.addWidget(self.lbl_mail_status)
-        grid.addWidget(mail_frame, 1, 1, _AT)
+        grid.addWidget(mail_frame, 2, 0, _AT)
 
         # ── Organization / branding section ───────────────────
         # Makes the app charity-agnostic: the name shown on the top bar is data,
@@ -412,9 +412,9 @@ class SettingsTab(QWidget):
         org_btns.addWidget(btn_org_save)
         org_btns.addStretch()
         org_lay.addLayout(org_btns)
-        grid.addWidget(org_frame, 3, 0, _AT)
+        grid.addWidget(org_frame, 2, 1, _AT)
 
-        # ── Bottom row: feedback + refresh ────────────────────────────────────
+        # ── Bottom row: feedback ──────────────────────────────────────────────
         bottom_row = QHBoxLayout()
         # A second, easy-to-find entry point to the feedback dialog (the small
         # one lives in the status bar; users look for it here in Settings).
@@ -425,13 +425,8 @@ class SettingsTab(QWidget):
         self.btn_feedback.clicked.connect(self._open_feedback)
         bottom_row.addWidget(self.btn_feedback)
         bottom_row.addStretch()
-
-        btn_refresh = QPushButton("רענן")
-        btn_refresh.setObjectName("neutral")
-        btn_refresh.setMaximumWidth(110)
-        btn_refresh.setToolTip("טען מחדש את פרטי ההגדרות")
-        btn_refresh.clicked.connect(self.refresh)
-        bottom_row.addWidget(btn_refresh)
+        # (The manual "רענן" button was removed — the settings screen reloads
+        # itself every time the tab is opened, so it served no purpose.)
         lay.addLayout(bottom_row)
         lay.addStretch()
 
@@ -731,9 +726,27 @@ class SettingsTab(QWidget):
         QMessageBox.information(self, "נשמר", "הגדרות המייל נשמרו ✓")
 
     def _test_mail_settings(self):
+        # Actually SEND a real test email (to the sender's own address) and report
+        # success only if the send truly went through — a login-only check could
+        # look "ok" while a real send still fails (bug #19). No internet / bad
+        # password / blocked SMTP all surface here as a failure.
         self._save_mail_settings_silent()
+        cfg = email_utils.get_smtp_config()
+        if not (cfg["email"] and cfg["app_password"]):
+            QMessageBox.warning(self, "בדיקת מייל",
+                                "יש למלא כתובת מייל וסיסמת אפליקציה תחילה.")
+            return
         with busy_cursor():
-            ok, msg = email_utils.test_connection()
+            try:
+                email_utils.send_email(
+                    cfg["email"],
+                    subject="בדיקת מייל — מנהל חלוקה",
+                    html_body="<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
+                              "זוהי הודעת בדיקה. אם קיבלת אותה — שליחת המייל מוגדרת כראוי ✓</div>")
+                ok, msg = True, (f"נשלח מייל בדיקה בהצלחה אל {cfg['email']} ✓\n"
+                                 "בדוק שההודעה הגיעה לתיבת הדואר.")
+            except Exception as e:
+                ok, msg = False, f"השליחה נכשלה — ודא חיבור לאינטרנט וסיסמת אפליקציה תקינה.\n\n{e}"
         if ok:
             QMessageBox.information(self, "בדיקת מייל", msg)
         else:

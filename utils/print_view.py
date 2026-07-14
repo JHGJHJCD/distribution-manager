@@ -234,7 +234,7 @@ def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
         ("הערות", _v("notes")),
     ]
     details = "".join(
-        f"<tr><th style='width:150px;background:#eef3ff;color:#1a4a7a;'>{label}</th>"
+        f"<tr><th style='width:28%;background:#eef3ff;color:#1a4a7a;'>{label}</th>"
         f"<td>{val}</td></tr>"
         for label, val in rows
     )
@@ -293,7 +293,10 @@ def print_recipient_card(rec: Dict, history: List[Dict], parent: QWidget = None)
         if has_logo:
             doc.addResource(QTextDocument.ResourceType.ImageResource,
                             QUrl("orglogo"), QImage(logo_path))
-        doc.setDefaultStyleSheet(_css(11))
+        # A single recipient's card has a whole A4 page to itself, so print it at
+        # a much larger base font (~3–4× the list's 11pt) — the previous size came
+        # out tiny and hard to read (bug #18).
+        doc.setDefaultStyleSheet(_css(30))
         doc.setHtml(card_html)
         doc.setPageSize(QSizeF(pr.pageLayout().paintRectPixels(pr.resolution()).size()))
         doc.print(pr)

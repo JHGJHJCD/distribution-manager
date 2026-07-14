@@ -79,24 +79,13 @@ class OneTimeTab(QWidget):
         self.search_input.textChanged.connect(lambda: self._search_timer.start(180))
         ctrl.addWidget(self.search_input)
 
-        ctrl.addWidget(QLabel("מוצרים זמינים:"))
-        self.products_spin = QSpinBox()
-        self.products_spin.setRange(0, 9999)
-        self.products_spin.setValue(0)
-        self.products_spin.setToolTip("הכנס כמה מוצרים יש — המערכת תחשב כמה לחד-פעמיים")
-        self.products_spin.setFixedWidth(90)
-        ctrl.addWidget(self.products_spin)
-
-        ctrl.addWidget(QLabel("רזרבה:"))
-        self.reserve_spin = QSpinBox()
-        self.reserve_spin.setRange(0, 999)
-        try:
-            self.reserve_spin.setValue(int(db.get_setting("reserve_count") or 5))
-        except (ValueError, TypeError):
-            self.reserve_spin.setValue(5)
-        self.reserve_spin.setToolTip("כמה אנשי רזרבה (הבאים בתור לפי עדיפות) להוסיף לרשימה")
-        self.reserve_spin.setFixedWidth(70)
-        ctrl.addWidget(self.reserve_spin)
+        # 'מוצרים זמינים' + 'רזרבה' now live in the 'חלוקה ורישום' tab (single
+        # source of truth). Here we only READ and display them.
+        self.lbl_products_info = QLabel("")
+        self.lbl_products_info.setStyleSheet("color:#475569; font-weight:700;")
+        self.lbl_products_info.setToolTip(
+            "מספר המוצרים והרזרבה נקבעים בלשונית 'חלוקה ורישום'")
+        ctrl.addWidget(self.lbl_products_info)
 
         btn_calc = QPushButton("חשב המלצה")
         btn_calc.setStyleSheet(_SMALL_GREEN_BTN)
@@ -165,17 +154,45 @@ class OneTimeTab(QWidget):
         lay.addLayout(bot)
 
     def refresh(self):
-        # Full list (no area filter) — the free-text search below narrows it.
-        self._rows_data = db.get_one_time_list(area_filter="הכל")
-        # Product count is shared with 'חלוקה ורישום' (bug 11) — reflect any change.
+        # Only real distribution candidates (priority ראשונה/שנייה) are shown —
+        # data-only one-timers with no priority are no longer listed here (bug #5;
+        # they also used to show a stray 'received' date, now fixed at the source).
+        self._rows_data = [r for r in db.get_one_time_list(area_filter="הכל")
+                           if r.get("in_distribution")]
+        self._update_products_info()
+        # Land pre-marked: auto-apply the recommendation from the shared product
+        # count so the operator (who arrives here from 'חלוקה ורישום') just reviews
+        # and adds. If no count is set yet, show the list unmarked.
+        total = self._shared_total()
+        if total > 0:
+            n, _regs = db.compute_suggested_n(total)
+            reserve_n = self._shared_reserve()
+            self._populate(suggested_n=n, reserve_n=reserve_n)
+        else:
+            self._populate()
+
+    @staticmethod
+    def _shared_total() -> int:
         try:
-            self.products_spin.blockSignals(True)
-            self.products_spin.setValue(int(db.get_setting("available_products") or 0))
+            return int(db.get_setting("available_products") or 0)
         except (TypeError, ValueError):
-            pass
-        finally:
-            self.products_spin.blockSignals(False)
-        self._populate()
+            return 0
+
+    @staticmethod
+    def _shared_reserve() -> int:
+        try:
+            return int(db.get_setting("reserve_count") or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _update_products_info(self):
+        total = self._shared_total()
+        if total <= 0:
+            self.lbl_products_info.setText("מוצרים זמינים: לא הוגדר (נקבע ב'חלוקה ורישום')")
+            return
+        n, regs = db.compute_suggested_n(total)
+        self.lbl_products_info.setText(
+            f"מוצרים זמינים: {total} · קבועים: {regs} · לחד-פעמיים: {n} · רזרבה: {self._shared_reserve()}")
 
     _SEARCH_KEYS = ("full_name", "phone1", "phone2", "phone3", "area",
                     "id_number", "spouse_id_number", "address", "external_id",
@@ -297,17 +314,17 @@ class OneTimeTab(QWidget):
         show_score_breakdown(self, self._rows_data[row])
 
     def _calc_suggestion(self):
-        total = self.products_spin.value()
+        total = self._shared_total()
         if total <= 0:
-            QMessageBox.information(self, "", "הכנס מספר מוצרים זמינים")
+            QMessageBox.information(
+                self, "",
+                "לא הוגדר מספר מוצרים.\nהגדר 'מוצרים זמינים' בלשונית 'חלוקה ורישום'.")
             return
-        db.set_setting("available_products", str(total))   # shared with חלוקה ורישום
         # Regulars are served first from the same pool; only the REMAINDER goes to
-        # the one-time list (bug 11) — so a product is never counted twice.
+        # the one-time list — so a product is never counted twice.
         n, regular_count = db.compute_suggested_n(total)
-        reserve_n = self.reserve_spin.value()
-        db.set_setting("reserve_count", str(reserve_n))   # remember as default
-        in_dist_count = sum(1 for x in self._rows_data if x.get("in_distribution"))
+        reserve_n = self._shared_reserve()
+        in_dist_count = len(self._rows_data)
         picked = min(n, in_dist_count)
         reserve_picked = max(0, min(reserve_n, in_dist_count - picked))
         self._populate(suggested_n=n, reserve_n=reserve_n)
@@ -315,8 +332,7 @@ class OneTimeTab(QWidget):
         if regular_count:
             msg += f"קבועים שנצרכים קודם: {regular_count}  →  נשאר לחד-פעמיים: {n}\n"
         msg += (
-            f"מועמדים בעדיפות (ראשונה+שנייה): {in_dist_count}\n\n"
-            f"סומנו {picked} עיקריים + {reserve_picked} רזרבה — לפי סדר עדיפות\n"
+            f"\nסומנו {picked} עיקריים + {reserve_picked} רזרבה — לפי סדר עדיפות\n"
             f"(ראשונה קודם, אחר כך שנייה, ובתוך כל דרגה לפי ניקוד הצורך)."
         )
         if n > in_dist_count:

@@ -97,12 +97,8 @@ class DistributionsTab(QWidget):
         self.count_lbl.setObjectName("subtitle")
         top.addWidget(self.count_lbl)
 
-        btn_refresh = QPushButton("רענן")
-        btn_refresh.setObjectName("neutral")
-        btn_refresh.setStyleSheet(_SMALL_BTN)
-        btn_refresh.clicked.connect(self.refresh)
-        top.addWidget(btn_refresh)
-
+        # (The manual "רענן" button was removed — the tab already reloads itself
+        # every time it's opened and after a delete, so it had no real use.)
         self.btn_delete = QPushButton("מחק חלוקה")
         self.btn_delete.setObjectName("danger")
         self.btn_delete.setStyleSheet(_SMALL_BTN)

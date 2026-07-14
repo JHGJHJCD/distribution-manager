@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QColor, QFont, QIcon
 from datetime import date
-from widgets import DateEdit, ProductsEditor
+from widgets import DateEdit
 import database as db
 import selection
 from utils.backup import auto_backup_async
@@ -41,6 +41,26 @@ from styles import (OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG
                     SELECTED_BG, SELECTED_FG)
 
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+# The auto-complete suggestion list of an editable QComboBox is a SEPARATE
+# top-level QCompleter popup — it isn't reached by the app's "QComboBox
+# QAbstractItemView" theme rule, so without this it rendered as unreadable
+# light-on-black (bugs #2, #13). Style its popup explicitly: white card, dark
+# text, blue selection.
+_COMPLETER_POPUP_QSS = (
+    "QAbstractItemView{background:#ffffff; color:#0f172a; border:1px solid #d7dfea;"
+    " border-radius:8px; padding:4px; font-size:14px; outline:none;"
+    " selection-background-color:#1e88e5; selection-color:#ffffff;}")
+
+
+def _style_completer(combo):
+    """Make an editable combo's suggestion popup readable (see note above)."""
+    comp = combo.completer()
+    if comp is None:
+        return
+    popup = comp.popup()
+    if popup is not None:
+        popup.setStyleSheet(_COMPLETER_POPUP_QSS)
 
 # colours for one-time picks (+ reserve)
 _RESERVE_BG, _RESERVE_FG = "#ede7f6", "#5e35b1"
@@ -352,6 +372,7 @@ class GroupUpdateTab(QWidget):
         self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה. אפשר לבחור משמות קודמים.")
         self.name_input.addItems(self._load_history("dist_names_history"))
         self.name_input.setCurrentText("")
+        _style_completer(self.name_input)
 
         self.date_edit = DateEdit(allow_empty=False)
         self.date_edit.setMinimumWidth(130)
@@ -366,29 +387,54 @@ class GroupUpdateTab(QWidget):
         self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
         self.dist_input.addItems(self._load_history("distributors_history"))
         self.dist_input.setCurrentText(db.get_setting("last_distributor") or "")
+        _style_completer(self.dist_input)
 
         self.note_input = QLineEdit()
         self.note_input.setPlaceholderText("הערה כללית שתישמר עם החלוקה (לא חובה)")
         self.note_input.setAlignment(ALIGN_RIGHT)
-        self.note_input.setToolTip("הערה על כל החלוקה — נשמרת בלשונית 'חלוקות' ומצורפת לכל מקבל")
+        self.note_input.setToolTip("הערה על כל החלוקה — נשמרת פעם אחת בלשונית 'חלוקות'")
+
+        # מוצרים זמינים + רזרבה — moved here from the 'חד פעמי' tab so the whole
+        # distribution starts from ONE place (single source of truth, shared via
+        # the 'available_products'/'reserve_count' settings). The count drives how
+        # many portions are left for one-timers after the regulars are served.
+        self.products_spin = QSpinBox()
+        self.products_spin.setRange(0, 99999)
+        self.products_spin.setToolTip("כמה מוצרים/מנות יש בסך הכל בחלוקה זו. "
+                                      "הקבועים נצרכים קודם; מה שנשאר עובר לחד-פעמיים.")
+        try:
+            self.products_spin.setValue(int(db.get_setting("available_products") or 0))
+        except (TypeError, ValueError):
+            self.products_spin.setValue(0)
+        self.products_spin.valueChanged.connect(self._on_products_changed)
+
+        self.reserve_spin = QSpinBox()
+        self.reserve_spin.setRange(0, 999)
+        self.reserve_spin.setToolTip("כמה אנשי רזרבה (הבאים בתור לפי עדיפות) לצרף לחד-פעמיים")
+        try:
+            self.reserve_spin.setValue(int(db.get_setting("reserve_count") or 5))
+        except (TypeError, ValueError):
+            self.reserve_spin.setValue(5)
+        self.reserve_spin.valueChanged.connect(self._on_reserve_changed)
+
+        # Live "how many portions are left for one-timers" hint.
+        self.lbl_leftover = QLabel("")
+        self.lbl_leftover.setStyleSheet("color:#475569; font-size:12.5px; font-weight:700;"
+                                        " background:transparent; border:none;")
+        self.lbl_leftover.setWordWrap(True)
 
         grid.addLayout(_field("שם החלוקה", self.name_input), 0, 0)
         grid.addLayout(_field("תאריך", self.date_edit), 0, 1)
         grid.addLayout(_field("מחלק", self.dist_input), 0, 2)
-        grid.addLayout(_field("הערה כללית לחלוקה", self.note_input), 1, 0, 1, 3)
+        grid.addLayout(_field("מוצרים זמינים", self.products_spin, maxw=140), 1, 0)
+        grid.addLayout(_field("רזרבה", self.reserve_spin, maxw=120), 1, 1)
+        grid.addWidget(self.lbl_leftover, 1, 2, Qt.AlignmentFlag.AlignBottom)
+        grid.addLayout(_field("הערה כללית לחלוקה", self.note_input), 2, 0, 1, 3)
         grid.setColumnStretch(0, 2)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(2, 1)
         c1.addLayout(grid)
         top_col.addWidget(card1)
-
-        # ── Card 2: products ──────────────────────────────────────────────────
-        card2, c2 = _make_card("מה מחלקים", "box", hint="הכמות היא לכל אדם")
-        self.products = ProductsEditor()
-        self.products.setToolTip("רשום כל מוצר שחולק ואת הכמות שכל אדם מקבל ממנו. "
-                                 "אפשר להוסיף כמה מוצרים לאותה חלוקה.")
-        c2.addWidget(self.products)
-        top_col.addWidget(card2)
 
         # ── Card 3: volunteer messaging ───────────────────────────────────────
         card3, c3 = _make_card("שליחה למתנדב", "mail")
@@ -404,6 +450,7 @@ class GroupUpdateTab(QWidget):
         self.volunteer_email_input.setToolTip("כתובת המייל של המתנדב שימלא את הרשימה")
         self.volunteer_email_input.addItems(self._load_history("volunteer_emails_history"))
         self.volunteer_email_input.setCurrentText("")
+        _style_completer(self.volunteer_email_input)
         vol_row.addLayout(_field("אימייל המתנדב", self.volunteer_email_input, maxw=300))
 
         btn_send_vol = QPushButton(" שלח למתנדב")
@@ -477,23 +524,12 @@ class GroupUpdateTab(QWidget):
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         toolbar.addLayout(_field("מצב חלוקה לקבועים", self.mode_combo, maxw=240))
 
-        # Scored-mode only: mark the top-N leaders by available portions
-        self.portions_spin = QSpinBox()
-        self.portions_spin.setRange(0, 100000)
-        self.portions_spin.setMinimumHeight(42)
-        self.portions_spin.setToolTip("כמה מנות זמינות לחלוקה — מסמן את המובילים בניקוד עד למספר זה.\n"
-                                      "המספר משותף עם 'מוצרים זמינים' בלשונית חד-פעמי.")
-        try:
-            self.portions_spin.setValue(int(db.get_setting("available_products") or 0))
-        except (TypeError, ValueError):
-            self.portions_spin.setValue(0)
-        self._portions_field = _field("מנות זמינות", self.portions_spin, maxw=130)
-        toolbar.addLayout(self._portions_field)
-
+        # Scored-mode only: mark the top-N leaders by the available-products count
+        # (the same 'מוצרים זמינים' field in the details card above).
         self.btn_mark_leaders = QPushButton("סמן מובילים")
         self.btn_mark_leaders.setStyleSheet(_BTN_SUCCESS)
         self.btn_mark_leaders.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_mark_leaders.setToolTip("מסמן את בעלי הניקוד הגבוה ביותר עד למספר המנות הזמינות")
+        self.btn_mark_leaders.setToolTip("מסמן את בעלי הניקוד הגבוה ביותר עד למספר 'מוצרים זמינים'")
         self.btn_mark_leaders.clicked.connect(self._mark_leaders)
         toolbar.addWidget(self.btn_mark_leaders)
 
@@ -680,44 +716,101 @@ class GroupUpdateTab(QWidget):
         self.refresh()
 
     def _update_mode_controls(self):
-        """Show the 'available portions' spin + 'mark leaders' button only in the
-        scored mode, where ranking-by-need is what drives the selection."""
+        """Show the 'mark leaders' button only in the scored mode, where
+        ranking-by-need is what drives the selection."""
         scored = self._current_mode() == "scored"
-        self.portions_spin.setVisible(scored)
         self.btn_mark_leaders.setVisible(scored)
-        for i in range(self._portions_field.count()):
-            w = self._portions_field.itemAt(i).widget()
-            if w is not None:
-                w.setVisible(scored)
+
+    def _on_products_changed(self, *_):
+        db.set_setting("available_products", str(self.products_spin.value()))
+        self._update_leftover_hint()
+
+    def _on_reserve_changed(self, *_):
+        db.set_setting("reserve_count", str(self.reserve_spin.value()))
+        self._update_leftover_hint()
+
+    def _one_time_remainder(self) -> int:
+        """How many products are left for one-timers after the regulars due this
+        week are served (0 in 'none'/'scored' modes, where regulars aren't
+        auto-served first)."""
+        n, _regs = db.compute_suggested_n(self.products_spin.value())
+        return n
+
+    def _main_pick_count(self) -> int:
+        """One-time picks added for THIS distribution that are real recipients
+        (not reserves) — what 'completing the one-time selection' is measured by."""
+        return len(self._extra_ids - self._reserve_ids)
+
+    def _update_leftover_hint(self):
+        """Explain, live, whether products still need one-time recipients."""
+        total = self.products_spin.value()
+        if total <= 0:
+            self.lbl_leftover.setText("")
+            return
+        n, regs = db.compute_suggested_n(total)
+        if n <= 0:
+            self.lbl_leftover.setStyleSheet(
+                "color:#059669; font-size:12.5px; font-weight:700; background:transparent; border:none;")
+            self.lbl_leftover.setText(f"מספיק לקבועים בלבד ({regs}) — אפשר להדפיס ✓")
+        else:
+            picks = self._main_pick_count()
+            done = picks >= n
+            self.lbl_leftover.setStyleSheet(
+                ("color:#059669;" if done else "color:#b45309;") +
+                " font-size:12.5px; font-weight:700; background:transparent; border:none;")
+            state = "נבחרו ✓" if done else "טרם הושלם — בחר בלשונית 'חד פעמי'"
+            self.lbl_leftover.setText(f"נשאר לחד-פעמיים: {n}  ·  נבחרו: {picks}  ({state})")
 
     def _mark_leaders(self):
-        """Check the top-N recipients by need-score, N = available portions."""
-        n = self.portions_spin.value()
-        db.set_setting("available_products", str(n))   # shared with the חד-פעמי tab
+        """Check the top-N recipients by need-score, N = 'מוצרים זמינים'."""
+        n = self.products_spin.value()
         # _rows_data is already need-ordered (scored mode) with the SAME name
         # tie-break as the display, so the top-N here matches exactly what's shown.
         ranked = self._rows_data
         self._checked_ids = {r.get("id") for r in ranked[:n] if r.get("id") is not None}
         self._populate()
 
+    def _one_time_gate_ok(self, action: str) -> bool:
+        """Bug #9 workflow gate: if the product count leaves portions for
+        one-timers, block printing / Excel export until the operator has actually
+        chosen one-time recipients — and send them straight to the 'חד פעמי' tab
+        to do it (bug #11: jump to where the missing data is entered). If the
+        products only cover the regulars, there's nothing to complete → allowed."""
+        n = self._one_time_remainder()
+        if n <= 0 or self._main_pick_count() > 0:
+            return True
+        QMessageBox.warning(
+            self, "בחירת חד-פעמיים חסרה",
+            f"לפי מספר המוצרים נשארו {n} מנות לחד-פעמיים.\n"
+            f"יש לבחור את מקבלי החד-פעמי בלשונית 'חד פעמי' ולהוסיפם לחלוקה — "
+            f"לפני {action}.")
+        mw = self.main_win
+        if mw is not None and hasattr(mw, "one_time_tab"):
+            mw.tabs.setCurrentWidget(mw.one_time_tab)
+        return False
+
     def refresh(self):
         mode = self._current_mode()
         if mode == "none":
             base = []
         elif mode == "scored":
-            # Merged mode: regulars AND one-time candidates on one need-score scale.
-            base = db.get_scored_all(area_filter="הכל")
+            # 'קבועים לפי ניקוד' — regulars ranked by need-score. One-timers are
+            # NOT auto-included here (they used to appear before being chosen, bug
+            # #12); they join the list only when explicitly added from the חד-פעמי
+            # tab, exactly like the schedule mode.
+            base = db.get_regulars_scored(area_filter="הכל")
         else:
             base = db.get_weekly_list(area_filter="הכל")
-        if mode == "scored":
-            # Pick up the shared product count if the חד-פעמי tab changed it.
+        # Pick up the shared product/reserve counts if another tab changed them.
+        for spin, key, default in ((self.products_spin, "available_products", 0),
+                                   (self.reserve_spin, "reserve_count", 5)):
             try:
-                self.portions_spin.blockSignals(True)
-                self.portions_spin.setValue(int(db.get_setting("available_products") or 0))
+                spin.blockSignals(True)
+                spin.setValue(int(db.get_setting(key) or default))
             except (TypeError, ValueError):
                 pass
             finally:
-                self.portions_spin.blockSignals(False)
+                spin.blockSignals(False)
         base_ids = {r["id"] for r in base}
         extras = self._extra_recipients(base_ids)
         self._rows_data = base + extras
@@ -744,6 +837,7 @@ class GroupUpdateTab(QWidget):
         self._seen_ids = set(live)
         self._checked_ids &= live      # forget ticks for people no longer listed
         self._populate()
+        self._update_leftover_hint()
 
     def _visible_rows(self):
         """The list rows currently shown — the whole list, or the quick-search
@@ -824,6 +918,19 @@ class GroupUpdateTab(QWidget):
 
         self.table.blockSignals(False)
         self._update_counts()
+        # Mode-aware empty message (bug #15): 'בלי קבועים' leaves the list empty by
+        # design — say so and point to where recipients come from, instead of a
+        # bare "no recipients".
+        lbl = getattr(self.table, "_empty_label", None)
+        if lbl is not None:
+            if self._current_mode() == "none":
+                lbl.setText("מצב 'בלי קבועים': הקבועים אינם בחלוקה זו.\n\n"
+                            "כדי להוסיף מקבלים — עבור ללשונית 'חד פעמי', בחר את "
+                            "מקבלי החד-פעמי ולחץ 'הוסף נבחרים לעדכון קבוצתי'.")
+            elif self._search_text:
+                lbl.setText("אין תוצאות לחיפוש זה")
+            else:
+                lbl.setText("אין מקבלים להצגה")
         refresh_empty_state(self.table)
         self._resize_table_height()
 
@@ -910,40 +1017,25 @@ class GroupUpdateTab(QWidget):
             return
 
         dist_date    = self.date_edit.get_iso()
-        what         = self.products.products_display()
-        qty          = self.products.total_qty()
         distributor  = self.dist_input.currentText().strip()
         dist_name    = self.name_input.currentText().strip()
         general_note = self.note_input.text().strip()
 
         _ERR = "border: 2px solid #dc2626; background-color: #fff5f5;"
-        errors = []
-        if self.products.is_empty():
-            self.products.setStyleSheet("QLineEdit{" + _ERR + "}")
-            errors.append("מה חולק: יש לרשום לפחות מוצר אחד")
-        else:
-            self.products.setStyleSheet("")
         if not distributor:
             self.dist_input.setStyleSheet(_ERR)
             self.dist_input.setToolTip("חובה למלא שם המחלק")
-            errors.append("שם המחלק: שדה חובה")
-        else:
-            self.dist_input.setStyleSheet("")
-            self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
-        if errors:
-            QMessageBox.warning(self, "שדות חסרים", "• " + "\n• ".join(errors))
+            QMessageBox.warning(self, "שדות חסרים", "• שם המחלק: שדה חובה")
             return
+        self.dist_input.setStyleSheet("")
+        self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
 
-        # A general note is recorded on the batch AND appended to each recipient.
-        if general_note:
-            suffix = f" | הערה כללית: {general_note}"
-            for rec in checked:
-                rec["notes"] = (rec.get("notes") or "") + suffix
-
+        # The general note is recorded ONCE on the batch (bug #7) — no longer
+        # duplicated into every recipient's per-person note.
         export_path = None
         export_err = None
         with busy_cursor():
-            db.bulk_add_distributions(checked, dist_date, what, qty, distributor,
+            db.bulk_add_distributions(checked, dist_date, "", 0, distributor,
                                       dist_name=dist_name, general_note=general_note)
             auto_backup_async()
             # Merged action: also export a full Excel (of who received) to Downloads.
@@ -968,7 +1060,6 @@ class GroupUpdateTab(QWidget):
         self._checked_ids.clear()
         self._seen_ids.clear()
         self.note_input.clear()
-        self.products.clear()
 
         if export_path:
             reveal_in_folder(export_path)   # open Downloads with the file selected
@@ -1013,6 +1104,8 @@ class GroupUpdateTab(QWidget):
         return rows if rows else list(self._rows_data)
 
     def _export_excel(self):
+        if not self._one_time_gate_ok("ייצוא לאקסל"):
+            return
         checked = self._get_export_rows()
         dist_date = _fdate(self.date_edit.get_iso())
         try:
@@ -1028,7 +1121,7 @@ class GroupUpdateTab(QWidget):
 
     def _send_to_volunteer(self):
         dist_name   = self.name_input.currentText().strip()
-        what        = self.products.products_display()
+        what        = ""     # products list removed (bug #9)
         distributor = self.dist_input.currentText().strip()
         to_addr     = self.volunteer_email_input.currentText().strip()
 
@@ -1043,11 +1136,6 @@ class GroupUpdateTab(QWidget):
                 errors.append(f"{label}: שדה חובה")
             else:
                 widget.setStyleSheet("")
-        if self.products.is_empty():
-            self.products.setStyleSheet("QLineEdit{" + _ERR + "}")
-            errors.append("מה חולק: יש לרשום לפחות מוצר אחד")
-        else:
-            self.products.setStyleSheet("")
         if not to_addr:
             self.volunteer_email_input.setStyleSheet(_ERR)
             errors.append("אימייל מתנדב: שדה חובה")
@@ -1078,7 +1166,7 @@ class GroupUpdateTab(QWidget):
         Shared by the 'שלח למתנדב' button and the post-print prompt."""
         dist_date_iso = self.date_edit.get_iso()
         dist_date_disp = _fdate(dist_date_iso)
-        qty = self.products.total_qty()
+        qty = 0     # products list removed (bug #9)
         try:
             with busy_cursor():
                 # Store the ISO date (not the dd/mm/yyyy display string) so a
@@ -1168,13 +1256,9 @@ class GroupUpdateTab(QWidget):
             if reply != QMessageBox.StandardButton.Yes:
                 return 0, meta, []
 
-        general_suffix = (f" | הערה כללית: {meta['general_note']}"
-                          if meta.get("general_note") else "")
-        records = []
-        for r in received:
-            rec = dict(r)
-            rec["notes"] = (r.get("notes") or "") + general_suffix
-            records.append(rec)
+        # The general note is stored ONCE on the batch (bug #7), not appended to
+        # every recipient — each recipient keeps only their own per-person note.
+        records = [dict(r) for r in received]
 
         with busy_cursor():
             db.bulk_add_distributions(
@@ -1219,6 +1303,8 @@ class GroupUpdateTab(QWidget):
             return
         self.name_input.setStyleSheet("")
         self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה. אפשר לבחור משמות קודמים.")
+        if not self._one_time_gate_ok("הדפסה"):
+            return
         # Remember the name typed for print too, so it's suggested next time.
         self._push_history("dist_names_history", name)
         checked = self._get_export_rows()
@@ -1229,10 +1315,10 @@ class GroupUpdateTab(QWidget):
         # when email is set up and a volunteer address is present (else stay quiet).
         to_addr = self.volunteer_email_input.currentText().strip()
         if email_utils.is_configured() and to_addr and _EMAIL_RE.match(to_addr):
-            what = self.products.products_display()
+            what = ""     # products list removed (bug #9)
             distributor = self.dist_input.currentText().strip()
-            if not what or not distributor:
-                return   # can't build a proper email without these; skip silently
+            if not distributor:
+                return   # can't build a proper email without a distributor; skip
             reply = QMessageBox.question(
                 self, "שליחה למתנדב",
                 f"לשלוח את הרשימה גם למתנדב במייל ({to_addr})?",
