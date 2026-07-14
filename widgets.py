@@ -32,6 +32,29 @@ class WednesdayCalendar(QCalendarWidget):
         self.setFirstDayOfWeek(Qt.DayOfWeek.Sunday)
         self.setGridVisible(False)
 
+        # ── Fix "the whole calendar is black" bug ────────────────────────────
+        # Inside the QDateEdit popup the calendar inherited a dark palette (white
+        # text on a near-black surface, so it read as an all-black box). Pin an
+        # explicit light theme: white day grid with dark text and a blue header.
+        self.setStyleSheet(
+            "QCalendarWidget QWidget{ background:#ffffff; }"
+            "QCalendarWidget QAbstractItemView:enabled{"
+            " background:#ffffff; color:#1f2937;"
+            " selection-background-color:#1976d2; selection-color:#ffffff;"
+            " outline:0; }"
+            "QCalendarWidget QAbstractItemView:disabled{ color:#c7cdd6; }"
+            "QCalendarWidget QWidget#qt_calendar_navigationbar{"
+            " background:#1565c0; }"
+            "QCalendarWidget QToolButton{"
+            " color:#ffffff; background:transparent; font-size:14px;"
+            " font-weight:700; padding:4px 10px; }"
+            "QCalendarWidget QToolButton:hover{ background:#1976d2;"
+            " border-radius:6px; }"
+            "QCalendarWidget QToolButton::menu-indicator{ image:none; }"
+            "QCalendarWidget QMenu{ background:#ffffff; color:#1f2937; }"
+            "QCalendarWidget QSpinBox{ background:#ffffff; color:#1f2937;"
+            " selection-background-color:#1976d2; }")
+
         # ── Fix "two-digit dates vanish" bug ─────────────────────────────────
         # In the QDateEdit popup the calendar sized its columns too narrow, so
         # Qt elided two-digit day numbers (10–31) down to nothing while single

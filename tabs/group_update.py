@@ -12,13 +12,14 @@ from PyQt6.QtGui import QColor, QFont, QIcon
 from datetime import date
 from widgets import DateEdit, ProductsEditor
 import database as db
+import selection
 from utils.backup import auto_backup_async
 from utils.excel_utils import (export_distribution_to_excel, export_full_distribution_to_excel,
                                export_volunteer_checklist_to_excel, import_volunteer_checklist)
 from utils.print_view import print_distribution_list
 from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
                       enable_touch_scroll, search_icon, line_icon, reveal_in_folder,
-                      apply_header_icons)
+                      apply_header_icons, show_score_breakdown)
 from utils import email_utils
 
 
@@ -480,9 +481,10 @@ class GroupUpdateTab(QWidget):
         self.portions_spin = QSpinBox()
         self.portions_spin.setRange(0, 100000)
         self.portions_spin.setMinimumHeight(42)
-        self.portions_spin.setToolTip("כמה מנות זמינות לחלוקה — מסמן את המובילים בניקוד עד למספר זה")
+        self.portions_spin.setToolTip("כמה מנות זמינות לחלוקה — מסמן את המובילים בניקוד עד למספר זה.\n"
+                                      "המספר משותף עם 'מוצרים זמינים' בלשונית חד-פעמי.")
         try:
-            self.portions_spin.setValue(int(db.get_setting("scored_portions") or 0))
+            self.portions_spin.setValue(int(db.get_setting("available_products") or 0))
         except (TypeError, ValueError):
             self.portions_spin.setValue(0)
         self._portions_field = _field("מנות זמינות", self.portions_spin, maxw=130)
@@ -524,6 +526,12 @@ class GroupUpdateTab(QWidget):
         toolbar.addWidget(btn_uncheck_all)
 
         toolbar.addStretch()
+        body.addLayout(toolbar)
+
+        # Count chips live on their OWN row (not crammed into the toolbar) so the
+        # extra scored-mode controls can never squeeze/clip the 'סה"כ' chip.
+        counts_row = QHBoxLayout()
+        counts_row.setSpacing(8)
         self.lbl_checked = QLabel("סומנו: 0")
         self.lbl_total = QLabel("סה\"כ ברשימה: 0")
         self.lbl_souls = QLabel("נפשות: 0")
@@ -531,8 +539,10 @@ class GroupUpdateTab(QWidget):
         self.lbl_total.setStyleSheet(_CHIP_QSS)
         self.lbl_souls.setStyleSheet(_CHIP_QSS)
         for lbl in (self.lbl_checked, self.lbl_total, self.lbl_souls):
-            toolbar.addWidget(lbl)
-        body.addLayout(toolbar)
+            lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            counts_row.addWidget(lbl)
+        counts_row.addStretch()
+        body.addLayout(counts_row)
 
         # ── Recipient list (tall card, sticky header, internal scroll) ────────
         list_card = QFrame()
@@ -568,6 +578,7 @@ class GroupUpdateTab(QWidget):
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.table.itemChanged.connect(self._on_item_changed)
+        self.table.cellClicked.connect(self._on_cell_clicked)
         lc.addWidget(self.table)
         attach_empty_state(self.table, "אין מקבלים להצגה")
         body.addWidget(list_card)
@@ -641,6 +652,16 @@ class GroupUpdateTab(QWidget):
                 continue
             rec = dict(rec)
             rec["_reserve"] = rid in self._reserve_ids
+            # Give picks the same recency fields the scored/weekly lists carry, so
+            # that in 'scored' mode they can be re-scored on the SAME scale as
+            # everyone else (a missing days_since would wrongly zero their ותק).
+            ld_str = rec.get("last_distribution") or ""
+            try:
+                ld = date.fromisoformat(ld_str) if ld_str else date(2000, 1, 1)
+            except ValueError:
+                ld = date(2000, 1, 1)
+            rec["last_dist_date"] = ld
+            rec["days_since"] = (date.today() - ld).days
             out.append(rec)
         return out
 
@@ -651,6 +672,10 @@ class GroupUpdateTab(QWidget):
 
     def _on_mode_changed(self, *_):
         db.set_setting("dist_regulars_mode", self._current_mode())
+        # Start each mode with a clean selection so ticks don't bleed across modes
+        # (schedule re-ticks everyone; scored starts empty for 'סמן מובילים').
+        self._checked_ids.clear()
+        self._seen_ids.clear()
         self._update_mode_controls()
         self.refresh()
 
@@ -668,9 +693,10 @@ class GroupUpdateTab(QWidget):
     def _mark_leaders(self):
         """Check the top-N recipients by need-score, N = available portions."""
         n = self.portions_spin.value()
-        db.set_setting("scored_portions", str(n))
-        ranked = sorted(self._rows_data,
-                        key=lambda r: -(r.get("need_score") or 0))
+        db.set_setting("available_products", str(n))   # shared with the חד-פעמי tab
+        # _rows_data is already need-ordered (scored mode) with the SAME name
+        # tie-break as the display, so the top-N here matches exactly what's shown.
+        ranked = self._rows_data
         self._checked_ids = {r.get("id") for r in ranked[:n] if r.get("id") is not None}
         self._populate()
 
@@ -679,23 +705,42 @@ class GroupUpdateTab(QWidget):
         if mode == "none":
             base = []
         elif mode == "scored":
-            base = db.get_regulars_scored(area_filter="הכל")
+            # Merged mode: regulars AND one-time candidates on one need-score scale.
+            base = db.get_scored_all(area_filter="הכל")
         else:
             base = db.get_weekly_list(area_filter="הכל")
+        if mode == "scored":
+            # Pick up the shared product count if the חד-פעמי tab changed it.
+            try:
+                self.portions_spin.blockSignals(True)
+                self.portions_spin.setValue(int(db.get_setting("available_products") or 0))
+            except (TypeError, ValueError):
+                pass
+            finally:
+                self.portions_spin.blockSignals(False)
         base_ids = {r["id"] for r in base}
         extras = self._extra_recipients(base_ids)
         self._rows_data = base + extras
         if mode == "scored":
-            # give the one-time picks a need_score too, so the whole list ranks
-            # on the same scale, then order everyone by need (highest first).
-            db._annotate_need_scores(extras)
-            self._rows_data.sort(key=lambda r: -(r.get("need_score") or 0))
+            # Score EVERYONE (base + picks) together on ONE need scale, then order
+            # by need (highest first), ties by name. Scoring the picks separately
+            # would rank them on a different 0–100 scale and mis-order the merge.
+            self._rows_data = selection.rank_by_need(self._rows_data, db.get_need_weights())
         live = {r.get("id") for r in self._rows_data}
-        # Newly-appeared one-time picks arrive pre-checked; anyone already seen
-        # keeps whatever tick state the operator left them in.
-        for rid in self._extra_ids:
-            if rid not in self._seen_ids and rid in live:
-                self._checked_ids.add(rid)
+        # In the schedule/receipt workflow everyone starts marked as 'received'
+        # (the operator only UNticks the no-shows, bug 6). In 'scored' mode the
+        # job is to PICK the top-N by portions, so rows start unticked there and
+        # 'סמן מובילים' selects them. Either way, a row the operator explicitly
+        # unticked keeps its state across search/refresh.
+        default_checked = (mode != "scored")
+        if default_checked:
+            for rid in live:
+                # RULE 3: reserve picks are standby — they ride along on the list
+                # (and print as a separate section) but are NOT ticked-for-record,
+                # so a reserve is only saved if the operator activates them for a
+                # no-show. Everyone else starts ticked as 'received'.
+                if rid not in self._seen_ids and rid not in self._reserve_ids:
+                    self._checked_ids.add(rid)
         self._seen_ids = set(live)
         self._checked_ids &= live      # forget ticks for people no longer listed
         self._populate()
@@ -791,6 +836,15 @@ class GroupUpdateTab(QWidget):
         header_h = self.table.horizontalHeader().height() or 44
         total = header_h + max(rows, 4) * row_h + 4
         self.table.setFixedHeight(total)
+
+    def _on_cell_clicked(self, row, col):
+        """Clicking a name (col 1) opens the need-score breakdown — same as the
+        'חד פעמי' tab — for any row that has a score (scored regulars + picks)."""
+        if col != 1:
+            return
+        rows = self._visible_rows()
+        if 0 <= row < len(rows) and rows[row].get("_score_parts"):
+            show_score_breakdown(self, rows[row])
 
     def _on_item_changed(self, item):
         """Keep _checked_ids in sync when the operator ticks/unticks a row."""
@@ -909,8 +963,10 @@ class GroupUpdateTab(QWidget):
         self._extra_ids.clear()
         self._reserve_ids.clear()
         self._persist_extras()
-        # Reset the entry fields + ticks for a clean next distribution.
+        # Reset the entry fields + ticks for a clean next distribution. Clearing
+        # _seen_ids too means the next refresh re-ticks everyone as 'received'.
         self._checked_ids.clear()
+        self._seen_ids.clear()
         self.note_input.clear()
         self.products.clear()
 
@@ -940,9 +996,21 @@ class GroupUpdateTab(QWidget):
             combo.blockSignals(False)
 
     def _get_export_rows(self):
-        """Rows to export/print: the checked set if any, else the whole list."""
+        """Rows to print/export: everyone ticked as 'received', PLUS the reserve
+        (standby) picks even though they're unticked — RULE 3: reserve is not
+        recorded, but it must still appear on the printed list as its own section
+        so the distributor has backups on hand for no-shows."""
         checked = self._get_checked_recipients()
-        return checked if checked else list(self._rows_data)
+        checked_ids = {r.get("id") for r in checked}
+        reserve = []
+        for rec in self._rows_data:
+            rid = rec.get("id")
+            if (rec.get("_reserve") or rid in self._reserve_ids) and rid not in checked_ids:
+                r = dict(rec)
+                r["_reserve"] = True
+                reserve.append(r)
+        rows = checked + reserve
+        return rows if rows else list(self._rows_data)
 
     def _export_excel(self):
         checked = self._get_export_rows()

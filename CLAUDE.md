@@ -13,8 +13,8 @@
 
 ## Architecture Rules
 - העדף שימוש בקוד קיים על פני כתיבת חדש; אל תשכפל לוגיקה — חלץ helper משותף.
-- לוגיקה עסקית מחוץ ל-UI כשאפשר (`scoring.py`/`database.py` — מודולים טהורים), הלשוניות רק מציגות.
-- שמור על הפרדה קיימת: `scoring` = חישוב, `database` = נתונים, `tabs/` = תצוגה, `utils/` = שירותים.
+- לוגיקה עסקית מחוץ ל-UI כשאפשר (`scoring.py`/`selection.py`/`database.py` — מודולים טהורים), הלשוניות רק מציגות.
+- שמור על הפרדה קיימת: `scoring` = ניקוד, `selection` = מי-מקבל (gate/סדר/רזרבה), `database` = נתונים, `tabs/` = תצוגה, `utils/` = שירותים. **כלל בחירת-מקבלים חדש? ל-`selection.py` + טסט ב-`test_selection.py`, לא לתוך לשונית.**
 
 ## סדר עדיפויות בהתנגשות
 **שלמות נתונים → כללים עסקיים → יציבות → חוויית משתמש → איכות קוד.** כששניים מתנגשים, המוקדם מנצח.
@@ -39,8 +39,9 @@
 ## עץ הפרויקט
 ```
 main.py            # tab_specs, splash, single-instance, DPI, יציאה
-database.py         # SQLite + re-export של scoring
+database.py         # SQLite + re-export של scoring/selection
 scoring.py          # מודול טהור: annotate_need_scores, NEED_FACTORS
+selection.py        # מודול טהור: מקור-אמת יחיד ל"מי מקבל" (gate/ranking/roles/reserve)
 widgets.py          # ProductsEditor ועוד
 styles.py · version.py
 tabs/
@@ -81,7 +82,7 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 - **`group_update.py` — "חלוקה ורישום"** (לשונית פתיחה, מיזוג weekly+group). מרובה מוצרים (`widgets.ProductsEditor` — כמות|סוג|מחק, כל שורה עם "כמות לאדם", נשמר כמחרוזת ב-`what_dist`) + הערה כללית. חיפוש מהיר מסנן את רשימת השבוע (`db.filter_recipients`). סימון מוחזק ב-`_checked_ids` (שורד סינון) + `_seen_ids` לסימון-מראש של חד-פעמיים. רישום → `bulk_add_distributions(..., dist_name, general_note)` (יוצר גם שורת אצווה). זרימת מתנדבים: `_dispatch_volunteer_email`/`_import_volunteer_results`.
   עיצוב (v2.37+): כרטיסים לבנים (`_make_card`/`_field`) על רקע `#f5f7fb`, כפתורים `_BTN_PRIMARY/_SUCCESS/_DANGER/_GHOST`, אייקוני-קו (`utils.ui.line_icon`), סרגל פעולות תחתון קבוע. כרטיסי פרטים+מוצרים+מתנדב עטופים ב-`QScrollArea` פנימי (`top_scroll`) כך שרשימת המקבלים (`list_card`, stretch=1) מקבלת את רוב הגובה — ויזואלי בלבד.
 - **`recipients.py`** — CRUD מקבלים + דיאלוג, סינון עדיפות. כפתור "בדיקת כפילויות" → `review.py` כדיאלוג.
-- **`one_time.py`** — חלוקת עדיפות לחד-פעמיים: ניקוד צורך, רזרבה, לחיצה על שם → פירוט ניקוד.
+- **`one_time.py`** — חלוקת עדיפות לחד-פעמיים: ניקוד צורך, רזרבה, לחיצה על שם → פירוט ניקוד (`utils.ui.show_score_breakdown`, RTL). מספר "מוצרים זמינים" משותף עם `group_update` דרך setting `available_products`; `compute_suggested_n` צורך קבועים קודם.
 - **`search.py`** — "חיפוש מהיר" מאוחד. רשימה → כרטיס-פרופיל HTML + היסטוריה. `HighlightDelegate`, `BadgeDelegate`, ייצוא, `print_recipient_card`.
 - **`distributions.py`** — "חלוקות": שורה לכל אצווה מ-`dist_batches`. לחיצה כפולה → `BatchDetailsDialog`, מחיקה `db.delete_batch`.
 - **`settings.py`** — סיסמה, עדכון, משקלי ניקוד, גיבויים, איפוס, פאנל "מייל למתנדבים" (SMTP), פריסת 2 טורים.
@@ -92,10 +93,18 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 - SMTP דורש **App Password של Gmail** (myaccount.google.com/apppasswords, מצריך 2FA) שמזין המשתמש בהגדרות.
 - כל ייצואי האקסל → תיקיית **הורדות** (`_downloads_dir`). לניקוי תא בטסט: `ws.cell(r,c).value = None`.
 
-## עדיפות וניקוד צורך
-- קוד מקור (מאקסל): 4=קבוע→שבועי · 3=ראשונה · 2=שנייה (3/2 = `PRIORITY_TIERS` לחד-פעמי) · 1/0/בירור/**ריק = נתונים בלבד, לא מסומנים ולא בשבועי**. נשמר כ-`priority`+`priority_raw`. **המספרים לא מוצגים** — רק תוויות עברית (תואמות `PRIORITY_BADGES` ב-`utils/ui.py`).
-- `scoring.annotate_need_scores(rows, weights)`: 0–100 = שקלול 6 גורמים (`NEED_FACTORS`), משקלים מתכווננים (`need_w_*`, סכום 100). מאכלס `_score_parts` לפירוט בלחיצה.
-- רזרבה: `one_time` עם `reserve_count` — N עיקריים + K הבאים; ההדפסה מפצלת ל"חלוקה"/"רזרבה" (landscape).
+## עדיפות וניקוד צורך — `selection.py` (מקור-אמת יחיד)
+כל שאלת "מי מקבל, באיזה סדר, ולמה" עוברת דרך `selection.py` (טהור, בלי DB/Qt). הלשוניות ו-`database.py` רק צורכים אותו. ארבעת הכללים העסקיים (הכריע המפעיל, 07/2026) — כל אחד ומקומו בקוד:
+1. **עדיפות מול ניקוד** — עדיפות (3/2) היא **שער כניסה** בלבד (`is_one_time_candidate`). *איך* ממיינים תלוי במצב:
+   - **חלוקת עדיפות חד-פעמי** (`selection.rank_one_time_priority`, דרך `db.get_one_time_list`): עדיפות **גוברת** — כל ראשונה(3) לפני כל שנייה(2), ניקוד ממיין רק **בתוך** דרגה.
+   - **מצב "קבועים לפי ניקוד"** (`selection.rank_by_need`, דרך `db.get_scored_all`/`get_regulars_scored`): עדיפות רק שער; הסדר לפי **ניקוד בלבד** — שנייה עם ניקוד גבוה יכולה להקדים ראשונה נמוכה.
+2. **קבועים מול חד-פעמיים** — שני מצבים נשמרים (בורר "מצב חלוקה לקבועים"): `schedule` (קבועים קודם לפי לוח; `compute_suggested_n` מנכה מהמלאי **רק את הקבועים שבתור השבוע** = `len(get_weekly_list())`, לא כל הקבועים — דו-שבועי/חודשי שלא בתור לא גוזל מנה) / `scored` (מתחרים יחד בניקוד) / `none`.
+3. **רזרבה = רשימת המתנה** — `selection.assign_roles` מסמן `_role` (main/reserve/out). רזרבה **לא נרשמת** כברירת מחדל (`recorded_by_default`→False): מגיעה ללא-סימון ב-`group_update` (`refresh` מדלג על `_reserve_ids`), אבל **כן מודפסת** כמקטע נפרד (`_get_export_rows` מוסיף רזרבה גם ללא סימון). נרשמת רק אם המפעיל מפעיל אותה במקום מי שלא הגיע.
+4. **חוסר נתונים → תחתית התור** — ב-`scoring.annotate_need_scores` גורם **חסר תורם 0 נק'** (לא ניטרלי 0.5), גם ל-"high" וגם ל-"low". נתון חסר רק פוגע, לעולם לא מזכה — משפחה עם נתונים חסרים שוקעת לתחתית.
+- קוד מקור (מאקסל): 4=קבוע→שבועי · 3=ראשונה · 2=שנייה (3/2 = `PRIORITY_TIERS`) · 1/0/בירור/**ריק = נתונים בלבד**. נשמר כ-`priority`+`priority_raw`. **המספרים לא מוצגים** — רק תוויות עברית (`PRIORITY_BADGES` ב-`utils/ui.py`).
+- `scoring.annotate_need_scores`: 0–100 = שקלול 6 גורמים (`NEED_FACTORS`), משקלים מתכווננים (`need_w_*`, סכום 100). `_score_parts` לפירוט בלחיצה. שוברי-שוויון במיון = **שם בלבד** (כדי שגורם עם משקל 0 לא יחזור בדלת האחורית).
+- `db.delete_distribution(id)` — מחיקת רישום חלוקה בודד (מלשונית "חיפוש מהיר"), לרישומים ישנים ללא `batch_id`.
+- הדפסת רזרבה: `utils/print_view.py` מפצל לפי `_reserve` ל"חלוקה"/"רזרבה — לפי סדר עדיפות".
 
 ## כללים עסקיים קריטיים
 - **נפשות בייבוא** = "ילדים בבית" + מבוגרים במשק הבית. מבוגרים נגזר ממצב אישי (`_adults_in_household` ב-`utils/excel_utils.py`): חד-הורי (גרוש/אלמן/רווק/פרוד — עם נרמול אותיות סופיות) = 1, נשוי/ריק/לא ידוע = 2.
@@ -117,4 +126,4 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 - משוב: `utils/feedback.py` → Google Form + JSONL מקומי.
 
 ## בדיקות
-סקריפטים עצמאיים (לא pytest): `test_all`, `test_deep`, `test_data_safety`, `test_scenarios`, `test_search`, `test_priority_import`, `test_volunteer_flow`, `test_updater`. `dev/stress_test.py [rounds]` (offscreen, `PYTHONUTF8=1`). כל הקבצים UTF-8 (טרמינל מציג mojibake אך הנתונים תקינים).
+סקריפטים עצמאיים (לא pytest): `test_all`, `test_deep`, `test_selection` (4 הכללים העסקיים — עדיפות/ניקוד/רזרבה/חוסר-נתונים), `test_data_safety`, `test_scenarios`, `test_search`, `test_priority_import`, `test_volunteer_flow`, `test_updater`. `dev/stress_test.py [rounds]` (offscreen, `PYTHONUTF8=1`). כל הקבצים UTF-8 (טרמינל מציג mojibake אך הנתונים תקינים).

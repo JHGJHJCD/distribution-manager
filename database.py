@@ -670,7 +670,20 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
                 updates.append((r["next_distribution"], r["id"]))
             r["_status"] = r.get("weekly_status", "") or ""
             r["days_left"] = (nd - today).days
-            if nd <= cutoff:
+            # A regular is on this week's list if their turn is due by the cutoff,
+            # OR they were already served within the last few days — so recording
+            # a distribution to a regular doesn't make them vanish the same week
+            # and you can still hand them another round (bug 2).
+            ld_str2 = r.get("last_distribution") or ""
+            try:
+                ld2 = date.fromisoformat(ld_str2) if ld_str2 else None
+            except ValueError:
+                ld2 = None
+            # 0 <= … guards against a FUTURE last_distribution (data-entry error):
+            # a future date would make the diff negative — also ≤ 6 — and wrongly
+            # keep the recipient on every week's list forever.
+            served_recently = ld2 is not None and 0 <= (today - ld2).days <= 6
+            if nd <= cutoff or served_recently:
                 result.append(r)
         if updates:
             conn.executemany("UPDATE recipients SET next_distribution=? WHERE id=?", updates)
@@ -685,6 +698,7 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
 # writing the user-tunable weights) plus re-exports so existing callers and
 # tests keep working via `db.NEED_FACTORS`, `db._need_num`, etc.
 import scoring
+import selection
 from scoring import (NEED_FACTORS, DEFAULT_NEED_WEIGHTS, PRIORITY_TIERS,
                      _need_num, _norm)
 
@@ -756,11 +770,12 @@ def get_one_time_list(area_filter: str = "הכל"):
 
     in_dist = [r for r in result if r["in_distribution"]]
     others = [r for r in result if not r["in_distribution"]]
-    _annotate_need_scores(in_dist)
+    # RULE 1 (one-time priority distribution): priority DOMINATES — every ראשונה(3)
+    # before every שנייה(2), need-score orders only WITHIN a tier. Ranking lives in
+    # the pure selection core (distinct from the merged scored mode's pure-score).
+    in_dist = selection.rank_one_time_priority(in_dist, get_need_weights())
     for r in others:
         r["need_score"] = None
-    # tier always dominates (3 before 2), then need-score desc
-    in_dist.sort(key=lambda x: (-(x.get("priority") or 0), -(x.get("need_score") or 0)))
     others.sort(key=lambda x: (x["last_dist_date"], -(x.get("souls") or 0)))
     return in_dist + others
 
@@ -791,11 +806,47 @@ def get_regulars_scored(area_filter: str = "הכל"):
         r["days_since"] = (date.today() - ld).days
         r["_scored_regular"] = True
         result.append(r)
-    _annotate_need_scores(result)
-    # highest need first; tie-break by longest-waiting then largest family
-    result.sort(key=lambda x: (-(x.get("need_score") or 0),
-                               -x["days_since"], -(x.get("souls") or 0)))
-    return result
+    # Highest need first, ties by NAME only — the one pure ranking used everywhere.
+    return selection.rank_by_need(result, get_need_weights())
+
+
+def get_scored_all(area_filter: str = "הכל"):
+    """Merged need-score ranking of EVERYONE active in a distribution — the
+    regulars AND the one-time priority candidates — scored on ONE shared scale
+    and ordered by need (highest first). This powers the 'קבועים לפי ניקוד' mode,
+    where both groups compete for the same portions by their need-score.
+
+    Included: every active regular (recurring, or priority 4 = קבוע), plus every
+    active one-timer whose priority is a distribution tier (3/2). Data-only rows
+    (empty frequency and not קבוע, or one-timers with no distribution priority)
+    are excluded. Regulars are flagged `_scored_regular`; one-timers keep their
+    'חד-פעמי' frequency so the UI tints them distinctly."""
+    today = date.today()
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM recipients WHERE status='פעיל'").fetchall()
+    result = []
+    for r in rows:
+        r = dict(r)
+        if area_filter != "הכל" and r.get("area", "") != area_filter:
+            continue
+        freq = r.get("frequency") or ""
+        if freq == "חד-פעמי":
+            if r.get("priority") not in PRIORITY_TIERS:
+                continue                      # one-timer not up for distribution
+        elif freq != "" or r.get("priority") == 4:
+            r["_scored_regular"] = True        # a regular
+        else:
+            continue                           # data-only row
+        ld_str = r.get("last_distribution") or ""
+        try:
+            ld = date.fromisoformat(ld_str) if ld_str else date(2000, 1, 1)
+        except ValueError:
+            ld = date(2000, 1, 1)
+        r["last_dist_date"] = ld
+        r["days_since"] = (today - ld).days
+        result.append(r)
+    # Highest need first, ties by NAME only — the one pure ranking used everywhere.
+    return selection.rank_by_need(result, get_need_weights())
 
 
 def get_regulars_mode() -> str:
@@ -806,17 +857,18 @@ def get_regulars_mode() -> str:
 
 
 def compute_suggested_n(total_products: int) -> tuple[int, int]:
-    """Returns (n_for_one_time, regular_count). Regulars (frequency != חד-פעמי,
-    e.g. code-4 קבוע) are served first; the rest of the products go to the
-    one-time priority list. In 'none'/'scored' modes regulars are no longer
-    auto-served first, so regular_count is 0 and all products feed the list."""
+    """Returns (n_for_one_time, regular_count). Regulars are served first; the
+    rest of the products go to the one-time priority list. In 'none'/'scored'
+    modes regulars are no longer auto-served first, so regular_count is 0 and all
+    products feed the list.
+
+    regular_count counts ONLY the regulars actually due on THIS week's list (the
+    same set get_weekly_list shows), NOT every active regular — a bi-weekly or
+    monthly recipient who isn't due this week doesn't consume a portion now, so
+    counting them would wrongly reserve products away from the one-time list."""
     if get_regulars_mode() != "schedule":
         return max(0, total_products), 0
-    with get_connection() as conn:
-        regular_count = conn.execute(
-            "SELECT COUNT(*) as c FROM recipients WHERE status='פעיל' "
-            "AND frequency != 'חד-פעמי' AND (frequency != '' OR priority = 4)"
-        ).fetchone()["c"]
+    regular_count = len(get_weekly_list())
     n = max(0, total_products - regular_count)
     return n, regular_count
 
@@ -895,6 +947,15 @@ def delete_batch(batch_id: int):
     with get_connection() as conn:
         conn.execute("DELETE FROM distributions WHERE batch_id=?", (batch_id,))
         conn.execute("DELETE FROM dist_batches WHERE id=?", (batch_id,))
+
+
+def delete_distribution(dist_id: int):
+    """Delete a single distribution history record by its id. Used by the search
+    tab to remove stray/old records (including legacy rows that carry no batch
+    link and so can't be removed from the 'חלוקות' batch view). Does NOT roll
+    back the recipient's last/next distribution dates."""
+    with get_connection() as conn:
+        conn.execute("DELETE FROM distributions WHERE id=?", (dist_id,))
 
 
 def get_distributions(recipient_name: str = None, limit: int = 1000):

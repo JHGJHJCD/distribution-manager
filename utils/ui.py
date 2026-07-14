@@ -562,3 +562,61 @@ def busy_cursor():
         if app is not None:
             QApplication.restoreOverrideCursor()
             QApplication.processEvents()
+
+
+def show_score_breakdown(parent, rec: dict):
+    """Popup explaining how a recipient's need-score was computed (the per-factor
+    value, weight and points). Shared by the 'חד פעמי' and 'חלוקה ורישום' tabs so
+    both show an identical, RTL-correct breakdown. `rec` must carry the
+    '_score_parts' the scoring pass fills in."""
+    import html as _html
+    from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout,
+                                 QPushButton, QLabel, QMessageBox)
+
+    name = rec.get("full_name", "")
+    parts = rec.get("_score_parts")
+    if not parts:
+        QMessageBox.information(
+            parent, "פירוט ניקוד",
+            f"ל{name} אין ניקוד צורך בחלוקה זו.")
+        return
+    rows_html = "".join(
+        "<tr>"
+        f"<td align='right'>{_html.escape(str(p['label']))}</td>"
+        f"<td align='center'>{_html.escape(str(p['value']))}</td>"
+        f"<td align='center'>{p['weight_pct']}%</td>"
+        f"<td align='center'><b>{p['points']}</b></td>"
+        "</tr>"
+        for p in parts
+    )
+    # dir='rtl' on the TABLE itself (not only the surrounding div) is what keeps
+    # the columns running right-to-left inside a QLabel's rich text.
+    body = (
+        "<div dir='rtl' style='font-family:Segoe UI;'>"
+        "<p>ניקוד צורך כולל: <b style='color:#1565c0;font-size:15px'>"
+        f"{rec.get('need_score')}</b> / 100 &nbsp;(גבוה = נזקק יותר)</p>"
+        "<table dir='rtl' border='1' cellpadding='6' cellspacing='0' width='100%' "
+        "style='border-collapse:collapse;'>"
+        "<tr style='background:#e3f2fd;color:#1565c0;'>"
+        "<th align='right'>גורם</th><th>ערך</th><th>משקל</th><th>תרומה לניקוד</th></tr>"
+        f"{rows_html}</table>"
+        "<p style='color:#6b7280;font-size:11px'>ערך חסר או הוצאה אפסית אינם תורמים "
+        "לניקוד. המשקלים נקבעים בהגדרות ← משקלי ניקוד עדיפות.</p></div>"
+    )
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(f"פירוט ניקוד — {name}")
+    dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+    dlg.setMinimumWidth(460)
+    v = QVBoxLayout(dlg)
+    lbl = QLabel(body)
+    lbl.setTextFormat(Qt.TextFormat.RichText)
+    lbl.setWordWrap(True)
+    v.addWidget(lbl)
+    row = QHBoxLayout()
+    row.addStretch()
+    btn = QPushButton("סגור")
+    btn.setObjectName("neutral")
+    btn.clicked.connect(dlg.accept)
+    row.addWidget(btn)
+    v.addLayout(row)
+    dlg.exec()

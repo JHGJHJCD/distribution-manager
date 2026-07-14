@@ -37,26 +37,34 @@ ok("S1 weekly shows regulars", len(wk_reg) >= 5)
 ok("S1 weekly excludes one-timers initially",
    not any(r.get("frequency") == "חד-פעמי" for r in win.weekly_tab._rows_data))
 
-# ── Scenario 2: one-time priority + reserve → issued in BOTH tabs → record ─────
+# ── Scenario 2: one-time main + reserve → main CHECKED, reserve STANDBY (RULE 3)
+# 8 products, 5 regulars served first → 3 slots for one-timers (main), +1 reserve.
 ot = win.one_time_tab
-ot.refresh(); ot.products_spin.setValue(3); ot.reserve_spin.setValue(1); ot._calc_suggestion()
+ot.refresh(); ot.products_spin.setValue(8); ot.reserve_spin.setValue(1); ot._calc_suggestion()
 ot._add_to_group_update()
-gt_checked = [win.group_tab._rows_data[r]["full_name"] for r in range(win.group_tab.table.rowCount())
-              if win.group_tab.table.item(r, 0) and win.group_tab.table.item(r, 0).checkState() == Qt.CheckState.Checked]
+gt = win.group_tab
+gt_checked = [gt._rows_data[r]["full_name"] for r in range(gt.table.rowCount())
+              if gt.table.item(r, 0) and gt.table.item(r, 0).checkState() == Qt.CheckState.Checked]
 ot_checked = [n for n in gt_checked if n.startswith("פלוני")]
-ok("S2 one-timers arrive CHECKED in group_update", len(ot_checked) >= 1, str(ot_checked))
-win.weekly_tab.refresh()
-wk_ot = [r["full_name"] for r in win.weekly_tab._rows_data if r.get("frequency") == "חד-פעמי"]
-ok("S2 one-timers merged into weekly list", len(wk_ot) >= 1, str(wk_ot))
-ok("S2 weekly reserve flagged", any(r.get("_reserve") for r in win.weekly_tab._rows_data))
-ok("S2 weekly print has reserve section",
-   "רזרבה — לפי סדר עדיפות" in _build_html(win.weekly_tab._get_export_rows(), "10/06/2026"))
+ok("S2 one-time MAIN picks arrive CHECKED in group_update", len(ot_checked) >= 1, str(ot_checked))
+# RULE 3: the reserve pick rides along but is NOT ticked for recording (standby).
+reserve_ids = set(gt._reserve_ids)
+ok("S2 reserve pick is standby (NOT checked for recording)",
+   bool(reserve_ids) and not (reserve_ids & gt._checked_ids), str(reserve_ids))
+wk_ot = [r["full_name"] for r in gt._rows_data if r.get("frequency") == "חד-פעמי"]
+ok("S2 one-timers merged into the list", len(wk_ot) >= 1, str(wk_ot))
+ok("S2 reserve still flagged for the print", any(r.get("_reserve") for r in gt._rows_data))
+ok("S2 print INCLUDES the reserve section (standby handed to distributor)",
+   "רזרבה — לפי סדר עדיפות" in _build_html(gt._get_export_rows(), "10/06/2026"))
 # record the distribution from group_update
-win.group_tab.products.set_products([("סל מזון", 1)]); win.group_tab.dist_input.setCurrentText("מחלק א")
+gt.products.set_products([("סל מזון", 1)]); gt.dist_input.setCurrentText("מחלק א")
 n_before = len(db.get_distributions())
-win.group_tab._save()
+gt._save()
 ok("S2 distribution recorded for the picks", len(db.get_distributions()) > n_before)
-ok("S2 picks cleared after save", len(win.group_tab._extra_ids) == 0)
+# RULE 3: a standby reserve must NOT land in the distribution history.
+ok("S2 reserve NOT recorded to history",
+   all(len(db.get_distributions_for_recipient(rid)) == 0 for rid in reserve_ids))
+ok("S2 picks cleared after save", len(gt._extra_ids) == 0)
 
 # ── Scenario 3: add a new ראשונה recipient → enters one-time distribution ──────
 _rid = db.add_recipient({"full_name": "חדש ראשונה", "status": "פעיל", "frequency": "חד-פעמי",
@@ -102,6 +110,25 @@ ok("S7 ranked recipient has score breakdown",
 from tabs.recipients import _priority_display
 ok("S8 priority labels have no digits",
    _priority_display({"priority": 3}) == "ראשונה" and _priority_display({"priority": 1}) == "")
+
+# ── Scenario 9: 'scored' mode ranks manual picks on the SAME need scale ────────
+# A one-timer with NO distribution priority is excluded from get_scored_all, so it
+# only reaches the list as a manual pick — the case that used to be scored on its
+# own isolated 0–100 scale and mis-ordered. It must now share the merged scale.
+gt = win.group_tab
+_extra = db.add_recipient({"full_name": "מ.י בלי עדיפות", "status": "פעיל",
+                           "frequency": "חד-פעמי", "priority": None, "souls": 5})
+gt.mode_combo.setCurrentIndex(gt.mode_combo.findData("scored"))
+gt.add_one_time_picks([{"id": _extra}])          # persist pick + refresh (scored)
+pick = next((r for r in gt._rows_data if r.get("id") == _extra), None)
+ok("S9 manual pick appears in the scored list", pick is not None)
+ok("S9 manual pick scored on the shared scale (need_score + parts)",
+   pick is not None and isinstance(pick.get("need_score"), (int, float))
+   and isinstance(pick.get("_score_parts"), list))
+_scores = [r.get("need_score") or 0 for r in gt._rows_data]
+ok("S9 whole scored list is monotonic — one scale, not two",
+   _scores == sorted(_scores, reverse=True), str(_scores[:6]))
+gt.mode_combo.setCurrentIndex(gt.mode_combo.findData("schedule"))   # restore
 
 print()
 print("RESULT:", "ALL SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")

@@ -85,9 +85,17 @@ def annotate_need_scores(rows, weights: dict):
         active = [f for f in NEED_FACTORS if weights.get(f["key"], 0) > 0]
         total_w = sum(weights.get(f["key"], 0) for f in active)
 
-    # Pre-compute each active factor's min/max for in-list normalization. For a
-    # 'low' factor (less = needier) only positive values count, so an empty field
-    # stays neutral instead of looking like the neediest.
+    # Pre-compute each active factor's range for in-list normalization.
+    #  • "high" factors (more = needier, e.g. הוצאות/נפשות): scale from 0 → the
+    #    highest value in the list, so someone with NO expense scores 0 on that
+    #    factor (not a neutral half) and the neediest scores the full weight. This
+    #    is what makes a single-factor ranking run cleanly 0→100.
+    #  • "low" factors (less = needier, e.g. הכנסה פנויה): only positive values
+    #    define the range; the neediest (lowest value) scores the full weight.
+    # RULE 4 (חוסר נתונים → תחתית התור): a MISSING value on ANY factor contributes
+    #   0 points — treated as "least needy" — never a neutral 0.5. So incomplete
+    #   data can only ever hurt a ranking, sinking families with missing details
+    #   toward the bottom instead of quietly parking them in the middle.
     ranges = {}
     for f in active:
         vals = []
@@ -96,26 +104,30 @@ def annotate_need_scores(rows, weights: dict):
             if v is None or (f["dir"] == "low" and v <= 0):
                 continue
             vals.append(v)
-        ranges[f["key"]] = (min(vals), max(vals)) if vals else (0.0, 0.0)
+        if f["dir"] == "high":
+            ranges[f["key"]] = (0.0, max(vals)) if vals else (0.0, 0.0)
+        else:
+            ranges[f["key"]] = (min(vals), max(vals)) if vals else (0.0, 0.0)
 
     for r in rows:
         acc = 0.0
         parts = []   # per-factor breakdown for the "why this score" view
         for f in active:
             v = _need_num(r.get(f["field"]), f["kind"])
-            missing = v is None or (f["dir"] == "low" and v <= 0)
-            if missing:
-                comp = 0.5                       # missing → neutral
+            lo, hi = ranges[f["key"]]
+            if f["dir"] == "high":
+                # No value / zero expense → this factor contributes nothing.
+                comp = _norm(v, lo, hi) if (v is not None and v > 0) else 0.0
+                missing = v is None
             else:
-                lo, hi = ranges[f["key"]]
-                comp = _norm(v, lo, hi)
-                if f["dir"] == "low":
-                    comp = 1.0 - comp
+                missing = v is None or v <= 0
+                # RULE 4: missing → 0 ("least needy"), not a neutral 0.5.
+                comp = 0.0 if missing else 1.0 - _norm(v, lo, hi)
             w = weights.get(f["key"], 0)
             acc += w * comp
             parts.append({
                 "label": f["label"],
-                "value": "—" if missing else r.get(f["field"]),
+                "value": "—" if v is None else r.get(f["field"]),
                 "weight_pct": round(100 * w / total_w),
                 "points": round(100 * w * comp / total_w, 1),
             })

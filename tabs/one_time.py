@@ -8,8 +8,10 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from datetime import date
 import database as db
+import selection
 from utils.ui import (attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
-                      search_icon, add_glow, enable_touch_scroll, apply_header_icons)
+                      search_icon, add_glow, enable_touch_scroll, apply_header_icons,
+                      show_score_breakdown)
 from styles import OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG, SELECTED_BG, SELECTED_FG
 
 _SMALL_GREEN_BTN = (
@@ -165,6 +167,14 @@ class OneTimeTab(QWidget):
     def refresh(self):
         # Full list (no area filter) — the free-text search below narrows it.
         self._rows_data = db.get_one_time_list(area_filter="הכל")
+        # Product count is shared with 'חלוקה ורישום' (bug 11) — reflect any change.
+        try:
+            self.products_spin.blockSignals(True)
+            self.products_spin.setValue(int(db.get_setting("available_products") or 0))
+        except (TypeError, ValueError):
+            pass
+        finally:
+            self.products_spin.blockSignals(False)
         self._populate()
 
     _SEARCH_KEYS = ("full_name", "phone1", "phone2", "phone3", "area",
@@ -192,21 +202,30 @@ class OneTimeTab(QWidget):
         self.table.setRowCount(0)
         self.table.setRowCount(len(self._rows_data))
 
-        # By priority order: the first `suggested_n` distribution rows are MAIN,
-        # the next `reserve_n` are RESERVE (standby). Both are checked/included;
-        # reserve is flagged + tinted so it prints as a separate section.
-        main_so_far = 0
-        reserve_so_far = 0
+        # Role assignment (main / reserve / out) is the pure selection core — the
+        # SAME logic the tests pin down. The list is already need-ordered by
+        # database.get_one_time_list; here we just split it by available portions.
+        # The first `suggested_n` candidates are MAIN, the next `reserve_n` are
+        # RESERVE (standby). Reserve is checked here so it transfers to the group
+        # tab, but it is NOT recorded on save (RULE 3, enforced in group_update).
+        candidates = [rec for rec in self._rows_data if rec.get("in_distribution")]
+        if suggested_n >= 0:
+            selection.assign_roles(candidates, suggested_n, reserve_n)
+        else:
+            for rec in candidates:            # nothing marked until 'חשב המלצה'
+                rec["_role"] = selection.ROLE_OUT
+                rec["_reserve"] = False
+        for rec in self._rows_data:
+            if not rec.get("in_distribution"):
+                rec["_role"] = selection.ROLE_OUT
+                rec["_reserve"] = False
+        main_so_far = sum(1 for r in candidates if r.get("_role") == selection.ROLE_MAIN)
+        reserve_so_far = sum(1 for r in candidates if r.get("_role") == selection.ROLE_RESERVE)
+
         for r, rec in enumerate(self._rows_data):
-            in_dist = rec.get("in_distribution")
-            is_main = (suggested_n >= 0 and in_dist and main_so_far < suggested_n)
-            is_reserve = False
-            if is_main:
-                main_so_far += 1
-            elif suggested_n >= 0 and in_dist and reserve_so_far < reserve_n:
-                is_reserve = True
-                reserve_so_far += 1
-            rec["_reserve"] = is_reserve
+            role = rec.get("_role", selection.ROLE_OUT)
+            is_main = role == selection.ROLE_MAIN
+            is_reserve = role == selection.ROLE_RESERVE
             selected = is_main or is_reserve
 
             pr = rec.get("priority")
@@ -275,78 +294,33 @@ class OneTimeTab(QWidget):
         # Clicking a name (column 1) opens the score breakdown for that person.
         if col != 1 or row < 0 or row >= len(self._rows_data):
             return
-        self._show_score_breakdown(self._rows_data[row])
-
-    def _show_score_breakdown(self, rec):
-        name = rec.get("full_name", "")
-        parts = rec.get("_score_parts")
-        if not parts:
-            QMessageBox.information(
-                self, "פירוט ניקוד",
-                f"{name} אינו ברשימת החלוקה (עדיפות 3/2), ולכן אין לו ניקוד צורך.")
-            return
-        rows_html = "".join(
-            f"<tr>"
-            f"<td>{html.escape(str(p['label']))}</td>"
-            f"<td align='center'>{html.escape(str(p['value']))}</td>"
-            f"<td align='center'>{p['weight_pct']}%</td>"
-            f"<td align='center'><b>{p['points']}</b></td>"
-            f"</tr>"
-            for p in parts
-        )
-        body = (
-            f"<div dir='rtl' style='font-family:Rubik,Segoe UI;'>"
-            f"<p>ניקוד צורך כולל: <b style='color:#1565c0;font-size:15px'>"
-            f"{rec.get('need_score')}</b> / 100 &nbsp;(גבוה = נזקק יותר)</p>"
-            f"<table border='1' cellpadding='6' cellspacing='0' width='100%' "
-            f"style='border-collapse:collapse;'>"
-            f"<tr style='background:#e3f2fd;color:#1565c0;'>"
-            f"<th align='right'>גורם</th><th>ערך</th><th>משקל</th><th>תרומה לניקוד</th></tr>"
-            f"{rows_html}</table>"
-            f"<p style='color:#6b7280;font-size:11px'>ערך חסר מחושב כניטרלי. "
-            f"המשקלים נקבעים בהגדרות ← משקלי ניקוד עדיפות.</p></div>"
-        )
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"פירוט ניקוד — {name}")
-        dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        dlg.setMinimumWidth(440)
-        v = QVBoxLayout(dlg)
-        lbl = QLabel(body)
-        lbl.setTextFormat(Qt.TextFormat.RichText)
-        lbl.setWordWrap(True)
-        v.addWidget(lbl)
-        row = QHBoxLayout()
-        row.addStretch()
-        btn = QPushButton("סגור")
-        btn.setObjectName("neutral")
-        btn.clicked.connect(dlg.accept)
-        row.addWidget(btn)
-        v.addLayout(row)
-        dlg.exec()
+        show_score_breakdown(self, self._rows_data[row])
 
     def _calc_suggestion(self):
         total = self.products_spin.value()
         if total <= 0:
             QMessageBox.information(self, "", "הכנס מספר מוצרים זמינים")
             return
-        # The number of products IS the number of one-time recipients to mark
-        # (regulars are handled separately in 'חלוקה ורישום'). So N products →
-        # N main picks, by priority order, plus the reserve on top.
-        n = total
+        db.set_setting("available_products", str(total))   # shared with חלוקה ורישום
+        # Regulars are served first from the same pool; only the REMAINDER goes to
+        # the one-time list (bug 11) — so a product is never counted twice.
+        n, regular_count = db.compute_suggested_n(total)
         reserve_n = self.reserve_spin.value()
         db.set_setting("reserve_count", str(reserve_n))   # remember as default
         in_dist_count = sum(1 for x in self._rows_data if x.get("in_distribution"))
         picked = min(n, in_dist_count)
         reserve_picked = max(0, min(reserve_n, in_dist_count - picked))
         self._populate(suggested_n=n, reserve_n=reserve_n)
-        msg = (
-            f"מוצרים זמינים: {total}\n"
+        msg = f"מוצרים זמינים: {total}\n"
+        if regular_count:
+            msg += f"קבועים שנצרכים קודם: {regular_count}  →  נשאר לחד-פעמיים: {n}\n"
+        msg += (
             f"מועמדים בעדיפות (ראשונה+שנייה): {in_dist_count}\n\n"
             f"סומנו {picked} עיקריים + {reserve_picked} רזרבה — לפי סדר עדיפות\n"
             f"(ראשונה קודם, אחר כך שנייה, ובתוך כל דרגה לפי ניקוד הצורך)."
         )
         if n > in_dist_count:
-            msg += (f"\n\n⚠ יש יותר מוצרים ({n}) ממועמדי העדיפות ({in_dist_count}). "
+            msg += (f"\n\n⚠ נשארו יותר מוצרים ({n}) ממועמדי העדיפות ({in_dist_count}). "
                     f"את השאר אפשר לסמן ידנית.")
         QMessageBox.information(self, "המלצת מערכת", msg)
 

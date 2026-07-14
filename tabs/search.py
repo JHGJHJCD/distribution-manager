@@ -157,6 +157,15 @@ class SearchTab(QWidget):
         self.btn_print_card.clicked.connect(self._print_card)
         self.btn_print_card.setEnabled(False)
         hist_row.addWidget(self.btn_print_card)
+
+        self.btn_del_hist = QPushButton("מחק רישום")
+        self.btn_del_hist.setObjectName("danger")
+        self.btn_del_hist.setStyleSheet(_SMALL_BTN)
+        self.btn_del_hist.setToolTip("מחק את רישום החלוקה המסומן מההיסטוריה של המקבל "
+                                     "(למחיקת חלוקה נמחקת/ישנה שנשארה)")
+        self.btn_del_hist.clicked.connect(self._delete_hist_record)
+        self.btn_del_hist.setEnabled(False)
+        hist_row.addWidget(self.btn_del_hist)
         right_panel.addLayout(hist_row)
 
         self.hist_table = QTableWidget()
@@ -203,6 +212,7 @@ class SearchTab(QWidget):
         else:
             self._current_rec_id = None
             self.btn_print_card.setEnabled(False)
+            self.btn_del_hist.setEnabled(False)
             self._show_empty_profile("לא נמצאו תוצאות")
 
     def _on_result_selected(self, cur, _prev=None):
@@ -254,16 +264,20 @@ class SearchTab(QWidget):
         self.hist_table.clearContents()
         self.hist_table.setRowCount(0)
         self.hist_title.setText("היסטוריית חלוקות")
+        if hasattr(self, "btn_del_hist"):
+            self.btn_del_hist.setEnabled(False)
 
     def _show_recipient(self, rec_id):
         rec = db.get_recipient(rec_id)
         if not rec:
             self._current_rec_id = None
             self.btn_print_card.setEnabled(False)
+            self.btn_del_hist.setEnabled(False)
             self._show_empty_profile()
             return
         self._current_rec_id = rec_id
         self.btn_print_card.setEnabled(True)
+        self.btn_del_hist.setEnabled(True)
 
         hist = db.get_distributions_for_recipient(rec["id"])
 
@@ -321,7 +335,39 @@ class SearchTab(QWidget):
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(ALIGN_RIGHT)
+                # Keep the record id on every cell so a selected row can be deleted.
+                item.setData(Qt.ItemDataRole.UserRole, entry.get("id"))
                 self.hist_table.setItem(r, c, item)
+
+    def _delete_hist_record(self):
+        """Remove the selected distribution record from this recipient's history.
+        Fixes stale/old records that linger in search (e.g. legacy rows with no
+        batch link, which the 'חלוקות' tab can't delete)."""
+        if not self._current_rec_id:
+            QMessageBox.information(self, "", "בחר מקבל תחילה")
+            return
+        row = self.hist_table.currentRow()
+        item = self.hist_table.item(row, 0) if row >= 0 else None
+        if item is None:
+            QMessageBox.information(self, "", "בחר שורת חלוקה למחיקה")
+            return
+        dist_id = item.data(Qt.ItemDataRole.UserRole)
+        if dist_id is None:
+            return
+        when = self.hist_table.item(row, 0).text()
+        reply = QMessageBox.question(
+            self, "מחיקת רישום חלוקה",
+            f"למחוק את רישום החלוקה מתאריך {when} מההיסטוריה של המקבל?\n"
+            "פעולה זו אינה הפיכה (מוחקת רק את הרישום, לא את המקבל).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        db.delete_distribution(dist_id)
+        self._show_recipient(self._current_rec_id)   # re-render the history
+        if self.main_win:
+            self.main_win.status_msg("רישום החלוקה נמחק")
 
     # ── actions ────────────────────────────────────────────────────────────────
     def _export_results(self):
