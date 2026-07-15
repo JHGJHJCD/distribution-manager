@@ -150,9 +150,16 @@ class SearchTab(QWidget):
         enable_touch_scroll(self.detail_scroll)
         self.detail_card = QFrame()
         self.detail_card.setObjectName("panel")
-        self._detail_lay = QVBoxLayout(self.detail_card)
+        # Two-column grid: the recipient's fields sit side-by-side so the whole
+        # profile fits without pushing the history title on top of the last row
+        # (bug #5j4hw). Full-width items (notes) span both columns.
+        self._detail_lay = QGridLayout(self.detail_card)
         self._detail_lay.setContentsMargins(16, 12, 16, 12)
-        self._detail_lay.setSpacing(2)
+        self._detail_lay.setHorizontalSpacing(24)
+        self._detail_lay.setVerticalSpacing(2)
+        self._detail_lay.setColumnStretch(0, 1)
+        self._detail_lay.setColumnStretch(1, 1)
+        self._detail_count = 0
         self.detail_scroll.setWidget(self.detail_card)
         right_panel.addWidget(self.detail_scroll, 1)
 
@@ -244,6 +251,8 @@ class SearchTab(QWidget):
             w = it.widget()
             if w is not None:
                 w.deleteLater()
+        self._detail_lay.setRowStretch(self._detail_count // 2 + 2, 0)
+        self._detail_count = 0
 
     def _add_detail_row(self, icon_name, label, value, ltr=False):
         value = (str(value).strip() if value not in (None, "") else "")
@@ -270,7 +279,10 @@ class SearchTab(QWidget):
             val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             val.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         g.addWidget(val, 1)
-        self._detail_lay.addWidget(row)
+        # RTL: first field on the right (col 1), second on the left (col 0).
+        r, c = divmod(self._detail_count, 2)
+        self._detail_lay.addWidget(row, r, 1 - c)
+        self._detail_count += 1
 
     def _clear_header(self):
         while self._hdr_lay.count():
@@ -351,8 +363,12 @@ class SearchTab(QWidget):
             nl.setWordWrap(True)
             nl.setStyleSheet("color:#78350f; background:transparent; border:none;")
             bl.addWidget(nl, 1)
-            self._detail_lay.addWidget(box)
-        self._detail_lay.addStretch()
+            # Notes span the full width, on their own row below the field pairs.
+            note_row = (self._detail_count + 1) // 2
+            self._detail_lay.addWidget(box, note_row, 0, 1, 2)
+            self._detail_count = (note_row + 1) * 2
+        # Push all rows to the top; the empty trailing row soaks up extra height.
+        self._detail_lay.setRowStretch(self._detail_count // 2 + 1, 1)
 
         # History
         self.hist_title.setText(f"היסטוריית חלוקות ({len(hist)})")

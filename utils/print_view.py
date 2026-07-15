@@ -43,6 +43,8 @@ def _css(fs: int = 11) -> str:
     tr:nth-child(even) {{ background-color: #eef3ff; }}
     .reserve-h {{ text-align: right; color: #b45309; font-size: {fs + 1}pt; font-weight: bold;
                  margin-top: 12px; border-bottom: 1px solid #f0c890; padding-bottom: 3px; }}
+    th.sec-title {{ background-color: #b45309; color: white; text-align: right;
+                   font-size: {fs + 1}pt; border-color: #92400e; }}
     table.reserve th {{ background-color: #b45309; border-color: #92400e; }}
     .footer {{ text-align: center; font-size: {small}pt; color: #888; margin-top: 6px; }}
     .chk {{ text-align: center; font-size: {fs + 1}pt; width: {fs * 2}px; color: #305090; }}
@@ -255,9 +257,14 @@ def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
             f"<td>{_esc(_fmt(h.get('dist_date')))}</td>"
             f"<td>{i}</td></tr>"
         )
+    # The title must sit directly ABOVE the table. A standalone <div> before the
+    # table drifted to the opposite side of the page under QTextDocument's RTL
+    # layout (bug #rxurn), so make the title a full-width header row INSIDE the
+    # table (colspan spanning all columns) — it can't detach from the columns.
     hist_table = (
-        "<div class='reserve-h'>היסטוריית חלוקות</div>"
-        "<table><thead><tr>"
+        "<table><thead>"
+        "<tr><th colspan='6' class='sec-title'>היסטוריית חלוקות</th></tr>"
+        "<tr>"
         "<th>הערות</th><th>מחלק</th><th>כמות</th><th>מה חולק</th><th>תאריך</th><th>מס'</th>"
         "</tr></thead><tbody>" + (hist_rows or
             "<tr><td colspan='6' style='text-align:center;color:#888;'>אין חלוקות רשומות</td></tr>")

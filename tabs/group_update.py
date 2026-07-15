@@ -55,29 +55,38 @@ _COMPLETER_POPUP_QSS = (
     "QAbstractItemView::item:selected{color:#ffffff; background:#1e88e5;}")
 
 
-def _style_completer(combo):
-    """Make an editable combo's suggestion popup readable (see note above).
-
-    ``completer().popup()`` is created lazily and is often ``None`` at build
-    time, so styling it in place silently no-ops and the popup later shows up
-    dark-on-dark (bug #5eg5z). Instead install our OWN styled QListView as the
-    completer popup up front, so the style is guaranteed to stick."""
-    comp = combo.completer()
-    if comp is None:
-        return
+def _light_popup_view():
+    """A QListView forced to a light card / dark text, immune to the app-wide
+    qt-material theme (which otherwise renders combo popups dark-on-dark)."""
     view = QListView()
     view.setStyleSheet(_COMPLETER_POPUP_QSS)
     # A stylesheet alone can still be overridden on a top-level popup by the
-    # app-wide qt-material theme, which is what left this popup dark-on-dark
-    # (bug #5eg5z). Force the palette too, so the light card / dark text is
-    # guaranteed regardless of the global theme.
+    # app-wide qt-material theme (bug #5eg5z). Force the palette too, so the
+    # light card / dark text is guaranteed regardless of the global theme.
     pal = view.palette()
     pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
     pal.setColor(QPalette.ColorRole.Text, QColor("#0f172a"))
     pal.setColor(QPalette.ColorRole.Highlight, QColor("#1e88e5"))
     pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
     view.setPalette(pal)
-    comp.setPopup(view)
+    return view
+
+
+def _style_completer(combo):
+    """Make an editable combo's suggestion popups readable (see note above).
+
+    Two SEPARATE popups need styling, and both were rendering dark-on-dark:
+    - the QCompleter popup (shown while typing) — created lazily and often
+      ``None`` at build time, so styling it in place silently no-ops. Install
+      our OWN styled QListView as the completer popup up front instead.
+    - the QComboBox's own dropdown (shown on clicking the arrow), i.e.
+      ``combo.view()`` — the full list, styled by the dark theme (bug #5eg5z)."""
+    # The click-the-arrow dropdown list.
+    combo.setView(_light_popup_view())
+    comp = combo.completer()
+    if comp is None:
+        return
+    comp.setPopup(_light_popup_view())
 
 # colours for one-time picks (+ reserve)
 _RESERVE_BG, _RESERVE_FG = "#ede7f6", "#5e35b1"
