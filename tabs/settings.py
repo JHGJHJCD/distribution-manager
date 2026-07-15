@@ -72,14 +72,19 @@ class SettingsTab(QWidget):
         title.setObjectName("title")
         lay.addWidget(title)
 
-        # Two-column block layout — compact, instead of full-width rows.
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(8)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        lay.addLayout(grid)
-        _AT = Qt.AlignmentFlag.AlignTop   # blocks sit at the top of their cell
+        # Two INDEPENDENT columns (not a shared-row grid): each column packs its
+        # panels top-to-bottom with no gaps. A grid tied both columns' rows to the
+        # same height, so the short 'גיבויים' panel left a big void beneath it next
+        # to the tall weights panel, pushing 'מייל למתנדבים' way down (bug #nfp9i).
+        # The 'אזור מסוכן' strip stays full-width below both columns.
+        cols = QHBoxLayout()
+        cols.setSpacing(8)
+        right_col = QVBoxLayout(); right_col.setSpacing(8)
+        left_col = QVBoxLayout(); left_col.setSpacing(8)
+        cols.addLayout(right_col, 1)
+        cols.addLayout(left_col, 1)
+        lay.addLayout(cols)
+        _AT = Qt.AlignmentFlag.AlignTop   # (retained for compatibility)
 
         # ── Security section ──────────────────────────────
         sec_frame = QFrame()
@@ -102,7 +107,7 @@ class SettingsTab(QWidget):
         btn_pwd.clicked.connect(self._change_password)
         pwd_row.addWidget(btn_pwd)
         sec_lay.addLayout(pwd_row)
-        grid.addWidget(sec_frame, 0, 0, _AT)
+        right_col.addWidget(sec_frame)
 
         # ── Software update section ───────────────────────
         upd_frame = QFrame()
@@ -130,7 +135,7 @@ class SettingsTab(QWidget):
         self.lbl_update_status.setObjectName("subtitle")
         self.lbl_update_status.setWordWrap(True)
         upd_lay.addWidget(self.lbl_update_status)
-        grid.addWidget(upd_frame, 0, 1, _AT)
+        left_col.addWidget(upd_frame)
 
         # ── Need-score weights section ────────────────────
         w_frame = QFrame()
@@ -181,7 +186,7 @@ class SettingsTab(QWidget):
         w_btns.addWidget(btn_reset_w)
         w_btns.addStretch()
         w_lay.addLayout(w_btns)
-        grid.addWidget(w_frame, 1, 1, _AT)
+        left_col.addWidget(w_frame)
 
         # ── Backup section ────────────────────────────────
         bk_frame = QFrame()
@@ -191,6 +196,13 @@ class SettingsTab(QWidget):
         bk_lay.setSpacing(6)
 
         bk_lay.addWidget(section_header("גיבויים", "backup", "#1565c0"))
+
+        bk_desc = QLabel("התוכנה מגבה את הנתונים אוטומטית. כאן אפשר לבחור לאן לשמור "
+                         "עותק נוסף (למשל כונן חיצוני), לגבות ידנית, או לשחזר מגיבוי "
+                         "אם משהו השתבש.")
+        bk_desc.setObjectName("subtitle")
+        bk_desc.setWordWrap(True)
+        bk_lay.addWidget(bk_desc)
 
         form_bk = QFormLayout()
         form_bk.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -232,7 +244,7 @@ class SettingsTab(QWidget):
 
         bk_btns.addStretch()
         bk_lay.addLayout(bk_btns)
-        grid.addWidget(bk_frame, 1, 0, _AT)
+        right_col.addWidget(bk_frame)
 
         # ── Danger zone section ───────────────────────────
         danger_frame = QFrame()
@@ -261,7 +273,7 @@ class SettingsTab(QWidget):
         danger_btns.addWidget(btn_reset)
         danger_btns.addStretch()
         danger_lay.addLayout(danger_btns)
-        grid.addWidget(danger_frame, 3, 0, 1, 2, _AT)   # full-width bottom strip
+        lay.addWidget(danger_frame)   # full-width strip below both columns
 
         # ── Volunteer email section ────────────────────────
         mail_frame = QFrame()
@@ -358,7 +370,7 @@ class SettingsTab(QWidget):
         self.lbl_mail_status.setObjectName("subtitle")
         self.lbl_mail_status.setWordWrap(True)
         mail_lay.addWidget(self.lbl_mail_status)
-        grid.addWidget(mail_frame, 2, 0, _AT)
+        right_col.addWidget(mail_frame)
 
         # ── Organization / branding section ───────────────────
         # Makes the app charity-agnostic: the name shown on the top bar is data,
@@ -412,7 +424,12 @@ class SettingsTab(QWidget):
         org_btns.addWidget(btn_org_save)
         org_btns.addStretch()
         org_lay.addLayout(org_btns)
-        grid.addWidget(org_frame, 2, 1, _AT)
+        left_col.addWidget(org_frame)
+
+        # Trailing stretch keeps each column's panels packed to the top so the
+        # shorter column doesn't stretch its panels to fill the taller one.
+        right_col.addStretch()
+        left_col.addStretch()
 
         # ── Bottom row: feedback ──────────────────────────────────────────────
         bottom_row = QHBoxLayout()

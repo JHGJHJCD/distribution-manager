@@ -1,11 +1,10 @@
-import html as _html
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QLineEdit, QAbstractItemView,
     QFrame, QPushButton, QMessageBox, QListWidget, QListWidgetItem, QScrollArea
 )
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QColor
 import database as db
 from utils.ui import (search_icon, busy_cursor, line_icon, enable_touch_scroll,
                       PRIORITY_BADGES, STATUS_BADGES, ALIGN_RIGHT, reveal_in_folder,
@@ -41,13 +40,19 @@ def _priority_display(rec: dict) -> str:
     return "בירור" if "בירור" in (rec.get("priority_raw") or "") else ""
 
 
-def _badge_span(text: str, colors: dict) -> str:
+def _make_badge(text: str, colors: dict):
+    """A rounded 'pill' QLabel for a priority/status tag (real widget QSS → truly
+    round, never clipped — unlike an HTML span in a QLabel)."""
     c = colors.get(text)
     if not text or not c:
-        return ""
+        return None
     bg, fg = c
-    return (f"<span style='background:{bg};color:{fg};padding:2px 12px;"
-            f"border-radius:9px;font-weight:700;font-size:13px'>{_html.escape(text)}</span>")
+    lab = QLabel(text)
+    lab.setStyleSheet(
+        f"background:{bg}; color:{fg}; padding:3px 14px; border-radius:11px;"
+        f"font-weight:700; font-size:13px;")
+    lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    return lab
 
 
 class SearchTab(QWidget):
@@ -124,10 +129,14 @@ class SearchTab(QWidget):
         right_panel.setSpacing(8)
         main.addLayout(right_panel, 1)
 
-        # Header (name + badges)
-        self.detail_header = QLabel("")
-        self.detail_header.setTextFormat(Qt.TextFormat.RichText)
-        self.detail_header.setWordWrap(True)
+        # Header (name + badges). Real QLabel "pill" widgets — not an HTML span —
+        # because QLabel's rich-text engine ignores border-radius and clips the
+        # padded background, so the badge rendered cut-off (bug #r92nz). Widget
+        # stylesheets round cleanly and never clip.
+        self.detail_header = QWidget()
+        self._hdr_lay = QHBoxLayout(self.detail_header)
+        self._hdr_lay.setContentsMargins(0, 6, 0, 6)
+        self._hdr_lay.setSpacing(8)
         right_panel.addWidget(self.detail_header)
 
         # Scrollable detail rows (icon + label + value)
@@ -257,9 +266,20 @@ class SearchTab(QWidget):
         g.addWidget(val, 1)
         self._detail_lay.addWidget(row)
 
+    def _clear_header(self):
+        while self._hdr_lay.count():
+            it = self._hdr_lay.takeAt(0)
+            w = it.widget()
+            if w is not None:
+                w.deleteLater()
+
     def _show_empty_profile(self, msg="בחר מקבל מהרשימה כדי לראות את פרטיו"):
-        self.detail_header.setText(
-            f"<div dir='rtl' style='color:#94a3b8;font-size:13px;padding:14px 0;'>{msg}</div>")
+        self._clear_header()
+        lab = QLabel(msg)
+        lab.setStyleSheet("color:#94a3b8; font-size:13px; padding:14px 0; background:transparent;")
+        lab.setWordWrap(True)
+        self._hdr_lay.addWidget(lab)
+        self._hdr_lay.addStretch()
         self._clear_details()
         self.hist_table.clearContents()
         self.hist_table.setRowCount(0)
@@ -281,14 +301,19 @@ class SearchTab(QWidget):
 
         hist = db.get_distributions_for_recipient(rec["id"])
 
-        # Header — name + priority + status badges
-        name = _html.escape(rec.get("full_name", "") or "")
-        pri = _badge_span(_priority_display(rec), PRIORITY_BADGES)
-        status = _badge_span(rec.get("status", ""), STATUS_BADGES)
-        self.detail_header.setText(
-            f"<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
-            f"<span style='font-size:20px;font-weight:800;color:#0d2a4a;'>{name}</span>"
-            f" &nbsp; {pri} &nbsp; {status}</div>")
+        # Header — name + priority + status badges (real pill widgets)
+        self._clear_header()
+        name_lbl = QLabel(rec.get("full_name", "") or "")
+        name_lbl.setStyleSheet(
+            "font-size:20px; font-weight:800; color:#0d2a4a; background:transparent;")
+        name_lbl.setWordWrap(True)
+        self._hdr_lay.addWidget(name_lbl)
+        for text, colors in ((_priority_display(rec), PRIORITY_BADGES),
+                             (rec.get("status", ""), STATUS_BADGES)):
+            badge = _make_badge(text, colors)
+            if badge is not None:
+                self._hdr_lay.addWidget(badge)
+        self._hdr_lay.addStretch()
 
         # Detail rows with dignified icons
         self._clear_details()
@@ -329,12 +354,19 @@ class SearchTab(QWidget):
         self.hist_table.setRowCount(0)
         self.hist_table.setRowCount(len(hist))
         for r, entry in enumerate(hist):
-            vals = [_fdate(entry.get("dist_date", "")), entry.get("what_dist", ""),
+            # received=0 → a recorded no-show (#yjcny); mark it clearly instead of
+            # letting it read like an ordinary receipt. Older rows lack the flag
+            # (default 1 = received).
+            missed = (entry.get("received", 1) or 0) == 0
+            what = "✗ לא קיבל" if missed else entry.get("what_dist", "")
+            vals = [_fdate(entry.get("dist_date", "")), what,
                     str(entry.get("quantity", "") or ""), entry.get("distributor", ""),
                     entry.get("notes", "")]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(ALIGN_RIGHT)
+                if missed:
+                    item.setForeground(QColor("#b91c1c"))
                 # Keep the record id on every cell so a selected row can be deleted.
                 item.setData(Qt.ItemDataRole.UserRole, entry.get("id"))
                 self.hist_table.setItem(r, c, item)

@@ -600,17 +600,19 @@ def show_score_breakdown(parent, rec: dict):
             parent, "פירוט ניקוד",
             f"ל{name} אין ניקוד צורך בחלוקה זו.")
         return
+    # QTextDocument ignores dir='rtl' for table COLUMN order (known project
+    # pitfall), so the columns are written in reverse manually: the source order
+    # is תרומה→משקל→ערך→גורם so that on screen it reads right-to-left with the
+    # 'גורם' (factor) column on the right, matching the Hebrew reading direction.
     rows_html = "".join(
         "<tr>"
-        f"<td align='right'>{_html.escape(str(p['label']))}</td>"
-        f"<td align='center'>{_html.escape(str(p['value']))}</td>"
-        f"<td align='center'>{p['weight_pct']}%</td>"
         f"<td align='center'><b>{p['points']}</b></td>"
+        f"<td align='center'>{p['weight_pct']}%</td>"
+        f"<td align='center'>{_html.escape(str(p['value']))}</td>"
+        f"<td align='right'>{_html.escape(str(p['label']))}</td>"
         "</tr>"
         for p in parts
     )
-    # dir='rtl' on the TABLE itself (not only the surrounding div) is what keeps
-    # the columns running right-to-left inside a QLabel's rich text.
     body = (
         "<div dir='rtl' style='font-family:Segoe UI;'>"
         "<p>ניקוד צורך כולל: <b style='color:#1565c0;font-size:15px'>"
@@ -618,7 +620,7 @@ def show_score_breakdown(parent, rec: dict):
         "<table dir='rtl' border='1' cellpadding='6' cellspacing='0' width='100%' "
         "style='border-collapse:collapse;'>"
         "<tr style='background:#e3f2fd;color:#1565c0;'>"
-        "<th align='right'>גורם</th><th>ערך</th><th>משקל</th><th>תרומה לניקוד</th></tr>"
+        "<th>תרומה לניקוד</th><th>משקל</th><th>ערך</th><th align='right'>גורם</th></tr>"
         f"{rows_html}</table>"
         "<p style='color:#6b7280;font-size:11px'>ערך חסר או הוצאה אפסית אינם תורמים "
         "לניקוד. המשקלים נקבעים בהגדרות ← משקלי ניקוד עדיפות.</p></div>"

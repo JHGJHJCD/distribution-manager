@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QLineEdit,
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
-    QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea
+    QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea, QListView
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
 from PyQt6.QtGui import QColor, QFont, QIcon
@@ -50,17 +50,24 @@ _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 _COMPLETER_POPUP_QSS = (
     "QAbstractItemView{background:#ffffff; color:#0f172a; border:1px solid #d7dfea;"
     " border-radius:8px; padding:4px; font-size:14px; outline:none;"
-    " selection-background-color:#1e88e5; selection-color:#ffffff;}")
+    " selection-background-color:#1e88e5; selection-color:#ffffff;}"
+    "QAbstractItemView::item{color:#0f172a; background:transparent; padding:4px 8px;}"
+    "QAbstractItemView::item:selected{color:#ffffff; background:#1e88e5;}")
 
 
 def _style_completer(combo):
-    """Make an editable combo's suggestion popup readable (see note above)."""
+    """Make an editable combo's suggestion popup readable (see note above).
+
+    ``completer().popup()`` is created lazily and is often ``None`` at build
+    time, so styling it in place silently no-ops and the popup later shows up
+    dark-on-dark (bug #5eg5z). Instead install our OWN styled QListView as the
+    completer popup up front, so the style is guaranteed to stick."""
     comp = combo.completer()
     if comp is None:
         return
-    popup = comp.popup()
-    if popup is not None:
-        popup.setStyleSheet(_COMPLETER_POPUP_QSS)
+    view = QListView()
+    view.setStyleSheet(_COMPLETER_POPUP_QSS)
+    comp.setPopup(view)
 
 # colours for one-time picks (+ reserve)
 _RESERVE_BG, _RESERVE_FG = "#ede7f6", "#5e35b1"
@@ -748,7 +755,13 @@ class GroupUpdateTab(QWidget):
             self.lbl_leftover.setText("")
             return
         n, regs = db.compute_suggested_n(total)
-        if n <= 0:
+        if regs > 0 and total < regs:
+            # Not enough products even for the regulars due this week (bug #m69he).
+            self.lbl_leftover.setStyleSheet(
+                "color:#b91c1c; font-size:12.5px; font-weight:800; background:transparent; border:none;")
+            self.lbl_leftover.setText(
+                f"⚠ אין מספיק מוצרים לכל הקבועים! יש {total}, צריך {regs} — חסרים {regs - total}")
+        elif n <= 0:
             self.lbl_leftover.setStyleSheet(
                 "color:#059669; font-size:12.5px; font-weight:700; background:transparent; border:none;")
             self.lbl_leftover.setText(f"מספיק לקבועים בלבד ({regs}) — אפשר להדפיס ✓")
@@ -820,20 +833,17 @@ class GroupUpdateTab(QWidget):
             # would rank them on a different 0–100 scale and mis-order the merge.
             self._rows_data = selection.rank_by_need(self._rows_data, db.get_need_weights())
         live = {r.get("id") for r in self._rows_data}
-        # In the schedule/receipt workflow everyone starts marked as 'received'
-        # (the operator only UNticks the no-shows, bug 6). In 'scored' mode the
-        # job is to PICK the top-N by portions, so rows start unticked there and
-        # 'סמן מובילים' selects them. Either way, a row the operator explicitly
-        # unticked keeps its state across search/refresh.
-        default_checked = (mode != "scored")
-        if default_checked:
-            for rid in live:
-                # RULE 3: reserve picks are standby — they ride along on the list
-                # (and print as a separate section) but are NOT ticked-for-record,
-                # so a reserve is only saved if the operator activates them for a
-                # no-show. Everyone else starts ticked as 'received'.
-                if rid not in self._seen_ids and rid not in self._reserve_ids:
-                    self._checked_ids.add(rid)
+        # Regulars start UNticked (bug #ebnr2): the operator ticks who actually
+        # received — nobody is pre-marked as 'received'. One-time MAIN picks are
+        # the exception: they were DELIBERATELY chosen (in the 'חד פעמי' tab) to
+        # receive, so they arrive ticked. Reserves (standby) stay unticked. A row
+        # the operator explicitly (un)ticked keeps its state across search/refresh.
+        # (The volunteer import ticks reported-received people via
+        # _mark_received_in_table.)
+        for rid in live:
+            if (rid in self._extra_ids and rid not in self._reserve_ids
+                    and rid not in self._seen_ids):
+                self._checked_ids.add(rid)
         self._seen_ids = set(live)
         self._checked_ids &= live      # forget ticks for people no longer listed
         self._populate()
@@ -929,6 +939,14 @@ class GroupUpdateTab(QWidget):
                             "מקבלי החד-פעמי ולחץ 'הוסף נבחרים לעדכון קבוצתי'.")
             elif self._search_text:
                 lbl.setText("אין תוצאות לחיפוש זה")
+            elif self._current_mode() == "schedule" and db.get_regulars_scored():
+                # Schedule mode shows only regulars DUE this week. When none are due
+                # but regulars exist, a bare "no recipients" reads like the data is
+                # gone (bug #abv1w). Say what's happening and point to the full list.
+                n = len(db.get_regulars_scored())
+                lbl.setText(f"אין קבועים שתורם השבוע לפי לוח הזמנים "
+                            f"({n} קבועים בסה\"כ).\n\n"
+                            "לרשימת כל הקבועים — בחר למעלה במצב 'קבועים לפי ניקוד'.")
             else:
                 lbl.setText("אין מקבלים להצגה")
         refresh_empty_state(self.table)
@@ -1030,13 +1048,19 @@ class GroupUpdateTab(QWidget):
         self.dist_input.setStyleSheet("")
         self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
 
+        # Ticking is now opt-in (bug #ebnr2): an unticked row just means "not
+        # distributed to", NOT a recorded no-show — so nothing is auto-recorded as
+        # 'לא הגיע'. Only the people the operator ticked are saved as received.
+        not_received = []
+
         # The general note is recorded ONCE on the batch (bug #7) — no longer
         # duplicated into every recipient's per-person note.
         export_path = None
         export_err = None
         with busy_cursor():
             db.bulk_add_distributions(checked, dist_date, "", 0, distributor,
-                                      dist_name=dist_name, general_note=general_note)
+                                      dist_name=dist_name, general_note=general_note,
+                                      not_received=not_received)
             auto_backup_async()
             # Merged action: also export a full Excel (of who received) to Downloads.
             try:

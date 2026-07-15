@@ -53,13 +53,14 @@ print("\nTab-level (results table + auto-select):")
 from tabs.search import SearchTab
 tab = SearchTab()
 tab.refresh()   # cache rows
+from PyQt6.QtWidgets import QLabel as _QLabel
 def _details_text():
-    # header + all detail-row values, concatenated
-    parts = [tab.detail_header.text()]
+    # header (name + badge pill labels) + all detail-row values, concatenated
+    parts = [lbl.text() for lbl in tab.detail_header.findChildren(_QLabel)]
     for i in range(tab._detail_lay.count()):
         w = tab._detail_lay.itemAt(i).widget()
         if w is not None:
-            for lbl in w.findChildren(type(tab.detail_header)):
+            for lbl in w.findChildren(_QLabel):
                 parts.append(lbl.text())
     return " ".join(parts)
 

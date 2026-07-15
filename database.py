@@ -306,6 +306,11 @@ def init_db():
         dist_cols = {row["name"] for row in conn.execute("PRAGMA table_info(distributions)")}
         if "batch_id" not in dist_cols:
             conn.execute("ALTER TABLE distributions ADD COLUMN batch_id INTEGER")
+        # received: 1 = the recipient actually got the distribution, 0 = they were
+        # on the list but did NOT receive (a recorded no-show). Every pre-existing
+        # row predates the flag and means "received", so the default is 1.
+        if "received" not in dist_cols:
+            conn.execute("ALTER TABLE distributions ADD COLUMN received INTEGER DEFAULT 1")
 
         # Indexes are created AFTER the column migrations so that an older DB
         # (missing a column an index references) is upgraded first, not crashed.
@@ -600,8 +605,17 @@ def next_wednesday(from_date: date = None) -> date:
 
 def calculate_next_dist(last_date_str: str, frequency: str) -> date:
     """Return the correct next distribution date based on frequency."""
+    if not last_date_str:
+        # Never served yet: the recipient is due at the UPCOMING distribution
+        # (the coming Wednesday, or today if today is Wednesday) — not a week
+        # out. Otherwise a regular added on distribution day gets pushed to next
+        # week and silently drops off the current list (bug #pv59q).
+        if frequency == "חד-פעמי":
+            return next_wednesday()
+        today = date.today()
+        return today if today.weekday() == 2 else next_wednesday(today)
     try:
-        last = date.fromisoformat(last_date_str) if last_date_str else date.today()
+        last = date.fromisoformat(last_date_str)
     except ValueError:
         last = date.today()
 
@@ -666,6 +680,14 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
                 nd = None
             if nd is None:
                 nd = calculate_next_dist(r.get("last_distribution") or "", r.get("frequency") or "")
+                r["next_distribution"] = nd.isoformat()
+                updates.append((r["next_distribution"], r["id"]))
+            # A never-served active regular is due at the upcoming distribution —
+            # never a week out. Self-heals records whose next_distribution was
+            # stored a week ahead at add-time (bug #pv59q: a קבוע added on the
+            # distribution day would otherwise not show on this week's list).
+            if not (r.get("last_distribution") or "").strip() and nd != base_wed:
+                nd = base_wed
                 r["next_distribution"] = nd.isoformat()
                 updates.append((r["next_distribution"], r["id"]))
             r["_status"] = r.get("weekly_status", "") or ""
@@ -906,13 +928,21 @@ def compute_suggested_n(total_products: int) -> tuple[int, int]:
 
 def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
                            quantity, distributor: str,
-                           dist_name: str = "", general_note: str = ""):
+                           dist_name: str = "", general_note: str = "",
+                           not_received: list[dict] = None):
     """Add many distributions at once and update recipients' last/next distribution.
 
     Also records ONE batch row (the distribution event) that the "חלוקות" tab
     lists — capturing the shared header, the multi-product breakdown (carried in
     `what_dist`), and a single general note for the whole distribution. Each
-    per-recipient row links back to the batch via batch_id. Returns the batch id."""
+    per-recipient row links back to the batch via batch_id. Returns the batch id.
+
+    `not_received` is the optional list of recipients who were on the list but did
+    NOT get the distribution (recorded no-shows). They are written as rows with
+    received=0 under the same batch, but their last/next distribution is left
+    UNTOUCHED: a no-show didn't get anything, so their seniority clock keeps
+    running and they stay due for the next round."""
+    not_received = not_received or []
     souls_total = 0
     for rec in records:
         try:
@@ -931,8 +961,8 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
         for rec in records:
             conn.execute(
                 "INSERT INTO distributions "
-                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,1)",
                 (rec.get("id"), rec.get("full_name", ""), dist_date,
                  rec.get("area", ""), rec.get("souls", 0),
                  what_dist, quantity, distributor,
@@ -945,6 +975,17 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
             conn.execute(
                 "UPDATE recipients SET last_distribution=?, next_distribution=?, weekly_status='' WHERE id=?",
                 (dist_date, nw, rec.get("id"))
+            )
+        # No-shows: record the fact (received=0) WITHOUT advancing their dates.
+        for rec in not_received:
+            conn.execute(
+                "INSERT INTO distributions "
+                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,0)",
+                (rec.get("id"), rec.get("full_name", ""), dist_date,
+                 rec.get("area", ""), rec.get("souls", 0),
+                 what_dist, 0, distributor,
+                 rec.get("notes", ""), batch_id)
             )
     return batch_id
 
@@ -985,8 +1026,10 @@ def _recompute_recipient_dates(conn, rec_id):
     if not row:
         return
     freq = row["frequency"] or ""
+    # received=1 only: a recorded no-show must never become someone's
+    # "last distribution" — they didn't actually receive anything.
     last_row = conn.execute(
-        "SELECT MAX(dist_date) AS m FROM distributions WHERE recipient_id=?", (rec_id,)
+        "SELECT MAX(dist_date) AS m FROM distributions WHERE recipient_id=? AND received=1", (rec_id,)
     ).fetchone()
     last = (last_row["m"] if last_row else "") or ""
     if last and freq and freq != "חד-פעמי":
@@ -1070,10 +1113,12 @@ def get_summary():
         total_souls = conn.execute(
             "SELECT COALESCE(SUM(souls),0) as s FROM recipients WHERE status='פעיל'"
         ).fetchone()["s"]
+        # Stats count actual receipts only — recorded no-shows (received=0) are
+        # not distributions that happened.
         dists_month = conn.execute(
-            "SELECT COUNT(*) as c FROM distributions WHERE dist_date >= ?", (month_start,)
+            "SELECT COUNT(*) as c FROM distributions WHERE dist_date >= ? AND received=1", (month_start,)
         ).fetchone()["c"]
-        dists_total = conn.execute("SELECT COUNT(*) as c FROM distributions").fetchone()["c"]
+        dists_total = conn.execute("SELECT COUNT(*) as c FROM distributions WHERE received=1").fetchone()["c"]
 
         overdue = conn.execute(
             "SELECT COUNT(*) as c FROM recipients "

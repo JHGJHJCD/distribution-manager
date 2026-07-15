@@ -61,14 +61,31 @@ class BatchDetailsDialog(QDialog):
             lay.addWidget(note_lbl)
 
         recs = db.get_batch_recipients(batch.get("id"))
-        lay.addWidget(QLabel(f"מקבלים שקיבלו ({len(recs)}):"))
+        # received=1 → got it; received=0 → recorded no-show (#yjcny). Older rows
+        # have no flag stored → treat as received (default 1).
+        got = [r for r in recs if (r.get("received", 1) or 0) != 0]
+        missed = [r for r in recs if (r.get("received", 1) or 0) == 0]
+
+        lay.addWidget(QLabel(f"מקבלים שקיבלו ({len(got)}):"))
         lst = QListWidget()
         enable_touch_scroll(lst)
-        for r in recs:
+        for r in got:
             nm = r.get("recipient_name", "") or "—"
             pnote = (r.get("notes") or "").strip()
             lst.addItem(f"{nm}" + (f"   —   {pnote}" if pnote else ""))
         lay.addWidget(lst, 1)
+
+        if missed:
+            lbl_missed = QLabel(f"לא קיבלו ({len(missed)}):")
+            lbl_missed.setStyleSheet("color:#b91c1c; font-weight:600;")
+            lay.addWidget(lbl_missed)
+            lst_missed = QListWidget()
+            lst_missed.setStyleSheet("color:#b91c1c;")
+            enable_touch_scroll(lst_missed)
+            for r in missed:
+                nm = r.get("recipient_name", "") or "—"
+                lst_missed.addItem(nm)
+            lay.addWidget(lst_missed, 1)
 
         btn = QPushButton("סגור")
         btn.setObjectName("neutral")

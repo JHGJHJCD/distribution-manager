@@ -474,6 +474,13 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
     cell_align = Alignment(horizontal="right", vertical="center")
     _DATE_KEYS = {"last_distribution", "next_distribution", "birth_date", "spouse_birth_date"}
 
+    # Alphabetical by name so the exported sheet reads in א-ב order (bug #scgrh).
+    # Reserve (standby) people stay grouped at the end, each group sorted by name.
+    # Hebrew sorts correctly by Unicode code point.
+    recipients = sorted(recipients,
+                        key=lambda r: (bool(r.get("_reserve")),
+                                       (r.get("full_name") or "").strip()))
+
     for i, rec in enumerate(recipients, 1):
         is_reserve = bool(rec.get("_reserve"))
         got = "רזרבה" if is_reserve else "כן"

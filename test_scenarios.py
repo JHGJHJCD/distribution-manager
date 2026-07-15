@@ -88,7 +88,13 @@ win.search_tab.search_input.setText("פלוני א"); win.search_tab._run_search
 ok("S5 search finds the recipient", len(win.search_tab._results) >= 1)
 if win.search_tab._results:
     win.search_tab.results_list.setCurrentRow(0)
-    ok("S5 details show a name", "פלוני" in win.search_tab.detail_header.text())
+    _hlay = win.search_tab._hdr_lay
+    _hdr_text = " ".join(
+        _hlay.itemAt(i).widget().text()
+        for i in range(_hlay.count())
+        if _hlay.itemAt(i).widget() is not None
+        and hasattr(_hlay.itemAt(i).widget(), "text"))
+    ok("S5 details show a name", "פלוני" in _hdr_text)
 
 # ── Scenario 6: backup → reset → restore ──────────────────────────────────────
 from utils.backup import auto_backup, restore_from_backup

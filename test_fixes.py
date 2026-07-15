@@ -90,13 +90,15 @@ due = len(db.get_weekly_list())
 ok("#9 setup: regulars are due this week", due >= 3, f"due={due}")
 gt = win.group_tab
 gt.refresh()
-db.set_setting("available_products", "5"); db.set_setting("reserve_count", "0")
-gt.products_spin.setValue(5)     # 3 regulars due → 2 left for one-timers
+db.set_setting("available_products", "0"); db.set_setting("reserve_count", "0")
+# Robust to however many regulars are actually due: leave exactly 2 portions
+# for one-timers (due + 2), so the gate must block until a pick is made.
+gt.products_spin.setValue(due + 2)
 ok("#9 gate BLOCKS print before one-time picks are made", gt._one_time_gate_ok("הדפסה") is False)
 gt.add_one_time_picks([{"id": [r for r in db.get_one_time_list() if r["in_distribution"]][0]["id"],
                         "_reserve": False}])
 ok("#9 gate PASSES once a one-time pick is added", gt._one_time_gate_ok("הדפסה") is True)
-gt.products_spin.setValue(2)     # only enough for the regulars (2<3) → no leftover
+gt.products_spin.setValue(max(0, due - 1))   # fewer than the regulars → no leftover
 gt._extra_ids.clear(); gt._reserve_ids.clear()
 ok("#9 gate PASSES when products only cover the regulars", gt._one_time_gate_ok("הדפסה") is True)
 
