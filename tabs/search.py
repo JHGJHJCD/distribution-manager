@@ -143,7 +143,10 @@ class SearchTab(QWidget):
         self.detail_scroll = QScrollArea()
         self.detail_scroll.setWidgetResizable(True)
         self.detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self.detail_scroll.setMaximumHeight(300)
+        # The recipient's details are the main thing on this screen — give them
+        # the bulk of the height so every field is visible without scrolling
+        # (bug #5j4hw). The history table below is capped small instead.
+        self.detail_scroll.setMinimumHeight(340)
         enable_touch_scroll(self.detail_scroll)
         self.detail_card = QFrame()
         self.detail_card.setObjectName("panel")
@@ -151,7 +154,7 @@ class SearchTab(QWidget):
         self._detail_lay.setContentsMargins(16, 12, 16, 12)
         self._detail_lay.setSpacing(2)
         self.detail_scroll.setWidget(self.detail_card)
-        right_panel.addWidget(self.detail_scroll)
+        right_panel.addWidget(self.detail_scroll, 1)
 
         # History header row + print-card button
         hist_row = QHBoxLayout()
@@ -189,8 +192,11 @@ class SearchTab(QWidget):
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setResizeContentsPrecision(20)
         self.hist_table.verticalHeader().setVisible(False)
+        # History is secondary here — keep it compact so the details above get
+        # the room (bug #5j4hw). It scrolls internally when there are many rows.
+        self.hist_table.setMaximumHeight(230)
         enable_touch_scroll(self.hist_table)
-        right_panel.addWidget(self.hist_table, 1)
+        right_panel.addWidget(self.hist_table)
 
     # ── data ───────────────────────────────────────────────────────────────────
     def refresh(self):

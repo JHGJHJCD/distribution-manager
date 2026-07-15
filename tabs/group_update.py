@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea, QListView
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
-from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtGui import QColor, QFont, QIcon, QPalette
 from datetime import date
 from widgets import DateEdit
 import database as db
@@ -67,6 +67,16 @@ def _style_completer(combo):
         return
     view = QListView()
     view.setStyleSheet(_COMPLETER_POPUP_QSS)
+    # A stylesheet alone can still be overridden on a top-level popup by the
+    # app-wide qt-material theme, which is what left this popup dark-on-dark
+    # (bug #5eg5z). Force the palette too, so the light card / dark text is
+    # guaranteed regardless of the global theme.
+    pal = view.palette()
+    pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+    pal.setColor(QPalette.ColorRole.Text, QColor("#0f172a"))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor("#1e88e5"))
+    pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    view.setPalette(pal)
     comp.setPopup(view)
 
 # colours for one-time picks (+ reserve)
@@ -430,10 +440,21 @@ class GroupUpdateTab(QWidget):
                                         " background:transparent; border:none;")
         self.lbl_leftover.setWordWrap(True)
 
+        # Live hint under 'מוצרים זמינים' showing how many regulars are actually on
+        # THIS week's list — the operator asked to see the real count (it was easy
+        # to misread the manually-typed products number as a fixed regulars count,
+        # bug #jcncv). The spin itself stays a manual products/portions count.
+        self.lbl_regulars_count = QLabel("")
+        self.lbl_regulars_count.setStyleSheet(
+            "color:#1e78d6; font-size:11.5px; font-weight:700;"
+            " background:transparent; border:none;")
+
         grid.addLayout(_field("שם החלוקה", self.name_input), 0, 0)
         grid.addLayout(_field("תאריך", self.date_edit), 0, 1)
         grid.addLayout(_field("מחלק", self.dist_input), 0, 2)
-        grid.addLayout(_field("מוצרים זמינים", self.products_spin, maxw=140), 1, 0)
+        prod_field = _field("מוצרים זמינים", self.products_spin, maxw=140)
+        prod_field.addWidget(self.lbl_regulars_count)
+        grid.addLayout(prod_field, 1, 0)
         grid.addLayout(_field("רזרבה", self.reserve_spin, maxw=120), 1, 1)
         grid.addWidget(self.lbl_leftover, 1, 2, Qt.AlignmentFlag.AlignBottom)
         grid.addLayout(_field("הערה כללית לחלוקה", self.note_input), 2, 0, 1, 3)
@@ -825,6 +846,11 @@ class GroupUpdateTab(QWidget):
             finally:
                 spin.blockSignals(False)
         base_ids = {r["id"] for r in base}
+        # Show the real regulars count for this list (bug #jcncv).
+        reg_word = {"none": "בלי קבועים",
+                    "scored": f"קבועים לפי ניקוד: {len(base)}"}.get(
+            mode, f"קבועים השבוע: {len(base)}")
+        self.lbl_regulars_count.setText(reg_word)
         extras = self._extra_recipients(base_ids)
         self._rows_data = base + extras
         if mode == "scored":

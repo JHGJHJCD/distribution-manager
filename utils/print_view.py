@@ -233,26 +233,32 @@ def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
         ("חלוקה הבאה", _esc(_fmt(rec.get("next_distribution")))),
         ("הערות", _v("notes")),
     ]
+    # QTextDocument lays table columns in SOURCE order and ignores direction:rtl,
+    # so a naive label→value order prints label on the LEFT and reads
+    # left-to-right (bug #rxurn). Emit value FIRST, label LAST, so the label lands
+    # on the right where a Hebrew reader starts.
     details = "".join(
-        f"<tr><th style='width:28%;background:#eef3ff;color:#1a4a7a;'>{label}</th>"
-        f"<td>{val}</td></tr>"
+        f"<tr><td style='width:70%;'>{val}</td>"
+        f"<th style='width:30%;background:#eef3ff;color:#1a4a7a;'>{label}</th></tr>"
         for label, val in rows
     )
 
+    # Same reason: write the history columns in REVERSE source order so the
+    # printed table reads right-to-left (מס' on the right, הערות on the left).
     hist_rows = ""
     for i, h in enumerate(history, 1):
         hist_rows += (
-            f"<tr><td>{i}</td>"
-            f"<td>{_esc(_fmt(h.get('dist_date')))}</td>"
-            f"<td>{_esc(h.get('what_dist', ''))}</td>"
-            f"<td>{_esc(h.get('quantity', '') or '')}</td>"
+            f"<tr><td>{_esc(h.get('notes', ''))}</td>"
             f"<td>{_esc(h.get('distributor', ''))}</td>"
-            f"<td>{_esc(h.get('notes', ''))}</td></tr>"
+            f"<td>{_esc(h.get('quantity', '') or '')}</td>"
+            f"<td>{_esc(h.get('what_dist', ''))}</td>"
+            f"<td>{_esc(_fmt(h.get('dist_date')))}</td>"
+            f"<td>{i}</td></tr>"
         )
     hist_table = (
         "<div class='reserve-h'>היסטוריית חלוקות</div>"
         "<table><thead><tr>"
-        "<th>מס'</th><th>תאריך</th><th>מה חולק</th><th>כמות</th><th>מחלק</th><th>הערות</th>"
+        "<th>הערות</th><th>מחלק</th><th>כמות</th><th>מה חולק</th><th>תאריך</th><th>מס'</th>"
         "</tr></thead><tbody>" + (hist_rows or
             "<tr><td colspan='6' style='text-align:center;color:#888;'>אין חלוקות רשומות</td></tr>")
         + "</tbody></table>"
@@ -264,7 +270,7 @@ def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
     {logo_html}
     <div class='org'>{_esc(ORG_NAME)}</div>
     <h2>כרטיס מקבל — {_esc(rec.get('full_name', ''))}</h2>
-    <table>{details}</table>
+    <table width='100%'>{details}</table>
     {hist_table}
     <p class='footer'>הודפס: {date.today().strftime('%d/%m/%Y')} · סה\"כ חלוקות: {len(history)}</p>
     </body></html>
