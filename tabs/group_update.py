@@ -5,9 +5,10 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QLineEdit,
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
-    QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea, QListView
+    QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea, QListView,
+    QStyledItemDelegate
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QObject, QRect
 from PyQt6.QtGui import QColor, QFont, QIcon, QPalette
 from datetime import date
 from widgets import DateEdit
@@ -87,6 +88,70 @@ def _style_completer(combo):
     if comp is None:
         return
     comp.setPopup(_light_popup_view())
+
+
+class _SuggestionDeleteDelegate(QStyledItemDelegate):
+    """Draws a small red ✕ at the leading (left) edge of every suggestion row,
+    so the operator can remove a saved suggestion (#jtnps)."""
+    HIT_W = 26
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        painter.save()
+        r = option.rect
+        pen = painter.pen()
+        pen.setColor(QColor("#c0392b"))
+        painter.setPen(pen)
+        f = painter.font()
+        f.setBold(True)
+        painter.setFont(f)
+        painter.drawText(QRect(r.left() + 3, r.top(), self.HIT_W, r.height()),
+                         Qt.AlignmentFlag.AlignCenter, "✕")
+        painter.restore()
+
+
+class _ComboSuggestionDeleter(QObject):
+    """Lets the operator delete a suggestion from an editable combo's dropdown by
+    clicking the ✕ the delegate draws — removing it from the list AND from the
+    persisted history so it doesn't come back (#jtnps)."""
+
+    def __init__(self, combo, hist_key, tab):
+        super().__init__(combo)
+        self._combo = combo
+        self._key = hist_key
+        self._tab = tab
+        view = combo.view()
+        view.setItemDelegate(_SuggestionDeleteDelegate(view))
+        view.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.MouseButtonRelease:
+            view = self._combo.view()
+            pos = ev.position().toPoint() if hasattr(ev, "position") else ev.pos()
+            idx = view.indexAt(pos)
+            if idx.isValid() and pos.x() <= _SuggestionDeleteDelegate.HIT_W + 4:
+                self._delete(idx.row())
+                return True
+        return super().eventFilter(obj, ev)
+
+    def _delete(self, row):
+        if row < 0 or row >= self._combo.count():
+            return
+        text = self._combo.itemText(row)
+        was_current = (self._combo.currentText() == text)
+        self._combo.removeItem(row)
+        hist = [x for x in self._tab._load_history(self._key) if x != text]
+        db.set_setting(self._key, "\n".join(hist))
+        if was_current:
+            self._combo.setCurrentText("")
+        if self._combo.count() == 0:
+            self._combo.hidePopup()
+
+
+def _make_suggestions_deletable(combo, hist_key, tab):
+    """Attach the ✕-to-delete behaviour to an editable history combo. Kept alive
+    by parenting the helper to the combo."""
+    combo._suggestion_deleter = _ComboSuggestionDeleter(combo, hist_key, tab)
 
 # colours for one-time picks (+ reserve)
 _RESERVE_BG, _RESERVE_FG = "#ede7f6", "#5e35b1"
@@ -399,6 +464,7 @@ class GroupUpdateTab(QWidget):
         self.name_input.addItems(self._load_history("dist_names_history"))
         self.name_input.setCurrentText("")
         _style_completer(self.name_input)
+        _make_suggestions_deletable(self.name_input, "dist_names_history", self)
 
         self.date_edit = DateEdit(allow_empty=False)
         self.date_edit.setMinimumWidth(130)
@@ -414,6 +480,7 @@ class GroupUpdateTab(QWidget):
         self.dist_input.addItems(self._load_history("distributors_history"))
         self.dist_input.setCurrentText(db.get_setting("last_distributor") or "")
         _style_completer(self.dist_input)
+        _make_suggestions_deletable(self.dist_input, "distributors_history", self)
 
         self.note_input = QLineEdit()
         self.note_input.setPlaceholderText("הערה כללית שתישמר עם החלוקה (לא חובה)")
@@ -443,11 +510,23 @@ class GroupUpdateTab(QWidget):
             self.reserve_spin.setValue(5)
         self.reserve_spin.valueChanged.connect(self._on_reserve_changed)
 
-        # Live "how many portions are left for one-timers" hint.
+        # Live "how many portions are left for one-timers" hint — wrapped in its
+        # own little card (#xwxna) so it reads as a tidy panel, not text floating
+        # in mid-air. The label carries only the (state-dependent) text colour; the
+        # card frame carries the border/background.
         self.lbl_leftover = QLabel("")
         self.lbl_leftover.setStyleSheet("color:#475569; font-size:12.5px; font-weight:700;"
                                         " background:transparent; border:none;")
         self.lbl_leftover.setWordWrap(True)
+        self.leftover_card = QFrame()
+        self.leftover_card.setObjectName("leftover-card")
+        self.leftover_card.setStyleSheet(
+            "QFrame#leftover-card{background:#f8fafc; border:1px solid #e2e8f0;"
+            " border-radius:10px;}")
+        _lc = QHBoxLayout(self.leftover_card)
+        _lc.setContentsMargins(12, 8, 12, 8)
+        _lc.addWidget(self.lbl_leftover)
+        self.leftover_card.setVisible(False)   # shown only when there's a hint
 
         # Live hint under 'מוצרים זמינים' showing how many regulars are actually on
         # THIS week's list — the operator asked to see the real count (it was easy
@@ -465,7 +544,7 @@ class GroupUpdateTab(QWidget):
         prod_field.addWidget(self.lbl_regulars_count)
         grid.addLayout(prod_field, 1, 0)
         grid.addLayout(_field("רזרבה", self.reserve_spin, maxw=120), 1, 1)
-        grid.addWidget(self.lbl_leftover, 1, 2, Qt.AlignmentFlag.AlignBottom)
+        grid.addWidget(self.leftover_card, 1, 2, Qt.AlignmentFlag.AlignVCenter)
         grid.addLayout(_field("הערה כללית לחלוקה", self.note_input), 2, 0, 1, 3)
         grid.setColumnStretch(0, 2)
         grid.setColumnStretch(1, 1)
@@ -488,6 +567,7 @@ class GroupUpdateTab(QWidget):
         self.volunteer_email_input.addItems(self._load_history("volunteer_emails_history"))
         self.volunteer_email_input.setCurrentText("")
         _style_completer(self.volunteer_email_input)
+        _make_suggestions_deletable(self.volunteer_email_input, "volunteer_emails_history", self)
         vol_row.addLayout(_field("אימייל המתנדב", self.volunteer_email_input, maxw=300))
 
         btn_send_vol = QPushButton(" שלח למתנדב")
@@ -780,29 +860,31 @@ class GroupUpdateTab(QWidget):
 
     def _update_leftover_hint(self):
         """Explain, live, whether products still need one-time recipients."""
+        def _show(color, weight, text):
+            self.lbl_leftover.setStyleSheet(
+                f"color:{color}; font-size:12.5px; font-weight:{weight};"
+                " background:transparent; border:none;")
+            self.lbl_leftover.setText(text)
+            self.leftover_card.setVisible(True)
+
         total = self.products_spin.value()
         if total <= 0:
             self.lbl_leftover.setText("")
+            self.leftover_card.setVisible(False)
             return
         n, regs = db.compute_suggested_n(total)
         if regs > 0 and total < regs:
             # Not enough products even for the regulars due this week (bug #m69he).
-            self.lbl_leftover.setStyleSheet(
-                "color:#b91c1c; font-size:12.5px; font-weight:800; background:transparent; border:none;")
-            self.lbl_leftover.setText(
-                f"⚠ אין מספיק מוצרים לכל הקבועים! יש {total}, צריך {regs} — חסרים {regs - total}")
+            _show("#b91c1c", 800,
+                  f"⚠ אין מספיק מוצרים לכל הקבועים! יש {total}, צריך {regs} — חסרים {regs - total}")
         elif n <= 0:
-            self.lbl_leftover.setStyleSheet(
-                "color:#059669; font-size:12.5px; font-weight:700; background:transparent; border:none;")
-            self.lbl_leftover.setText(f"מספיק לקבועים בלבד ({regs}) — אפשר להדפיס ✓")
+            _show("#059669", 700, f"מספיק לקבועים בלבד ({regs}) — אפשר להדפיס ✓")
         else:
             picks = self._main_pick_count()
             done = picks >= n
-            self.lbl_leftover.setStyleSheet(
-                ("color:#059669;" if done else "color:#b45309;") +
-                " font-size:12.5px; font-weight:700; background:transparent; border:none;")
             state = "נבחרו ✓" if done else "טרם הושלם — בחר בלשונית 'חד פעמי'"
-            self.lbl_leftover.setText(f"נשאר לחד-פעמיים: {n}  ·  נבחרו: {picks}  ({state})")
+            _show("#059669" if done else "#b45309", 700,
+                  f"נשאר לחד-פעמיים: {n}  ·  נבחרו: {picks}  ({state})")
 
     def _mark_leaders(self):
         """Check the top-N recipients by need-score, N = 'מוצרים זמינים'."""
@@ -868,17 +950,13 @@ class GroupUpdateTab(QWidget):
             # would rank them on a different 0–100 scale and mis-order the merge.
             self._rows_data = selection.rank_by_need(self._rows_data, db.get_need_weights())
         live = {r.get("id") for r in self._rows_data}
-        # Regulars start UNticked (bug #ebnr2): the operator ticks who actually
-        # received — nobody is pre-marked as 'received'. One-time MAIN picks are
-        # the exception: they were DELIBERATELY chosen (in the 'חד פעמי' tab) to
-        # receive, so they arrive ticked. Reserves (standby) stay unticked. A row
-        # the operator explicitly (un)ticked keeps its state across search/refresh.
-        # (The volunteer import ticks reported-received people via
-        # _mark_received_in_table.)
-        for rid in live:
-            if (rid in self._extra_ids and rid not in self._reserve_ids
-                    and rid not in self._seen_ids):
-                self._checked_ids.add(rid)
+        # EVERYONE starts UNticked (bugs #ebnr2, #p5vv0): the operator ticks who
+        # actually received — nobody is pre-marked as 'received'. One-time picks
+        # are no exception: they're brought INTO the list (so they can receive),
+        # but arrive unticked like the regulars, and get ticked only when the
+        # operator marks them as arrived. A row the operator explicitly (un)ticked
+        # keeps its state across search/refresh. (The volunteer import ticks
+        # reported-received people via _mark_received_in_table.)
         self._seen_ids = set(live)
         self._checked_ids &= live      # forget ticks for people no longer listed
         self._populate()

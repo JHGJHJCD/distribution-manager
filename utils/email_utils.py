@@ -9,6 +9,7 @@
 היא לא יוצאת מהמחשב של המשתמש.
 """
 import os
+import socket
 import smtplib
 import imaplib
 import email as _email
@@ -110,11 +111,27 @@ def send_email(to_addr: str, subject: str, html_body: str,
         part["Content-Disposition"] = f'attachment; filename="{os.path.basename(attachment_path)}"'
         root.attach(part)
 
-    server = _connect(cfg)
+    # Connecting is where "no internet" shows up: getaddrinfo/timeout/refused all
+    # surface as OSError-family here. Turn them into a clear Hebrew message so the
+    # caller never reports a send as successful when the network was down (#ib2st).
     try:
-        server.sendmail(cfg["email"], [to_addr], root.as_string())
+        server = _connect(cfg)
+    except (OSError, smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected) as e:
+        raise RuntimeError(
+            "אין חיבור לאינטרנט — המייל לא נשלח. ודא/י שהמחשב מחובר לרשת ונסה/י שוב."
+        ) from e
+    try:
+        # sendmail returns the recipients the server REFUSED (empty = all accepted).
+        # A refused recipient means the mail was NOT delivered — treat as failure
+        # rather than silently reporting success.
+        refused = server.sendmail(cfg["email"], [to_addr], root.as_string())
     finally:
-        server.quit()
+        try:
+            server.quit()
+        except Exception:
+            pass
+    if refused:
+        raise RuntimeError("המייל לא התקבל אצל הנמען — בדוק/י את כתובת המייל ונסה/י שוב.")
 
 
 # ─── Incoming: auto-pull volunteer replies over IMAP ──────────────────────────

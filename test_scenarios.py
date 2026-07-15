@@ -37,8 +37,9 @@ ok("S1 weekly shows regulars", len(wk_reg) >= 5)
 ok("S1 weekly excludes one-timers initially",
    not any(r.get("frequency") == "חד-פעמי" for r in win.weekly_tab._rows_data))
 
-# ── Scenario 2: one-time main + reserve → main CHECKED, reserve STANDBY (RULE 3)
-# 8 products, 5 regulars served first → 3 slots for one-timers (main), +1 reserve.
+# ── Scenario 2: one-time main + reserve → picks arrive UNCHECKED (#p5vv0),
+# reserve STANDBY (RULE 3). 8 products, 5 regulars served first → 3 slots for
+# one-timers (main), +1 reserve. The operator ticks who actually arrives.
 ot = win.one_time_tab
 # 'מוצרים זמינים'/'רזרבה' now live in the group tab (shared via settings).
 db.set_setting("available_products", "8"); db.set_setting("reserve_count", "1")
@@ -48,7 +49,10 @@ gt = win.group_tab
 gt_checked = [gt._rows_data[r]["full_name"] for r in range(gt.table.rowCount())
               if gt.table.item(r, 0) and gt.table.item(r, 0).checkState() == Qt.CheckState.Checked]
 ot_checked = [n for n in gt_checked if n.startswith("פלוני")]
-ok("S2 one-time MAIN picks arrive CHECKED in group_update", len(ot_checked) >= 1, str(ot_checked))
+# #p5vv0: one-time picks are imported into the list but NOT auto-checked.
+ok("S2 one-time MAIN picks arrive UNCHECKED (#p5vv0)", len(ot_checked) == 0, str(ot_checked))
+main_ids = set(gt._extra_ids) - set(gt._reserve_ids)
+ok("S2 one-time MAIN picks ARE in the list (just unmarked)", len(main_ids) >= 1, str(main_ids))
 # RULE 3: the reserve pick rides along but is NOT ticked for recording (standby).
 reserve_ids = set(gt._reserve_ids)
 ok("S2 reserve pick is standby (NOT checked for recording)",
@@ -58,11 +62,13 @@ ok("S2 one-timers merged into the list", len(wk_ot) >= 1, str(wk_ot))
 ok("S2 reserve still flagged for the print", any(r.get("_reserve") for r in gt._rows_data))
 ok("S2 print INCLUDES the reserve section (standby handed to distributor)",
    "רזרבה — לפי סדר עדיפות" in _build_html(gt._get_export_rows(), "10/06/2026"))
-# record the distribution from group_update
+# The operator marks the main picks as arrived (ticks them), then records.
+gt._checked_ids |= main_ids
+gt._populate()
 gt.dist_input.setCurrentText("מחלק א")
 n_before = len(db.get_distributions())
 gt._save()
-ok("S2 distribution recorded for the picks", len(db.get_distributions()) > n_before)
+ok("S2 distribution recorded for the ticked picks", len(db.get_distributions()) > n_before)
 # RULE 3: a standby reserve must NOT land in the distribution history.
 ok("S2 reserve NOT recorded to history",
    all(len(db.get_distributions_for_recipient(rid)) == 0 for rid in reserve_ids))

@@ -477,8 +477,9 @@ check("weekly UI excludes חד-פעמי", not ot_in_ui)
 _win.one_time_tab.refresh()
 check("one_time tab loads", _win.one_time_tab.table.rowCount() >= 0)
 
-# regression: one-timers selected in "חד פעמי" must arrive CHECKED in "עדכון
-# קבוצתי" so they actually appear in the issued (checked) distribution list.
+# regression (#p5vv0): one-timers selected in "חד פעמי" are brought INTO the
+# "עדכון קבוצתי" list, but arrive UNCHECKED — imported, not pre-marked as
+# received. The operator ticks them only when they actually arrive.
 from PyQt6.QtWidgets import QMessageBox as _QMB
 _orig_info = _QMB.information
 _QMB.information = staticmethod(lambda *a, **k: None)   # don't block on the popup
@@ -491,10 +492,10 @@ _win.one_time_tab._calc_suggestion()
 _win.one_time_tab._add_to_group_update()
 _QMB.information = _orig_info
 _issued = _win.group_tab._get_checked_recipients()
-check("one-timer added from חד-פעמי is checked & in issued list",
-      any(r["full_name"] == "__ot_issued__" for r in _issued))
+check("one-timer added from חד-פעמי is NOT auto-checked (#p5vv0)",
+      not any(r["full_name"] == "__ot_issued__" for r in _issued))
 _win.weekly_tab.refresh()
-check("weekly list also includes the one-time pick",
+check("weekly list includes the one-time pick (imported, unchecked)",
       any(r.get("full_name") == "__ot_issued__" for r in _win.weekly_tab._rows_data))
 
 _stats = db.get_summary()

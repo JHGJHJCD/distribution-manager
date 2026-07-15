@@ -273,7 +273,9 @@ class SettingsTab(QWidget):
         danger_btns.addWidget(btn_reset)
         danger_btns.addStretch()
         danger_lay.addLayout(danger_btns)
-        lay.addWidget(danger_frame)   # full-width strip below both columns
+        # Placed in the right column, under 'מייל למתנדבים' (#nbbwj) — half-width and
+        # compact instead of a full-width strip. The actual addWidget happens after
+        # mail_frame is built, below.
 
         # ── Volunteer email section ────────────────────────
         mail_frame = QFrame()
@@ -371,6 +373,7 @@ class SettingsTab(QWidget):
         self.lbl_mail_status.setWordWrap(True)
         mail_lay.addWidget(self.lbl_mail_status)
         right_col.addWidget(mail_frame)
+        right_col.addWidget(danger_frame)   # 'אזור מסוכן' — half-width, under the mail panel (#nbbwj)
 
         # ── Organization / branding section ───────────────────
         # Makes the app charity-agnostic: the name shown on the top bar is data,

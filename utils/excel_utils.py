@@ -108,6 +108,21 @@ def _normalize_phone(val: str) -> str:
     return val
 
 
+def _write_phone_cell(cell, value):
+    """Write a phone number so Excel doesn't flag it with the green-triangle
+    'מספר המאוחסן כטקסט' (number-stored-as-text) warning. A pure-digit phone is
+    stored as a real number with a leading-zero-preserving format (so 0533193925
+    stays exactly that, no warning). Anything with non-digits — a landline hyphen
+    (04-9955317), '+', spaces — stays plain text; Excel doesn't flag those, since
+    they aren't numeric."""
+    s = str(value if value is not None else "").strip()
+    if s.isdigit() and 1 <= len(s) <= 15:
+        cell.value = int(s)
+        cell.number_format = "0" * len(s)   # keep exact length incl. leading zero
+    else:
+        cell.value = s
+
+
 # Hebrew final-form letters → their regular forms, so a substring match isn't
 # defeated by ן↔נ etc. (e.g. "אלמן" ends in a final nun but "אלמנה" uses a
 # regular nun — without this they wouldn't match).
@@ -356,6 +371,7 @@ def export_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     headers = ["מס'", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3", "אזור", "נפשות", "✓ ביצוע"]
+    phone_cells = [(3, "phone1"), (4, "phone2"), (5, "phone3")]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = header_font
@@ -380,6 +396,8 @@ def export_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
             cell.alignment = cell_align
             cell.fill = fill
             cell.border = border
+        for c, key in phone_cells:   # real-number phones → no green-triangle warning
+            _write_phone_cell(ws.cell(i + 1, c), rec.get(key, ""))
         ws.row_dimensions[i + 1].height = 18
 
     col_widths = [6, 26, 16, 16, 16, 10, 8, 10]
@@ -501,6 +519,9 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
             cell.border = border
         # 'קיבל חלוקה' cell — green for received, amber for reserve (standby)
         ws[i + 1][1].fill = reserve_cell_fill if is_reserve else got_cell_fill
+        for c, h in enumerate(headers, 1):   # phones as real numbers (no green triangle)
+            if h.startswith("טלפון"):
+                _write_phone_cell(ws.cell(i + 1, c), rec.get(_FULL_FIELDS[c - 3][0], ""))
         ws.row_dimensions[i + 1].height = 18
 
     # column widths — index, got, then a sensible width per field
@@ -725,6 +746,9 @@ def export_volunteer_checklist_to_excel(recipients: List[Dict], dist_date: str,
             cell.alignment = cell_align
             cell.border = border
             cell.fill = alt_fill if i % 2 == 0 else normal_fill
+        for c, h in enumerate(_VOL_COLS, 1):   # phones as real numbers (no green triangle)
+            if h.startswith("טלפון"):
+                _write_phone_cell(ws.cell(r, c), vals[c - 1])
         ws.cell(r, _VOL_COL_NAME).font = Font(bold=True)
         dv.add(ws.cell(r, _VOL_COL_CAME))
         ws.row_dimensions[r].height = 18
