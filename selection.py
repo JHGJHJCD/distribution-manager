@@ -141,3 +141,86 @@ def plan_one_time(rows: list, weights: dict, portions, reserve_count: int = 0) -
         r["_role"] = ROLE_OUT
         r["_reserve"] = False
     return ranked + others
+
+
+# ── Custom broad filter (mode 'filter') ───────────────────────────────────────
+# A distribution mode that ignores priority/frequency entirely and instead picks
+# recipients from the FULL active list by tunable numeric thresholds (e.g. only
+# families with 5+ children, or income up to X). Each field is filtered by an
+# optional minimum and/or maximum; an unset bound means "no limit" on that side.
+# The operator's request (2026-08): filter by number of children, monthly income,
+# and disposable-per-soul. Area is intentionally NOT a criterion here.
+
+# (data key, Hebrew label) — the fields offered in the filter dialog, in order.
+FILTER_FIELDS = [
+    ("children_total", "מספר ילדים"),
+    ("income",         "הכנסה חודשית"),
+    ("per_soul",       "פנוי לנפש"),
+]
+
+
+def to_number(val):
+    """Best-effort numeric read of a field that may be stored as free text
+    ('4,500 ₪' → 4500.0, '' → None). Returns a float, or None when no digits are
+    present. Keeps a decimal point but drops thousands separators and currency."""
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    if not s:
+        return None
+    # Commas here are thousands separators (Israeli shekel amounts: '4,500 ₪'),
+    # so drop them; keep digits, a decimal point and a leading minus, discard
+    # everything else (spaces, ₪, letters). A stray extra '.' makes float() fail
+    # → None, which is the safe "no usable number" answer.
+    s = s.replace(",", "")
+    neg = s.lstrip().startswith("-")
+    text = "".join(ch for ch in s if ch.isdigit() or ch == ".")
+    if text in ("", "."):
+        return None
+    if neg:
+        text = "-" + text
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def criteria_is_active(criteria: dict) -> bool:
+    """True if at least one field has a real (min or max) bound set."""
+    for field, _label in FILTER_FIELDS:
+        b = (criteria or {}).get(field) or {}
+        if b.get("min") is not None or b.get("max") is not None:
+            return True
+    return False
+
+
+def matches_criteria(rec: dict, criteria: dict) -> bool:
+    """Does a single recipient satisfy EVERY set bound (AND across fields)?
+
+    A recipient whose value for a CONSTRAINED field is missing/unparseable is
+    EXCLUDED — we can't confirm it falls inside the requested range, and this is a
+    hard eligibility filter (unlike need-scoring, where missing data only lowers
+    rank). Fields with no bound set are ignored."""
+    for field, _label in FILTER_FIELDS:
+        b = (criteria or {}).get(field) or {}
+        lo, hi = b.get("min"), b.get("max")
+        if lo is None and hi is None:
+            continue
+        val = to_number(rec.get(field))
+        if val is None:
+            return False
+        if lo is not None and val < lo:
+            return False
+        if hi is not None and val > hi:
+            return False
+    return True
+
+
+def filter_by_criteria(rows: list, criteria: dict) -> list:
+    """Return the subset of rows matching the criteria (RULE-agnostic broad
+    filter). With no active bound, returns the list unchanged. Pure."""
+    if not criteria_is_active(criteria):
+        return list(rows)
+    return [r for r in rows if matches_criteria(r, criteria)]

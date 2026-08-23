@@ -110,6 +110,17 @@ check("general note suffix present in history",
 rec0 = db.get_recipient(ids[0])
 check("recipient last_distribution updated", rec0.get("last_distribution") == "2026-07-08")
 
+print("\n=== H2: duplicate-import detection (find_matching_batch) ===")
+# The bulk_add above created a batch (date 2026-07-08, blank name) recording ids[:3].
+check("H2 same date + blank name + recipient overlap → duplicate detected",
+      db.find_matching_batch("2026-07-08", "", [ids[0]]) is not None)
+check("H2 different dist_name → NOT flagged (legitimate other distribution)",
+      db.find_matching_batch("2026-07-08", "חלוקה אחרת לגמרי", [ids[0]]) is None)
+check("H2 different date → NOT flagged",
+      db.find_matching_batch("2026-01-01", "", [ids[0]]) is None)
+check("H2 no recipient overlap → NOT flagged",
+      db.find_matching_batch("2026-07-08", "", [999999]) is None)
+
 print("\n=== email module builds messages without a real send ===")
 check("not configured returns clear error",
       not email_utils.is_configured())

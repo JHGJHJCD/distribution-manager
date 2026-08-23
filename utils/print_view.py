@@ -163,19 +163,10 @@ def _preview(printer: QPrinter, render, parent: QWidget, title: str):
     dlg.exec()
 
 
-def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWidget = None,
-                            dist_name: str = ""):
-    """Open a print PREVIEW of the distribution list — portrait, right-to-left —
-    so the user sees exactly what will print before sending it to the printer."""
-    printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-    printer.setPageOrientation(QPageLayout.Orientation.Portrait)
-    # Reasonable margins so nothing is clipped at the page edges.
-    printer.setPageMargins(QMarginsF(10, 10, 10, 10), QPageLayout.Unit.Millimeter)
-
-    logo_path = _resource_path("org_logo.png")
-    has_logo = os.path.exists(logo_path)
-    html = _build_html(recipients, dist_date, has_logo, dist_name)
-
+def _make_dist_renderer(recipients: List[Dict], html: str, has_logo: bool, logo_path: str):
+    """Build the paint callback that draws the distribution list onto a QPrinter,
+    picking the largest font that still fits the target page count. Shared by the
+    on-screen preview and the PDF export so both look identical."""
     def render(pr: QPrinter):
         page_size = QSizeF(pr.pageLayout().paintRectPixels(pr.resolution()).size())
         doc = QTextDocument()
@@ -202,8 +193,66 @@ def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWid
             if doc.pageCount() <= target_pages:
                 break
         doc.print(pr)
+    return render
 
+
+def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWidget = None,
+                            dist_name: str = ""):
+    """Open a print PREVIEW of the distribution list — portrait, right-to-left —
+    so the user sees exactly what will print before sending it to the printer."""
+    printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+    printer.setPageOrientation(QPageLayout.Orientation.Portrait)
+    # Reasonable margins so nothing is clipped at the page edges.
+    printer.setPageMargins(QMarginsF(10, 10, 10, 10), QPageLayout.Unit.Millimeter)
+
+    logo_path = _resource_path("org_logo.png")
+    has_logo = os.path.exists(logo_path)
+    html = _build_html(recipients, dist_date, has_logo, dist_name)
+
+    render = _make_dist_renderer(recipients, html, has_logo, logo_path)
     _preview(printer, render, parent, "תצוגה מקדימה — רשימת חלוקה")
+
+
+def _safe_filename(text: str) -> str:
+    """Turn a distribution name into a filesystem-safe file stem."""
+    text = (text or "").strip()
+    for ch in '\\/:*?"<>|':
+        text = text.replace(ch, "")
+    text = "_".join(text.split())
+    return text[:60] or "חלוקה"
+
+
+def export_distribution_pdf(recipients: List[Dict], dist_date: str,
+                            dist_name: str = "") -> str:
+    """Render the distribution list straight to a PDF in the user's Downloads
+    folder (no printer needed), then open it automatically. Returns the file path.
+
+    Same layout as the print preview — reuses the exact HTML + fit renderer."""
+    from utils.excel_utils import _downloads_dir   # lazy: avoid import cycle
+
+    printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+    printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+    printer.setPageOrientation(QPageLayout.Orientation.Portrait)
+    printer.setPageMargins(QMarginsF(10, 10, 10, 10), QPageLayout.Unit.Millimeter)
+
+    stem = _safe_filename(dist_name or "רשימת_חלוקה")
+    fname = f"{stem}_{date.today().strftime('%Y-%m-%d')}.pdf"
+    out_path = os.path.join(str(_downloads_dir()), fname)
+    printer.setOutputFileName(out_path)
+
+    logo_path = _resource_path("org_logo.png")
+    has_logo = os.path.exists(logo_path)
+    html = _build_html(recipients, dist_date, has_logo, dist_name)
+
+    render = _make_dist_renderer(recipients, html, has_logo, logo_path)
+    render(printer)   # writes the PDF file
+
+    # Open the finished PDF automatically (best-effort — never fail the export).
+    try:
+        os.startfile(out_path)   # Windows: opens in the default PDF viewer
+    except Exception:
+        pass
+    return out_path
 
 
 _PRIORITY_LABELS = {4: "קבוע", 3: "עדיפות ראשונה", 2: "עדיפות שנייה"}

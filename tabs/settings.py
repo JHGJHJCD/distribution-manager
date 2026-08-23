@@ -597,7 +597,9 @@ class SettingsTab(QWidget):
         - No backup folder configured → warn, let the user choose to proceed anyway.
         - Backup failed (folder set)  → abort; do NOT risk data loss.
         """
-        result = auto_backup()
+        # Safety bucket ('safety_*') — kept separate from routine backups so
+        # ordinary churn can never evict this pre-destructive recovery point (C1).
+        result = auto_backup(kind="safety")
         if result is True:
             return True
 

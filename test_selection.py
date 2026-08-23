@@ -182,6 +182,36 @@ _tie = selection.rank_by_need(
 ok("tie-break: equal need → longest-waiting first (beats alphabetical 'אבי')",
    [r["id"] for r in _tie] == ["late", "early"], str([r["full_name"] for r in _tie]))
 
+# ── broad custom filter (mode 'filter', #vq4fx) ───────────────────────────────
+# A distribution over the WHOLE list by numeric thresholds, ignoring priority.
+ok("to_number: text shekels parse", selection.to_number("4,500 ₪") == 4500.0)
+ok("to_number: blank/None → None", selection.to_number("") is None and selection.to_number(None) is None)
+ok("to_number: non-numeric → None", selection.to_number("לא ידוע") is None)
+ok("to_number: keeps decimals", selection.to_number("2,500.50") == 2500.5)
+
+_pool = [
+    {"id": 1, "full_name": "גדולה-ענייה", "children_total": 7, "income": "2000", "per_soul": "250"},
+    {"id": 2, "full_name": "קטנה-אמידה", "children_total": 2, "income": "9000", "per_soul": "2000"},
+    {"id": 3, "full_name": "חסרת-הכנסה", "children_total": 8, "income": "",     "per_soul": "100"},
+    {"id": 4, "full_name": "גבולית",      "children_total": 5, "income": "3000", "per_soul": "250"},
+]
+_crit = {"children_total": {"min": 5, "max": None},
+         "income":         {"min": None, "max": 3000},
+         "per_soul":       {"min": None, "max": None}}
+_res = selection.filter_by_criteria(_pool, _crit)
+ok("filter: children≥5 AND income≤3000 keeps only qualifying rows",
+   sorted(r["id"] for r in _res) == [1, 4], str([r["id"] for r in _res]))
+ok("filter: missing value in a CONSTRAINED field excludes the row (hard gate)",
+   3 not in {r["id"] for r in _res})
+ok("filter: priority/frequency are IGNORED — a one-timer can qualify",
+   {r["id"] for r in selection.filter_by_criteria(
+       [{"id": 9, "frequency": "חד-פעמי", "priority": 3, "children_total": 6, "income": "1000"}],
+       {"children_total": {"min": 5, "max": None}})} == {9})
+ok("filter: no active bound → list unchanged",
+   len(selection.filter_by_criteria(_pool, {"children_total": {"min": None, "max": None}})) == 4)
+ok("criteria_is_active: empty vs set",
+   not selection.criteria_is_active({}) and selection.criteria_is_active(_crit))
+
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

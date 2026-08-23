@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QLineEdit,
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
     QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea, QListView,
-    QStyledItemDelegate
+    QStyledItemDelegate, QDialog, QFormLayout
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QObject, QRect
 from PyQt6.QtGui import QColor, QFont, QIcon, QPalette
@@ -88,6 +88,91 @@ def _style_completer(combo):
     if comp is None:
         return
     comp.setPopup(_light_popup_view())
+
+
+class FilterCriteriaDialog(QDialog):
+    """Editor for the custom broad-filter thresholds (distribution mode 'filter',
+    #vq4fx). One row per numeric field (מספר ילדים / הכנסה / פנוי לנפש) with an
+    optional 'מ-' (minimum) and 'עד' (maximum). A blank box means no bound on that
+    side. Only recipients satisfying EVERY set bound get the distribution."""
+
+    def __init__(self, parent=None, criteria: dict = None):
+        super().__init__(parent)
+        self.setWindowTitle("סינון מותאם — מי נכלל בחלוקה")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumWidth(440)
+        self._boxes = {}   # field -> (min_edit, max_edit)
+        self._build(criteria or {})
+
+    def _num_edit(self, value) -> QLineEdit:
+        e = QLineEdit()
+        e.setAlignment(Qt.AlignmentFlag.AlignRight)
+        e.setPlaceholderText("—")
+        e.setMaximumWidth(110)
+        if value is not None:
+            # Show whole numbers without a trailing '.0'.
+            e.setText(str(int(value)) if float(value).is_integer() else str(value))
+        return e
+
+    def _build(self, criteria: dict):
+        outer = QVBoxLayout(self)
+        intro = QLabel("בחר את התנאים. מקבל ייכלל רק אם הוא עונה על כל התנאים שמולאו.\n"
+                       "השאר ריק = בלי הגבלה בצד הזה. (חסר נתון בשדה מסונן → לא נכלל)")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#475569; font-size:12.5px;")
+        outer.addWidget(intro)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(8)
+        grid.addWidget(QLabel("קריטריון"), 0, 0)
+        h_min = QLabel("מ- (לפחות)"); h_max = QLabel("עד (לכל היותר)")
+        for h in (h_min, h_max):
+            h.setStyleSheet("color:#64748b; font-size:12px;")
+        grid.addWidget(h_min, 0, 1)
+        grid.addWidget(h_max, 0, 2)
+        for i, (field, label) in enumerate(selection.FILTER_FIELDS, start=1):
+            b = (criteria or {}).get(field) or {}
+            lbl = QLabel(label + ":")
+            lbl.setStyleSheet("font-weight:600;")
+            min_e = self._num_edit(b.get("min"))
+            max_e = self._num_edit(b.get("max"))
+            grid.addWidget(lbl, i, 0)
+            grid.addWidget(min_e, i, 1)
+            grid.addWidget(max_e, i, 2)
+            self._boxes[field] = (min_e, max_e)
+        outer.addLayout(grid)
+
+        btns = QHBoxLayout()
+        btn_clear = QPushButton("נקה הכל")
+        btn_clear.setStyleSheet(_BTN_GHOST)
+        btn_clear.clicked.connect(self._clear)
+        btn_ok = QPushButton("החל סינון")
+        btn_ok.setObjectName("primary")
+        btn_ok.setStyleSheet(_BTN_PRIMARY)
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("ביטול")
+        btn_cancel.setStyleSheet(_BTN_GHOST)
+        btn_cancel.clicked.connect(self.reject)
+        btns.addWidget(btn_clear)
+        btns.addStretch()
+        btns.addWidget(btn_ok)
+        btns.addWidget(btn_cancel)
+        outer.addSpacing(6)
+        outer.addLayout(btns)
+
+    def _clear(self):
+        for min_e, max_e in self._boxes.values():
+            min_e.clear()
+            max_e.clear()
+
+    def get_criteria(self) -> dict:
+        out = {}
+        for field, (min_e, max_e) in self._boxes.items():
+            lo = selection.to_number(min_e.text())
+            hi = selection.to_number(max_e.text())
+            out[field] = {"min": lo, "max": hi}
+        return out
 
 
 class _SuggestionDeleteDelegate(QStyledItemDelegate):
@@ -341,9 +426,16 @@ class GroupUpdateTab(QWidget):
         received_ids = []
         for p in paths:
             try:
-                n, meta, ids = self._apply_checklist_file(p, confirm=False)
+                n, meta, ids, needs_review = self._apply_checklist_file(p, confirm=False)
             except Exception:
-                n, meta, ids = 0, {}, []
+                n, meta, ids, needs_review = 0, {}, [], False
+            if needs_review:
+                # Looks like a duplicate of a round already recorded — ask the
+                # operator explicitly instead of silently double-recording (bug H2).
+                try:
+                    n, meta, ids, _ = self._apply_checklist_file(p, confirm=True)
+                except Exception:
+                    n, meta, ids = 0, {}, []
             total += n
             received_ids += ids
             if meta.get("dist_name"):
@@ -625,15 +717,21 @@ class GroupUpdateTab(QWidget):
 
         # Regulars distribution mode: schedule / none / scored-by-need
         self.mode_combo = QComboBox()
+        # Its dropdown otherwise renders dark-on-dark (unreadable black window,
+        # #ow11d) under the qt-material theme — force the same light card the
+        # editable combos use.
+        self.mode_combo.setView(_light_popup_view())
         self.mode_combo.setMinimumHeight(42)
         self.mode_combo.setToolTip(
             "כיצד להתייחס לקבועים בחלוקה זו:\n"
             "• רגיל — קבועים אוטומטית לפי לוח זמנים\n"
             "• בלי קבועים — קבועים לא מקבלים\n"
-            "• קבועים לפי ניקוד — כל הקבועים מדורגים לפי ניקוד צורך, כמו חד-פעמי")
+            "• קבועים לפי ניקוד — כל הקבועים מדורגים לפי ניקוד צורך, כמו חד-פעמי\n"
+            "• לפי סינון מותאם — כל המקבלים שעונים על קריטריונים (מספר ילדים / הכנסה / פנוי לנפש)")
         for label, val in (("רגיל — קבועים לפי לוח זמנים", "schedule"),
                            ("בלי קבועים", "none"),
-                           ("קבועים לפי ניקוד", "scored")):
+                           ("קבועים לפי ניקוד", "scored"),
+                           ("לפי סינון מותאם (מספר ילדים / הכנסה)", "filter")):
             self.mode_combo.addItem(label, val)
         cur_mode = db.get_regulars_mode()
         idx = self.mode_combo.findData(cur_mode)
@@ -649,6 +747,15 @@ class GroupUpdateTab(QWidget):
         self.btn_mark_leaders.setToolTip("מסמן את בעלי הניקוד הגבוה ביותר עד למספר 'מוצרים זמינים'")
         self.btn_mark_leaders.clicked.connect(self._mark_leaders)
         toolbar.addWidget(self.btn_mark_leaders)
+
+        # Broad-filter mode: a button to open the criteria editor (children/income/
+        # per-soul thresholds). Shown only while the 'filter' mode is selected.
+        self.btn_edit_filter = QPushButton("הגדר סינון")
+        self.btn_edit_filter.setStyleSheet(_BTN_GHOST)
+        self.btn_edit_filter.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_edit_filter.setToolTip("בחר לפי אילו קריטריונים לסנן (מספר ילדים / הכנסה / פנוי לנפש)")
+        self.btn_edit_filter.clicked.connect(self._edit_filter)
+        toolbar.addWidget(self.btn_edit_filter)
 
         self.search_input = QLineEdit()
         self.search_input.setMinimumHeight(42)
@@ -785,6 +892,20 @@ class GroupUpdateTab(QWidget):
         btn_print.clicked.connect(self._print)
         bar.addWidget(btn_print)
 
+        # Save the same list straight to a PDF in Downloads (opens automatically) —
+        # a printer-free alternative to the print preview (#qxnvx).
+        btn_pdf = QPushButton("  שמור PDF")
+        btn_pdf.setObjectName("ghost")
+        btn_pdf.setStyleSheet(_BTN_GHOST)
+        btn_pdf.setMinimumHeight(46)
+        btn_pdf.setMinimumWidth(150)
+        btn_pdf.setIcon(QIcon(line_icon("download", 18, "#4338ca")))
+        btn_pdf.setIconSize(QSize(18, 18))
+        btn_pdf.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_pdf.setToolTip("שומר את רשימת החלוקה כקובץ PDF בתיקיית ההורדות ופותח אותו")
+        btn_pdf.clicked.connect(self._export_pdf)
+        bar.addWidget(btn_pdf)
+
         bar.addStretch()
         bw.addWidget(bottom_bar)
         root.addWidget(bottom_wrap)
@@ -821,7 +942,7 @@ class GroupUpdateTab(QWidget):
     # ── distribution-mode for regulars (schedule / none / scored) ──────────────
     def _current_mode(self) -> str:
         data = self.mode_combo.currentData()
-        return data if data in ("schedule", "none", "scored") else "schedule"
+        return data if data in ("schedule", "none", "scored", "filter") else "schedule"
 
     def _on_mode_changed(self, *_):
         db.set_setting("dist_regulars_mode", self._current_mode())
@@ -830,13 +951,20 @@ class GroupUpdateTab(QWidget):
         self._checked_ids.clear()
         self._seen_ids.clear()
         self._update_mode_controls()
+        # Entering filter mode with no criteria set would list EVERYONE — open the
+        # criteria editor first so the operator actually narrows it down. _edit_filter
+        # refreshes on save; refresh here covers the cancel case too.
+        if (self._current_mode() == "filter"
+                and not selection.criteria_is_active(db.get_filter_criteria())):
+            self._edit_filter()
         self.refresh()
 
     def _update_mode_controls(self):
-        """Show the 'mark leaders' button only in the scored mode, where
-        ranking-by-need is what drives the selection."""
-        scored = self._current_mode() == "scored"
-        self.btn_mark_leaders.setVisible(scored)
+        """Show the 'mark leaders' button only in the scored mode, and the 'edit
+        filter' button only in the filter mode."""
+        mode = self._current_mode()
+        self.btn_mark_leaders.setVisible(mode == "scored")
+        self.btn_edit_filter.setVisible(mode == "filter")
 
     def _on_products_changed(self, *_):
         db.set_setting("available_products", str(self.products_spin.value()))
@@ -924,6 +1052,10 @@ class GroupUpdateTab(QWidget):
             # #12); they join the list only when explicitly added from the חד-פעמי
             # tab, exactly like the schedule mode.
             base = db.get_regulars_scored(area_filter="הכל")
+        elif mode == "filter":
+            # 'לפי סינון מותאם' — everyone active matching the numeric criteria,
+            # regardless of priority/frequency (broad filter, #vq4fx).
+            base = db.get_filtered_list(area_filter="הכל")
         else:
             base = db.get_weekly_list(area_filter="הכל")
         # Pick up the shared product/reserve counts if another tab changed them.
@@ -939,7 +1071,8 @@ class GroupUpdateTab(QWidget):
         base_ids = {r["id"] for r in base}
         # Show the real regulars count for this list (bug #jcncv).
         reg_word = {"none": "בלי קבועים",
-                    "scored": f"קבועים לפי ניקוד: {len(base)}"}.get(
+                    "scored": f"קבועים לפי ניקוד: {len(base)}",
+                    "filter": f"לפי סינון: {len(base)} מקבלים"}.get(
             mode, f"קבועים השבוע: {len(base)}")
         self.lbl_regulars_count.setText(reg_word)
         extras = self._extra_recipients(base_ids)
@@ -1050,6 +1183,9 @@ class GroupUpdateTab(QWidget):
                 lbl.setText("מצב 'בלי קבועים': הקבועים אינם בחלוקה זו.\n\n"
                             "כדי להוסיף מקבלים — עבור ללשונית 'חד פעמי', בחר את "
                             "מקבלי החד-פעמי ולחץ 'הוסף נבחרים לעדכון קבוצתי'.")
+            elif self._current_mode() == "filter":
+                lbl.setText("מצב 'לפי סינון מותאם': אף מקבל לא עונה על הקריטריונים "
+                            "שנבחרו.\n\nלחץ 'הגדר סינון' למעלה כדי לשנות את התנאים.")
             elif self._search_text:
                 lbl.setText("אין תוצאות לחיפוש זה")
             elif self._current_mode() == "schedule" and db.get_regulars_scored():
@@ -1357,8 +1493,13 @@ class GroupUpdateTab(QWidget):
     def _apply_checklist_file(self, path: str, confirm: bool):
         """Read a filled volunteer checklist and record the received rows to
         history. When confirm=True, ask the operator first (manual file import);
-        when confirm=False, import silently (automatic email pull). Returns
-        (records_written, meta, received_ids)."""
+        when confirm=False, import silently (automatic email pull).
+
+        Returns (records_written, meta, received_ids, needs_review). needs_review
+        is True only when an AUTOMATIC (confirm=False) import was held back because
+        it looks like a DUPLICATE of a batch already in history — so the caller can
+        ask the operator instead of silently double-recording the round (bug H2).
+        Nothing is ever auto-skipped or auto-deleted without explicit approval."""
         result = import_volunteer_checklist(path)
         received = result["received"]
         unmatched = result["unmatched"]
@@ -1370,7 +1511,14 @@ class GroupUpdateTab(QWidget):
                 if unmatched:
                     msg += f"\n\n⚠ {len(unmatched)} שורות לא זוהו: " + ", ".join(unmatched[:10])
                 QMessageBox.information(self, "אין מה לייבא", msg)
-            return 0, meta, []
+            return 0, meta, [], False
+
+        dist_date = meta.get("dist_date") or self.date_edit.get_iso()
+        # Duplicate guard (bug H2): a batch with the SAME date+name and overlapping
+        # recipients almost certainly means this round was already recorded (the
+        # volunteer replied twice, or it was both auto-pulled and imported by hand).
+        dup = db.find_matching_batch(dist_date, meta.get("dist_name") or "",
+                                     [r.get("id") for r in received])
 
         if confirm:
             summary = (
@@ -1384,6 +1532,13 @@ class GroupUpdateTab(QWidget):
             if unmatched:
                 summary += (f"\n\n⚠ {len(unmatched)} שורות לא זוהו ולא ייובאו: "
                            + ", ".join(unmatched[:10]))
+            if dup:
+                summary = (
+                    f"⚠ כבר קיימת חלוקה בשם '{dup.get('dist_name') or '—'}' "
+                    f"מתאריך {_fdate(dup.get('dist_date', ''))} "
+                    f"({dup.get('recipient_count', 0)} מקבלים).\n"
+                    "ייבוא חוזר עלול לרשום את אותה חלוקה פעמיים.\n\n"
+                ) + summary
             summary += "\n\nלאשר ייבוא להיסטוריה?"
             reply = QMessageBox.question(
                 self, "אישור ייבוא", summary,
@@ -1391,7 +1546,11 @@ class GroupUpdateTab(QWidget):
                 QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
-                return 0, meta, []
+                return 0, meta, [], False
+        elif dup:
+            # Automatic import: never silently record a likely-duplicate. Signal the
+            # caller to ask the operator (bug H2: no auto skip/delete without approval).
+            return 0, meta, [], True
 
         # The general note is stored ONCE on the batch (bug #7), not appended to
         # every recipient — each recipient keeps only their own per-person note.
@@ -1399,13 +1558,13 @@ class GroupUpdateTab(QWidget):
 
         with busy_cursor():
             db.bulk_add_distributions(
-                records, meta.get("dist_date") or self.date_edit.get_iso(),
+                records, dist_date,
                 meta.get("what") or "", meta.get("qty") or 0,
                 meta.get("distributor") or "",
                 dist_name=meta.get("dist_name") or "",
                 general_note=meta.get("general_note") or "")
             auto_backup_async()
-        return len(records), meta, [r.get("id") for r in received]
+        return len(records), meta, [r.get("id") for r in received], False
 
     def _import_volunteer_results(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1413,7 +1572,7 @@ class GroupUpdateTab(QWidget):
         if not path:
             return
         try:
-            n, _meta, ids = self._apply_checklist_file(path, confirm=True)
+            n, _meta, ids, _ = self._apply_checklist_file(path, confirm=True)
         except Exception as e:
             QMessageBox.critical(self, "שגיאה בקריאת הקובץ", str(e))
             return
@@ -1465,3 +1624,54 @@ class GroupUpdateTab(QWidget):
             if reply == QMessageBox.StandardButton.Yes:
                 if self._dispatch_volunteer_email(to_addr, name, what, distributor):
                     QMessageBox.information(self, "נשלח", f"הרשימה נשלחה למתנדב ל-{to_addr}.")
+
+    def _export_pdf(self):
+        """Save the marked distribution list as a PDF in Downloads and open it —
+        same gating and content as printing, no printer required (#qxnvx)."""
+        name = self.name_input.currentText().strip()
+        if not name:
+            self.name_input.setStyleSheet(
+                "border: 2px solid #dc2626; background-color:#fff5f5;")
+            self.name_input.setToolTip("חובה לרשום שם חלוקה לפני שמירת PDF")
+            QMessageBox.warning(
+                self, "חסר שם חלוקה",
+                "יש לרשום שם חלוקה (למשל 'חלוקת פסח') בשדה 'שם החלוקה' לפני שמירת PDF.")
+            self.name_input.setFocus()
+            return
+        self.name_input.setStyleSheet("")
+        self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה. אפשר לבחור משמות קודמים.")
+        if not self._one_time_gate_ok("שמירת PDF"):
+            return
+        self._push_history("dist_names_history", name)
+        checked = self._get_export_rows()
+        if not checked:
+            QMessageBox.information(self, "אין את מי לשמור",
+                                    "לא סומנו מקבלים — אין תוכן לשמירה ל-PDF.")
+            return
+        dist_date = _fdate(self.date_edit.get_iso())
+        try:
+            from utils.print_view import export_distribution_pdf
+            with busy_cursor():
+                path = export_distribution_pdf(checked, dist_date, dist_name=name)
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה בשמירת PDF", str(e))
+            return
+        QMessageBox.information(
+            self, "PDF נשמר",
+            f"קובץ ה-PDF נשמר בתיקיית ההורדות ונפתח אוטומטית:\n{path}")
+        if self.main_win:
+            self.main_win.status_msg("נשמר PDF לתיקיית ההורדות")
+
+    def _edit_filter(self) -> bool:
+        """Open the broad-filter criteria editor. Saves + refreshes on accept.
+        Returns True if the operator confirmed (accepted) the dialog."""
+        dlg = FilterCriteriaDialog(self, db.get_filter_criteria())
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            db.set_filter_criteria(dlg.get_criteria())
+            self._checked_ids.clear()
+            self._seen_ids.clear()
+            self.refresh()
+            if self.main_win:
+                self.main_win.status_msg("סינון מותאם עודכן")
+            return True
+        return False

@@ -478,8 +478,10 @@ class RecipientsTab(QWidget):
                 rows = import_from_excel(path)
                 report = _import_quality_report(rows)
                 if replace:
-                    # Safety backup BEFORE wiping — abort if it cannot be made.
-                    if auto_backup() is not True:
+                    # Safety backup BEFORE wiping — into the durable safety_ bucket
+                    # (not the routine one), so it can't be churned out by ordinary
+                    # backups later (R2). Abort if it cannot be made.
+                    if auto_backup(kind="safety") is not True:
                         raise RuntimeError(
                             "גיבוי הבטיחות נכשל — הייבוא בוטל כדי לא לאבד נתונים.")
                     db.reset_all_data()
@@ -557,6 +559,7 @@ class RecipientDialog(QDialog):
 
         # ── Tab 1: פרטים בסיסיים ─────────────────────────────────────────────
         f1 = _tab("פרטים בסיסיים")
+        self._form1 = f1
 
         self.f_name    = field("שם מלא (חובה)")
         self.f_phone1  = field("טלפון ראשי")
@@ -571,8 +574,14 @@ class RecipientDialog(QDialog):
         self.f_souls = QSpinBox()
         self.f_souls.setRange(0, 99)
 
+        # Frequency = a SCHEDULE, which only a 'קבוע' recipient has. So the combo
+        # offers only the three real schedules (no blank, no 'חד-פעמי') and the
+        # whole row is shown only while priority = קבוע (see _toggle_frequency_row).
+        # For priority ראשונה/שנייה the stored frequency is derived as 'חד-פעמי',
+        # for ללא/בירור it is '' — see _effective_frequency(). This removes the
+        # confusing empty option (#fw5s2) and the frequency-without-קבוע case (#j6czs).
         self.f_freq = QComboBox()
-        self.f_freq.addItems(["", "שבועי", "דו-שבועי", "חודשי", "חד-פעמי"])
+        self.f_freq.addItems(["שבועי", "דו-שבועי", "חודשי"])
         self.f_freq.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         self.f_status = QComboBox()
@@ -596,6 +605,10 @@ class RecipientDialog(QDialog):
 
         self.f_freq.currentTextChanged.connect(self._suggest_next)
         self.f_last_dist.dateChanged.connect(self._suggest_next)
+        # Frequency is a קבוע-only concept — show/hide its row with the priority,
+        # and re-suggest the next date when the effective frequency changes.
+        self.f_priority.currentIndexChanged.connect(self._toggle_frequency_row)
+        self.f_priority.currentIndexChanged.connect(self._suggest_next)
 
         for w in (self.f_phone1, self.f_phone2, self.f_phone3):
             w.textChanged.connect(lambda t, fw=w: _mark(fw, bool(t.strip()) and not _phone_valid(t),
@@ -743,11 +756,33 @@ class RecipientDialog(QDialog):
         btns.addWidget(btn_cancel)
         outer.addLayout(btns)
 
+        # Set the initial visibility of the frequency row (setCurrentIndex above
+        # doesn't fire the signal when the value was already index 0 = ללא).
+        self._toggle_frequency_row()
+
+    def _is_regular_selected(self) -> bool:
+        """True when the priority combo currently points at 'קבוע' (4)."""
+        return _PRIORITY_OPTIONS[self.f_priority.currentIndex()][1] == 4
+
+    def _toggle_frequency_row(self):
+        """Show the 'תדירות' row only for a קבוע recipient (#j6czs)."""
+        self._form1.setRowVisible(self.f_freq, self._is_regular_selected())
+
+    def _effective_frequency(self) -> str:
+        """The frequency actually stored, derived from the priority:
+        קבוע → the chosen schedule · ראשונה/שנייה → 'חד-פעמי' · else → ''."""
+        pr = _PRIORITY_OPTIONS[self.f_priority.currentIndex()][1]
+        if pr == 4:
+            return self.f_freq.currentText()
+        if pr in (3, 2):
+            return "חד-פעמי"
+        return ""
+
     def _suggest_next(self):
         """Auto-fill next_distribution when it's empty and we have enough info."""
         if not self.f_next_dist.is_empty():
             return  # user already set it manually — don't overwrite
-        freq = self.f_freq.currentText()
+        freq = self._effective_frequency()
         if not freq or freq == "חד-פעמי":
             return
         nd = db.calculate_next_dist(self.f_last_dist.get_iso(), freq)
@@ -759,12 +794,14 @@ class RecipientDialog(QDialog):
             QMessageBox.warning(self, "יש לתקן לפני שמירה",
                                 "• " + "\n• ".join(errors))
             return
-        # Safety net: a blank frequency means the recipient will NOT show up in
-        # the weekly distribution list. Warn instead of silently hiding them.
-        if not self.f_freq.currentText().strip():
+        # Safety net: priority ללא/חובת בירור yields no frequency, so the recipient
+        # will not appear in any distribution list. Warn instead of silently hiding
+        # them (a קבוע always has a schedule; ראשונה/שנייה go to the one-time list).
+        if not self._effective_frequency().strip():
             reply = QMessageBox.question(
-                self, "ללא תדירות",
-                "לא נבחרה תדירות חלוקה — המקבל יישמר אבל לא יופיע ברשימת החלוקה.\n\n"
+                self, "לא בחלוקה",
+                "העדיפות שנבחרה (ללא / חובת בירור) אינה נכללת בחלוקה — "
+                "המקבל יישמר אבל לא יופיע בשום רשימת חלוקה.\n\n"
                 "לשמור בכל זאת?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
@@ -833,7 +870,7 @@ class RecipientDialog(QDialog):
             "address":            self.f_address.text().strip(),
             "area":               self.f_area.currentText(),
             "souls":              self.f_souls.value(),
-            "frequency":          self.f_freq.currentText(),
+            "frequency":          self._effective_frequency(),
             "status":             self.f_status.currentText(),
             "last_distribution":  self.f_last_dist.get_iso(),
             "next_distribution":  self.f_next_dist.get_iso(),

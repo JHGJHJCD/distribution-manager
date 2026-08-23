@@ -1,4 +1,5 @@
 import os
+import shutil
 import sqlite3
 import threading
 from datetime import datetime
@@ -35,11 +36,46 @@ def auto_backup_async():
     threading.Thread(target=auto_backup, daemon=True).start()
 
 
-def auto_backup():
+# How many of each backup kind to keep. THREE independent buckets so that
+# frequent routine backups can never evict the durable daily snapshots or the
+# pre-destructive safety points (bug C1: a single 30-slot ring meant an
+# accidental reset's safety backup was churned out within ~30 ordinary saves,
+# leaving nothing to recover from once the mistake was noticed weeks later).
+_KEEP_ROUTINE = 20   # 'backup_*'  — every launch/save
+_KEEP_DAILY = 30     # 'daily_*'   — one per calendar day (≈ a month of history)
+_KEEP_SAFETY = 10    # 'safety_*'  — taken before reset/restore
+# Total bounded at ~60 files — durable in TIME, never unbounded in volume.
+
+
+def _prune_backups(folder, prefix, keep):
+    """Keep only the newest `keep` files named '<prefix>*.db' in `folder`.
+    Filenames embed a sortable timestamp, so a lexicographic sort is chronological
+    and the oldest ones sort first."""
+    try:
+        files = sorted(f for f in os.listdir(folder)
+                       if f.startswith(prefix) and f.endswith(".db"))
+    except OSError:
+        return
+    for old in files[:-keep]:
+        try:
+            os.remove(os.path.join(folder, old))
+        except OSError:
+            pass
+
+
+def auto_backup(kind: str = "routine"):
     """Backup data.db using SQLite's Online Backup API (WAL-safe).
-    Returns True on success, False on failure. Falls back to a default backups
-    folder in the stable data dir, so backups happen even if the user never
-    configured a folder."""
+    Returns True on success, False on failure, None if no writable folder exists.
+
+    Retention uses three independent buckets so recovery stays durable in TIME
+    without unbounded growth in volume (bug C1):
+      • routine ('backup_*') — every launch/save; newest _KEEP_ROUTINE kept.
+      • daily   ('daily_*')  — one snapshot per calendar day; _KEEP_DAILY days.
+      • safety  ('safety_*') — before a destructive action (reset/restore); its
+                               OWN bucket, so routine churn can never evict it.
+    `kind='safety'` writes into the safety bucket; anything else is routine and
+    also refreshes today's daily snapshot. The public signature/return values are
+    unchanged, so existing callers (auto_backup()) keep working."""
     try:
         import database as db
         backup_folder = db.get_setting("backup_folder")
@@ -54,8 +90,17 @@ def auto_backup():
         if not os.path.exists(db.DB_PATH):
             return False
 
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        dest = os.path.join(backup_folder, f"backup_{ts}.db")
+        now = datetime.now()
+        # Microsecond resolution + a uniquifying loop so two backups in the same
+        # instant never overwrite each other (the old second-resolution name
+        # silently collided, quietly losing a recovery point).
+        ts = now.strftime("%Y%m%d_%H%M%S_%f")
+        prefix = "safety_" if kind == "safety" else "backup_"
+        dest = os.path.join(backup_folder, f"{prefix}{ts}.db")
+        _n = 1
+        while os.path.exists(dest):
+            dest = os.path.join(backup_folder, f"{prefix}{ts}_{_n}.db")
+            _n += 1
 
         # Use SQLite Online Backup API — handles WAL mode correctly.
         # This is the only safe way to copy a WAL-mode database.
@@ -67,19 +112,24 @@ def auto_backup():
             dst_conn.close()
             src_conn.close()
 
-        # Keep only last 30 backups
-        backups = sorted(
-            [f for f in os.listdir(backup_folder)
-             if f.startswith("backup_") and f.endswith(".db")]
-        )
-        for old in backups[:-30]:
-            try:
-                os.remove(os.path.join(backup_folder, old))
-            except Exception:
-                pass
+        # Routine backups also refresh TODAY's durable daily snapshot (once/day).
+        # The routine backup file is already self-contained (checkpointed by the
+        # Online Backup API), so a plain copy is safe here.
+        if kind != "safety":
+            daily = os.path.join(backup_folder, f"daily_{now.strftime('%Y%m%d')}.db")
+            if not os.path.exists(daily):
+                try:
+                    shutil.copy2(dest, daily)
+                except OSError:
+                    pass
+
+        # Prune each bucket independently — one bucket's churn never touches another.
+        _prune_backups(backup_folder, "backup_", _KEEP_ROUTINE)
+        _prune_backups(backup_folder, "daily_", _KEEP_DAILY)
+        _prune_backups(backup_folder, "safety_", _KEEP_SAFETY)
 
         try:
-            db.set_setting("last_backup_at", datetime.now().isoformat(timespec="seconds"))
+            db.set_setting("last_backup_at", now.isoformat(timespec="seconds"))
         except Exception:
             pass
 

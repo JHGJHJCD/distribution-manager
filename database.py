@@ -1,6 +1,7 @@
 import sqlite3
 import sys
 import os
+import json
 import hashlib
 import secrets
 from datetime import date, datetime, timedelta
@@ -143,8 +144,16 @@ def self_heal_db():
         if _db_integrity_ok(DB_PATH):
             return
 
-        # Stage 2: DB itself is bad — restore the best backup we have.
-        best, best_score = None, (-1, -1.0)
+        # Stage 2: DB itself is bad — restore the NEWEST usable backup.
+        # Selection rule (bug H3): among backups that are integrity-OK AND
+        # non-empty (recipient_count > 0), pick the one with the newest mtime.
+        #   • Newest-first respects a legitimate recent deletion/cleanup instead of
+        #     resurrecting stale data — the old rule keyed on recipient COUNT first,
+        #     so an older-but-larger backup would silently win over a newer-smaller
+        #     one and bring deleted recipients back.
+        #   • The non-empty floor still guards against restoring an empty/partial
+        #     backup over what little structure remains (never "restore nothing").
+        best, best_mtime = None, -1.0
         if os.path.isdir(BACKUP_DIR):
             for name in os.listdir(BACKUP_DIR):
                 if not name.lower().endswith(".db"):
@@ -152,19 +161,31 @@ def self_heal_db():
                 p = os.path.join(BACKUP_DIR, name)
                 if not _db_integrity_ok(p):
                     continue
-                score = (_db_recipient_count(p), os.path.getmtime(p))
-                if score > best_score:
-                    best, best_score = p, score
-        if best is None:
-            return   # nothing to restore from — let init recreate schema
-
+                if _db_recipient_count(p) <= 0:
+                    continue   # skip empty/partial backups — never resurrect nothing
+                mtime = os.path.getmtime(p)
+                if mtime > best_mtime:
+                    best, best_mtime = p, mtime
+        # Set the corrupt DB aside BEFORE deciding what to restore (bug R1). We
+        # NEVER delete or overwrite it — it is renamed to data.db.corrupt.db so it
+        # stays available for inspection or manual recovery. Doing this even when
+        # there is NO usable backup is what prevents a crash: init_db then opens a
+        # MISSING path and recreates a fresh empty schema, instead of failing to
+        # open the malformed file (the old code returned here and left the corrupt
+        # file in place, so init_db crashed with 'file is not a database').
         try:
             corrupt = DB_PATH + ".corrupt.db"
             if os.path.exists(corrupt):
                 os.remove(corrupt)
             os.replace(DB_PATH, corrupt)
         except Exception:
+            # Could not even set it aside — nothing more we can safely do here;
+            # fall through and let init_db attempt its normal path.
             pass
+
+        if best is None:
+            return   # no usable backup — init_db will create a fresh empty schema
+
         import shutil
         shutil.copy2(best, DB_PATH)
     except Exception:
@@ -902,9 +923,48 @@ def get_scored_all(area_filter: str = "הכל"):
 
 def get_regulars_mode() -> str:
     """Distribution mode for regulars: 'schedule' (default, auto by timetable),
-    'none' (regulars excluded) or 'scored' (regulars ranked by need-score)."""
+    'none' (regulars excluded), 'scored' (regulars ranked by need-score) or
+    'filter' (a custom broad filter over ALL active recipients — see
+    get_filtered_list)."""
     mode = get_setting("dist_regulars_mode") or "schedule"
-    return mode if mode in ("schedule", "none", "scored") else "schedule"
+    return mode if mode in ("schedule", "none", "scored", "filter") else "schedule"
+
+
+# ─── Custom broad filter (mode 'filter') ─────────────────────────────────────
+def get_filter_criteria() -> dict:
+    """The persisted broad-filter thresholds (mode 'filter'), as
+    {field: {'min': float|None, 'max': float|None}}. Empty dict if never set."""
+    raw = get_setting("dist_filter_criteria")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def set_filter_criteria(criteria: dict):
+    """Persist the broad-filter thresholds as JSON."""
+    set_setting("dist_filter_criteria", json.dumps(criteria or {}))
+
+
+def get_filtered_list(criteria: dict = None, area_filter: str = "הכל"):
+    """The distribution list for the custom 'filter' mode: every ACTIVE recipient
+    that satisfies the numeric thresholds (priority/frequency are ignored — this
+    is a deliberate broad filter over the whole list). Rows are need-scored and
+    ordered by need (highest first) so limited products go to the neediest of the
+    matching set; clicking a name still shows the score breakdown."""
+    if criteria is None:
+        criteria = get_filter_criteria()
+    rows = get_all_recipients(status_filter="פעיל")
+    if area_filter != "הכל":
+        rows = [r for r in rows if r.get("area", "") == area_filter]
+    rows = selection.filter_by_criteria(rows, criteria)
+    for r in rows:
+        r["days_since"] = recency_days(r)
+        r["_filtered"] = True
+    return selection.rank_by_need(rows, get_need_weights())
 
 
 def compute_suggested_n(total_products: int) -> tuple[int, int]:
@@ -1009,6 +1069,45 @@ def get_batch_recipients(batch_id: int):
             (batch_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def find_matching_batch(dist_date, dist_name, recipient_ids):
+    """Return an existing batch (dict) that looks like the SAME distribution round
+    as one about to be imported — same dist_date AND same dist_name AND at least
+    one overlapping recorded recipient — else None.
+
+    Read-only. Used to WARN before a volunteer checklist is imported a second time
+    (bug H2: the import had no idempotency guard, so a round sent/imported twice
+    silently produced duplicate history rows and double-advanced dates). It never
+    blocks or deletes anything — the caller decides what to do. Dates and names are
+    compared trimmed, so a blank name only matches a blank name (never a catch-all).
+    A different name OR a different date OR zero recipient overlap → not a match
+    (a legitimately different distribution is never flagged)."""
+    dd = (dist_date or "").strip()
+    dn = (dist_name or "").strip()
+    ids = set()
+    for i in (recipient_ids or []):
+        try:
+            ids.add(int(i))
+        except (TypeError, ValueError):
+            pass
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM dist_batches "
+            "WHERE TRIM(COALESCE(dist_date,''))=? AND TRIM(COALESCE(dist_name,''))=? "
+            "ORDER BY id DESC",
+            (dd, dn)).fetchall()
+        for b in rows:
+            if not ids:
+                return dict(b)   # same date+name and no ids to compare → a match
+            recorded = conn.execute(
+                "SELECT recipient_id FROM distributions WHERE batch_id=?",
+                (b["id"],)).fetchall()
+            batch_ids = {r["recipient_id"] for r in recorded
+                         if r["recipient_id"] is not None}
+            if ids & batch_ids:
+                return dict(b)
+    return None
 
 
 def _recompute_recipient_dates(conn, rec_id):
@@ -1147,9 +1246,13 @@ def get_summary():
 # ─── Reset ───────────────────────────────────────────────────────────────────
 
 def reset_all_data():
-    """Delete ALL recipients, distributions, and change_log. Settings are kept."""
+    """Delete ALL recipients, distributions, distribution batches, and change_log.
+    Settings are kept. dist_batches must be cleared too — otherwise a reset leaves
+    orphaned batch rows behind, so the 'חלוקות' tab keeps showing phantom
+    distributions whose per-recipient rows are already gone (bug H1)."""
     with get_connection() as conn:
         conn.execute("DELETE FROM distributions")
+        conn.execute("DELETE FROM dist_batches")
         conn.execute("DELETE FROM change_log")
         conn.execute("DELETE FROM recipients")
 
