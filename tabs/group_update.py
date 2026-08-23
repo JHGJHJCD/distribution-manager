@@ -1360,20 +1360,32 @@ class GroupUpdateTab(QWidget):
             combo.blockSignals(False)
 
     def _get_export_rows(self):
-        """Rows to print/export: everyone ticked as 'received', PLUS the reserve
-        (standby) picks even though they're unticked — RULE 3: reserve is not
-        recorded, but it must still appear on the printed list as its own section
-        so the distributor has backups on hand for no-shows."""
-        checked = self._get_checked_recipients()
-        checked_ids = {r.get("id") for r in checked}
-        reserve = []
+        """Rows for the printed / exported hand-out list. This is a BLANK ☐
+        checklist the distributor fills in by hand, so it must contain the FULL
+        weekly list — every regular AND every one-time pick — not only the rows
+        already ticked as 'received'. Ticking drives what `_save` RECORDS, not
+        what gets printed; before anyone is ticked (the normal pre-distribution
+        state) the ticked set is empty. The previous version returned
+        `checked + reserve`, so with nothing ticked the printout/PDF showed the
+        reserve section ALONE and the whole main list vanished (reported bug).
+        Reserve picks are flagged so `print_view` keeps them in their own
+        'רזרבה' section (RULE 3: standby, printed but not recorded)."""
+        # Inline-edited notes come from the visible table; rows hidden by the
+        # quick-search fall back to their stored notes.
+        note_by_id = {}
+        for r in range(self.table.rowCount()):
+            chk = self.table.item(r, 0)
+            if chk is not None:
+                note_it = self.table.item(r, _COL_NOTES)
+                note_by_id[chk.data(Qt.ItemDataRole.UserRole)] = note_it.text() if note_it else ""
+        rows = []
         for rec in self._rows_data:
             rid = rec.get("id")
-            if (rec.get("_reserve") or rid in self._reserve_ids) and rid not in checked_ids:
-                r = dict(rec)
-                r["_reserve"] = True
-                reserve.append(r)
-        rows = checked + reserve
+            r = dict(rec)
+            r["_reserve"] = bool(rec.get("_reserve") or rid in self._reserve_ids)
+            if rid in note_by_id:
+                r["notes"] = note_by_id[rid]
+            rows.append(r)
         return rows if rows else list(self._rows_data)
 
     def _export_excel(self):

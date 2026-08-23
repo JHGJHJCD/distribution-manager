@@ -60,8 +60,18 @@ ok("S2 reserve pick is standby (NOT checked for recording)",
 wk_ot = [r["full_name"] for r in gt._rows_data if r.get("frequency") == "חד-פעמי"]
 ok("S2 one-timers merged into the list", len(wk_ot) >= 1, str(wk_ot))
 ok("S2 reserve still flagged for the print", any(r.get("_reserve") for r in gt._rows_data))
+_html_before_ticks = _build_html(gt._get_export_rows(), "10/06/2026")
 ok("S2 print INCLUDES the reserve section (standby handed to distributor)",
-   "רזרבה — לפי סדר עדיפות" in _build_html(gt._get_export_rows(), "10/06/2026"))
+   "רזרבה — לפי סדר עדיפות" in _html_before_ticks)
+# Before anyone is ticked, the printout/PDF must still list the FULL weekly list
+# — regulars AND main one-time picks — not the reserve section alone (reported
+# bug: PDF saved only the reserves).
+_export_before = gt._get_export_rows()
+ok("S2 print/PDF INCLUDES regulars before ticking (not reserves only)",
+   all(f"קבוע {i}" in _html_before_ticks for i in range(5)),
+   f"main rows={sum(1 for r in _export_before if not r.get('_reserve'))}")
+ok("S2 print/PDF INCLUDES main one-time picks before ticking",
+   any(r.get("id") in main_ids for r in _export_before), str(main_ids))
 # The operator marks the main picks as arrived (ticks them), then records.
 gt._checked_ids |= main_ids
 gt._populate()
