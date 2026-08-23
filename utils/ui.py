@@ -244,7 +244,7 @@ _HEADER_ICON_RULES = [
     ("טלפון", "phone"), ("נייד", "phone"),
     ("כתובת", "address"), ("רחוב", "address"),
     ("אזור", "area"), ("קהילה", "area"),
-    ("נפשות", "users"),
+    ("נפשות", "users"), ("ילד", "users"),
     ("תדירות", "freq"),
     ("חלוקה הבאה", "calendar"), ("חלוקה אחרונה", "calendar"),
     ("תאריך", "calendar"), ("לידה", "calendar"),

@@ -372,9 +372,10 @@ def _fdate(s: str) -> str:
 
 # Merged tab: viewing the week's list AND checking who received + recording it.
 COLS = ["✔", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3", "אזור",
-        "תדירות", "חלוקה הבאה", "נפשות", "הערות"]
-_COL_SOULS = 8
-_COL_NOTES = 9
+        "תדירות", "חלוקה הבאה", "ילדים", "נפשות", "הערות"]
+_COL_CHILDREN = 8
+_COL_SOULS = 9
+_COL_NOTES = 10
 
 SCOPE_WEEK = "חלוקת השבוע"
 SCOPE_ALL = "כל הקבועים"
@@ -1159,6 +1160,7 @@ class GroupUpdateTab(QWidget):
             vals = [rec.get("full_name", ""), rec.get("phone1", ""),
                     rec.get("phone2", ""), rec.get("phone3", ""),
                     rec.get("area", ""), freq_disp, next_disp,
+                    str(rec.get("children_total", "") or ""),
                     str(rec.get("souls", "") or ""), ""]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
