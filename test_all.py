@@ -450,7 +450,17 @@ from main import MainWindow
 _win = MainWindow()
 _win.show()
 
-check("6 tabs", _win.tabs.count() == 6)
+check("3 top-level areas (v2.59)", _win.tabs.count() == 3)
+check("all 6 content tabs exist as leaves", len(_win._leaf_tabs) == 6)
+# every leaf is reachable through the nested navigation helper
+for _leaf in _win._leaf_tabs:
+    _win.navigate_to_tab(_leaf)
+    if _win._current_leaf() is not _leaf:
+        check(f"navigate_to_tab reaches {_leaf.objectName()}", False)
+        break
+else:
+    check("navigate_to_tab reaches every leaf", True)
+_win.navigate_to_tab(_win.group_tab)   # back to the opening tab
 check("_extra_ids is set", isinstance(_win.group_tab._extra_ids, set))
 check("settings tab available", hasattr(_win, "settings_tab"))
 

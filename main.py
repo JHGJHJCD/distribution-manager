@@ -557,23 +557,42 @@ class MainWindow(QMainWindow):
         # on demand from a button ('כל החלוקות' in חיפוש מהיר / 'בדיקת כפילויות'
         # in מקבלים).
 
-        # (widget, label, stable key). The key — not the position — is what we
-        # persist, so a saved order survives even if tabs are later added/removed.
-        tab_specs = [
-            (self.group_tab,      "חלוקה ורישום",  "dist"),
-            (self.recipients_tab, "מקבלים",        "recipients"),
-            (self.one_time_tab,   "חד פעמי",       "one_time"),
-            (self.search_tab,     "חיפוש מהיר",    "search"),
-            (self.distributions_tab, "חלוקות",     "distributions"),
-            (self.settings_tab,   "הגדרות",        "settings"),
-        ]
-        for widget, label, key in tab_specs:
+        # v2.59 UX simplification: 6 flat tabs → 3 top-level areas
+        # (חלוקה · אנשים · הגדרות); the old tabs live on unchanged as sub-tabs
+        # inside each area. Every tab widget keeps its attribute name and its
+        # "tab_<key>" objectName, so the guided tour, tests and screenshots keep
+        # finding them by key regardless of nesting.
+        def _leaf(widget, key):
             widget.setObjectName("tab_" + key)
-            self.tabs.addTab(widget, label)
+            widget._needs_refresh = (widget is not self.group_tab)
+            return widget
 
-        # Tab 0 (group_update) loaded in __init__; others lazy-load on first click
-        for i in range(self.tabs.count()):
-            self.tabs.widget(i)._needs_refresh = (i != 0)
+        def _area(name_key, sub_specs):
+            inner = QTabWidget()
+            inner.setObjectName(name_key)
+            inner.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            inner.setProperty("subtabs", True)   # lighter sub-tab styling (styles.py)
+            for widget, label, key in sub_specs:
+                inner.addTab(_leaf(widget, key), label)
+            inner.currentChanged.connect(
+                lambda _i, tw=inner: self._show_leaf(tw.currentWidget()))
+            return inner
+
+        area_dist = _area("tabgrp_dist", [
+            (self.group_tab,         "חלוקה ורישום",   "dist"),
+            (self.one_time_tab,      "חד פעמי",        "one_time"),
+            (self.distributions_tab, "חלוקות קודמות",  "distributions"),
+        ])
+        area_people = _area("tabgrp_people", [
+            (self.recipients_tab, "כל המקבלים",  "recipients"),
+            (self.search_tab,     "חיפוש מהיר",  "search"),
+        ])
+        self.tabs.addTab(area_dist, "חלוקה")
+        self.tabs.addTab(area_people, "אנשים")
+        self.tabs.addTab(_leaf(self.settings_tab, "settings"), "הגדרות")
+        # Flat list of the real content tabs (leaves) for refresh bookkeeping.
+        self._leaf_tabs = [self.group_tab, self.one_time_tab, self.distributions_tab,
+                           self.recipients_tab, self.search_tab, self.settings_tab]
 
         self._restore_tab_order()
         # Save the new order whenever the user drags a tab.
@@ -651,7 +670,7 @@ class MainWindow(QMainWindow):
 
         # After restoring a custom order the tab now at position 0 may not be the
         # one that self-refreshed in __init__, so refresh whatever is shown first.
-        cur = self.tabs.currentWidget()
+        cur = self._current_leaf()
         if cur is not None and getattr(cur, "_needs_refresh", False) and hasattr(cur, "refresh"):
             cur.refresh()
             cur._needs_refresh = False
@@ -803,8 +822,33 @@ class MainWindow(QMainWindow):
         else:
             db.set_setting("tour_seen", "1")
 
-    def _on_tab_changed(self, idx):
-        tab = self.tabs.widget(idx)
+    def _current_leaf(self):
+        """The content tab actually shown right now — resolves a top-level area
+        (an inner QTabWidget) to its selected sub-tab."""
+        w = self.tabs.currentWidget()
+        if isinstance(w, QTabWidget):
+            w = w.currentWidget()
+        return w
+
+    def navigate_to_tab(self, widget):
+        """Bring `widget` (a leaf content tab) to the front, selecting both the
+        top-level area and the sub-tab as needed."""
+        for i in range(self.tabs.count()):
+            page = self.tabs.widget(i)
+            if page is widget:
+                self.tabs.setCurrentIndex(i)
+                return
+            if isinstance(page, QTabWidget):
+                j = page.indexOf(widget)
+                if j != -1:
+                    self.tabs.setCurrentIndex(i)
+                    page.setCurrentIndex(j)
+                    return
+
+    def _show_leaf(self, tab):
+        """Lazy-refresh + polish the leaf tab that just became visible."""
+        if tab is None:
+            return
         if hasattr(tab, "refresh") and getattr(tab, "_needs_refresh", True):
             tab.refresh()
             tab._needs_refresh = False
@@ -816,10 +860,13 @@ class MainWindow(QMainWindow):
         effects.apply_depth(tab)
         effects.fade_in(tab)
 
+    def _on_tab_changed(self, idx):
+        self._show_leaf(self._current_leaf())
+
     def refresh_all(self):
-        for i in range(self.tabs.count()):
-            self.tabs.widget(i)._needs_refresh = True
-        current = self.tabs.currentWidget()
+        for tab in self._leaf_tabs:
+            tab._needs_refresh = True
+        current = self._current_leaf()
         if current and hasattr(current, "refresh"):
             current.refresh()
             current._needs_refresh = False

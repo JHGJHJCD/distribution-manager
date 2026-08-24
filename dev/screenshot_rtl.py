@@ -29,18 +29,18 @@ win.show()
 OUT = os.path.join(os.path.dirname(__file__), "screenshots_test")
 os.makedirs(OUT, exist_ok=True)
 
-# index by objectName
-tabs = {win.tabs.widget(i).objectName(): i for i in range(win.tabs.count())}
+# leaves by objectName (v2.59: tabs are nested inside 3 top-level areas)
+leaves = {t.objectName(): t for t in win._leaf_tabs}
 order = ["tab_dist", "tab_recipients", "tab_one_time", "tab_search", "tab_settings"]
-seq = [k for k in order if k in tabs]
+seq = [k for k in order if k in leaves]
 step = [0]
 
 def go():
     if step[0] >= len(seq):
         app.quit(); return
     key = seq[step[0]]
-    win.tabs.setCurrentIndex(tabs[key])
-    w = win.tabs.widget(tabs[key])
+    w = leaves[key]
+    win.navigate_to_tab(w)
     if getattr(w, "refresh", None):
         w.refresh()
     # reveal cursor: focus the first editable text field on this tab

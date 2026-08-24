@@ -28,15 +28,36 @@ def _widget_rect(win, w):
     return QRect(tl, w.size())
 
 
+def _locate_tab(win, key):
+    """Find the tab page whose objectName is 'tab_<key>' anywhere in the (now
+    nested, v2.59) tab structure — top-level areas hold the old tabs as
+    sub-tabs. Selects the whole chain so the page is actually shown, and
+    returns (owning_tabwidget, index) or None."""
+    from PyQt6.QtWidgets import QTabWidget
+
+    def scan(tabs):
+        for i in range(tabs.count()):
+            w = tabs.widget(i)
+            if w.objectName() == "tab_" + key:
+                tabs.setCurrentIndex(i)
+                return tabs, i
+            if isinstance(w, QTabWidget):
+                found = scan(w)
+                if found:
+                    tabs.setCurrentIndex(i)
+                    return found
+        return None
+
+    return scan(win.tabs)
+
+
 def _tab_rect(win, key):
     """Switch to the tab identified by its objectName key and return the
     rectangle of its tab-button (in `win` coordinates)."""
-    tabs = win.tabs
-    idx = next((i for i in range(tabs.count())
-                if tabs.widget(i).objectName() == "tab_" + key), None)
-    if idx is None:
+    found = _locate_tab(win, key)
+    if found is None:
         return None
-    tabs.setCurrentIndex(idx)
+    tabs, idx = found
     bar = tabs.tabBar()
     r = bar.tabRect(idx)
     tl = win.mapFromGlobal(bar.mapToGlobal(r.topLeft()))
@@ -47,13 +68,11 @@ def _tab_rect(win, key):
 
 def _tab_widget(win, key):
     """Switch to the tab identified by `key` and return its content widget."""
-    tabs = win.tabs
-    for i in range(tabs.count()):
-        w = tabs.widget(i)
-        if w.objectName() == "tab_" + key:
-            tabs.setCurrentIndex(i)
-            return w
-    return None
+    found = _locate_tab(win, key)
+    if found is None:
+        return None
+    tabs, idx = found
+    return tabs.widget(idx)
 
 
 def _ensure_visible(w):

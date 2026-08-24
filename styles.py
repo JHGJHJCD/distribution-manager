@@ -136,6 +136,30 @@ QTabBar::tab:left:selected:hover, QTabBar::tab:right:selected:hover {
     color: #ffffff;
 }
 
+/* ════ Inner sub-tabs (v2.59: 3 top-level areas hold the old tabs) ════
+   Lighter, smaller pills so the second row reads as sub-navigation and not as
+   a duplicate of the main tab bar. */
+QTabWidget[subtabs="true"]::pane {
+    border: none;
+    top: 0px;
+}
+QTabWidget[subtabs="true"] QTabBar::tab {
+    font-size: 13px;
+    min-width: 84px;
+    padding: 6px 16px;
+    margin: 2px 2px 4px 2px;
+}
+QTabWidget[subtabs="true"] QTabBar::tab:selected,
+QTabWidget[subtabs="true"] QTabBar::tab:top:selected {
+    background: #e3f0fd;
+    color: #1565c0;
+    font-weight: 700;
+}
+QTabWidget[subtabs="true"] QTabBar::tab:selected:hover,
+QTabWidget[subtabs="true"] QTabBar::tab:top:selected:hover {
+    color: #1565c0;
+}
+
 /* ════ Tables — roomier rows for readability ════ */
 QTableWidget, QTableView {
     border-radius: 10px;

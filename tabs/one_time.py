@@ -358,5 +358,5 @@ class OneTimeTab(QWidget):
             gt = self.main_win.group_tab
             # Records the picks (persisted so they survive restart) and refreshes.
             added = gt.add_one_time_picks(selected)
-            self.main_win.tabs.setCurrentWidget(gt)
+            self.main_win.navigate_to_tab(gt)
             self.main_win.status_msg(f"נוספו {added} חד-פעמיים לרשימת החלוקה")
