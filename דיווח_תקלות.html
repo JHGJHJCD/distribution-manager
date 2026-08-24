@@ -3,23 +3,25 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>כלי דיווח תקלות — מנהל חלוקה</title>
+<title>כלי דיווח תקלות ובקשות שיפור — מנהל חלוקה</title>
 <style>
 /* ============================================================================
-   כלי דיווח תקלות — מנהל חלוקה
+   כלי דיווח תקלות ובקשות שיפור — מנהל חלוקה
    קובץ יחיד (HTML + CSS + JS), ללא שרת וללא התקנות. שמירה אוטומטית ב-LocalStorage.
    העיצוב תואם את התוכנה: כחול #1565c0/#2b95ef, כרטיסים לבנים על רקע אפור בהיר.
    ---------------------------------------------------------------------------
    מבנה הנתונים:
      APP_STRUCTURE = [{ key, name, icon, items:[{key,name,type,desc}] }]
-     state.bugs    = { "<tabKey>::<itemKey>": [ {id, severity, status, desc,
-                        steps, actual, expected, notes, shots:[{name,data}]} ] }
+     state.bugs    = { "<tabKey>::<itemKey>": [ {id, kind, severity, status,
+                        desc, steps, actual, expected, notes, shots:[{name,data}]} ] }
+     kind = "bug" (תקלה) | "improvement" (בקשת שיפור)
    כדי להרחיב — הוסף לשונית/פריט ל-APP_STRUCTURE; שאר הכלי מתעדכן אוטומטית.
 ============================================================================ */
 :root{
   --bg:#eef2f8; --card:#ffffff; --line:#e6eaf2; --ink:#0d2a4a; --muted:#64748b;
   --blue:#1565c0; --blue2:#2b95ef; --blue-soft:#eaf3ff;
   --green:#059669; --amber:#b45309; --red:#dc2626; --purple:#6d28d9;
+  --teal:#0891b2; --teal-soft:#ecfeff;
   --radius:12px; --shadow:0 1px 3px rgba(15,40,80,.06),0 4px 16px rgba(15,40,80,.05);
 }
 *{box-sizing:border-box;}
@@ -48,15 +50,15 @@ textarea,input,select{font-family:inherit;}
 .stats{display:flex;gap:10px;flex-wrap:wrap;padding:14px 22px 4px;}
 .stat{
   background:var(--card);border:1px solid var(--line);border-radius:14px;
-  padding:8px 16px;min-width:96px;text-align:center;box-shadow:var(--shadow);
+  padding:8px 16px;min-width:92px;text-align:center;box-shadow:var(--shadow);
 }
 .stat b{display:block;font-size:22px;font-weight:900;line-height:1.1;}
 .stat span{font-size:12px;color:var(--muted);}
 .stat.total b{color:var(--blue);}
+.stat.bugs  b{color:var(--red);}
+.stat.imp   b{color:var(--teal);}
 .stat.open  b{color:var(--amber);}
-.stat.prog  b{color:var(--purple);}
-.stat.fixed b{color:var(--green);}
-.stat.ver   b{color:#0891b2;}
+.stat.done  b{color:var(--green);}
 .stat.crit  b{color:var(--red);}
 
 /* ── Toolbar ───────────────────────────────────────────────────────────── */
@@ -64,14 +66,14 @@ textarea,input,select{font-family:inherit;}
 .toolbar input[type=search],.toolbar select{
   border:1px solid #d7dfea;border-radius:10px;padding:9px 12px;background:#fff;font-size:14px;
 }
-.toolbar input[type=search]{min-width:240px;flex:1;max-width:420px;}
+.toolbar input[type=search]{min-width:220px;flex:1;max-width:400px;}
 .btn{
   border:none;border-radius:10px;padding:9px 18px;font-weight:800;font-size:14px;color:#fff;
   background:linear-gradient(180deg,var(--blue2),var(--blue));box-shadow:var(--shadow);
 }
 .btn:hover{filter:brightness(1.06);}
 .btn.ghost{background:#fff;color:#1f2937;border:1px solid #d7dfea;}
-.btn.green{background:linear-gradient(180deg,#34d399,#059669);}
+.btn.teal{background:linear-gradient(180deg,#22d3ee,#0891b2);}
 .btn.small{padding:5px 12px;font-size:12.5px;border-radius:8px;}
 .btn.danger{background:linear-gradient(180deg,#f87171,#dc2626);}
 
@@ -106,24 +108,26 @@ textarea,input,select{font-family:inherit;}
   box-shadow:var(--shadow);margin-bottom:14px;overflow:hidden;
 }
 .item-head{display:flex;align-items:center;gap:10px;padding:12px 16px;background:#f7f9fc;
-  border-bottom:1px solid var(--line);}
+  border-bottom:1px solid var(--line);flex-wrap:wrap;}
 .item-head .name{font-weight:800;font-size:15.5px;}
 .type-badge{font-size:11.5px;font-weight:800;border-radius:20px;padding:2px 10px;color:#fff;}
 .type-field{background:#0891b2;} .type-button{background:var(--blue);}
 .type-action{background:var(--purple);} .type-table{background:#475569;}
 .item-head .idesc{color:var(--muted);font-size:12.5px;}
 .item-head .grow{flex:1;}
-.item-body{padding:12px 16px;}
 .no-bugs{color:#94a3b8;font-size:13px;padding:2px 2px 10px;}
 
-/* ── Bug cards ─────────────────────────────────────────────────────────── */
+/* ── Report cards ──────────────────────────────────────────────────────── */
 .bug{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:12px;background:#fcfdff;}
 .bug.sev-critical{border-inline-start:5px solid var(--red);}
 .bug.sev-high{border-inline-start:5px solid #ea580c;}
 .bug.sev-medium{border-inline-start:5px solid var(--amber);}
 .bug.sev-low{border-inline-start:5px solid #16a34a;}
+.bug.kind-improvement{background:var(--teal-soft);border-inline-start:5px solid var(--teal);}
 .bug-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;}
-.bug-top select{border:1px solid #d7dfea;border-radius:8px;padding:5px 8px;font-size:12.5px;font-weight:700;}
+.bug-top select{border:1px solid #d7dfea;border-radius:8px;padding:5px 8px;font-size:12.5px;font-weight:700;background:#fff;}
+.bug-top select.sel-kind[data-k="improvement"]{color:var(--teal);border-color:#a5e8f2;background:#f4feff;}
+.bug-top select.sel-kind[data-k="bug"]{color:var(--red);}
 .bug-top .bug-id{color:#94a3b8;font-size:12px;margin-inline-start:auto;}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 .fieldbox label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:3px;}
@@ -145,7 +149,7 @@ textarea,input,select{font-family:inherit;}
   border-radius:50%;width:20px;height:20px;font-weight:900;font-size:12px;line-height:1;}
 .bug-actions{display:flex;gap:8px;margin-top:8px;}
 
-/* severity/status colour tags in selects */
+/* status colour tags in selects */
 .sel-status[data-v="fixed"],.sel-status[data-v="verified"]{color:var(--green);}
 .sel-status[data-v="in-progress"]{color:var(--purple);}
 .sel-status[data-v="new"]{color:var(--amber);}
@@ -172,8 +176,8 @@ textarea,input,select{font-family:inherit;}
 <div class="appbar">
   <div class="logo">🐞</div>
   <div>
-    <h1>כלי דיווח תקלות</h1>
-    <div class="sub">מנהל חלוקה · קופה של צדקה הר יונה · נוף הגליל</div>
+    <h1>כלי דיווח תקלות ובקשות שיפור</h1>
+    <div class="sub">מנהל חלוקה · גרסה 2.56 · קופה של צדקה הר יונה · נוף הגליל</div>
   </div>
   <div class="spacer"></div>
   <button class="btn ghost" onclick="exportReport()">⬇ ייצוא דוח</button>
@@ -183,10 +187,15 @@ textarea,input,select{font-family:inherit;}
 <div class="stats" id="stats"></div>
 
 <div class="toolbar">
-  <input type="search" id="search" placeholder="🔎 חיפוש בתקלות: תיאור, שלבים, פריט..." oninput="render()">
+  <input type="search" id="search" placeholder="🔎 חיפוש: תיאור, שלבים, פריט..." oninput="render()">
+  <select id="fKind" onchange="render()">
+    <option value="">🐞💡 תקלות ושיפורים</option>
+    <option value="bug">🐞 תקלות בלבד</option>
+    <option value="improvement">💡 שיפורים בלבד</option>
+  </select>
   <select id="fSeverity" onchange="render()">
-    <option value="">כל החומרות</option>
-    <option value="critical">קריטי</option>
+    <option value="">כל הרמות</option>
+    <option value="critical">קריטי / דחוף</option>
     <option value="high">גבוה</option>
     <option value="medium">בינוני</option>
     <option value="low">נמוך</option>
@@ -195,8 +204,8 @@ textarea,input,select{font-family:inherit;}
     <option value="">כל הסטטוסים</option>
     <option value="new">חדש</option>
     <option value="in-progress">בטיפול</option>
-    <option value="fixed">תוקן</option>
-    <option value="verified">נבדק</option>
+    <option value="fixed">טופל / בוצע</option>
+    <option value="verified">נבדק / אושר</option>
   </select>
   <button class="btn ghost small" onclick="clearAll()">🗑 נקה הכל</button>
 </div>
@@ -212,31 +221,37 @@ textarea,input,select{font-family:inherit;}
 <div class="toast" id="toast"></div>
 
 <script>
-/* ======================= מבנה התוכנה (לשוניות ופריטים) ======================= */
+/* ======================= מבנה התוכנה (לשוניות ופריטים) =======================
+   מעודכן לגרסה 2.56 — כולל "הוסף מקבל ידנית", "חלוקה חדשה", "שמור PDF",
+   מצב "לפי סינון מותאם" + "הגדר סינון", ועמודת "ילדים" ברשימת החלוקה. */
 const APP_STRUCTURE = [
   { key:"dist", name:"חלוקה ורישום", icon:"📋", items:[
-    {key:"name",   name:"שדה: שם החלוקה", type:"field",  desc:"חובה לפני הדפסה; הצעות משמות קודמים"},
-    {key:"date",   name:"שדה: תאריך",     type:"field",  desc:"לוח שנה, ימי רביעי מסומנים"},
-    {key:"distr",  name:"שדה: מחלק",      type:"field",  desc:"שם מבצע החלוקה; נזכר אוטומטית"},
-    {key:"prod",   name:"שדה: מוצרים זמינים", type:"field", desc:"מספר המנות; קובע כמה נשאר לחד-פעמיים"},
-    {key:"reserve",name:"שדה: רזרבה",     type:"field",  desc:"כמה אנשי רזרבה לצרף לחד-פעמיים"},
-    {key:"note",   name:"שדה: הערה כללית לחלוקה", type:"field", desc:"נשמרת פעם אחת ברמת החלוקה"},
+    {key:"name",    name:"שדה: שם החלוקה", type:"field",  desc:"חובה לפני הדפסה; הצעות משמות קודמים (✕ למחיקת הצעה)"},
+    {key:"date",    name:"שדה: תאריך",     type:"field",  desc:"לוח שנה, ימי רביעי מסומנים"},
+    {key:"distr",   name:"שדה: מחלק",      type:"field",  desc:"שם מבצע החלוקה; נזכר אוטומטית"},
+    {key:"prod",    name:"שדה: מוצרים זמינים", type:"field", desc:"מספר המנות; קובע כמה נשאר לחד-פעמיים"},
+    {key:"reserve", name:"שדה: רזרבה",     type:"field",  desc:"כמה אנשי רזרבה לצרף (רשימת המתנה)"},
+    {key:"note",    name:"שדה: הערה כללית לחלוקה", type:"field", desc:"נשמרת פעם אחת ברמת החלוקה"},
     {key:"leftover",name:"חיווי: נשאר לחד-פעמיים", type:"action", desc:"מציג כמה מנות נותרו ואם נבחרו"},
-    {key:"vmail",  name:"שדה: אימייל המתנדב", type:"field", desc:"כתובת המתנדב שימלא את הרשימה"},
-    {key:"vsend",  name:"כפתור: שלח למתנדב", type:"button", desc:"שולח קובץ רשימה במייל"},
-    {key:"vimport",name:"כפתור: יבוא ידני", type:"button", desc:"ייבוא ידני של קובץ שהתקבל"},
-    {key:"mode",   name:"בורר: מצב חלוקה לקבועים", type:"action", desc:"רגיל / בלי קבועים / לפי ניקוד"},
-    {key:"leaders",name:"כפתור: סמן מובילים", type:"button", desc:"מצב 'לפי ניקוד' — מסמן top-N"},
-    {key:"qsearch",name:"שדה: חיפוש מהיר ברשימה", type:"field", desc:"סינון הרשימה לפי כל פרט"},
+    {key:"vmail",   name:"שדה: אימייל המתנדב", type:"field", desc:"כתובת המתנדב שימלא את הרשימה"},
+    {key:"vsend",   name:"כפתור: שלח למתנדב", type:"button", desc:"שולח קובץ רשימה במייל"},
+    {key:"vimport", name:"כפתור: יבוא ידני", type:"button", desc:"ייבוא ידני של קובץ שהתקבל מהמתנדב"},
+    {key:"mode",    name:"בורר: מצב חלוקה לקבועים", type:"action", desc:"רגיל (לפי לוח) / בלי קבועים / לפי ניקוד / לפי סינון מותאם"},
+    {key:"leaders", name:"כפתור: סמן מובילים", type:"button", desc:"מצב 'לפי ניקוד' — מסמן top-N בעלי הניקוד הגבוה"},
+    {key:"editfilter",name:"כפתור: הגדר סינון", type:"button", desc:"מצב 'סינון מותאם' — ספי ילדים/הכנסה/לנפש"},
+    {key:"manualadd",name:"כפתור: ＋ הוסף מקבל (ידני)", type:"button", desc:"הוספת כל מקבל פעיל לחלוקה — גם אם אינו בתור השבוע"},
+    {key:"qsearch", name:"שדה: חיפוש מהיר ברשימה", type:"field", desc:"סינון הרשימה לפי כל פרט"},
     {key:"checkall",name:"כפתורים: בחר הכל / בטל הכל", type:"button", desc:"סימון/ביטול המוני"},
-    {key:"table",  name:"טבלת המקבלים", type:"table", desc:"סימון קבלה + הערה לכל מקבל"},
-    {key:"save",   name:"כפתור: שמור חלוקה", type:"button", desc:"רושם להיסטוריה + מייצא אקסל"},
-    {key:"print",  name:"כפתור: הדפסה לחלוקה", type:"button", desc:"מדפיס את הרשימה (A4)"},
+    {key:"table",   name:"טבלת המקבלים", type:"table", desc:"סימון קבלה + עמודות שם/עדיפות/ניקוד/ילדים/הערה"},
+    {key:"save",    name:"כפתור: שמור חלוקה", type:"button", desc:"רושם להיסטוריה + מייצא אקסל מלא"},
+    {key:"print",   name:"כפתור: הדפסה לחלוקה", type:"button", desc:"מדפיס את רשימת החלוקה (A4)"},
+    {key:"pdf",     name:"כפתור: שמור PDF", type:"button", desc:"שומר את הרשימה כ-PDF בתיקיית ההורדות ופותח אותה"},
+    {key:"reset",   name:"כפתור: חלוקה חדשה (איפוס מסך)", type:"button", desc:"מנקה מוצרים/רזרבה/שם/הערה/סימונים/בחירות; רישומים שמורים לא נפגעים"},
   ]},
   { key:"recipients", name:"מקבלים", icon:"👥", items:[
     {key:"search", name:"שדה חיפוש", type:"field", desc:"שם, טלפון, ת״ז, כתובת"},
     {key:"filter", name:"סינון סטטוס / עדיפות", type:"action", desc:"פעיל/מושהה, לפי דרגה"},
-    {key:"add",    name:"כפתור: + הוסף מקבל", type:"button", desc:"טופס הוספת משפחה/מקבל"},
+    {key:"add",    name:"כפתור: + הוסף מקבל", type:"button", desc:"טופס הוספת משפחה/מקבל (תדירות מוצגת רק ל'קבוע')"},
     {key:"import", name:"כפתור: יבוא מ-Excel", type:"button", desc:"ייבוא רשימה שלמה מאקסל"},
     {key:"dups",   name:"כפתור: בדיקת כפילויות", type:"button", desc:"מאתר רשומות כפולות"},
     {key:"rowbtns",name:"כפתורים: הפעל / השהה / מחק", type:"button", desc:"פעולות על השורה"},
@@ -247,12 +262,12 @@ const APP_STRUCTURE = [
     {key:"info",   name:"חיווי: מוצרים/קבועים/לחד-פעמיים/רזרבה", type:"action", desc:"נקרא מ'חלוקה ורישום'"},
     {key:"calc",   name:"כפתור: חשב המלצה", type:"button", desc:"מסמן מומלצים לפי עדיפות וניקוד"},
     {key:"table",  name:"טבלה (לחיצה על שם=פירוט ניקוד)", type:"table", desc:"בחר, שם, עדיפות, ניקוד, חלוקה אחרונה"},
-    {key:"addgrp", name:"כפתור: הוסף נבחרים לעדכון קבוצתי", type:"button", desc:"מעביר את הנבחרים לחלוקה"},
+    {key:"addgrp", name:"כפתור: הוסף נבחרים לחלוקה", type:"button", desc:"מעביר את הנבחרים ל'חלוקה ורישום'"},
   ]},
   { key:"search", name:"חיפוש מהיר", icon:"🔍", items:[
     {key:"input",  name:"שדה חיפוש", type:"field", desc:"חיפוש מקבל בכל השדות"},
     {key:"results",name:"רשימת תוצאות", type:"table", desc:"בחירה מציגה פרופיל"},
-    {key:"profile",name:"כרטיס פרופיל + היסטוריה", type:"action", desc:"פרטי המקבל וחלוקותיו"},
+    {key:"profile",name:"כרטיס פרופיל + היסטוריה", type:"action", desc:"פרטי המקבל וחלוקותיו (אפשר למחוק רישום בודד)"},
     {key:"export", name:"כפתור: ייצוא הרשימה", type:"button", desc:"מוריד תוצאות לאקסל"},
     {key:"printcard",name:"כפתור: הדפסת כרטיס מקבל", type:"button", desc:"מדפיס כרטיס פרטים (גופן גדול)"},
   ]},
@@ -262,7 +277,7 @@ const APP_STRUCTURE = [
   ]},
   { key:"settings", name:"הגדרות", icon:"⚙️", items:[
     {key:"pwd",    name:"אבטחה: שנה סיסמה", type:"button", desc:"שינוי סיסמת הכניסה"},
-    {key:"update", name:"עדכון תוכנה: בדוק עדכונים", type:"button", desc:"בדיקת גרסה חדשה"},
+    {key:"update", name:"עדכון תוכנה: בדוק עדכונים", type:"button", desc:"בדיקת גרסה חדשה + עדכון אוטומטי"},
     {key:"backup", name:"גיבויים: בחר תיקייה / גבה עכשיו / שחזר", type:"button", desc:"ניהול גיבויים"},
     {key:"weights",name:"משקלי ניקוד: שמור / אפס", type:"action", desc:"כיוון משקלי הניקוד (סכום 100%)"},
     {key:"mail",   name:"מייל למתנדבים: שמור / שלח מייל בדיקה", type:"button", desc:"הגדרות SMTP + בדיקה"},
@@ -270,10 +285,40 @@ const APP_STRUCTURE = [
     {key:"reset",  name:"אזור מסוכן: אפס את כל הנתונים", type:"action", desc:"מחיקה בלתי הפיכה"},
     {key:"feedback",name:"כפתור: השאר הודעה למפתח", type:"button", desc:"שליחת משוב (+ אפשרות במייל)"},
   ]},
+  { key:"general", name:"כללי ורעיונות", icon:"💡", items:[
+    {key:"idea",   name:"רעיון / בקשת שיפור כללית", type:"action", desc:"שיפור שאינו קשור לפריט מסוים בתוכנה"},
+    {key:"other",  name:"תקלה כללית / משהו אחר", type:"action", desc:"כל דבר שלא מצאת לו מקום בלשוניות"},
+  ]},
 ];
 
+const KINDS = {
+  bug:         {label:"תקלה", icon:"🐞"},
+  improvement: {label:"שיפור", icon:"💡"},
+};
 const SEVERITIES = {critical:"קריטי", high:"גבוה", medium:"בינוני", low:"נמוך"};
-const STATUSES   = {new:"חדש", "in-progress":"בטיפול", fixed:"תוקן", verified:"נבדק"};
+/* status + field wording differ a touch between a bug report and an idea */
+const STATUS_TEXT = {
+  bug:         {new:"חדש", "in-progress":"בטיפול", fixed:"תוקן",  verified:"נבדק"},
+  improvement: {new:"חדש", "in-progress":"בעבודה", fixed:"בוצע",  verified:"אושר"},
+};
+const SEV_TITLE  = {bug:"חומרה", improvement:"עדיפות"};
+const FIELD_LABELS = {
+  bug: {
+    desc:"תיאור התקלה", steps:"שלבים לשחזור",
+    actual:"תוצאה בפועל", expected:"תוצאה צפויה", notes:"הערות",
+    descPh:"מה לא עובד?", stepsPh:"1. ...\n2. ...",
+    actualPh:"מה קרה", expectedPh:"מה היה אמור לקרות",
+  },
+  improvement: {
+    desc:"מה לשפר / הבקשה", steps:"למה זה חשוב",
+    actual:"איך זה עובד היום", expected:"איך היית רוצה שיעבוד", notes:"הערות",
+    descPh:"מה תרצה שנוסיף או נשנה?", stepsPh:"מתי זה מפריע / מה זה יחסוך",
+    actualPh:"המצב הנוכחי (לא חובה)", expectedPh:"ההתנהגות הרצויה",
+  },
+};
+
+function kindOf(b){ return b.kind === "improvement" ? "improvement" : "bug"; }
+function statusText(kind,key){ return (STATUS_TEXT[kind]||STATUS_TEXT.bug)[key] || key; }
 
 /* ============================== מצב + אחסון ============================== */
 const LS_KEY = "manhal_bug_reports_v1";
@@ -283,6 +328,8 @@ function load(){
     const raw = localStorage.getItem(LS_KEY);
     if(raw){ const p = JSON.parse(raw); state.bugs = p.bugs||{}; state.activeTab = p.activeTab||state.activeTab; }
   }catch(e){ console.warn("load failed", e); }
+  // migrate old records that predate the bug/improvement split
+  for(const k in state.bugs) for(const b of state.bugs[k]) if(!b.kind) b.kind = "bug";
 }
 let saveTimer=null;
 function save(){
@@ -296,18 +343,19 @@ function itemKey(tab,item){ return tab+"::"+item; }
 function bugsFor(tab,item){ return state.bugs[itemKey(tab,item)] || []; }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
-/* ============================== פעולות תקלה ============================== */
-function newBug(tab,item){
+/* ============================== פעולות דיווח ============================== */
+function newReport(tab,item,kind){
+  kind = kind==="improvement" ? "improvement" : "bug";
   const k = itemKey(tab,item);
   (state.bugs[k] = state.bugs[k]||[]).push({
-    id:uid(), severity:"medium", status:"new",
+    id:uid(), kind, severity:"medium", status:"new",
     desc:"", steps:"", actual:"", expected:"", notes:"", shots:[]
   });
   save(); render();
 }
 function delBug(tab,item,id){
   const k = itemKey(tab,item);
-  if(!confirm("למחוק את התקלה?")) return;
+  if(!confirm("למחוק את הדיווח?")) return;
   state.bugs[k] = (state.bugs[k]||[]).filter(b=>b.id!==id);
   if(!state.bugs[k].length) delete state.bugs[k];
   save(); render();
@@ -323,7 +371,7 @@ function dupBug(tab,item,id){
 }
 function updBug(tab,item,id,field,val){
   const b = (state.bugs[itemKey(tab,item)]||[]).find(x=>x.id===id);
-  if(b){ b[field]=val; save(); if(field==="severity"||field==="status") render(); else updateStats(); }
+  if(b){ b[field]=val; save(); if(field==="severity"||field==="status"||field==="kind") render(); else updateStats(); }
 }
 
 /* ============================== צילומי מסך ============================== */
@@ -349,11 +397,13 @@ function lightbox(src){ const lb=document.getElementById("lightbox"); document.g
 function activeFilters(){
   return {
     q: document.getElementById("search").value.trim().toLowerCase(),
+    kind: document.getElementById("fKind").value,
     sev: document.getElementById("fSeverity").value,
     st: document.getElementById("fStatus").value,
   };
 }
 function bugMatches(b,item,f){
+  if(f.kind && kindOf(b)!==f.kind) return false;
   if(f.sev && b.severity!==f.sev) return false;
   if(f.st && b.status!==f.st) return false;
   if(f.q){
@@ -362,27 +412,28 @@ function bugMatches(b,item,f){
   }
   return true;
 }
-function filtering(f){ return !!(f.q||f.sev||f.st); }
+function filtering(f){ return !!(f.q||f.kind||f.sev||f.st); }
 
 /* ============================== רינדור ============================== */
 function esc(s){ return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
 function countAll(){
-  let c={total:0,new:0,"in-progress":0,fixed:0,verified:0,critical:0};
+  let c={total:0,bug:0,improvement:0,new:0,"in-progress":0,fixed:0,verified:0,critical:0};
   for(const k in state.bugs) for(const b of state.bugs[k]){
-    c.total++; c[b.status]=(c[b.status]||0)+1; if(b.severity==="critical") c.critical++;
+    c.total++; c[kindOf(b)]++; c[b.status]=(c[b.status]||0)+1;
+    if(kindOf(b)==="bug" && b.severity==="critical") c.critical++;
   }
   return c;
 }
 function updateStats(){
   const c = countAll();
   document.getElementById("stats").innerHTML = `
-    <div class="stat total"><b>${c.total}</b><span>סה״כ תקלות</span></div>
-    <div class="stat open"><b>${(c.new||0)+(c["in-progress"]||0)}</b><span>פתוחות</span></div>
-    <div class="stat prog"><b>${c["in-progress"]||0}</b><span>בטיפול</span></div>
-    <div class="stat fixed"><b>${c.fixed||0}</b><span>תוקנו</span></div>
-    <div class="stat ver"><b>${c.verified||0}</b><span>נבדקו</span></div>
-    <div class="stat crit"><b>${c.critical||0}</b><span>קריטיות</span></div>`;
+    <div class="stat total"><b>${c.total}</b><span>סה״כ דיווחים</span></div>
+    <div class="stat bugs"><b>${c.bug}</b><span>🐞 תקלות</span></div>
+    <div class="stat imp"><b>${c.improvement}</b><span>💡 שיפורים</span></div>
+    <div class="stat open"><b>${(c.new||0)+(c["in-progress"]||0)}</b><span>פתוחים</span></div>
+    <div class="stat done"><b>${(c.fixed||0)+(c.verified||0)}</b><span>טופלו</span></div>
+    <div class="stat crit"><b>${c.critical||0}</b><span>תקלות קריטיות</span></div>`;
 }
 
 function renderSidebar(){
@@ -398,29 +449,33 @@ function renderSidebar(){
 }
 
 function bugCard(tab,item,b){
+  const kind = kindOf(b);
+  const L = FIELD_LABELS[kind];
   const shots = b.shots.map((s,i)=>`
     <div class="shot"><img src="${s.data}" title="${esc(s.name)}" onclick="lightbox('${s.data}')">
       <button class="del" title="מחק תמונה" onclick="delShot('${tab}','${item.key}','${b.id}',${i})">×</button></div>`).join("");
-  const sevOpts = Object.entries(SEVERITIES).map(([v,t])=>`<option value="${v}" ${b.severity===v?"selected":""}>${t}</option>`).join("");
-  const stOpts  = Object.entries(STATUSES).map(([v,t])=>`<option value="${v}" ${b.status===v?"selected":""}>${t}</option>`).join("");
+  const kindOpts = Object.entries(KINDS).map(([v,o])=>`<option value="${v}" ${kind===v?"selected":""}>${o.icon} ${o.label}</option>`).join("");
+  const sevOpts  = Object.entries(SEVERITIES).map(([v,t])=>`<option value="${v}" ${b.severity===v?"selected":""}>${t}</option>`).join("");
+  const stOpts   = Object.keys(STATUS_TEXT[kind]).map(v=>`<option value="${v}" ${b.status===v?"selected":""}>${statusText(kind,v)}</option>`).join("");
   const U = `'${tab}','${item.key}','${b.id}'`;
-  return `<div class="bug sev-${b.severity}">
+  return `<div class="bug kind-${kind} sev-${b.severity}">
     <div class="bug-top">
-      <select title="חומרה" onchange="updBug(${U},'severity',this.value)">${sevOpts}</select>
+      <select class="sel-kind" data-k="${kind}" title="סוג הדיווח" onchange="updBug(${U},'kind',this.value)">${kindOpts}</select>
+      <select title="${SEV_TITLE[kind]}" onchange="updBug(${U},'severity',this.value)">${sevOpts}</select>
       <select class="sel-status" data-v="${b.status}" title="סטטוס" onchange="updBug(${U},'status',this.value)">${stOpts}</select>
       <span class="bug-id">#${b.id.slice(-5)}</span>
     </div>
-    <div class="fieldbox"><label>תיאור התקלה</label>
-      <textarea class="desc" oninput="updBug(${U},'desc',this.value)" placeholder="מה לא עובד?">${esc(b.desc)}</textarea></div>
-    <div class="fieldbox"><label>שלבים לשחזור</label>
-      <textarea oninput="updBug(${U},'steps',this.value)" placeholder="1. ...&#10;2. ...">${esc(b.steps)}</textarea></div>
+    <div class="fieldbox"><label>${L.desc}</label>
+      <textarea class="desc" oninput="updBug(${U},'desc',this.value)" placeholder="${L.descPh}">${esc(b.desc)}</textarea></div>
+    <div class="fieldbox"><label>${L.steps}</label>
+      <textarea oninput="updBug(${U},'steps',this.value)" placeholder="${esc(L.stepsPh)}">${esc(b.steps)}</textarea></div>
     <div class="grid2">
-      <div class="fieldbox"><label>תוצאה בפועל</label>
-        <textarea oninput="updBug(${U},'actual',this.value)" placeholder="מה קרה">${esc(b.actual)}</textarea></div>
-      <div class="fieldbox"><label>תוצאה צפויה</label>
-        <textarea oninput="updBug(${U},'expected',this.value)" placeholder="מה היה אמור לקרות">${esc(b.expected)}</textarea></div>
+      <div class="fieldbox"><label>${L.actual}</label>
+        <textarea oninput="updBug(${U},'actual',this.value)" placeholder="${L.actualPh}">${esc(b.actual)}</textarea></div>
+      <div class="fieldbox"><label>${L.expected}</label>
+        <textarea oninput="updBug(${U},'expected',this.value)" placeholder="${L.expectedPh}">${esc(b.expected)}</textarea></div>
     </div>
-    <div class="fieldbox"><label>הערות</label>
+    <div class="fieldbox"><label>${L.notes}</label>
       <textarea oninput="updBug(${U},'notes',this.value)">${esc(b.notes)}</textarea></div>
     <div class="dropzone" ondragover="event.preventDefault();this.classList.add('over')"
          ondragleave="this.classList.remove('over')"
@@ -432,7 +487,7 @@ function bugCard(tab,item,b){
     ${shots?`<div class="shots">${shots}</div>`:""}
     <div class="bug-actions">
       <button class="btn ghost small" onclick="dupBug(${U})">⧉ שכפל</button>
-      <button class="btn danger small" onclick="delBug(${U})">🗑 מחק תקלה</button>
+      <button class="btn danger small" onclick="delBug(${U})">🗑 מחק</button>
     </div>
   </div>`;
 }
@@ -442,7 +497,7 @@ function renderContent(){
   const f = activeFilters();
   const filt = filtering(f);
   let html = `<div class="content-head"><h2>${tab.icon} ${tab.name}</h2>
-     <span class="desc">${filt?"מוצגות תקלות מסוננות בלבד":"לחץ על פריט כדי להוסיף תקלות"}</span></div>`;
+     <span class="desc">${filt?"מוצגים דיווחים מסוננים בלבד":"לחץ על פריט כדי לדווח תקלה 🐞 או לבקש שיפור 💡"}</span></div>`;
   let shownItems = 0;
   tab.items.forEach(item=>{
     let bugs = bugsFor(tab.key,item.key);
@@ -454,14 +509,15 @@ function renderContent(){
         <span class="name">${item.name}</span>
         <span class="grow"></span>
         <span class="idesc">${esc(item.desc||"")}</span>
-        <button class="btn small" onclick="newBug('${tab.key}','${item.key}')">+ הוסף תקלה</button>
+        <button class="btn small" onclick="newReport('${tab.key}','${item.key}','bug')">＋ תקלה</button>
+        <button class="btn teal small" onclick="newReport('${tab.key}','${item.key}','improvement')">＋ שיפור</button>
       </div>
       <div class="item-body">
         ${bugs.length? bugs.map(b=>bugCard(tab.key,item,b)).join("")
-                     : '<div class="no-bugs">אין תקלות רשומות לפריט זה.</div>'}
+                     : '<div class="no-bugs">אין דיווחים לפריט זה. הוסף תקלה או בקשת שיפור בכפתורים למעלה.</div>'}
       </div></div>`;
   });
-  if(filt && !shownItems) html += `<div class="empty-note">אין תקלות שתואמות את הסינון בלשונית זו.</div>`;
+  if(filt && !shownItems) html += `<div class="empty-note">אין דיווחים שתואמים את הסינון בלשונית זו.</div>`;
   document.getElementById("content").innerHTML = html;
 }
 
@@ -471,9 +527,10 @@ function selectTab(k){ state.activeTab=k; save(); render(); window.scrollTo({top
 /* ============================== ייצוא / העתקה ============================== */
 function buildReport(){
   const c = countAll();
-  let md = `# דוח תקלות — מנהל חלוקה\n\n`;
+  let md = `# דוח תקלות ובקשות שיפור — מנהל חלוקה (גרסה 2.56)\n\n`;
   md += `נוצר: ${new Date().toLocaleString("he-IL")}\n\n`;
-  md += `**סיכום:** סה״כ ${c.total} · פתוחות ${(c.new||0)+(c["in-progress"]||0)} · בטיפול ${c["in-progress"]||0} · תוקנו ${c.fixed||0} · נבדקו ${c.verified||0} · קריטיות ${c.critical||0}\n\n`;
+  md += `**סיכום:** סה״כ ${c.total} · 🐞 תקלות ${c.bug} · 💡 שיפורים ${c.improvement} · `;
+  md += `פתוחים ${(c.new||0)+(c["in-progress"]||0)} · טופלו ${(c.fixed||0)+(c.verified||0)} · תקלות קריטיות ${c.critical||0}\n`;
   let any=false;
   APP_STRUCTURE.forEach(tab=>{
     const itemsWithBugs = tab.items.filter(it=>bugsFor(tab.key,it.key).length);
@@ -483,17 +540,20 @@ function buildReport(){
       md += `\n### ${it.name}\n`;
       bugsFor(tab.key,it.key).forEach((b,i)=>{
         any=true;
-        md += `\n**תקלה ${i+1}** (#${b.id.slice(-5)}) — חומרה: ${SEVERITIES[b.severity]} · סטטוס: ${STATUSES[b.status]}\n`;
-        if(b.desc)     md += `- תיאור: ${b.desc.replace(/\n/g," ")}\n`;
-        if(b.steps)    md += `- שלבי שחזור: ${b.steps.replace(/\n/g," / ")}\n`;
-        if(b.actual)   md += `- תוצאה בפועל: ${b.actual.replace(/\n/g," ")}\n`;
-        if(b.expected) md += `- תוצאה צפויה: ${b.expected.replace(/\n/g," ")}\n`;
-        if(b.notes)    md += `- הערות: ${b.notes.replace(/\n/g," ")}\n`;
+        const kind = kindOf(b);
+        const K = KINDS[kind];
+        md += `\n**${K.icon} ${K.label} ${i+1}** (#${b.id.slice(-5)}) — ${SEV_TITLE[kind]}: ${SEVERITIES[b.severity]} · סטטוס: ${statusText(kind,b.status)}\n`;
+        const L = FIELD_LABELS[kind];
+        if(b.desc)     md += `- ${L.desc}: ${b.desc.replace(/\n/g," ")}\n`;
+        if(b.steps)    md += `- ${L.steps}: ${b.steps.replace(/\n/g," / ")}\n`;
+        if(b.actual)   md += `- ${L.actual}: ${b.actual.replace(/\n/g," ")}\n`;
+        if(b.expected) md += `- ${L.expected}: ${b.expected.replace(/\n/g," ")}\n`;
+        if(b.notes)    md += `- ${L.notes}: ${b.notes.replace(/\n/g," ")}\n`;
         if(b.shots.length) md += `- צורפו ${b.shots.length} תמונות מסך: ${b.shots.map(s=>s.name).join(", ")}\n`;
       });
     });
   });
-  if(!any) md += `\n_לא נרשמו תקלות._\n`;
+  if(!any) md += `\n_לא נרשמו דיווחים._\n`;
   return md;
 }
 function download(name,text){
@@ -505,7 +565,7 @@ function download(name,text){
 }
 function exportReport(){
   const d = new Date(), pad=n=>String(n).padStart(2,"0");
-  download(`דוח_תקלות_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}.md`, buildReport());
+  download(`דוח_תקלות_ושיפורים_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}.md`, buildReport());
   toast("📄 הדוח יוצא");
 }
 async function copyReport(){
@@ -518,8 +578,8 @@ async function copyReport(){
   }
 }
 function clearAll(){
-  if(!confirm("לנקות את כל התקלות שנרשמו? פעולה זו אינה הפיכה.")) return;
-  state.bugs={}; save(); render(); toast("נוקו כל התקלות");
+  if(!confirm("לנקות את כל הדיווחים שנרשמו? פעולה זו אינה הפיכה.")) return;
+  state.bugs={}; save(); render(); toast("נוקו כל הדיווחים");
 }
 function toast(msg){
   const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show");
