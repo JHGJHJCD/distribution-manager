@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLineEdit, QLabel, QComboBox,
     QDialog, QFormLayout, QMessageBox, QFileDialog, QSpinBox,
-    QTextEdit, QAbstractItemView
+    QTextEdit, QAbstractItemView, QMenu
 )
 from PyQt6.QtCore import Qt, QDate, QTimer
 from widgets import DateEdit
@@ -39,20 +39,6 @@ from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state,
                       BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, search_icon,
                       ALIGN_RIGHT, rtl_text_area, enable_touch_scroll,
                       apply_header_icons)
-
-# Compact action buttons (≈50% shorter) — glossy gradients come from the
-# success/danger object names; this only tightens the size.
-_ACTION_BTN = "font-size:12px; min-height:24px; min-width:64px; padding:3px 14px;"
-# 'השהה' — a glossy amber button (its own gradient, no object name).
-_SUSPEND_BTN = (
-    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-    "  stop:0 #fbbf24, stop:1 #f59e0b); color:#ffffff; border:none;"
-    "  border-radius:9px; font-weight:700; font-size:12px;"
-    "  min-height:24px; min-width:64px; padding:3px 14px; }"
-    "QPushButton:hover{ background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-    "  stop:0 #fcd34d, stop:1 #d97706); }"
-    "QPushButton:pressed{ background:#b45309; }"
-)
 
 COLS = ["מס'", "שם מלא", "עדיפות", "טלפון 1", "טלפון 2", "טלפון 3",
         "כתובת", "אזור", "נפשות", "תדירות", "חלוקה אחרונה",
@@ -215,6 +201,11 @@ class RecipientsTab(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.doubleClicked.connect(self._edit)
+        # פעולות המקבל (עריכה / הפעלה / השהיה / מחיקה) עברו לתפריט לחיצה-ימנית על
+        # השורה (#wtfnh) — כדי לפנות את סרגל הכפתורים העמוס. סטטוס ניתן לשנות גם
+        # בעריכה (לחיצה כפולה).
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_row_menu)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         # "שם מלא" — give it a generous fixed-but-resizable width so long names
@@ -234,30 +225,18 @@ class RecipientsTab(QWidget):
         self.table.setItemDelegateForColumn(2, BadgeDelegate(PRIORITY_BADGES, self.table))
         self.table.setItemDelegateForColumn(12, BadgeDelegate(STATUS_BADGES, self.table))
 
-        # Bottom buttons — trimmed to the three core actions (הפעל / השהה / מחק),
-        # smaller and glossy. Editing is still available by double-clicking a row.
+        # Bottom bar — the per-row action buttons (הפעל/השהה/מחק) were removed
+        # (#wtfnh, redundant) and moved to a right-click menu on the row. What
+        # stays: exporting the whole list (#thmir) and the duplicate check.
         bot = QHBoxLayout()
         bot.setSpacing(8)
 
-        btn_activate = QPushButton("הפעל")
-        btn_activate.setObjectName("success")
-        btn_activate.setStyleSheet(_ACTION_BTN)
-        btn_activate.setToolTip("סמן את המקבל הנבחר כפעיל")
-        btn_activate.clicked.connect(lambda: self._set_status("פעיל"))
-        bot.addWidget(btn_activate)
-
-        btn_suspend = QPushButton("השהה")
-        btn_suspend.setStyleSheet(_SUSPEND_BTN)
-        btn_suspend.setToolTip("השהה זמנית את המקבל הנבחר")
-        btn_suspend.clicked.connect(lambda: self._set_status("מושהה"))
-        bot.addWidget(btn_suspend)
-
-        btn_del = QPushButton("מחק")
-        btn_del.setObjectName("danger")
-        btn_del.setStyleSheet(_ACTION_BTN)
-        btn_del.setToolTip("מחק את המקבל הנבחר")
-        btn_del.clicked.connect(self._delete)
-        bot.addWidget(btn_del)
+        btn_export = QPushButton("ייצוא לאקסל")
+        btn_export.setObjectName("success")
+        btn_export.setStyleSheet("font-size:11px; min-height:24px; min-width:0; padding:3px 12px;")
+        btn_export.setToolTip("ייצוא כל רשימת המקבלים המוצגת לקובץ Excel בתיקיית ההורדות")
+        btn_export.clicked.connect(self._export_excel)
+        bot.addWidget(btn_export)
 
         bot.addStretch()
 
@@ -269,6 +248,46 @@ class RecipientsTab(QWidget):
         bot.addWidget(btn_dup)
 
         lay.addLayout(bot)
+
+    def _show_row_menu(self, pos):
+        """Right-click menu on a recipient row: edit / activate / suspend / delete.
+        Replaces the old always-on button bar (#wtfnh)."""
+        if self.table.rowAt(pos.y()) < 0:
+            return
+        menu = QMenu(self)
+        act_edit    = menu.addAction("עריכה…")
+        menu.addSeparator()
+        act_activate = menu.addAction("הפעל")
+        act_suspend  = menu.addAction("השהה")
+        menu.addSeparator()
+        act_delete   = menu.addAction("מחק")
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen == act_edit:
+            self._edit()
+        elif chosen == act_activate:
+            self._set_status("פעיל")
+        elif chosen == act_suspend:
+            self._set_status("מושהה")
+        elif chosen == act_delete:
+            self._delete()
+
+    def _export_excel(self):
+        """Export the currently displayed recipients list to an Excel file in
+        Downloads (#thmir)."""
+        from utils.excel_utils import export_recipients_to_excel
+        from utils.ui import reveal_in_folder
+        rows = getattr(self, "_rows_data", None) or []
+        if not rows:
+            QMessageBox.information(self, "", "אין מקבלים לייצוא")
+            return
+        try:
+            with busy_cursor():
+                path = export_recipients_to_excel(rows)
+            reveal_in_folder(path)
+            QMessageBox.information(self, "ייצוא הושלם",
+                                    f"רשימת המקבלים נשמרה בתיקיית ההורדות ונפתחה התיקייה:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה בייצוא", str(e))
 
     def _open_dup_check(self):
         from PyQt6.QtWidgets import QDialog, QVBoxLayout
@@ -621,8 +640,10 @@ class RecipientDialog(QDialog):
         f1.addRow("כתובת:", self.f_address)
         f1.addRow("אזור:", self.f_area)
         f1.addRow("נפשות:", self.f_souls)
-        f1.addRow("תדירות:", self.f_freq)
+        # עדיפות מעל תדירות (#3jiq8): התדירות נגזרת מהעדיפות ונפתחת רק כשהיא 'קבוע',
+        # לכן העדיפות באה קודם — ואז שורת התדירות מופיעה/נעלמת מתחתיה.
         f1.addRow("עדיפות:", self.f_priority)
+        f1.addRow("תדירות:", self.f_freq)
         f1.addRow("סטטוס:", self.f_status)
         # On ADD these are meaningless and only add noise: 'חלוקה אחרונה' is set
         # automatically when a distribution is recorded (a new recipient has none

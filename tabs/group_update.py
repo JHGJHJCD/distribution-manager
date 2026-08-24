@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QLineEdit,
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
     QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea, QListView,
-    QStyledItemDelegate, QDialog, QFormLayout
+    QStyledItemDelegate, QDialog, QFormLayout, QListWidget, QListWidgetItem
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QObject, QRect
 from PyQt6.QtGui import QColor, QFont, QIcon, QPalette
@@ -172,6 +172,85 @@ class FilterCriteriaDialog(QDialog):
             lo = selection.to_number(min_e.text())
             hi = selection.to_number(max_e.text())
             out[field] = {"min": lo, "max": hi}
+        return out
+
+
+class _ManualAddDialog(QDialog):
+    """Pick any active recipient(s) to add to the current distribution by hand
+    (#243lo) — the full active roster, searchable, with checkboxes. People already
+    on the list are excluded. Returns the chosen ids via selected_ids()."""
+
+    def __init__(self, parent=None, exclude_ids: set = None):
+        super().__init__(parent)
+        self.setWindowTitle("הוספת מקבל ידנית לחלוקה")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumSize(460, 560)
+        self._exclude = exclude_ids or set()
+        self._all = [r for r in db.get_all_recipients(status_filter="פעיל")
+                     if r.get("id") not in self._exclude]
+        self._build()
+
+    def _build(self):
+        outer = QVBoxLayout(self)
+        intro = QLabel("סמן את מי להוסיף לחלוקה. אפשר לבחור כמה, גם מי שאינו עומד "
+                       "בקריטריונים או אינו בתור השבוע.")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#475569; font-size:12.5px;")
+        outer.addWidget(intro)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("חיפוש לפי שם / טלפון / אזור…")
+        self._search.setAlignment(ALIGN_RIGHT)
+        self._search.addAction(search_icon(18), QLineEdit.ActionPosition.LeadingPosition)
+        self._search.textChanged.connect(self._apply_search)
+        outer.addWidget(self._search)
+
+        self._list = QListWidget()
+        self._list.setStyleSheet(
+            "QListWidget{background:#ffffff; border:1px solid #d7dfea; border-radius:8px;}"
+            "QListWidget::item{padding:6px 8px; border-bottom:1px solid #f1f4f9;}")
+        enable_touch_scroll(self._list)
+        outer.addWidget(self._list, 1)
+        self._fill(self._all)
+
+        btns = QHBoxLayout()
+        btn_ok = QPushButton("הוסף נבחרים")
+        btn_ok.setObjectName("primary")
+        btn_ok.setStyleSheet(_BTN_PRIMARY)
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("ביטול")
+        btn_cancel.setStyleSheet(_BTN_GHOST)
+        btn_cancel.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(btn_ok)
+        btns.addWidget(btn_cancel)
+        outer.addSpacing(6)
+        outer.addLayout(btns)
+
+    def _fill(self, rows):
+        self._list.clear()
+        for rec in rows:
+            area = rec.get("area") or ""
+            phone = rec.get("phone1") or ""
+            extra = "  ·  ".join(x for x in (area, phone) if x)
+            label = rec.get("full_name", "") + (f"   ({extra})" if extra else "")
+            it = QListWidgetItem(label)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            it.setCheckState(Qt.CheckState.Unchecked)
+            it.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
+            self._list.addItem(it)
+
+    def _apply_search(self):
+        txt = self._search.text().strip()
+        rows = db.filter_recipients(self._all, txt, limit=100000) if txt else self._all
+        self._fill(rows)
+
+    def selected_ids(self) -> list:
+        out = []
+        for i in range(self._list.count()):
+            it = self._list.item(i)
+            if it.checkState() == Qt.CheckState.Checked:
+                out.append(it.data(Qt.ItemDataRole.UserRole))
         return out
 
 
@@ -633,10 +712,37 @@ class GroupUpdateTab(QWidget):
         grid.addLayout(_field("שם החלוקה", self.name_input), 0, 0)
         grid.addLayout(_field("תאריך", self.date_edit), 0, 1)
         grid.addLayout(_field("מחלק", self.dist_input), 0, 2)
-        prod_field = _field("מוצרים זמינים", self.products_spin, maxw=140)
+
+        # 'מוצרים זמינים' הוא השדה החשוב ביותר במסך (#ss0lm) — לכן הוא מוגש בתוך
+        # פאנל מודגש ובולט, ולצדו ממש 'רזרבה' (#l9lyw) כדי שהמפעיל ימלא את שניהם
+        # יחד: קודם כמה מוצרים, ומיד כמה רזרבה.
+        self.products_spin.setMinimumHeight(48)
+        self.products_spin.setMinimumWidth(120)
+        self.products_spin.setStyleSheet(
+            "QSpinBox{font-size:24px; font-weight:900; color:#0d3b73; background:#ffffff;"
+            " border:2px solid #f59e0b; border-radius:10px; padding:2px 10px;}"
+            "QSpinBox:focus{border-color:#d97706;}")
+        prod_panel = QFrame()
+        prod_panel.setObjectName("prod-panel")
+        prod_panel.setStyleSheet(
+            "QFrame#prod-panel{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            " stop:0 #fffbeb, stop:1 #fef3c7); border:2px solid #fbbf24;"
+            " border-radius:14px;}")
+        # Hug the content so the amber box doesn't stretch into a big empty band.
+        prod_panel.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        pp = QHBoxLayout(prod_panel)
+        pp.setContentsMargins(16, 10, 16, 10)
+        pp.setSpacing(24)
+        prod_field = _field("★  מוצרים זמינים", self.products_spin, maxw=150)
+        # Make the star label of the hero field larger + bold amber.
+        _plab = prod_field.itemAt(0).widget()
+        _plab.setStyleSheet("color:#b45309; font-size:15px; font-weight:900;"
+                            " background:transparent; border:none;")
         prod_field.addWidget(self.lbl_regulars_count)
-        grid.addLayout(prod_field, 1, 0)
-        grid.addLayout(_field("רזרבה", self.reserve_spin, maxw=120), 1, 1)
+        pp.addLayout(prod_field)
+        pp.addLayout(_field("רזרבה", self.reserve_spin, maxw=110))
+
+        grid.addWidget(prod_panel, 1, 0, 1, 2, Qt.AlignmentFlag.AlignRight)
         grid.addWidget(self.leftover_card, 1, 2, Qt.AlignmentFlag.AlignVCenter)
         grid.addLayout(_field("הערה כללית לחלוקה", self.note_input), 2, 0, 1, 3)
         grid.setColumnStretch(0, 2)
@@ -757,6 +863,17 @@ class GroupUpdateTab(QWidget):
         self.btn_edit_filter.setToolTip("בחר לפי אילו קריטריונים לסנן (מספר ילדים / הכנסה / פנוי לנפש)")
         self.btn_edit_filter.clicked.connect(self._edit_filter)
         toolbar.addWidget(self.btn_edit_filter)
+
+        # Manually add ANY active recipient to this distribution — even one that
+        # doesn't meet the filter criteria / isn't due this week (#243lo). Always
+        # available, in every mode.
+        self.btn_add_manual = QPushButton("＋ הוסף מקבל")
+        self.btn_add_manual.setStyleSheet(_BTN_GHOST)
+        self.btn_add_manual.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_add_manual.setToolTip("הוסף לחלוקה זו מקבל כלשהו מכל הרשימה — גם אם "
+                                       "אינו עומד בקריטריונים או אינו בתור השבוע")
+        self.btn_add_manual.clicked.connect(self._add_manual)
+        toolbar.addWidget(self.btn_add_manual)
 
         self.search_input = QLineEdit()
         self.search_input.setMinimumHeight(42)
@@ -908,6 +1025,20 @@ class GroupUpdateTab(QWidget):
         bar.addWidget(btn_pdf)
 
         bar.addStretch()
+
+        # Reset everything for a fresh distribution (#c8m83): clears the products/
+        # reserve counts, name, note, ticks and one-time picks so the operator can
+        # start recording a new round from scratch.
+        btn_reset = QPushButton("  חלוקה חדשה")
+        btn_reset.setObjectName("ghost")
+        btn_reset.setStyleSheet(_BTN_GHOST)
+        btn_reset.setMinimumHeight(46)
+        btn_reset.setIcon(QIcon(line_icon("update", 18, "#475569")))
+        btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_reset.setToolTip("מאפס את המסך לחלוקה חדשה — מנקה מוצרים, רזרבה, שם, "
+                             "הערה, סימונים ובחירות חד-פעמי")
+        btn_reset.clicked.connect(self._reset_for_new)
+        bar.addWidget(btn_reset)
         bw.addWidget(bottom_bar)
         root.addWidget(bottom_wrap)
 
@@ -1299,6 +1430,29 @@ class GroupUpdateTab(QWidget):
         self.dist_input.setStyleSheet("")
         self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
 
+        # Explicit confirmation before recording (#adr4h): only the TICKED rows are
+        # saved, but it's easy to record more than intended (e.g. after 'בחר הכל').
+        # Show the exact count, and warn if it exceeds the available-products count
+        # so a mismatch like "10 חולקו אבל 27 נרשמו" is caught before it's written.
+        n = len(checked)
+        souls = 0
+        for rec in checked:
+            try:
+                souls += int(rec.get("souls", 0) or 0)
+            except (ValueError, TypeError):
+                pass
+        confirm_msg = (f"לרשום חלוקה ל-{n} מקבלים שסומנו כמי שקיבלו "
+                       f"({souls} נפשות)?")
+        prod = self.products_spin.value()
+        if prod and n > prod:
+            confirm_msg += (f"\n\n⚠ סימנת {n} מקבלים, אך 'מוצרים זמינים' = {prod}. "
+                            f"ודא שאכן חולקו {n} מנות ולא פחות.")
+        if QMessageBox.question(
+                self, "אישור רישום חלוקה", confirm_msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
+            return
+
         # Ticking is now opt-in (bug #ebnr2): an unticked row just means "not
         # distributed to", NOT a recorded no-show — so nothing is auto-recorded as
         # 'לא הגיע'. Only the people the operator ticked are saved as received.
@@ -1675,6 +1829,59 @@ class GroupUpdateTab(QWidget):
             f"קובץ ה-PDF נשמר בתיקיית ההורדות ונפתח אוטומטית:\n{path}")
         if self.main_win:
             self.main_win.status_msg("נשמר PDF לתיקיית ההורדות")
+
+    def _add_manual(self):
+        """Manually add any active recipient(s) to this distribution — regardless
+        of mode, filter criteria or weekly schedule (#243lo). Picked people join
+        the list via the existing one-time-picks mechanism (as MAIN, not reserve),
+        arrive ticked, and are recorded like any other pick when the operator saves."""
+        already = {r.get("id") for r in self._rows_data}
+        dlg = _ManualAddDialog(self, exclude_ids=already)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        ids = dlg.selected_ids()
+        if not ids:
+            return
+        added = 0
+        for rid in ids:
+            if rid not in self._extra_ids:
+                added += 1
+            self._extra_ids.add(rid)
+            self._reserve_ids.discard(rid)   # manual adds are MAIN, never reserve
+            self._checked_ids.add(rid)       # arrive ticked (chosen on purpose)
+        self._persist_extras()
+        self.refresh()
+        if self.main_win:
+            self.main_win.status_msg(f"נוספו {added} מקבלים ידנית לחלוקה")
+
+    def _reset_for_new(self):
+        """Reset the screen for a fresh distribution (#c8m83): clear products/
+        reserve counts, name, general note, all ticks and one-time picks, so the
+        operator can start recording a new round from scratch."""
+        if QMessageBox.question(
+                self, "חלוקה חדשה",
+                "לאפס את המסך לחלוקה חדשה?\n\n"
+                "ינוקו: מספר המוצרים והרזרבה, שם החלוקה, ההערה, כל הסימונים "
+                "ובחירות החד-פעמי.\nרשומות חלוקה שכבר נשמרו — לא ייפגעו.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        self._checked_ids.clear()
+        self._seen_ids.clear()
+        self._extra_ids.clear()
+        self._reserve_ids.clear()
+        self._persist_extras()
+        self.name_input.setCurrentText("")
+        self.note_input.clear()
+        for spin, key in ((self.products_spin, "available_products"),
+                          (self.reserve_spin, "reserve_count")):
+            spin.blockSignals(True)
+            spin.setValue(0 if key == "available_products" else 5)
+            spin.blockSignals(False)
+            db.set_setting(key, str(spin.value()))
+        self.refresh()
+        if self.main_win:
+            self.main_win.status_msg("המסך אופס לחלוקה חדשה")
 
     def _edit_filter(self) -> bool:
         """Open the broad-filter criteria editor. Saves + refreshes on accept.
