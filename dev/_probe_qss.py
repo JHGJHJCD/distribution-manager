@@ -39,8 +39,8 @@ print("QTextEdit empty cursor:", "RIGHT" if cr.center().x() > te.width()/2 else 
 # end-to-end: real one_time table, name item visual position
 from main import MainWindow
 w = MainWindow()
-w.one_time_tab.refresh()
-t = w.one_time_tab.table
+w.group_tab.refresh()
+t = w.group_tab.table
 t.resize(1200, 400); t.show(); app.processEvents()
 if t.rowCount():
     img = t.viewport().grab().toImage()

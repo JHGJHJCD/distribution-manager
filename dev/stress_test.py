@@ -40,7 +40,6 @@ from PyQt6.QtCore import Qt
 # Tabs under test
 from tabs.group_update import GroupUpdateTab, SCOPE_WEEK, SCOPE_ALL
 from tabs.recipients import RecipientsTab
-from tabs.one_time import OneTimeTab
 from tabs.search import SearchTab
 
 # ── data generation ────────────────────────────────────────────────────────────
@@ -173,19 +172,17 @@ def exercise(app, n, rng, report):
     # list path stays under stress coverage alongside the "all regulars" group.
     weekly = GroupUpdateTab(fm)
     recipients = RecipientsTab(fm)
-    one_time = OneTimeTab(fm)
     search = SearchTab(fm)
 
     timed(report, "recipients.refresh", n, recipients.refresh)
     timed(report, "weekly.refresh", n, weekly.refresh)
-    timed(report, "one_time.refresh", n, one_time.refresh)
     timed(report, "search.refresh", n, search.refresh)
     timed(report, "group.refresh", n, group.refresh)
 
     # Re-populate the SAME instances several times — this is the refresh_all()
     # path (fires after every save) that re-fills an already-populated table.
     for tab, label in ((recipients, "recipients"), (weekly, "weekly"),
-                       (one_time, "one_time"), (group, "group")):
+                       (group, "group")):
         for k in range(3):
             timed(report, f"{label}.repopulate", n, tab.refresh)
 
@@ -221,9 +218,10 @@ def exercise(app, n, rng, report):
     timed(report, "weekly.controls", n, _weekly_controls)
 
     def _one_time_calc():
-        one_time.products_spin.setValue(rng.randint(0, n))
-        n_sug, _ = db.compute_suggested_n(one_time.products_spin.value())
-        one_time._populate(suggested_n=n_sug)
+        # v2.60: the tab is gone — stress the shared core the picker dialog uses.
+        group.products_spin.setValue(rng.randint(0, n))
+        db.compute_suggested_n(group.products_spin.value())
+        [r for r in db.get_one_time_list() if r.get("in_distribution")]
     timed(report, "one_time.calc", n, _one_time_calc)
 
     def _search_select():
@@ -263,7 +261,7 @@ def exercise(app, n, rng, report):
     timed(report, "excel.export", n, _export)
 
     # clean up widgets
-    for w in (group, weekly, recipients, one_time, search):
+    for w in (group, weekly, recipients, search):
         w.deleteLater()
     app.processEvents()
 

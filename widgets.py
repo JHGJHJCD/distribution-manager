@@ -40,20 +40,20 @@ class WednesdayCalendar(QCalendarWidget):
             "QCalendarWidget QWidget{ background:#ffffff; }"
             "QCalendarWidget QAbstractItemView:enabled{"
             " background:#ffffff; color:#1f2937;"
-            " selection-background-color:#1976d2; selection-color:#ffffff;"
+            " selection-background-color:#0d9488; selection-color:#ffffff;"
             " outline:0; }"
             "QCalendarWidget QAbstractItemView:disabled{ color:#c7cdd6; }"
             "QCalendarWidget QWidget#qt_calendar_navigationbar{"
-            " background:#1565c0; }"
+            " background:#0f766e; }"
             "QCalendarWidget QToolButton{"
             " color:#ffffff; background:transparent; font-size:14px;"
             " font-weight:700; padding:4px 10px; }"
-            "QCalendarWidget QToolButton:hover{ background:#1976d2;"
+            "QCalendarWidget QToolButton:hover{ background:#0d9488;"
             " border-radius:6px; }"
             "QCalendarWidget QToolButton::menu-indicator{ image:none; }"
             "QCalendarWidget QMenu{ background:#ffffff; color:#1f2937; }"
             "QCalendarWidget QSpinBox{ background:#ffffff; color:#1f2937;"
-            " selection-background-color:#1976d2; }")
+            " selection-background-color:#0d9488; }")
 
         # ── Fix "two-digit dates vanish" bug ─────────────────────────────────
         # In the QDateEdit popup the calendar sized its columns too narrow, so
@@ -69,7 +69,7 @@ class WednesdayCalendar(QCalendarWidget):
 
         # Wednesday column: bold blue text
         fmt = QTextCharFormat()
-        fmt.setForeground(QBrush(QColor("#1565c0")))
+        fmt.setForeground(QBrush(QColor("#0f766e")))
         fmt.setFontWeight(700)
         self.setWeekdayTextFormat(Qt.DayOfWeek.Wednesday, fmt)
 
@@ -80,7 +80,7 @@ class WednesdayCalendar(QCalendarWidget):
             painter.save()
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#1976d2"))
+            painter.setBrush(QColor("#0d9488"))
             r = 2
             cx = rect.center().x()
             cy = rect.bottom() - r - 2
@@ -194,7 +194,7 @@ class ProductsEditor(QWidget):
         add_btn = QPushButton("הוסף פריט")
         add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_btn.setStyleSheet(
-            "QPushButton{background:#f0f5fc; color:#1565c0; border:1px dashed #b8c6de;"
+            "QPushButton{background:#eefaf5; color:#0f766e; border:1px dashed #a9cfc3;"
             " border-radius:9px; padding:7px 16px; font-size:13px; font-weight:700;"
             " margin-top:10px;}"
             "QPushButton:hover{background:#e4eefb; border-color:#8fb0e0;}")
@@ -222,7 +222,7 @@ class ProductsEditor(QWidget):
         qty_spin.setStyleSheet(
             "QSpinBox{background:#ffffff; color:#1f2937; border:1px solid #d7dfea;"
             " border-radius:8px; padding:2px 8px; font-size:14px; font-weight:700;}"
-            "QSpinBox:focus{border-color:#1e88e5;}")
+            "QSpinBox:focus{border-color:#14b8a6;}")
         qty_spin.setToolTip("כמות לאדם — כמה יחידות מהמוצר הזה מקבל כל אחד")
         h.addWidget(qty_spin)
 
@@ -235,7 +235,7 @@ class ProductsEditor(QWidget):
         name_edit.setStyleSheet(
             "QLineEdit{background:#ffffff; color:#1f2937; border:1px solid #d7dfea;"
             " border-radius:8px; padding:4px 12px; font-size:13.5px;}"
-            "QLineEdit:focus{border-color:#1e88e5;}")
+            "QLineEdit:focus{border-color:#14b8a6;}")
         h.addWidget(name_edit, 1)
 
         # ── מחק (leftmost) ────────────────────────────────────────────────────

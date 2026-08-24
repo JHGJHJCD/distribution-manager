@@ -52,9 +52,9 @@ _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 _COMPLETER_POPUP_QSS = (
     "QAbstractItemView{background:#ffffff; color:#0f172a; border:1px solid #d7dfea;"
     " border-radius:8px; padding:4px; font-size:14px; outline:none;"
-    " selection-background-color:#1e88e5; selection-color:#ffffff;}"
+    " selection-background-color:#14b8a6; selection-color:#ffffff;}"
     "QAbstractItemView::item{color:#0f172a; background:transparent; padding:4px 8px;}"
-    "QAbstractItemView::item:selected{color:#ffffff; background:#1e88e5;}")
+    "QAbstractItemView::item:selected{color:#ffffff; background:#14b8a6;}")
 
 
 def _light_popup_view():
@@ -68,7 +68,7 @@ def _light_popup_view():
     pal = view.palette()
     pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
     pal.setColor(QPalette.ColorRole.Text, QColor("#0f172a"))
-    pal.setColor(QPalette.ColorRole.Highlight, QColor("#1e88e5"))
+    pal.setColor(QPalette.ColorRole.Highlight, QColor("#14b8a6"))
     pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
     view.setPalette(pal)
     return view
@@ -531,11 +531,11 @@ _BG          = "#f5f7fb"
 _CARD_QSS    = ("QFrame#ui-card{background:#ffffff; border:1px solid #e6eaf2;"
                 " border-radius:12px;}")
 _BTN_PRIMARY = (
-    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2b95ef,stop:1 #1565c0);"
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #1cbd9f,stop:1 #0f766e);"
     " color:#fff; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
     " padding:0 18px; min-height:38px;}"
-    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #3ba0f5,stop:1 #1976d2);}"
-    "QPushButton:pressed{background:#0d47a1;}")
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2fd0b0,stop:1 #0d9488);}"
+    "QPushButton:pressed{background:#065f46;}")
 _BTN_SUCCESS = (
     "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #34d399,stop:1 #059669);"
     " color:#fff; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
@@ -553,15 +553,23 @@ _BTN_GHOST   = (
     " border-radius:9px; font-weight:700; font-size:13.5px; padding:0 16px; min-height:38px;}"
     "QPushButton:hover{background:#f8fafc; border-color:#c2cee0;}"
     "QPushButton:pressed{background:#eef2f8;}")
-# The hero action of this screen — printing the distribution list. A rich indigo
-# gradient, larger size and heavier weight make it the single most prominent
-# button in the bottom bar (paired with a soft drop-shadow, added in code).
+# The hero action of this screen — printing the distribution list. A deep brand-
+# green gradient, larger size and heavier weight make it the single most
+# prominent button in the bottom bar (paired with a soft drop-shadow in code).
 _BTN_PRINT   = (
-    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #6366f1,stop:1 #4338ca);"
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #14b8a6,stop:1 #0f766e);"
     " color:#fff; border:none; border-radius:12px; font-weight:900; font-size:16px;"
     " letter-spacing:0.3px; padding:0 30px; min-height:52px;}"
-    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #818cf8,stop:1 #4f46e5);}"
-    "QPushButton:pressed{background:#3730a3;}")
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2dd4bf,stop:1 #0d9488);}"
+    "QPushButton:pressed{background:#065f46;}")
+# The record-stage entry point — warm amber so it reads as "the next step" and
+# never competes with the green hero (proposal B: orange secondary actions).
+_BTN_RECORD  = (
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f59e0b,stop:1 #d97706);"
+    " color:#fff; border:none; border-radius:11px; font-weight:900; font-size:15px;"
+    " padding:0 26px; min-height:48px;}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #fbbf24,stop:1 #f59e0b);}"
+    "QPushButton:pressed{background:#b45309;}")
 _CHIP_QSS    = ("QLabel{background:#eef2f8; color:#475569; border:none; border-radius:16px;"
                 " padding:5px 13px; font-size:12.5px; font-weight:700;}")
 _CHIP_GREEN  = ("QLabel{background:#e6f6ef; color:#059669; border:none; border-radius:16px;"
@@ -598,11 +606,11 @@ def _make_card(title: str, icon_name: str = None, hint: str = None, shadow: bool
     head.setSpacing(9)
     if icon_name:
         ic = QLabel()
-        ic.setPixmap(line_icon(icon_name, 20, "#1e78d6"))
+        ic.setPixmap(line_icon(icon_name, 20, "#0f9d78"))
         ic.setStyleSheet("background:transparent; border:none;")
         head.addWidget(ic)
     tl = QLabel(title)
-    tl.setStyleSheet("color:#0d3b73; font-size:15px; font-weight:800; background:transparent; border:none;")
+    tl.setStyleSheet("color:#064e3b; font-size:15px; font-weight:800; background:transparent; border:none;")
     head.addWidget(tl)
     if hint:
         hl = QLabel(hint)
@@ -656,9 +664,9 @@ class _CollapsibleCard(QFrame):
         self.header.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self.header.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.header.setStyleSheet(
-            "QToolButton{background:transparent; border:none; color:#0d3b73;"
+            "QToolButton{background:transparent; border:none; color:#064e3b;"
             " font-size:14px; font-weight:800; padding:6px 8px;}"
-            "QToolButton:hover{color:#1e78d6;}")
+            "QToolButton:hover{color:#0f9d78;}")
         self.header.toggled.connect(self._on_toggled)
         head_row = QHBoxLayout()
         head_row.setContentsMargins(0, 0, 0, 0)
@@ -717,6 +725,11 @@ class GroupUpdateTab(QWidget):
         super().__init__(parent)
         self.main_win = parent
         self._rows_data = []             # full weekly + one-time list (unfiltered)
+        # v2.60 two-stage flow: 'prep' = building the list (NO checkboxes at all;
+        # the ambiguous ✔ column is hidden), 'record' = after the distribution,
+        # ticking who actually received. Unticked people in the record stage are
+        # written to history as explicit no-shows (received=0).
+        self._stage = "prep"
         self._checked_ids: set = set()   # who is currently ticked (survives search)
         self._seen_ids: set = set()      # ids already shown (for pre-checking new picks)
         self._search_text = ""           # quick-search filter over the list
@@ -796,6 +809,10 @@ class GroupUpdateTab(QWidget):
         idset = {int(i) for i in ids if i is not None}
         if not idset:
             return
+        # The ticks live in the record stage — reveal it (without wiping marks the
+        # operator may already have) so the imported results are actually visible.
+        if self._stage != "record":
+            self._set_stage("record", clear=False)
         self.table.blockSignals(True)
         for r in range(self.table.rowCount()):
             chk = self.table.item(r, 0)
@@ -967,7 +984,7 @@ class GroupUpdateTab(QWidget):
         # bug #jcncv). The spin itself stays a manual products/portions count.
         self.lbl_regulars_count = QLabel("")
         self.lbl_regulars_count.setStyleSheet(
-            "color:#1e78d6; font-size:11.5px; font-weight:700;"
+            "color:#0f9d78; font-size:11.5px; font-weight:700;"
             " background:transparent; border:none;")
 
         grid.addLayout(_field("שם החלוקה", self.name_input), 0, 0)
@@ -980,7 +997,7 @@ class GroupUpdateTab(QWidget):
         self.products_spin.setMinimumHeight(48)
         self.products_spin.setMinimumWidth(120)
         self.products_spin.setStyleSheet(
-            "QSpinBox{font-size:24px; font-weight:900; color:#0d3b73; background:#ffffff;"
+            "QSpinBox{font-size:24px; font-weight:900; color:#064e3b; background:#ffffff;"
             " border:2px solid #f59e0b; border-radius:10px; padding:2px 10px;}"
             "QSpinBox:focus{border-color:#d97706;}")
         prod_panel = QFrame()
@@ -1169,27 +1186,39 @@ class GroupUpdateTab(QWidget):
         self.search_input.addAction(search_icon(20), QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.setStyleSheet(
             "QLineEdit{background:#ffffff; border:1px solid #d7dfea; border-radius:11px;"
-            " padding:0 14px; font-size:14px;} QLineEdit:focus{border-color:#1e78d6;}")
+            " padding:0 14px; font-size:14px;} QLineEdit:focus{border-color:#0f9d78;}")
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.timeout.connect(self._apply_search)
         self.search_input.textChanged.connect(lambda: self._search_timer.start(180))
         toolbar.addWidget(self.search_input, 1)
 
-        btn_check_all = QPushButton("בחר הכל")
-        btn_check_all.setStyleSheet(_BTN_SUCCESS)
-        btn_check_all.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_check_all.clicked.connect(self._check_all)
-        toolbar.addWidget(btn_check_all)
+        self.btn_check_all = QPushButton("בחר הכל")
+        self.btn_check_all.setStyleSheet(_BTN_SUCCESS)
+        self.btn_check_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_check_all.clicked.connect(self._check_all)
+        toolbar.addWidget(self.btn_check_all)
 
-        btn_uncheck_all = QPushButton("בטל הכל")
-        btn_uncheck_all.setStyleSheet(_BTN_DANGER)
-        btn_uncheck_all.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_uncheck_all.clicked.connect(self._uncheck_all)
-        toolbar.addWidget(btn_uncheck_all)
+        self.btn_uncheck_all = QPushButton("בטל הכל")
+        self.btn_uncheck_all.setStyleSheet(_BTN_DANGER)
+        self.btn_uncheck_all.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_uncheck_all.clicked.connect(self._uncheck_all)
+        toolbar.addWidget(self.btn_uncheck_all)
 
         toolbar.addStretch()
         body.addLayout(toolbar)
+
+        # Stage banner — visible only in the record stage, explaining exactly what
+        # ticking means now (the old always-there ✔ column read ambiguous).
+        self.stage_banner = QLabel(
+            "📝 רישום מי קיבל: סמן ✓ ליד מי שהגיע וקיבל בפועל. "
+            "מי שלא יסומן — יירשם לו \"לא הגיע\".")
+        self.stage_banner.setWordWrap(True)
+        self.stage_banner.setStyleSheet(
+            "QLabel{background:#fff7ed; color:#9a3412; border:1px solid #fed7aa;"
+            " border-radius:10px; padding:9px 14px; font-size:13px; font-weight:700;}")
+        self.stage_banner.setVisible(False)
+        body.addWidget(self.stage_banner)
 
         # Count chips live on their OWN row (not crammed into the toolbar) so the
         # extra scored-mode controls can never squeeze/clip the 'סה"כ' chip.
@@ -1228,7 +1257,7 @@ class GroupUpdateTab(QWidget):
             "QHeaderView::section{background:#f4f7fc; color:#64748b; font-weight:700;"
             " border:none; border-bottom:1px solid #e6eaf2; padding:11px 10px;}"
             "QTableWidget::item{padding:6px 8px; border-bottom:1px solid #f1f4f9;}"
-            "QTableWidget::item:selected{background:#eaf3ff; color:#0d3b73;}")
+            "QTableWidget::item:selected{background:#e3f6ef; color:#064e3b;}")
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -1266,16 +1295,38 @@ class GroupUpdateTab(QWidget):
         bar.setContentsMargins(16, 10, 16, 10)
         bar.setSpacing(12)
 
-        btn_save = QPushButton(" שמור חלוקה")
-        btn_save.setObjectName("primary")
-        btn_save.setStyleSheet(_BTN_PRIMARY)
-        btn_save.setMinimumHeight(46)
-        btn_save.setMinimumWidth(170)
-        btn_save.setIcon(QIcon(line_icon("save", 18, "#ffffff")))
-        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_save.setToolTip("רושם את החלוקה למעקב ומייצא אוטומטית אקסל מלא לתיקיית ההורדות")
-        btn_save.clicked.connect(self._save)
-        bar.addWidget(btn_save)
+        # Stage switch: from the prep screen into the record stage (v2.60).
+        self.btn_stage_record = QPushButton("  רישום מי קיבל")
+        self.btn_stage_record.setStyleSheet(_BTN_RECORD)
+        self.btn_stage_record.setMinimumHeight(50)
+        self.btn_stage_record.setMinimumWidth(190)
+        self.btn_stage_record.setIcon(QIcon(line_icon("check", 20, "#ffffff")))
+        self.btn_stage_record.setIconSize(QSize(20, 20))
+        self.btn_stage_record.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_stage_record.setToolTip(
+            "אחרי החלוקה — עוברים לסימון מי קיבל בפועל ורושמים להיסטוריה")
+        self.btn_stage_record.clicked.connect(lambda: self._set_stage("record"))
+        bar.addWidget(self.btn_stage_record)
+
+        # Back out of the record stage without saving.
+        self.btn_stage_back = QPushButton("חזרה להכנת הרשימה")
+        self.btn_stage_back.setStyleSheet(_BTN_GHOST)
+        self.btn_stage_back.setMinimumHeight(46)
+        self.btn_stage_back.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_stage_back.clicked.connect(lambda: self._set_stage("prep"))
+        bar.addWidget(self.btn_stage_back)
+
+        self.btn_save = QPushButton(" שמור חלוקה")
+        self.btn_save.setObjectName("primary")
+        self.btn_save.setStyleSheet(_BTN_PRIMARY)
+        self.btn_save.setMinimumHeight(46)
+        self.btn_save.setMinimumWidth(170)
+        self.btn_save.setIcon(QIcon(line_icon("save", 18, "#ffffff")))
+        self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_save.setToolTip("רושם את החלוקה למעקב (כולל 'לא הגיע' למי שלא סומן) "
+                                 "ומייצא אוטומטית אקסל מלא לתיקיית ההורדות")
+        self.btn_save.clicked.connect(self._save)
+        bar.addWidget(self.btn_save)
 
         btn_print = QPushButton("  הדפסה לחלוקה")
         btn_print.setObjectName("primary")
@@ -1290,7 +1341,7 @@ class GroupUpdateTab(QWidget):
         _print_glow.setBlurRadius(22)
         _print_glow.setXOffset(0)
         _print_glow.setYOffset(4)
-        _print_glow.setColor(QColor(67, 56, 202, 120))
+        _print_glow.setColor(QColor(13, 148, 136, 120))
         btn_print.setGraphicsEffect(_print_glow)
         btn_print.clicked.connect(self._print)
         bar.addWidget(btn_print)
@@ -1302,7 +1353,7 @@ class GroupUpdateTab(QWidget):
         btn_pdf.setStyleSheet(_BTN_GHOST)
         btn_pdf.setMinimumHeight(46)
         btn_pdf.setMinimumWidth(150)
-        btn_pdf.setIcon(QIcon(line_icon("download", 18, "#4338ca")))
+        btn_pdf.setIcon(QIcon(line_icon("download", 18, "#0f766e")))
         btn_pdf.setIconSize(QSize(18, 18))
         btn_pdf.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_pdf.setToolTip("שומר את רשימת החלוקה כקובץ PDF בתיקיית ההורדות ופותח אותו")
@@ -1326,6 +1377,34 @@ class GroupUpdateTab(QWidget):
         bar.addWidget(btn_reset)
         bw.addWidget(bottom_bar)
         root.addWidget(bottom_wrap)
+        self._apply_stage()
+
+    # ── two-stage flow: prep (build the list) / record (tick who received) ─────
+    def _set_stage(self, stage: str, clear: bool = True):
+        """Switch between the prep and record stages (v2.60). Entering either
+        stage with clear=True starts with an empty tick set — the record stage
+        deliberately opens blank so the operator marks who ACTUALLY arrived."""
+        if stage == self._stage:
+            self._apply_stage()
+            return
+        self._stage = stage
+        if clear:
+            self._checked_ids.clear()
+        self._apply_stage()
+        self._populate()
+
+    def _apply_stage(self):
+        """Show/hide the stage-specific controls. The ✔ column exists only in
+        the record stage; prep is a clean, checkbox-free list."""
+        record = self._stage == "record"
+        self.table.setColumnHidden(0, not record)
+        self.btn_check_all.setVisible(record)
+        self.btn_uncheck_all.setVisible(record)
+        self.lbl_checked.setVisible(record)
+        self.stage_banner.setVisible(record)
+        self.btn_save.setVisible(record)
+        self.btn_stage_back.setVisible(record)
+        self.btn_stage_record.setVisible(not record)
 
     # ── data ───────────────────────────────────────────────────────────────────
     def _extra_recipients(self, base_ids: set) -> list:
@@ -1605,6 +1684,10 @@ class GroupUpdateTab(QWidget):
 
     def _populate(self):
         rows = self._visible_rows()
+        # No-show alert badges (v2.60): who is currently on a run of recorded
+        # "לא הגיע" at/over the operator-set threshold (0 disables).
+        thr = db.get_no_show_threshold()
+        streaks = db.no_show_streaks([r.get("id") for r in rows]) if thr else {}
         self.table.blockSignals(True)
         self.table.clearContents()
         self.table.setRowCount(0)
@@ -1638,6 +1721,13 @@ class GroupUpdateTab(QWidget):
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if c == 0:   # name — bold
                     nf = item.font(); nf.setBold(True); item.setFont(nf)
+                    streak = streaks.get(rid, 0)
+                    if thr and streak >= thr:
+                        item.setText(f"{v}   ⚠ לא הגיע {streak} ברצף")
+                        item.setBackground(QColor("#fee2e2"))
+                        item.setForeground(QColor("#b91c1c"))
+                        item.setToolTip(f"לא הגיע לקחת {streak} פעמים ברצף — "
+                                        "כדאי לבדוק מולו. הסף ניתן לשינוי בהגדרות.")
                 self.table.setItem(r, col, item)
 
         self.table.blockSignals(False)
@@ -1748,10 +1838,20 @@ class GroupUpdateTab(QWidget):
         return result
 
     def _save(self):
+        if self._stage != "record":
+            # Saving records reality — it happens only from the record stage.
+            self._set_stage("record")
+            return
         checked = self._get_checked_recipients()
         if not checked:
             QMessageBox.information(self, "", "לא סומן אף מקבל")
             return
+        # Everyone on the list who was NOT ticked is recorded as an explicit
+        # no-show ("לא הגיע", received=0) — operator's decision (#yjcny, v2.60).
+        # Reserves are exempt: they were standby, not expected to arrive (RULE 3).
+        not_received = [dict(rec) for rec in self._rows_data
+                        if rec.get("id") not in self._checked_ids
+                        and not (rec.get("_reserve") or rec.get("id") in self._reserve_ids)]
 
         dist_date    = self.date_edit.get_iso()
         distributor  = self.dist_input.currentText().strip()
@@ -1783,6 +1883,9 @@ class GroupUpdateTab(QWidget):
                 pass
         confirm_msg = (f"לרשום חלוקה ל-{n} מקבלים שסומנו כמי שקיבלו "
                        f"({souls} נפשות)?")
+        if not_received:
+            confirm_msg += (f"\n\nל-{len(not_received)} שלא סומנו יירשם \"לא הגיע\" "
+                            "(נשאר בתור, לא מאבד ותק).")
         prod = self.products_spin.value()
         if prod and n > prod:
             confirm_msg += (f"\n\n⚠ סימנת {n} מקבלים, אך 'מוצרים זמינים' = {prod}. "
@@ -1792,11 +1895,6 @@ class GroupUpdateTab(QWidget):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
-
-        # Ticking is now opt-in (bug #ebnr2): an unticked row just means "not
-        # distributed to", NOT a recorded no-show — so nothing is auto-recorded as
-        # 'לא הגיע'. Only the people the operator ticked are saved as received.
-        not_received = []
 
         # The general note is recorded ONCE on the batch (bug #7) — no longer
         # duplicated into every recipient's per-person note.
@@ -1824,11 +1922,12 @@ class GroupUpdateTab(QWidget):
         self._extra_ids.clear()
         self._reserve_ids.clear()
         self._persist_extras()
-        # Reset the entry fields + ticks for a clean next distribution. Clearing
-        # _seen_ids too means the next refresh re-ticks everyone as 'received'.
+        # Reset the entry fields + ticks for a clean next distribution, and drop
+        # back to the prep stage — the round is recorded.
         self._checked_ids.clear()
         self._seen_ids.clear()
         self.note_input.clear()
+        self._set_stage("prep", clear=False)
         # An auto-generated weekly name is date-stamped — clear it after saving
         # so next week's round regenerates with the right date instead of
         # silently reusing a stale one.
@@ -2015,6 +2114,7 @@ class GroupUpdateTab(QWidget):
         Nothing is ever auto-skipped or auto-deleted without explicit approval."""
         result = import_volunteer_checklist(path)
         received = result["received"]
+        no_shows = result.get("not_received") or []
         unmatched = result["unmatched"]
         meta = result["meta"]
 
@@ -2075,7 +2175,10 @@ class GroupUpdateTab(QWidget):
                 meta.get("what") or "", meta.get("qty") or 0,
                 meta.get("distributor") or "",
                 dist_name=meta.get("dist_name") or "",
-                general_note=meta.get("general_note") or "")
+                general_note=meta.get("general_note") or "",
+                # Rows the volunteer marked "לא" are explicit no-shows — recorded
+                # as received=0 so the streak alerts see them (v2.60).
+                not_received=no_shows)
             auto_backup_async()
         return len(records), meta, [r.get("id") for r in received], False
 
@@ -2233,6 +2336,7 @@ class GroupUpdateTab(QWidget):
         # Fold the advanced section back down unless a non-default mode/filter
         # is still active (never hide live state behind a closed fold).
         self.adv_section.set_open(self._special_active())
+        self._set_stage("prep", clear=False)
         self.refresh()
         if self.main_win:
             self.main_win.status_msg("המסך אופס לחלוקה חדשה")

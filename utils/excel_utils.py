@@ -785,6 +785,7 @@ def import_volunteer_checklist(path: str) -> dict:
     {
       "meta": {dist_date, what, qty, distributor, dist_name},
       "received": [ {id, full_name, area, souls, frequency, notes}, ... ]  # marked כן
+      "not_received": [ same shape ]  # explicitly marked לא/blank — recorded no-shows
       "unmatched": [ row-name strings that could not be matched to a recipient ]
     }
     Matching: primarily by the hidden recipient id column; if that id doesn't
@@ -814,6 +815,7 @@ def import_volunteer_checklist(path: str) -> dict:
     meta["general_note"] = (str(general_note).strip() if general_note else "")
 
     received = []
+    not_received = []
     unmatched = []
     for r in range(_VOL_DATA_START_ROW, ws.max_row + 1):
         name_cell = ws.cell(r, _VOL_COL_NAME).value
@@ -825,27 +827,34 @@ def import_volunteer_checklist(path: str) -> dict:
         # volunteer explicitly marked "לא" (or cleared/crossed out the cell).
         came = str(ws.cell(r, _VOL_COL_CAME).value or "").strip()
         did_not_come = came in ("", "לא", "X", "x", "✗", "-", "no", "No")
-        if not did_not_come:
-            rec = None
-            try:
-                rid = int(id_cell) if id_cell not in (None, "") else None
-            except (TypeError, ValueError):
-                rid = None
-            if rid is not None:
-                rec = db.get_recipient(rid)
-            if rec is None and name_cell:
-                candidates = [x for x in db.get_all_recipients()
-                             if (x.get("full_name") or "").strip() == str(name_cell).strip()]
-                rec = candidates[0] if len(candidates) == 1 else None
-            if rec is None:
+        rec = None
+        try:
+            rid = int(id_cell) if id_cell not in (None, "") else None
+        except (TypeError, ValueError):
+            rid = None
+        if rid is not None:
+            rec = db.get_recipient(rid)
+        if rec is None and name_cell:
+            candidates = [x for x in db.get_all_recipients()
+                         if (x.get("full_name") or "").strip() == str(name_cell).strip()]
+            rec = candidates[0] if len(candidates) == 1 else None
+        if rec is None:
+            # Only rows the volunteer marked as arrived matter for the operator's
+            # attention; an unmatched no-show row is silently skipped.
+            if not did_not_come:
                 unmatched.append(str(name_cell or f"שורה {r}"))
-            else:
-                note_cell = ws.cell(r, _VOL_COL_NOTE).value
-                received.append({
-                    "id": rec["id"], "full_name": rec.get("full_name", ""),
-                    "area": rec.get("area", ""), "souls": rec.get("souls", 0),
-                    "frequency": rec.get("frequency", ""),
-                    "notes": str(note_cell).strip() if note_cell else "",
-                })
+            continue
+        note_cell = ws.cell(r, _VOL_COL_NOTE).value
+        entry = {
+            "id": rec["id"], "full_name": rec.get("full_name", ""),
+            "area": rec.get("area", ""), "souls": rec.get("souls", 0),
+            "frequency": rec.get("frequency", ""),
+            "notes": str(note_cell).strip() if note_cell else "",
+        }
+        # A row marked "לא" (or cleared) is a recorded no-show — the person was on
+        # the list and did NOT receive. Kept separately so the caller can write it
+        # as received=0 history (no-show tracking, v2.60).
+        (not_received if did_not_come else received).append(entry)
 
-    return {"meta": meta, "received": received, "unmatched": unmatched}
+    return {"meta": meta, "received": received, "not_received": not_received,
+            "unmatched": unmatched}

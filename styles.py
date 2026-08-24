@@ -8,24 +8,26 @@
 from string import Template
 
 # ── מקור-אמת אחד לצבעים ─────────────────────────────────────────────────────
+# v2.60: זהות "ירוק רגוע" (בחירת המשתמש מתוך 3 הצעות) — ירוק-טורקיז חם.
+# שמות המפתחות נשארו blue_* היסטורית כדי לא לשבור הפניות; הערכים ירוקים.
 PALETTE = {
-    # סולם כחול אחד ועקבי (במקום ~8 כחולים אד-הוק)
-    "blue_900": "#0d47a1",   # כהה ביותר — טקסט נבחר / לחיצה
-    "blue_700": "#1565c0",   # מותג ראשי (PRIMARY)
-    "blue_600": "#1976d2",   # אקסנט / hover
-    "blue_400": "#42a5f5",   # קו אקסנט בהיר
-    "blue_200": "#bbdefb",   # מסגרות
-    "blue_100": "#e7f1fd",   # רקעי-גוון / כותרת טבלה
-    "blue_050": "#eef4ff",   # רקע עמוד
+    # סולם המותג (ירוק-טורקיז)
+    "blue_900": "#065f46",   # כהה ביותר — טקסט נבחר / לחיצה
+    "blue_700": "#0f766e",   # מותג ראשי (PRIMARY)
+    "blue_600": "#0d9488",   # אקסנט / hover
+    "blue_400": "#2dd4bf",   # קו אקסנט בהיר
+    "blue_200": "#a7ecd9",   # מסגרות
+    "blue_100": "#ddf3ec",   # רקעי-גוון / כותרת טבלה
+    "blue_050": "#eefaf5",   # רקע עמוד
     # ניטרליים — טון מודרני, אוורירי ורך יותר
     "ink":      "#1e293b",   # טקסט ראשי (slate-800)
     "ink_soft": "#475569",   # טקסט משני
     "muted":    "#7b8794",   # כותרות-משנה
-    "line":     "#e8ecf2",   # מסגרת ניטרלית (רכה יותר)
-    "line_2":   "#eff2f7",
+    "line":     "#e4ece7",   # מסגרת ניטרלית (רכה, נוטה ירקרק)
+    "line_2":   "#edf4f0",
     "surface":  "#ffffff",
-    "page":     "#f5f7fb",   # רקע עמוד נקי (כמעט-לבן בגוון כחלחל)
-    "field_bg": "#f6f8fc",
+    "page":     "#f4faf7",   # רקע עמוד נקי (כמעט-לבן בגוון ירקרק)
+    "field_bg": "#f5faf8",
     # סמנטיים
     "danger":      "#d32f2f", "danger_dk": "#b71c1c", "danger_soft": "#ef9a9a",
     "success":     "#2e9e4f", "success_dk": "#1b7a37", "success_soft": "#a5d6a7",
@@ -120,7 +122,7 @@ QTabBar::tab {
 QTabBar::tab:selected,
 QTabBar::tab:top:selected, QTabBar::tab:bottom:selected,
 QTabBar::tab:left:selected, QTabBar::tab:right:selected {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e88e5, stop:1 $blue_700);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #14b8a6, stop:1 $blue_700);
     color: #ffffff;
     font-weight: 700;
 }
@@ -151,13 +153,13 @@ QTabWidget[subtabs="true"] QTabBar::tab {
 }
 QTabWidget[subtabs="true"] QTabBar::tab:selected,
 QTabWidget[subtabs="true"] QTabBar::tab:top:selected {
-    background: #e3f0fd;
-    color: #1565c0;
+    background: #d9f2ea;
+    color: #0f766e;
     font-weight: 700;
 }
 QTabWidget[subtabs="true"] QTabBar::tab:selected:hover,
 QTabWidget[subtabs="true"] QTabBar::tab:top:selected:hover {
-    color: #1565c0;
+    color: #0f766e;
 }
 
 /* ════ Tables — roomier rows for readability ════ */
@@ -175,14 +177,14 @@ QTableWidget::item, QTableView::item {
     border: none;
     color: $ink;
 }
-QTableWidget::item:hover, QTableView::item:hover { background-color: #eef4fc; }
+QTableWidget::item:hover, QTableView::item:hover { background-color: #eaf7f2; }
 QTableWidget::item:selected, QTableView::item:selected,
 QTableWidget::item:selected:focus, QTableView::item:selected:focus {
-    background-color: #dbeafe;
+    background-color: #ccf1e6;
     color: $blue_900;
 }
 QTableWidget::item:selected:hover, QTableView::item:selected:hover {
-    background-color: #bfdbfe;
+    background-color: #aee9d8;
     color: $blue_900;
 }
 /* Premium table header: clean neutral surface with a crisp blue accent underline
@@ -195,10 +197,10 @@ QHeaderView::section {
     border: none;
     border-bottom: 2px solid $blue_400;
     border-left: 1px solid $line_2;
-    background-color: #f3f6fb;
+    background-color: #f2f8f5;
     color: $blue_700;
 }
-QHeaderView::section:hover { background-color: #e8eef8; }
+QHeaderView::section:hover { background-color: #e5f2ec; }
 
 /* ════ Buttons — hierarchy: primary / success / danger / ghost ════ */
 QPushButton {
@@ -213,12 +215,12 @@ QPushButton:pressed { padding-top: 7px; padding-bottom: 5px; }
 
 /* PRIMARY — the single dominant action per screen (subtle glossy gradient) */
 QPushButton#primary {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2f86e6, stop:1 #123f8f);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #12a385, stop:1 #0b5e50);
     color: #ffffff;
     border: none;
     font-weight: 800;
 }
-QPushButton#primary:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #2b95ef, stop:1 $blue_600); }
+QPushButton#primary:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1cbd9f, stop:1 $blue_600); }
 QPushButton#primary:pressed { background: $blue_900; }
 QPushButton#primary:focus   { border: 2px solid $blue_200; }
 QPushButton#primary:disabled { background: $line; color: $muted; }
@@ -273,7 +275,7 @@ QComboBox:hover, QDateEdit:hover, QSpinBox:hover {
 }
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
     border-color: $blue_600;
-    background-color: #fafeff;
+    background-color: #f7fdfb;
 }
 QComboBox:focus, QDateEdit:focus, QSpinBox:focus { border-color: $blue_600; }
 QLineEdit:disabled, QTextEdit:disabled,
@@ -293,7 +295,7 @@ QComboBox {
 }
 QComboBox:hover { border-color: $blue_400; }
 QComboBox:focus, QComboBox:on { border-color: $blue_600; }
-QComboBox:on       { background-color: #fafeff; }
+QComboBox:on       { background-color: #f7fdfb; }
 QComboBox:disabled { background-color: $field_bg; color: $muted; }
 
 /* drop-down button — in RTL it sits on the LEFT; give it its own rounded hit area */
@@ -331,7 +333,7 @@ QComboBox QAbstractItemView::item:hover {
     color: $blue_700;
 }
 QComboBox QAbstractItemView::item:selected {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1e88e5, stop:1 $blue_700);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #14b8a6, stop:1 $blue_700);
     color: #ffffff;
 }
 
@@ -356,7 +358,7 @@ QAbstractItemView::indicator:checked {
 QCheckBox::indicator:indeterminate,
 QTableView::indicator:indeterminate, QTableWidget::indicator:indeterminate {
     border: 2px solid $blue_700;
-    background-color: #90caf9;
+    background-color: #7dd3c0;
 }
 QCheckBox::indicator:disabled,
 QTableView::indicator:disabled, QTableWidget::indicator:disabled,
@@ -416,7 +418,7 @@ QCalendarWidget QSpinBox::up-button, QCalendarWidget QSpinBox::down-button {
 /* ════ Main window — clean near-white with a faint blue lift ════ */
 QMainWindow {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-        stop:0 #fbfcfe, stop:1 $page);
+        stop:0 #fbfdfc, stop:1 $page);
 }
 
 /* ════ Status bar ════ */
@@ -450,7 +452,7 @@ QGroupBox::title {
 /* ════ Branded top app-bar ════ */
 QFrame#appbar {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #0a2f6b, stop:0.55 $blue_700, stop:1 #2f86e6);
+        stop:0 #06382e, stop:0.55 $blue_700, stop:1 #12a385);
     border: none;
     border-radius: $r_card;
 }
@@ -488,8 +490,10 @@ TODAY_BG    = "#fff8e1"
 TODAY_FG    = "#e65100"
 WEEK_BG     = "#e8f5e9"
 WEEK_FG     = "#1b5e20"
-SELECTED_BG = PALETTE["blue_100"]
-SELECTED_FG = PALETTE["blue_900"]
+# One-time picks stay BLUE explicitly (v2.60): with the green brand palette a
+# palette-derived tint would collide with the green weekly rows above.
+SELECTED_BG = "#e3f0fd"
+SELECTED_FG = "#0d47a1"
 
 # ── Recipient status colors ──────────────────────────────────────────────────
 SUSPENDED_FG = "#8b6914"

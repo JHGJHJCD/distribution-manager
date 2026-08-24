@@ -451,7 +451,7 @@ _win = MainWindow()
 _win.show()
 
 check("3 top-level areas (v2.59)", _win.tabs.count() == 3)
-check("all 6 content tabs exist as leaves", len(_win._leaf_tabs) == 6)
+check("all 5 content tabs exist as leaves (v2.60)", len(_win._leaf_tabs) == 5)
 # every leaf is reachable through the nested navigation helper
 for _leaf in _win._leaf_tabs:
     _win.navigate_to_tab(_leaf)
@@ -484,23 +484,25 @@ for _r in range(_win.weekly_tab.table.rowCount()):
         break
 check("weekly UI excludes חד-פעמי", not ot_in_ui)
 
-_win.one_time_tab.refresh()
-check("one_time tab loads", _win.one_time_tab.table.rowCount() >= 0)
+# v2.60: the 'חד פעמי' tab was removed; the same pure core now drives the
+# in-screen OneTimePickerDialog. Exercise that core directly.
+_ot_cands = [r for r in db.get_one_time_list() if r.get("in_distribution")]
+check("one-time candidate list loads", isinstance(_ot_cands, list))
 
-# regression (#p5vv0): one-timers selected in "חד פעמי" are brought INTO the
-# "עדכון קבוצתי" list, but arrive UNCHECKED — imported, not pre-marked as
-# received. The operator ticks them only when they actually arrive.
-from PyQt6.QtWidgets import QMessageBox as _QMB
-_orig_info = _QMB.information
-_QMB.information = staticmethod(lambda *a, **k: None)   # don't block on the popup
+# regression (#p5vv0): one-time picks are brought INTO the distribution list,
+# but arrive UNCHECKED — imported, not pre-marked as received. The operator
+# ticks them (in the record stage) only when they actually arrive.
+import selection as _sel
 db.add_recipient({"full_name": "__ot_issued__", "status": "פעיל",
                   "frequency": "חד-פעמי", "priority": 3, "souls": 5})
 db.set_setting("available_products", "999")
 db.set_setting("reserve_count", "0")
-_win.one_time_tab.refresh()
-_win.one_time_tab._calc_suggestion()
-_win.one_time_tab._add_to_group_update()
-_QMB.information = _orig_info
+_n, _regs = db.compute_suggested_n(999)
+_ot_cands = [r for r in db.get_one_time_list() if r.get("in_distribution")]
+_sel.assign_roles(_ot_cands, _n, 0)
+_picks = [dict(r, _reserve=(r.get("_role") == _sel.ROLE_RESERVE))
+          for r in _ot_cands if r.get("_role") != _sel.ROLE_OUT]
+_win.group_tab.add_one_time_picks(_picks)
 _issued = _win.group_tab._get_checked_recipients()
 check("one-timer added from חד-פעמי is NOT auto-checked (#p5vv0)",
       not any(r["full_name"] == "__ot_issued__" for r in _issued))

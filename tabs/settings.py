@@ -93,7 +93,7 @@ class SettingsTab(QWidget):
         sec_lay.setContentsMargins(10, 7, 10, 7)
         sec_lay.setSpacing(6)
 
-        sec_lay.addWidget(section_header("אבטחה", "security", "#1565c0"))
+        sec_lay.addWidget(section_header("אבטחה", "security", "#0f766e"))
 
         pwd_row = QHBoxLayout()
         self.lbl_password = QLabel("••••")
@@ -109,6 +109,49 @@ class SettingsTab(QWidget):
         sec_lay.addLayout(pwd_row)
         right_col.addWidget(sec_frame)
 
+        # ── General (v2.60): UI font size + no-show alert threshold ────────────
+        gen_frame = QFrame()
+        gen_frame.setObjectName("panel")
+        gen_lay = QVBoxLayout(gen_frame)
+        gen_lay.setContentsMargins(10, 7, 10, 7)
+        gen_lay.setSpacing(6)
+        gen_lay.addWidget(section_header("כללי", "doc", "#0f766e"))
+
+        font_row = QHBoxLayout()
+        font_row.addWidget(QLabel("גודל הטקסט בתוכנה:"))
+        from PyQt6.QtWidgets import QComboBox
+        self.font_combo = QComboBox()
+        for label, key in (("קטן", "small"), ("רגיל", "normal"), ("גדול", "large")):
+            self.font_combo.addItem(label, key)
+        cur_font = db.get_setting("ui_font_size") or "normal"
+        idx = self.font_combo.findData(cur_font)
+        self.font_combo.setCurrentIndex(idx if idx >= 0 else 1)
+        self.font_combo.setToolTip("מגדיל או מקטין את הטקסט בכל התוכנה")
+        self.font_combo.currentIndexChanged.connect(self._on_font_size_changed)
+        font_row.addWidget(self.font_combo)
+        font_row.addStretch()
+        gen_lay.addLayout(font_row)
+
+        ns_row = QHBoxLayout()
+        ns_row.addWidget(QLabel("התראה על מי שלא הגיע — אחרי:"))
+        self.no_show_spin = QSpinBox()
+        self.no_show_spin.setRange(0, 20)
+        self.no_show_spin.setSuffix(" פעמים ברצף")
+        self.no_show_spin.setMinimumWidth(140)
+        try:
+            self.no_show_spin.setValue(db.get_no_show_threshold())
+        except Exception:
+            self.no_show_spin.setValue(3)
+        self.no_show_spin.setToolTip(
+            "מי שנרשם לו \"לא הגיע\" כך-וכך פעמים ברצף יסומן באדום ברשימת החלוקה "
+            "ובכרטיס המקבל. 0 = בלי התראות.")
+        self.no_show_spin.valueChanged.connect(
+            lambda v: db.set_setting("no_show_alert_threshold", str(v)))
+        ns_row.addWidget(self.no_show_spin)
+        ns_row.addStretch()
+        gen_lay.addLayout(ns_row)
+        right_col.addWidget(gen_frame)
+
         # ── Software update section ───────────────────────
         upd_frame = QFrame()
         upd_frame.setObjectName("panel")
@@ -116,12 +159,12 @@ class SettingsTab(QWidget):
         upd_lay.setContentsMargins(10, 7, 10, 7)
         upd_lay.setSpacing(6)
 
-        upd_lay.addWidget(section_header("עדכון תוכנה", "update", "#1565c0"))
+        upd_lay.addWidget(section_header("עדכון תוכנה", "update", "#0f766e"))
 
         ver_row = QHBoxLayout()
         ver_row.addWidget(QLabel("גרסה נוכחית:"))
         self.lbl_version = QLabel(f"v{APP_VERSION}")
-        self.lbl_version.setStyleSheet("font-weight:700; color:#1565c0;")
+        self.lbl_version.setStyleSheet("font-weight:700; color:#0f766e;")
         ver_row.addWidget(self.lbl_version)
         ver_row.addStretch()
         self.btn_check_update = QPushButton("בדוק עדכונים")
@@ -144,7 +187,7 @@ class SettingsTab(QWidget):
         w_lay.setContentsMargins(10, 7, 10, 7)
         w_lay.setSpacing(6)
 
-        w_lay.addWidget(section_header("משקלי ניקוד עדיפות", "weights", "#1565c0"))
+        w_lay.addWidget(section_header("משקלי ניקוד עדיפות", "weights", "#0f766e"))
 
         w_desc = QLabel(
             "קביעת המשקל של כל נתון בחישוב 'ניקוד הצורך' שלפיו מדורגים המקבלים "
@@ -195,7 +238,7 @@ class SettingsTab(QWidget):
         bk_lay.setContentsMargins(10, 7, 10, 7)
         bk_lay.setSpacing(6)
 
-        bk_lay.addWidget(section_header("גיבויים", "backup", "#1565c0"))
+        bk_lay.addWidget(section_header("גיבויים", "backup", "#0f766e"))
 
         bk_desc = QLabel("התוכנה מגבה את הנתונים אוטומטית. כאן אפשר לבחור לאן לשמור "
                          "עותק נוסף (למשל כונן חיצוני), לגבות ידנית, או לשחזר מגיבוי "
@@ -284,7 +327,7 @@ class SettingsTab(QWidget):
         mail_lay.setContentsMargins(10, 7, 10, 7)
         mail_lay.setSpacing(6)
 
-        mail_lay.addWidget(section_header("מייל למתנדבים", "mail", "#1565c0"))
+        mail_lay.addWidget(section_header("מייל למתנדבים", "mail", "#0f766e"))
 
         mail_desc = QLabel(
             "משמש לשליחת רשימת חלוקה למתנדב, ולקליטה אוטומטית של התוצאות שהוא שולח "
@@ -383,7 +426,7 @@ class SettingsTab(QWidget):
         org_lay = QVBoxLayout(org_frame)
         org_lay.setContentsMargins(10, 7, 10, 7)
         org_lay.setSpacing(6)
-        org_lay.addWidget(section_header("שם הארגון (סרגל עליון)", "org", "#1565c0"))
+        org_lay.addWidget(section_header("שם הארגון (סרגל עליון)", "org", "#0f766e"))
         org_desc = QLabel("הכיתוב שמופיע בראש התוכנה. שנה אותו כדי להתאים לכל קופת צדקה.")
         org_desc.setObjectName("subtitle")
         org_desc.setWordWrap(True)
@@ -781,6 +824,18 @@ class SettingsTab(QWidget):
         if email and password:
             email_utils.set_smtp_config(email, password)
 
+    def _on_font_size_changed(self, *_):
+        """Persist + apply the chosen UI text size immediately (v2.60)."""
+        key = self.font_combo.currentData() or "normal"
+        db.set_setting("ui_font_size", key)
+        from PyQt6.QtGui import QFont
+        pt = {"small": 10, "large": 13}.get(key, 11)
+        app = QApplication.instance()
+        if app is not None:
+            app.setFont(QFont("Segoe UI", pt))
+        if self.main_win:
+            self.main_win.status_msg("גודל הטקסט עודכן — חלק מהמסכים יתעדכנו בפתיחה הבאה")
+
     # ── Software update ───────────────────────────────────────────────────────
 
     def _check_updates(self):
@@ -801,19 +856,9 @@ class SettingsTab(QWidget):
             self.lbl_update_status.setText("לא נמצאה גרסה זמינה.")
             return
         if updater.is_newer(result["version"], APP_VERSION):
-            notes = (result.get("notes") or "").strip()
-            if len(notes) > 300:
-                notes = notes[:300] + "..."
-            ask = QMessageBox.question(
-                self, "עדכון זמין",
-                f"גרסה חדשה זמינה: v{result['version']}\n"
-                f"הגרסה שלך: v{APP_VERSION}\n\n"
-                + (notes + "\n\n" if notes else "")
-                + "להוריד ולהתקין עכשיו?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-            if ask == QMessageBox.StandardButton.Yes:
+            from utils.ui import UpdateOfferDialog
+            if UpdateOfferDialog.offer(self, result["version"], APP_VERSION,
+                                       result.get("notes") or ""):
                 self._start_download(result)
             else:
                 self.lbl_update_status.setStyleSheet("color:#b45309;")

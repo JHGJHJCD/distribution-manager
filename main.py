@@ -22,7 +22,6 @@ import database as db
 from styles import EXTRA_QSS, QT_MATERIAL_EXTRA
 from tabs.recipients import RecipientsTab
 from tabs.group_update import GroupUpdateTab
-from tabs.one_time import OneTimeTab
 from tabs.search import SearchTab
 from tabs.distributions import DistributionsTab
 from tabs.settings import SettingsTab, _UpdateWorker
@@ -76,7 +75,7 @@ def _make_splash_pix(W=520, H=340) -> QPixmap:
         y = 118
 
     # App name
-    p.setPen(QColor(21, 101, 192))
+    p.setPen(QColor(15, 118, 110))
     p.setFont(QFont("Segoe UI", 20, QFont.Weight.Bold))
     p.drawText(QRect(0, y, W, 34), Qt.AlignmentFlag.AlignCenter, "מנהל חלוקה")
 
@@ -88,7 +87,7 @@ def _make_splash_pix(W=520, H=340) -> QPixmap:
 
     # Bottom blue strip
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(21, 101, 192))
+    p.setBrush(QColor(15, 118, 110))
     p.drawRect(0, H - 32, W, 32)
     p.setPen(QColor(255, 255, 255, 225))
     p.setFont(QFont("Segoe UI", 9))
@@ -100,7 +99,7 @@ def _make_splash_pix(W=520, H=340) -> QPixmap:
 
     # Thin frame
     p.setBrush(Qt.BrushStyle.NoBrush)
-    p.setPen(QColor(210, 220, 235))
+    p.setPen(QColor(208, 228, 220))
     p.drawRect(0, 0, W - 1, H - 1)
     p.end()
     return pix
@@ -129,7 +128,7 @@ class _Splash(QSplashScreen):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         # track (empty part)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(224, 231, 243))
+        painter.setBrush(QColor(220, 236, 229))
         painter.drawRoundedRect(track, bar_h / 2, bar_h / 2)
         # filled part
         frac = self._progress / 100.0
@@ -137,8 +136,8 @@ class _Splash(QSplashScreen):
             fill_w = max(bar_h, (W - 2 * pad) * frac)
             fill = QRectF(pad, y, fill_w, bar_h)
             grad = QLinearGradient(fill.left(), 0, fill.right(), 0)
-            grad.setColorAt(0.0, QColor(47, 139, 232))
-            grad.setColorAt(1.0, QColor(21, 101, 192))
+            grad.setColorAt(0.0, QColor(18, 163, 133))
+            grad.setColorAt(1.0, QColor(15, 118, 110))
             painter.setBrush(QBrush(grad))
             painter.drawRoundedRect(fill, bar_h / 2, bar_h / 2)
 
@@ -168,9 +167,9 @@ def _login_logo(size: int = 60) -> QPixmap:
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     rad = size * 0.26
     body = QLinearGradient(0, 0, 0, size)
-    body.setColorAt(0.0, QColor("#5fa8ef"))
-    body.setColorAt(0.5, QColor("#2f8be8"))
-    body.setColorAt(1.0, QColor("#1565c0"))
+    body.setColorAt(0.0, QColor("#3ed1b0"))
+    body.setColorAt(0.5, QColor("#12a385"))
+    body.setColorAt(1.0, QColor("#0f766e"))
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(QBrush(body))
     p.drawRoundedRect(QRectF(1, 1, size - 2, size - 2), rad, rad)
@@ -186,7 +185,7 @@ def _login_logo(size: int = 60) -> QPixmap:
     p.setBrush(QColor("#ffffff"))
     p.drawRoundedRect(QRectF(m, m, cell, cell), size * 0.05, size * 0.05)
     gap = size * 0.055
-    p.setBrush(QColor("#2f8be8"))
+    p.setBrush(QColor("#12a385"))
     cx = m + cell / 2
     cy = m + cell / 2
     p.drawRect(QRectF(cx - gap / 2, m, gap, cell))   # vertical divider
@@ -216,7 +215,7 @@ class LoginDialog(QDialog):
         card.setStyleSheet("QFrame#login-card { background:#ffffff; border-radius:18px; }")
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(48)
-        shadow.setColor(QColor(20, 55, 105, 95))
+        shadow.setColor(QColor(6, 56, 46, 95))
         shadow.setOffset(0, 10)
         card.setGraphicsEffect(shadow)
         outer.addWidget(card)
@@ -232,7 +231,7 @@ class LoginDialog(QDialog):
         header.setStyleSheet(
             "QFrame#login-header {"
             "  background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            "    stop:0 #2f8bdf, stop:1 #1565c0);"
+            "    stop:0 #12a385, stop:1 #0f766e);"
             "  border-top-left-radius:18px; border-top-right-radius:18px;"
             "  border:none;"
             "}"
@@ -258,7 +257,7 @@ class LoginDialog(QDialog):
         title_lbl.setFont(ft)
         title_lbl.setStyleSheet("color:white; background:transparent; border:none;")
         glow = QGraphicsDropShadowEffect(title_lbl)
-        glow.setBlurRadius(10); glow.setColor(QColor(0, 30, 70, 110)); glow.setOffset(0, 1)
+        glow.setBlurRadius(10); glow.setColor(QColor(0, 46, 36, 110)); glow.setOffset(0, 1)
         title_lbl.setGraphicsEffect(glow)
         h_lay.addWidget(title_lbl)
 
@@ -298,7 +297,7 @@ class LoginDialog(QDialog):
         self.pwd_input.setStyleSheet(
             "QLineEdit{ background:#f3f6fb; border:1.5px solid #d8e2f0;"
             "  border-radius:11px; padding:8px 14px; font-size:13px; color:#1f2937; }"
-            "QLineEdit:focus{ border-color:#1e88e5; background:#ffffff; }"
+            "QLineEdit:focus{ border-color:#14b8a6; background:#ffffff; }"
         )
         self.pwd_input.returnPressed.connect(self.try_login)
         b_lay.addWidget(self.pwd_input)
@@ -309,13 +308,13 @@ class LoginDialog(QDialog):
         btn.setStyleSheet(
             "QPushButton{"
             "  background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            "    stop:0 #2b95ef, stop:1 #1565c0);"
+            "    stop:0 #1cbd9f, stop:1 #0f766e);"
             "  color:white; font-weight:800; font-size:15px;"
             "  border-radius:12px; border:none;"
             "}"
             "QPushButton:hover  { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            "    stop:0 #3ba0f5, stop:1 #1976d2); }"
-            "QPushButton:pressed{ background:#0d47a1; padding-top:2px; }"
+            "    stop:0 #2fd0b0, stop:1 #0d9488); }"
+            "QPushButton:pressed{ background:#065f46; padding-top:2px; }"
         )
         btn.clicked.connect(self.try_login)
         b_lay.addWidget(btn)
@@ -549,10 +548,11 @@ class MainWindow(QMainWindow):
         self.weekly_tab     = self.group_tab
         self.dist_tab       = self.group_tab
         self.recipients_tab = RecipientsTab(self)
-        self.one_time_tab   = OneTimeTab(self)
         self.search_tab     = SearchTab(self)
         self.distributions_tab = DistributionsTab(self)
         self.settings_tab   = SettingsTab(self)
+        # v2.60: the 'חד פעמי' tab was removed — the in-screen 'בחר חד-פעמיים'
+        # picker (OneTimePickerDialog in group_update) covers it entirely.
         # 'מעקב חלוקות' and 'בדיקת נתונים' are no longer permanent tabs — they open
         # on demand from a button ('כל החלוקות' in חיפוש מהיר / 'בדיקת כפילויות'
         # in מקבלים).
@@ -578,20 +578,19 @@ class MainWindow(QMainWindow):
                 lambda _i, tw=inner: self._show_leaf(tw.currentWidget()))
             return inner
 
-        area_dist = _area("tabgrp_dist", [
-            (self.group_tab,         "חלוקה ורישום",   "dist"),
-            (self.one_time_tab,      "חד פעמי",        "one_time"),
+        # 'חלוקות קודמות' lives under אנשים (operator's decision, 24/08/2026) —
+        # the history is read together with the people data, not while distributing.
+        # The חלוקה area holds a single screen, so it's a direct leaf (no inner bar).
+        area_people = _area("tabgrp_people", [
+            (self.recipients_tab,    "כל המקבלים",     "recipients"),
+            (self.search_tab,        "חיפוש מהיר",     "search"),
             (self.distributions_tab, "חלוקות קודמות",  "distributions"),
         ])
-        area_people = _area("tabgrp_people", [
-            (self.recipients_tab, "כל המקבלים",  "recipients"),
-            (self.search_tab,     "חיפוש מהיר",  "search"),
-        ])
-        self.tabs.addTab(area_dist, "חלוקה")
+        self.tabs.addTab(_leaf(self.group_tab, "dist"), "חלוקה")
         self.tabs.addTab(area_people, "אנשים")
         self.tabs.addTab(_leaf(self.settings_tab, "settings"), "הגדרות")
         # Flat list of the real content tabs (leaves) for refresh bookkeeping.
-        self._leaf_tabs = [self.group_tab, self.one_time_tab, self.distributions_tab,
+        self._leaf_tabs = [self.group_tab, self.distributions_tab,
                            self.recipients_tab, self.search_tab, self.settings_tab]
 
         self._restore_tab_order()
@@ -638,21 +637,7 @@ class MainWindow(QMainWindow):
         a_lay.addLayout(_title_box)
         a_lay.addStretch()
 
-        # Guided-tour launcher — always reachable round "?" button on the app bar.
-        tour_btn = QPushButton("❓ סיור מודרך")
-        tour_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        tour_btn.setToolTip("סיור שמסביר את חלקי התוכנה")
-        tour_btn.setStyleSheet(
-            "QPushButton{background:rgba(255,255,255,0.18); color:white; border:none;"
-            "border-radius:16px; padding:6px 16px; font-size:13px; font-weight:600;}"
-            "QPushButton:hover{background:rgba(255,255,255,0.32);}"
-            "QPushButton::menu-indicator{width:0px;}")
-        from PyQt6.QtWidgets import QMenu
-        tour_menu = QMenu(tour_btn)
-        tour_menu.addAction("סיור מהיר (סקירה כללית)", self.start_tour)
-        tour_menu.addAction("סיור מורחב (הסבר על כל כפתור)", self.start_extended_tour)
-        tour_btn.setMenu(tour_menu)
-        a_lay.addWidget(tour_btn)
+        # (v2.60: the guided tour was removed — the simplified UI no longer needs it.)
 
         # Custom window controls (minimize / maximize / close) only when the
         # frameless title bar is active — otherwise the native title bar has them.
@@ -783,7 +768,7 @@ class MainWindow(QMainWindow):
         fb_btn.setToolTip("דווח על בעיה או השאר בקשה למפתח")
         fb_btn.clicked.connect(self._open_feedback)
         sb.addWidget(fb_btn)
-        self._fb_btn = fb_btn   # referenced by the guided tour
+        self._fb_btn = fb_btn
 
         ver_lbl = QLabel(f"v{APP_VERSION}  ")
         ver_lbl.setStyleSheet("color:#9ca3af; font-size:11px;")
@@ -792,35 +777,6 @@ class MainWindow(QMainWindow):
     def _open_feedback(self):
         from utils.ui import FeedbackDialog
         FeedbackDialog.open(self)
-
-    # ── Guided tour (onboarding) ──────────────────────────────────────────────
-    def start_tour(self):
-        """Launch the short overview guided tour over the main window."""
-        from utils.tour import GuidedTour
-        self._tour = GuidedTour(self)   # keep a reference alive
-        self._tour.start()
-
-    def start_extended_tour(self):
-        """Launch the deep 'explain every button' tour."""
-        from utils.tour import GuidedTour, build_extended_steps
-        self._tour = GuidedTour(self, build_extended_steps(self))
-        self._tour.start()
-
-    def maybe_offer_tour(self):
-        """On the very first run, gently offer the tour once. Afterwards it is
-        only reachable from the ❓ button."""
-        if db.get_setting("tour_seen"):
-            return
-        ask = QMessageBox.question(
-            self, "ברוך הבא! 👋",
-            "זו הפעם הראשונה בתוכנה?\nרוצה סיור קצר (פחות מדקה) שיראה לך מה יש בכל מקום?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if ask == QMessageBox.StandardButton.Yes:
-            self.start_tour()
-        else:
-            db.set_setting("tour_seen", "1")
 
     def _current_leaf(self):
         """The content tab actually shown right now — resolves a top-level area
@@ -891,19 +847,9 @@ class MainWindow(QMainWindow):
             return
         if not updater.is_newer(result["version"], APP_VERSION):
             return
-        notes = (result.get("notes") or "").strip()
-        if len(notes) > 300:
-            notes = notes[:300] + "..."
-        ask = QMessageBox.question(
-            self, "עדכון זמין",
-            f"גרסה חדשה זמינה: v{result['version']}\n"
-            f"הגרסה שלך: v{APP_VERSION}\n\n"
-            + (notes + "\n\n" if notes else "")
-            + "להוריד ולהתקין עכשיו?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if ask == QMessageBox.StandardButton.Yes:
+        from utils.ui import UpdateOfferDialog
+        if UpdateOfferDialog.offer(self, result["version"], APP_VERSION,
+                                   result.get("notes") or ""):
             # Reuse the Settings tab's full download → install → restart flow.
             self.settings_tab._start_download(result)
 
@@ -963,6 +909,12 @@ def _set_windows_dpi_awareness():
             continue
 
 
+def _ui_font_pt() -> int:
+    """The app-wide font size, per the operator's Settings choice.
+    Keys: 'small' / 'normal' / 'large' under the 'ui_font_size' setting."""
+    return {"small": 10, "large": 13}.get(db.get_setting("ui_font_size") or "", 11)
+
+
 def _set_window_icon(widget):
     ico = resource_path("icon.ico")
     if os.path.exists(ico):
@@ -1011,7 +963,7 @@ def _apply_theme(app: "QApplication"):
     """Apply qt_material theme; fall back to plain QSS on any failure."""
     try:
         from qt_material import apply_stylesheet
-        apply_stylesheet(app, theme="light_blue.xml", invert_secondary=True,
+        apply_stylesheet(app, theme="light_teal.xml", invert_secondary=True,
                          extra=QT_MATERIAL_EXTRA)
         app.setStyleSheet(app.styleSheet() + EXTRA_QSS)
     except Exception:
@@ -1114,6 +1066,8 @@ def _run():
 
     db.init_db()
     _target["v"] = 45
+    # Operator-tunable UI text size (Settings → כללי): small/normal/large.
+    app.setFont(QFont("Segoe UI", _ui_font_pt()))
     _cleanup_prev_mei()   # remove a temp dir a prior hard exit may have left
 
     # Startup safety backup (non-blocking) — a restore point on every launch.
@@ -1151,8 +1105,6 @@ def _run():
     win.show_smart()
     # Check for updates shortly after the UI is up (background; non-blocking).
     QTimer.singleShot(1500, win._auto_check_updates)
-    # First-run: offer the guided tour once (after the window has settled).
-    QTimer.singleShot(700, win.maybe_offer_tour)
     _hard_exit(app.exec())
 
 

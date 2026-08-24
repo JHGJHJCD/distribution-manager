@@ -40,11 +40,16 @@ ok("S1 weekly excludes one-timers initially",
 # ── Scenario 2: one-time main + reserve → picks arrive UNCHECKED (#p5vv0),
 # reserve STANDBY (RULE 3). 8 products, 5 regulars served first → 3 slots for
 # one-timers (main), +1 reserve. The operator ticks who actually arrives.
-ot = win.one_time_tab
-# 'מוצרים זמינים'/'רזרבה' now live in the group tab (shared via settings).
+# v2.60: the 'חד פעמי' tab is gone — drive the same pure core the in-screen
+# picker (OneTimePickerDialog) uses.
+import selection
 db.set_setting("available_products", "8"); db.set_setting("reserve_count", "1")
-ot.refresh(); ot._calc_suggestion()
-ot._add_to_group_update()
+_n, _regs = db.compute_suggested_n(8)
+_cands = [r for r in db.get_one_time_list() if r.get("in_distribution")]
+selection.assign_roles(_cands, _n, 1)
+_picks = [dict(r, _reserve=(r.get("_role") == selection.ROLE_RESERVE))
+          for r in _cands if r.get("_role") != selection.ROLE_OUT]
+win.group_tab.add_one_time_picks(_picks)
 gt = win.group_tab
 gt_checked = [gt._rows_data[r]["full_name"] for r in range(gt.table.rowCount())
               if gt.table.item(r, 0) and gt.table.item(r, 0).checkState() == Qt.CheckState.Checked]
@@ -72,7 +77,9 @@ ok("S2 print/PDF INCLUDES regulars before ticking (not reserves only)",
    f"main rows={sum(1 for r in _export_before if not r.get('_reserve'))}")
 ok("S2 print/PDF INCLUDES main one-time picks before ticking",
    any(r.get("id") in main_ids for r in _export_before), str(main_ids))
-# The operator marks the main picks as arrived (ticks them), then records.
+# The operator moves to the record stage (v2.60 two-stage flow), marks the main
+# picks as arrived (ticks them), then records.
+gt._set_stage("record")
 gt._checked_ids |= main_ids
 gt._populate()
 gt.dist_input.setCurrentText("מחלק א")
@@ -87,9 +94,9 @@ ok("S2 picks cleared after save", len(gt._extra_ids) == 0)
 # ── Scenario 3: add a new ראשונה recipient → enters one-time distribution ──────
 _rid = db.add_recipient({"full_name": "חדש ראשונה", "status": "פעיל", "frequency": "חד-פעמי",
                          "priority": 3, "souls": 6})
-ot.refresh()
+_ot_rows = db.get_one_time_list()
 ok("S3 new priority-3 is in_distribution",
-   any(r["full_name"] == "חדש ראשונה" and r.get("in_distribution") for r in ot._rows_data))
+   any(r["full_name"] == "חדש ראשונה" and r.get("in_distribution") for r in _ot_rows))
 
 # ── Scenario 4: suspend a recipient → leaves the active weekly view ────────────
 _susp = db.add_recipient({"full_name": "להשהות", "status": "פעיל", "frequency": "שבועי", "souls": 2})
@@ -125,8 +132,7 @@ try: os.unlink(_bk)
 except OSError: pass
 
 # ── Scenario 7: score breakdown data available on a ranked recipient ──────────
-ot.refresh()
-_t = next((r for r in ot._rows_data if r.get("in_distribution")), None)
+_t = next((r for r in db.get_one_time_list() if r.get("in_distribution")), None)
 ok("S7 ranked recipient has score breakdown",
    _t is not None and isinstance(_t.get("_score_parts"), list) and len(_t["_score_parts"]) >= 1)
 

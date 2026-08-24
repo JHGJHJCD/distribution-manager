@@ -110,7 +110,7 @@ class SearchTab(QWidget):
             "QListWidget#names-list { border:1px solid #e5e7eb; border-radius:8px; }"
             "QListWidget#names-list::item { padding:9px 12px; border-bottom:1px solid #f1f5f9; }"
             "QListWidget#names-list::item:selected {"
-            "  background:#e7f1fd; color:#0d2a4a; border-left:3px solid #1565c0; }")
+            "  background:#ddf3ec; color:#0d2a4a; border-left:3px solid #0f766e; }")
         self.results_list.currentItemChanged.connect(self._on_result_selected)
         enable_touch_scroll(self.results_list)
         lp.addWidget(self.results_list, 1)
@@ -263,7 +263,7 @@ class SearchTab(QWidget):
         g.setContentsMargins(0, 4, 0, 4)
         g.setSpacing(9)
         ic = QLabel()
-        ic.setPixmap(line_icon(icon_name, 17, "#1565c0"))
+        ic.setPixmap(line_icon(icon_name, 17, "#0f766e"))
         ic.setFixedWidth(20)
         ic.setStyleSheet("background:transparent; border:none;")
         g.addWidget(ic)
@@ -349,6 +349,28 @@ class SearchTab(QWidget):
         self._add_detail_row("hash", "סה״כ חלוקות", len(hist))
         self._add_detail_row("mail", "אימייל", rec.get("email"), ltr=True)
         self._add_detail_row("synagogue", "בית כנסת", rec.get("synagogue"))
+        # No-show alert (v2.60): a red banner when the recipient is on a run of
+        # consecutive recorded "לא הגיע" at/over the Settings threshold.
+        thr = db.get_no_show_threshold()
+        streak = db.consecutive_no_shows(rec["id"]) if thr else 0
+        if thr and streak >= thr:
+            warn = QFrame()
+            warn.setStyleSheet("background:#fee2e2; border:1px solid #fecaca; border-radius:6px;")
+            wl = QHBoxLayout(warn)
+            wl.setContentsMargins(10, 8, 10, 8)
+            wl.setSpacing(9)
+            wi = QLabel("⚠")
+            wi.setFixedWidth(20)
+            wi.setStyleSheet("color:#b91c1c; font-weight:800; background:transparent; border:none;")
+            wl.addWidget(wi)
+            wt = QLabel(f"לא הגיע לקחת {streak} פעמים ברצף — כדאי לבדוק מולו אם עדיין זקוק לחלוקה.")
+            wt.setWordWrap(True)
+            wt.setStyleSheet("color:#7f1d1d; font-weight:700; background:transparent; border:none;")
+            wl.addWidget(wt, 1)
+            warn_row = (self._detail_count + 1) // 2
+            self._detail_lay.addWidget(warn, warn_row, 0, 1, 2)
+            self._detail_count = (warn_row + 1) * 2
+
         notes = (rec.get("notes") or "").strip()
         if notes:
             box = QFrame()

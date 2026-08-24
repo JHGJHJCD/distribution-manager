@@ -1,7 +1,8 @@
 """Small UI helpers for keeping the interface responsive during heavy work."""
 from contextlib import contextmanager
 
-from PyQt6.QtWidgets import QApplication, QLabel, QStyledItemDelegate, QStyle
+from PyQt6.QtWidgets import (QApplication, QLabel, QStyledItemDelegate, QStyle,
+                             QDialog, QVBoxLayout, QHBoxLayout, QFrame, QPushButton)
 from PyQt6.QtCore import Qt, QObject, QEvent, QRect, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap, QIcon
 
@@ -197,6 +198,9 @@ def line_icon(name: str, size: int = 18, color: str = "#475569") -> QPixmap:
         p.drawPolyline([QPointF(0.18 * S, 0.32 * S), QPointF(0.50 * S, 0.50 * S),
                         QPointF(0.82 * S, 0.32 * S)])
         L(0.50, 0.50, 0.50, 0.86)
+    elif name in ("check", "tick"):
+        p.drawPolyline([QPointF(0.20 * S, 0.54 * S), QPointF(0.42 * S, 0.76 * S),
+                        QPointF(0.80 * S, 0.26 * S)])
     elif name in ("trash", "delete"):
         L(0.22, 0.28, 0.78, 0.28)
         p.drawPolyline([QPointF(0.40 * S, 0.28 * S), QPointF(0.40 * S, 0.20 * S),
@@ -642,3 +646,98 @@ def show_score_breakdown(parent, rec: dict):
     row.addWidget(btn)
     v.addLayout(row)
     dlg.exec()
+
+
+# ── Update-offer dialog (v2.60) ──────────────────────────────────────────────
+
+class UpdateOfferDialog(QDialog):
+    """A friendly, styled 'new version available' dialog (replaces the plain
+    QMessageBox). Shows the playful greeting the operator asked for, the two
+    versions side by side, and the release notes. exec() → Accepted means
+    'download and install now'."""
+
+    GREETING = "הנה העדכון שחלמת עליו.. (או שלא) 😄"
+
+    def __init__(self, parent, new_version: str, current_version: str, notes: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle("עדכון תוכנה")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumWidth(430)
+        self.setStyleSheet("QDialog{background:#ffffff;}")
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        head = QFrame()
+        head.setStyleSheet(
+            "QFrame{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            " stop:0 #064e3b, stop:1 #0f9d78); border:none;}")
+        hl = QVBoxLayout(head)
+        hl.setContentsMargins(22, 18, 22, 16)
+        hl.setSpacing(4)
+        t1 = QLabel("🎁 עדכון חדש זמין!")
+        t1.setStyleSheet("color:#ffffff; font-size:18px; font-weight:800; background:transparent;")
+        t2 = QLabel(self.GREETING)
+        t2.setStyleSheet("color:rgba(255,255,255,0.92); font-size:13.5px; font-weight:600;"
+                         " background:transparent;")
+        hl.addWidget(t1)
+        hl.addWidget(t2)
+        lay.addWidget(head)
+
+        body = QVBoxLayout()
+        body.setContentsMargins(22, 16, 22, 20)
+        body.setSpacing(12)
+
+        vers = QHBoxLayout()
+        vers.setSpacing(10)
+        for label, ver in (("הגרסה שלך", current_version), ("גרסה חדשה", new_version)):
+            pill = QFrame()
+            pill.setStyleSheet("QFrame{background:#f1f5f4; border:none; border-radius:10px;}")
+            pl = QVBoxLayout(pill)
+            pl.setContentsMargins(12, 8, 12, 8)
+            pl.setSpacing(2)
+            a = QLabel(label)
+            a.setStyleSheet("color:#5f7a70; font-size:12px; background:transparent;")
+            a.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            b = QLabel(f"v{ver}")
+            b.setStyleSheet("color:#064e3b; font-size:15px; font-weight:800; background:transparent;")
+            b.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pl.addWidget(a)
+            pl.addWidget(b)
+            vers.addWidget(pill, 1)
+        body.addLayout(vers)
+
+        notes = (notes or "").strip()
+        if notes:
+            if len(notes) > 400:
+                notes = notes[:400] + "..."
+            nbox = QLabel(notes)
+            nbox.setWordWrap(True)
+            nbox.setStyleSheet(
+                "QLabel{background:#f4faf7; color:#334155; border:1px solid #d7ebe2;"
+                " border-radius:10px; padding:10px 12px; font-size:12.5px;}")
+            body.addWidget(nbox)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(10)
+        ok = QPushButton("⬇ הורד והתקן עכשיו")
+        ok.setObjectName("primary")
+        ok.setMinimumHeight(42)
+        ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        ok.clicked.connect(self.accept)
+        later = QPushButton("אחר כך")
+        later.setObjectName("neutral")
+        later.setMinimumHeight(42)
+        later.setCursor(Qt.CursorShape.PointingHandCursor)
+        later.clicked.connect(self.reject)
+        btns.addWidget(ok, 1)
+        btns.addWidget(later)
+        body.addLayout(btns)
+        lay.addLayout(body)
+
+    @staticmethod
+    def offer(parent, new_version: str, current_version: str, notes: str = "") -> bool:
+        """Convenience: show the dialog; True = install now."""
+        dlg = UpdateOfferDialog(parent, new_version, current_version, notes)
+        return dlg.exec() == QDialog.DialogCode.Accepted

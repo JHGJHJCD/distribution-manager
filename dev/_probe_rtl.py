@@ -19,14 +19,14 @@ db.init_db()
 
 from main import MainWindow
 w = MainWindow()
-w.one_time_tab.refresh()
+w.group_tab.refresh()
 w.group_tab.refresh()
 
 def dname(x):
     return {Qt.LayoutDirection.RightToLeft: "RTL",
             Qt.LayoutDirection.LeftToRight: "LTR"}.get(x, "Auto")
 
-for label, t in (("group", w.group_tab.table), ("one_time", w.one_time_tab.table)):
+for label, t in (("group", w.group_tab.table), ("one_time", w.group_tab.table)):
     it = t.item(0, 1)
     print(label,
           "| tableDir:", dname(t.layoutDirection()),

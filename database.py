@@ -1061,6 +1061,47 @@ def get_distribution_batches(limit: int = 500):
         return [dict(r) for r in rows]
 
 
+def get_no_show_threshold() -> int:
+    """How many consecutive recorded no-shows earn a warning badge (v2.60).
+    Operator-tunable in Settings; 0 disables the warnings entirely."""
+    try:
+        return max(0, int(get_setting("no_show_alert_threshold") or 3))
+    except (TypeError, ValueError):
+        return 3
+
+
+def no_show_streaks(rec_ids) -> dict:
+    """{recipient_id: N} — the CURRENT run of consecutive recorded no-shows
+    (received=0) for each requested recipient, counted from their most recent
+    history row backwards and broken by the first actual receipt. Recipients
+    with no streak (last row is a receipt, or no history) are omitted."""
+    ids = [int(i) for i in rec_ids if i is not None]
+    if not ids:
+        return {}
+    out = {}
+    done = set()
+    with get_connection() as conn:
+        marks = ",".join("?" * len(ids))
+        rows = conn.execute(
+            f"SELECT recipient_id, received FROM distributions "
+            f"WHERE recipient_id IN ({marks}) "
+            f"ORDER BY dist_date DESC, id DESC", ids).fetchall()
+    for row in rows:
+        rid = row["recipient_id"]
+        if rid in done:
+            continue
+        if (row["received"] if row["received"] is not None else 1) == 0:
+            out[rid] = out.get(rid, 0) + 1
+        else:
+            done.add(rid)   # streak broken by an actual receipt
+    return {k: v for k, v in out.items() if v > 0}
+
+
+def consecutive_no_shows(rec_id: int) -> int:
+    """The single-recipient form of no_show_streaks()."""
+    return no_show_streaks([rec_id]).get(rec_id, 0)
+
+
 def get_batch_recipients(batch_id: int):
     """The per-recipient rows recorded under one batch (who received)."""
     with get_connection() as conn:

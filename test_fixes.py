@@ -75,8 +75,8 @@ ok("#12 scored base has no one-timers",
 # ── #5: the one-time tab lists only real candidates (priority ראשונה/שנייה) ────
 from main import MainWindow
 win = MainWindow()
-win.one_time_tab.refresh()
-names = [r["full_name"] for r in win.one_time_tab._rows_data]
+# v2.60: the tab is gone — the candidate list itself is the contract now.
+names = [r["full_name"] for r in db.get_one_time_list() if r.get("in_distribution")]
 ok("#5 one-time list excludes no-priority people", "נטול עדיפות" not in names, str(names))
 ok("#5 one-time list keeps real candidates", "חדפ א" in names)
 
@@ -101,6 +101,23 @@ ok("#9 gate PASSES once a one-time pick is added", gt._one_time_gate_ok("הדפ�
 gt.products_spin.setValue(max(0, due - 1))   # fewer than the regulars → no leftover
 gt._extra_ids.clear(); gt._reserve_ids.clear()
 ok("#9 gate PASSES when products only cover the regulars", gt._one_time_gate_ok("הדפסה") is True)
+
+# ── v2.60: explicit "לא הגיע" recording + consecutive no-show streaks ─────────
+rid_ns = db.add_recipient({"full_name": "לא מגיע", "status": "פעיל",
+                           "frequency": "שבועי", "souls": 2})
+rec_ns = db.get_recipient(rid_ns)
+b_ns1 = db.bulk_add_distributions([], "2026-08-05", "", 0, "בודק",
+                                  dist_name="ns1", not_received=[rec_ns])
+b_ns2 = db.bulk_add_distributions([], "2026-08-12", "", 0, "בודק",
+                                  dist_name="ns2", not_received=[rec_ns])
+ok("no-show rows don't touch last_distribution",
+   not db.get_recipient(rid_ns)["last_distribution"])
+ok("streak counts consecutive no-shows", db.consecutive_no_shows(rid_ns) == 2)
+ok("bulk streak query agrees", db.no_show_streaks([rid_ns]).get(rid_ns) == 2)
+b_ns3 = db.bulk_add_distributions([db.get_recipient(rid_ns)], "2026-08-19", "", 0, "בודק",
+                                  dist_name="ns3")
+ok("an actual receipt breaks the streak", db.consecutive_no_shows(rid_ns) == 0)
+ok("threshold default is 3", db.get_no_show_threshold() == 3)
 
 print("\nRESULT:", "ALL FIX TESTS PASS ✓" if not fails else f"FAILURES: {fails}")
 sys.exit(1 if fails else 0)
