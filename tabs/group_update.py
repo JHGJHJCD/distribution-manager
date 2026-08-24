@@ -6,7 +6,8 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QLabel, QComboBox, QLineEdit,
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
     QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea, QListView,
-    QStyledItemDelegate, QDialog, QFormLayout, QListWidget, QListWidgetItem
+    QStyledItemDelegate, QDialog, QFormLayout, QListWidget, QListWidgetItem,
+    QToolButton
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QObject, QRect
 from PyQt6.QtGui import QColor, QFont, QIcon, QPalette
@@ -254,6 +255,192 @@ class _ManualAddDialog(QDialog):
         return out
 
 
+class OneTimePickerDialog(QDialog):
+    """Pick the one-time recipients WITHOUT leaving the main screen — the same
+    candidates, ranking and role split as the 'חד פעמי' tab, in a dialog.
+    Business logic is 100% the existing pure core (db.get_one_time_list →
+    priority-ranked, db.compute_suggested_n, selection.assign_roles); this class
+    only displays it. Accepted picks flow through the same
+    GroupUpdateTab.add_one_time_picks() the tab uses."""
+
+    _COLS = ["✔", "שם מלא", "עדיפות", "ניקוד", "אזור", "טלפון"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("בחירת חד-פעמיים לחלוקה")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumSize(640, 620)
+        self._rows = [r for r in db.get_one_time_list(area_filter="הכל")
+                      if r.get("in_distribution")]
+        self._build()
+
+    @staticmethod
+    def _shared_counts():
+        try:
+            total = int(db.get_setting("available_products") or 0)
+        except (TypeError, ValueError):
+            total = 0
+        try:
+            reserve = int(db.get_setting("reserve_count") or 0)
+        except (TypeError, ValueError):
+            reserve = 0
+        return total, reserve
+
+    def _build(self):
+        outer = QVBoxLayout(self)
+        outer.setSpacing(8)
+
+        total, reserve_n = self._shared_counts()
+        if total > 0:
+            n, regs = db.compute_suggested_n(total)
+        else:
+            # No product count set → nothing to recommend: arrive unmarked
+            # (reserve included), exactly like the 'חד פעמי' tab in this state.
+            n = regs = reserve_n = 0
+        # Pre-mark by the standing recommendation — first n are MAIN, next
+        # reserve_n are RESERVE (selection.assign_roles, RULE 3). The operator
+        # just reviews, adjusts and confirms.
+        selection.assign_roles(self._rows, n, reserve_n)
+
+        if total > 0:
+            info_txt = (f"מוצרים זמינים: {total} · קבועים השבוע: {regs} · "
+                        f"לחד-פעמיים: {n} · רזרבה: {reserve_n}\n"
+                        "המומלצים כבר מסומנים (לפי עדיפות וניקוד); רזרבה בסגול. "
+                        "אפשר לשנות סימונים. לחיצה על שם — פירוט ניקוד.")
+        else:
+            info_txt = ("לא הוגדרו מוצרים זמינים — סמן ידנית את מי לצרף. "
+                        "לחיצה על שם — פירוט ניקוד.")
+        info = QLabel(info_txt)
+        info.setWordWrap(True)
+        info.setStyleSheet("color:#475569; font-size:12.5px;")
+        outer.addWidget(info)
+
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("חיפוש לפי שם / טלפון / אזור…")
+        self._search.setAlignment(ALIGN_RIGHT)
+        self._search.addAction(search_icon(18), QLineEdit.ActionPosition.LeadingPosition)
+        self._search.textChanged.connect(self._apply_search)
+        outer.addWidget(self._search)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(len(self._COLS))
+        self.table.setHorizontalHeaderLabels(self._COLS)
+        self.table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setShowGrid(False)
+        self.table.setStyleSheet(
+            "QTableWidget{background:#ffffff; border:1px solid #d7dfea; border-radius:8px;}"
+            "QHeaderView::section{background:#f4f7fc; color:#64748b; font-weight:700;"
+            " border:none; border-bottom:1px solid #e6eaf2; padding:8px 8px;}"
+            "QTableWidget::item{padding:4px 8px;}")
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.verticalHeader().setVisible(False)
+        enable_touch_scroll(self.table)
+        self.table.cellClicked.connect(self._on_cell_clicked)
+        outer.addWidget(self.table, 1)
+        self._fill()
+
+        self._lbl_count = QLabel("")
+        self._lbl_count.setStyleSheet("color:#475569; font-size:12.5px; font-weight:700;")
+        outer.addWidget(self._lbl_count)
+        self.table.itemChanged.connect(lambda *_: self._update_count())
+        self._update_count()
+
+        btns = QHBoxLayout()
+        btn_ok = QPushButton("הוסף נבחרים לחלוקה")
+        btn_ok.setObjectName("primary")
+        btn_ok.setStyleSheet(_BTN_PRIMARY)
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("ביטול")
+        btn_cancel.setStyleSheet(_BTN_GHOST)
+        btn_cancel.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(btn_ok)
+        btns.addWidget(btn_cancel)
+        outer.addLayout(btns)
+
+    def _fill(self):
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(self._rows))
+        for r, rec in enumerate(self._rows):
+            role = rec.get("_role", selection.ROLE_OUT)
+            is_main = role == selection.ROLE_MAIN
+            is_reserve = role == selection.ROLE_RESERVE
+            if is_reserve:
+                bg, fg = QColor(_RESERVE_BG), QColor(_RESERVE_FG)
+            elif is_main:
+                bg, fg = QColor(SELECTED_BG), QColor(SELECTED_FG)
+            else:
+                bg, fg = QColor("#ffffff"), QColor("#0f172a")
+
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            chk.setCheckState(Qt.CheckState.Checked if (is_main or is_reserve)
+                              else Qt.CheckState.Unchecked)
+            chk.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
+            chk.setBackground(bg)
+            self.table.setItem(r, 0, chk)
+
+            prio = {3: "ראשונה", 2: "שנייה"}.get(rec.get("priority"), "")
+            if is_reserve:
+                prio += " · רזרבה"
+            score = rec.get("need_score")
+            vals = [rec.get("full_name", ""), prio,
+                    "" if score is None else str(score),
+                    rec.get("area", ""), rec.get("phone1", "")]
+            for c, v in enumerate(vals, start=1):
+                item = QTableWidgetItem(v or "")
+                item.setTextAlignment(ALIGN_RIGHT)
+                item.setBackground(bg)
+                item.setForeground(fg)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if c == 1:
+                    f = item.font(); f.setBold(True); item.setFont(f)
+                self.table.setItem(r, c, item)
+        self.table.blockSignals(False)
+
+    def _apply_search(self):
+        q = self._search.text().strip().lower()
+        for r in range(self.table.rowCount()):
+            if not q:
+                self.table.setRowHidden(r, False)
+                continue
+            rec = self._rows[r]
+            hay = " ".join(str(rec.get(k) or "") for k in
+                           ("full_name", "phone1", "phone2", "phone3", "area",
+                            "id_number", "address")).lower()
+            self.table.setRowHidden(r, q not in hay)
+
+    def _on_cell_clicked(self, row, col):
+        if col == 1 and 0 <= row < len(self._rows):
+            show_score_breakdown(self, self._rows[row])
+
+    def _update_count(self):
+        main = res = 0
+        for r in range(self.table.rowCount()):
+            chk = self.table.item(r, 0)
+            if chk and chk.checkState() == Qt.CheckState.Checked:
+                if self._rows[r].get("_role") == selection.ROLE_RESERVE:
+                    res += 1
+                else:
+                    main += 1
+        self._lbl_count.setText(f"נבחרו: {main} עיקריים · {res} רזרבה")
+
+    def selected(self) -> list:
+        """The checked recipients, each with '_reserve' set — the exact shape
+        GroupUpdateTab.add_one_time_picks() expects."""
+        out = []
+        for r in range(self.table.rowCount()):
+            chk = self.table.item(r, 0)
+            if chk and chk.checkState() == Qt.CheckState.Checked:
+                rec = dict(self._rows[r])
+                rec["_reserve"] = rec.get("_role") == selection.ROLE_RESERVE
+                out.append(rec)
+        return out
+
+
 class _SuggestionDeleteDelegate(QStyledItemDelegate):
     """Draws a small red ✕ at the leading (left) edge of every suggestion row,
     so the operator can remove a saved suggestion (#jtnps)."""
@@ -441,6 +628,71 @@ def _field(label_text: str, widget, maxw: int = None):
         widget.setMaximumWidth(maxw)
     box.addWidget(widget)
     return box
+
+
+class _CollapsibleCard(QFrame):
+    """A card whose body folds away behind a clickable header (▾/◀ arrow).
+    Closed by default — used to hide rarely-used control groups so the weekly
+    screen stays clean. Plain setVisible() on an inner widget; NO
+    QGraphicsDropShadowEffect (known pitfall: breaks height negotiation)."""
+
+    def __init__(self, title: str, subtitle: str = "", parent=None):
+        super().__init__(parent)
+        self.setObjectName("ui-card")
+        self.setStyleSheet(_CARD_QSS)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 4, 10, 6)
+        outer.setSpacing(4)
+
+        self._title = title
+        self.header = QToolButton()
+        self.header.setCheckable(True)
+        self.header.setChecked(False)
+        self.header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        # Hug the text so the title sits flush right (like the card titles) —
+        # an Expanding QToolButton centers its text and looked off-grid.
+        self.header.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.header.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.header.setStyleSheet(
+            "QToolButton{background:transparent; border:none; color:#0d3b73;"
+            " font-size:14px; font-weight:800; padding:6px 8px;}"
+            "QToolButton:hover{color:#1e78d6;}")
+        self.header.toggled.connect(self._on_toggled)
+        head_row = QHBoxLayout()
+        head_row.setContentsMargins(0, 0, 0, 0)
+        head_row.setSpacing(8)
+        head_row.addWidget(self.header)
+        head_row.addStretch()
+        if subtitle:
+            sub = QLabel(subtitle)
+            sub.setStyleSheet("color:#94a3b8; font-size:12px; background:transparent; border:none;")
+            head_row.addWidget(sub)
+        outer.addLayout(head_row)
+
+        self.body = QWidget()
+        self.body.setStyleSheet("background:transparent;")
+        self.body_layout = QVBoxLayout(self.body)
+        self.body_layout.setContentsMargins(8, 0, 8, 6)
+        self.body_layout.setSpacing(8)
+        self.body.setVisible(False)
+        outer.addWidget(self.body)
+        self._sync_arrow()
+
+    def _on_toggled(self, checked: bool):
+        self.body.setVisible(checked)
+        self._sync_arrow()
+
+    def _sync_arrow(self):
+        arrow = "▾" if self.header.isChecked() else "◀"
+        self.header.setText(f"{arrow}  {self._title}")
+
+    def is_open(self) -> bool:
+        return self.header.isChecked()
+
+    def set_open(self, opened: bool):
+        self.header.setChecked(bool(opened))
 
 
 def _fdate(s: str) -> str:
@@ -697,7 +949,16 @@ class GroupUpdateTab(QWidget):
             " border-radius:10px;}")
         _lc = QHBoxLayout(self.leftover_card)
         _lc.setContentsMargins(12, 8, 12, 8)
-        _lc.addWidget(self.lbl_leftover)
+        _lc.addWidget(self.lbl_leftover, 1)
+        # Pick the one-timers right here (no tab hopping) — opens a dialog with
+        # the candidates pre-marked by the standing recommendation.
+        self.btn_pick_onetime = QPushButton("בחר חד-פעמיים")
+        self.btn_pick_onetime.setStyleSheet(_BTN_SUCCESS)
+        self.btn_pick_onetime.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_pick_onetime.setToolTip(
+            "פותח חלון לבחירת מקבלי החד-פעמי — המומלצים כבר מסומנים לפי עדיפות וניקוד")
+        self.btn_pick_onetime.clicked.connect(self._open_one_time_picker)
+        _lc.addWidget(self.btn_pick_onetime)
         self.leftover_card.setVisible(False)   # shown only when there's a hint
 
         # Live hint under 'מוצרים זמינים' showing how many regulars are actually on
@@ -751,8 +1012,74 @@ class GroupUpdateTab(QWidget):
         c1.addLayout(grid)
         top_col.addWidget(card1)
 
-        # ── Card 3: volunteer messaging ───────────────────────────────────────
-        card3, c3 = _make_card("שליחה למתנדב", "mail")
+        # ── Collapsible: advanced distribution modes ──────────────────────────
+        # The regulars-mode selector + its per-mode buttons are rarely touched in
+        # the weekly routine — folded away so the daily screen stays clean. Opens
+        # automatically when a non-default mode / active filter would otherwise
+        # be hidden (state must never be invisible).
+        self.adv_section = _CollapsibleCard(
+            "מצבי חלוקה מתקדמים", "מצב קבועים · סימון מובילים · סינון מותאם")
+        adv_row = QHBoxLayout()
+        adv_row.setSpacing(12)
+
+        # Regulars distribution mode: schedule / none / scored-by-need / filter
+        self.mode_combo = QComboBox()
+        # Its dropdown otherwise renders dark-on-dark (unreadable black window,
+        # #ow11d) under the qt-material theme — force the same light card the
+        # editable combos use.
+        self.mode_combo.setView(_light_popup_view())
+        self.mode_combo.setMinimumHeight(42)
+        self.mode_combo.setToolTip(
+            "כיצד להתייחס לקבועים בחלוקה זו:\n"
+            "• רגיל — קבועים אוטומטית לפי לוח זמנים\n"
+            "• בלי קבועים — קבועים לא מקבלים\n"
+            "• קבועים לפי ניקוד — כל הקבועים מדורגים לפי ניקוד צורך, כמו חד-פעמי\n"
+            "• לפי סינון מותאם — כל המקבלים שעונים על קריטריונים (מספר ילדים / הכנסה / פנוי לנפש)")
+        for label, val in (("רגיל — קבועים לפי לוח זמנים", "schedule"),
+                           ("בלי קבועים", "none"),
+                           ("קבועים לפי ניקוד", "scored"),
+                           ("לפי סינון מותאם (מספר ילדים / הכנסה)", "filter")):
+            self.mode_combo.addItem(label, val)
+        cur_mode = db.get_regulars_mode()
+        idx = self.mode_combo.findData(cur_mode)
+        self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        adv_row.addLayout(_field("מצב חלוקה לקבועים", self.mode_combo, maxw=280))
+
+        # Scored-mode only: mark the top-N leaders by the available-products count
+        # (the same 'מוצרים זמינים' field in the details card above).
+        self.btn_mark_leaders = QPushButton("סמן מובילים")
+        self.btn_mark_leaders.setStyleSheet(_BTN_SUCCESS)
+        self.btn_mark_leaders.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_mark_leaders.setToolTip("מסמן את בעלי הניקוד הגבוה ביותר עד למספר 'מוצרים זמינים'")
+        self.btn_mark_leaders.clicked.connect(self._mark_leaders)
+        adv_row.addWidget(self.btn_mark_leaders, 0, Qt.AlignmentFlag.AlignBottom)
+
+        # Broad-filter mode: a button to open the criteria editor (children/income/
+        # per-soul thresholds). Shown only while the 'filter' mode is selected.
+        self.btn_edit_filter = QPushButton("הגדר סינון")
+        self.btn_edit_filter.setStyleSheet(_BTN_GHOST)
+        self.btn_edit_filter.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_edit_filter.setToolTip("בחר לפי אילו קריטריונים לסנן (מספר ילדים / הכנסה / פנוי לנפש)")
+        self.btn_edit_filter.clicked.connect(self._edit_filter)
+        adv_row.addWidget(self.btn_edit_filter, 0, Qt.AlignmentFlag.AlignBottom)
+        adv_row.addStretch()
+        self.adv_section.body_layout.addLayout(adv_row)
+        # Open at launch only when a non-default state is active — never hide a
+        # live mode/filter behind a closed fold. (During the session all changes
+        # originate inside this open section, so this is evaluated once here;
+        # refresh() never force-closes it on the operator.)
+        if (cur_mode != "schedule"
+                or selection.criteria_is_active(db.get_filter_criteria())):
+            self.adv_section.set_open(True)
+        top_col.addWidget(self.adv_section)
+
+        # ── Collapsible: volunteer messaging ──────────────────────────────────
+        # Not part of the daily routine (needs email know-how) — folded, always
+        # closed by default. The AUTOMATIC import of volunteer replies keeps
+        # running in the background regardless (it doesn't live in this UI).
+        self.vol_section = _CollapsibleCard(
+            "שליחה למתנדב במייל", "רשימה למילוי אצל מתנדב · קליטה אוטומטית")
         vol_row = QHBoxLayout()
         vol_row.setSpacing(12)
         self.volunteer_email_input = QComboBox()
@@ -788,12 +1115,12 @@ class GroupUpdateTab(QWidget):
         btn_import_vol.clicked.connect(self._import_volunteer_results)
         vol_row.addWidget(btn_import_vol, 0, Qt.AlignmentFlag.AlignBottom)
         vol_row.addStretch()
-        c3.addLayout(vol_row)
+        self.vol_section.body_layout.addLayout(vol_row)
 
         auto_hint = QLabel("↻ תוצאות שהמתנדב שולח חזרה במייל נקלטות אוטומטית")
         auto_hint.setStyleSheet("color:#7c3aed; font-size:12px; background:transparent; border:none;")
-        c3.addWidget(auto_hint)
-        top_col.addWidget(card3)
+        self.vol_section.body_layout.addWidget(auto_hint)
+        top_col.addWidget(self.vol_section)
 
         # ── ONE scroll region for the entire body ─────────────────────────────
         # The detail cards + toolbar + recipient list all live inside a single
@@ -821,48 +1148,6 @@ class GroupUpdateTab(QWidget):
         # ── Toolbar over the recipient list ───────────────────────────────────
         toolbar = QHBoxLayout()
         toolbar.setSpacing(12)
-
-        # Regulars distribution mode: schedule / none / scored-by-need
-        self.mode_combo = QComboBox()
-        # Its dropdown otherwise renders dark-on-dark (unreadable black window,
-        # #ow11d) under the qt-material theme — force the same light card the
-        # editable combos use.
-        self.mode_combo.setView(_light_popup_view())
-        self.mode_combo.setMinimumHeight(42)
-        self.mode_combo.setToolTip(
-            "כיצד להתייחס לקבועים בחלוקה זו:\n"
-            "• רגיל — קבועים אוטומטית לפי לוח זמנים\n"
-            "• בלי קבועים — קבועים לא מקבלים\n"
-            "• קבועים לפי ניקוד — כל הקבועים מדורגים לפי ניקוד צורך, כמו חד-פעמי\n"
-            "• לפי סינון מותאם — כל המקבלים שעונים על קריטריונים (מספר ילדים / הכנסה / פנוי לנפש)")
-        for label, val in (("רגיל — קבועים לפי לוח זמנים", "schedule"),
-                           ("בלי קבועים", "none"),
-                           ("קבועים לפי ניקוד", "scored"),
-                           ("לפי סינון מותאם (מספר ילדים / הכנסה)", "filter")):
-            self.mode_combo.addItem(label, val)
-        cur_mode = db.get_regulars_mode()
-        idx = self.mode_combo.findData(cur_mode)
-        self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        toolbar.addLayout(_field("מצב חלוקה לקבועים", self.mode_combo, maxw=240))
-
-        # Scored-mode only: mark the top-N leaders by the available-products count
-        # (the same 'מוצרים זמינים' field in the details card above).
-        self.btn_mark_leaders = QPushButton("סמן מובילים")
-        self.btn_mark_leaders.setStyleSheet(_BTN_SUCCESS)
-        self.btn_mark_leaders.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_mark_leaders.setToolTip("מסמן את בעלי הניקוד הגבוה ביותר עד למספר 'מוצרים זמינים'")
-        self.btn_mark_leaders.clicked.connect(self._mark_leaders)
-        toolbar.addWidget(self.btn_mark_leaders)
-
-        # Broad-filter mode: a button to open the criteria editor (children/income/
-        # per-soul thresholds). Shown only while the 'filter' mode is selected.
-        self.btn_edit_filter = QPushButton("הגדר סינון")
-        self.btn_edit_filter.setStyleSheet(_BTN_GHOST)
-        self.btn_edit_filter.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_edit_filter.setToolTip("בחר לפי אילו קריטריונים לסנן (מספר ילדים / הכנסה / פנוי לנפש)")
-        self.btn_edit_filter.clicked.connect(self._edit_filter)
-        toolbar.addWidget(self.btn_edit_filter)
 
         # Manually add ANY active recipient to this distribution — even one that
         # doesn't meet the filter criteria / isn't due this week (#243lo). Always
@@ -1142,7 +1427,7 @@ class GroupUpdateTab(QWidget):
         else:
             picks = self._main_pick_count()
             done = picks >= n
-            state = "נבחרו ✓" if done else "טרם הושלם — בחר בלשונית 'חד פעמי'"
+            state = "נבחרו ✓" if done else "טרם הושלם — לחץ 'בחר חד-פעמיים'"
             _show("#059669" if done else "#b45309", 700,
                   f"נשאר לחד-פעמיים: {n}  ·  נבחרו: {picks}  ({state})")
 
@@ -1155,24 +1440,74 @@ class GroupUpdateTab(QWidget):
         self._checked_ids = {r.get("id") for r in ranked[:n] if r.get("id") is not None}
         self._populate()
 
+    def _open_one_time_picker(self):
+        """Open the in-screen one-time picker dialog; accepted picks flow through
+        the same add_one_time_picks() path the 'חד פעמי' tab uses."""
+        dlg = OneTimePickerDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        picks = dlg.selected()
+        if not picks:
+            return
+        added = self.add_one_time_picks(picks)
+        if self.main_win:
+            self.main_win.status_msg(f"נוספו {added} חד-פעמיים לרשימת החלוקה")
+
+    def _special_active(self) -> bool:
+        """A non-default distribution state: non-schedule mode or an active
+        broad filter. (A product count > 0 is NOT special — every weekly round
+        has leftovers for one-timers, per the operator.)"""
+        return (self._current_mode() != "schedule"
+                or selection.criteria_is_active(db.get_filter_criteria()))
+
+    _AUTO_NAME_PREFIX = "חלוקה שבועית "
+
+    def _effective_dist_name(self):
+        """The distribution name to use for printing / PDF / email / saving.
+        Typed name → returned as-is. Empty name in the plain weekly state →
+        auto-filled as 'חלוקה שבועית DD/MM/YYYY' (written into the field so the
+        operator sees it) and returned. Empty name in a special state (mode /
+        filter) → None: a meaningful name is still required there."""
+        name = self.name_input.currentText().strip()
+        if name:
+            return name
+        if self._special_active():
+            return None
+        name = self._AUTO_NAME_PREFIX + _fdate(self.date_edit.get_iso())
+        self.name_input.setCurrentText(name)
+        return name
+
+    def _push_name_history(self, name: str):
+        """Remember a distribution name for the suggestions — but never the
+        auto-generated weekly names, which would flood the dropdown with a new
+        dated entry every week."""
+        if name and not name.startswith(self._AUTO_NAME_PREFIX):
+            self._push_history("dist_names_history", name)
+
     def _one_time_gate_ok(self, action: str) -> bool:
         """Bug #9 workflow gate: if the product count leaves portions for
         one-timers, block printing / Excel export until the operator has actually
-        chosen one-time recipients — and send them straight to the 'חד פעמי' tab
-        to do it (bug #11: jump to where the missing data is entered). If the
-        products only cover the regulars, there's nothing to complete → allowed."""
+        chosen one-time recipients. If the products only cover the regulars,
+        there's nothing to complete → allowed. Pure check + message — the
+        in-place remedy (opening the picker) lives in _ensure_one_time_picks()
+        so this stays modal-free for tests and callers that only ask."""
         n = self._one_time_remainder()
         if n <= 0 or self._main_pick_count() > 0:
             return True
-        QMessageBox.warning(
-            self, "בחירת חד-פעמיים חסרה",
-            f"לפי מספר המוצרים נשארו {n} מנות לחד-פעמיים.\n"
-            f"יש לבחור את מקבלי החד-פעמי בלשונית 'חד פעמי' ולהוסיפם לחלוקה — "
-            f"לפני {action}.")
-        mw = self.main_win
-        if mw is not None and hasattr(mw, "one_time_tab"):
-            mw.tabs.setCurrentWidget(mw.one_time_tab)
+        QMessageBox.information(
+            self, "בחירת חד-פעמיים",
+            f"לפי מספר המוצרים נשארו {n} מנות לחד-פעמיים וטרם נבחרו מקבלים.\n"
+            f"כעת ייפתח חלון הבחירה — אשר את הנבחרים כדי להמשיך ל{action}.")
         return False
+
+    def _ensure_one_time_picks(self, action: str) -> bool:
+        """Gate + in-place remedy: when the gate blocks, open the one-time
+        picker right here (no tab hopping). If the operator confirms picks the
+        blocked action continues seamlessly; cancelling keeps it blocked."""
+        if self._one_time_gate_ok(action):
+            return True
+        self._open_one_time_picker()
+        return self._main_pick_count() > 0
 
     def refresh(self):
         mode = self._current_mode()
@@ -1314,11 +1649,12 @@ class GroupUpdateTab(QWidget):
         if lbl is not None:
             if self._current_mode() == "none":
                 lbl.setText("מצב 'בלי קבועים': הקבועים אינם בחלוקה זו.\n\n"
-                            "כדי להוסיף מקבלים — עבור ללשונית 'חד פעמי', בחר את "
-                            "מקבלי החד-פעמי ולחץ 'הוסף נבחרים לעדכון קבוצתי'.")
+                            "כדי להוסיף מקבלים — הזן 'מוצרים זמינים' ולחץ "
+                            "'בחר חד-פעמיים', או השתמש ב'＋ הוסף מקבל'.")
             elif self._current_mode() == "filter":
                 lbl.setText("מצב 'לפי סינון מותאם': אף מקבל לא עונה על הקריטריונים "
-                            "שנבחרו.\n\nלחץ 'הגדר סינון' למעלה כדי לשנות את התנאים.")
+                            "שנבחרו.\n\nלחץ 'הגדר סינון' (באזור 'מצבי חלוקה מתקדמים') "
+                            "כדי לשנות את התנאים.")
             elif self._search_text:
                 lbl.setText("אין תוצאות לחיפוש זה")
             elif self._current_mode() == "schedule" and db.get_regulars_scored():
@@ -1328,7 +1664,8 @@ class GroupUpdateTab(QWidget):
                 n = len(db.get_regulars_scored())
                 lbl.setText(f"אין קבועים שתורם השבוע לפי לוח הזמנים "
                             f"({n} קבועים בסה\"כ).\n\n"
-                            "לרשימת כל הקבועים — בחר למעלה במצב 'קבועים לפי ניקוד'.")
+                            "לרשימת כל הקבועים — פתח את 'מצבי חלוקה מתקדמים' "
+                            "ובחר במצב 'קבועים לפי ניקוד'.")
             else:
                 lbl.setText("אין מקבלים להצגה")
         refresh_empty_state(self.table)
@@ -1418,7 +1755,10 @@ class GroupUpdateTab(QWidget):
 
         dist_date    = self.date_edit.get_iso()
         distributor  = self.dist_input.currentText().strip()
-        dist_name    = self.name_input.currentText().strip()
+        # Auto-name a plain weekly round so batches in 'חלוקות' aren't nameless;
+        # a special distribution keeps whatever was typed (may stay empty here —
+        # saving was never blocked on the name and stays that way).
+        dist_name    = self._effective_dist_name() or ""
         general_note = self.note_input.text().strip()
 
         _ERR = "border: 2px solid #dc2626; background-color: #fff5f5;"
@@ -1477,7 +1817,7 @@ class GroupUpdateTab(QWidget):
         # Remember the distributor + distribution name and refresh the suggestions.
         db.set_setting("last_distributor", distributor)
         self._push_history("distributors_history", distributor)
-        self._push_history("dist_names_history", dist_name)
+        self._push_name_history(dist_name)
         self._reload_name_history()
 
         # One-time picks distributed — drop them so they aren't re-saved next time.
@@ -1489,6 +1829,11 @@ class GroupUpdateTab(QWidget):
         self._checked_ids.clear()
         self._seen_ids.clear()
         self.note_input.clear()
+        # An auto-generated weekly name is date-stamped — clear it after saving
+        # so next week's round regenerates with the right date instead of
+        # silently reusing a stale one.
+        if dist_name.startswith(self._AUTO_NAME_PREFIX):
+            self.name_input.setCurrentText("")
 
         if export_path:
             reveal_in_folder(export_path)   # open Downloads with the file selected
@@ -1545,7 +1890,7 @@ class GroupUpdateTab(QWidget):
         return rows if rows else list(self._rows_data)
 
     def _export_excel(self):
-        if not self._one_time_gate_ok("ייצוא לאקסל"):
+        if not self._ensure_one_time_picks("ייצוא לאקסל"):
             return
         checked = self._get_export_rows()
         dist_date = _fdate(self.date_edit.get_iso())
@@ -1561,7 +1906,7 @@ class GroupUpdateTab(QWidget):
     # ── send list to a volunteer by email / import their filled results ────────
 
     def _send_to_volunteer(self):
-        dist_name   = self.name_input.currentText().strip()
+        dist_name   = self._effective_dist_name() or ""
         what        = ""     # products list removed (bug #9)
         distributor = self.dist_input.currentText().strip()
         to_addr     = self.volunteer_email_input.currentText().strip()
@@ -1755,22 +2100,26 @@ class GroupUpdateTab(QWidget):
                                f"המקבלים שהגיעו סומנו ברשימה.")
 
     def _print(self):
-        name = self.name_input.currentText().strip()
+        # Plain weekly round with no name → auto-named ('חלוקה שבועית DD/MM');
+        # a special distribution (mode/filter) still requires a meaningful name.
+        name = self._effective_dist_name()
         if not name:
             self.name_input.setStyleSheet(
                 "border: 2px solid #dc2626; background-color:#fff5f5;")
             self.name_input.setToolTip("חובה לרשום שם חלוקה לפני הדפסה")
             QMessageBox.warning(
                 self, "חסר שם חלוקה",
-                "יש לרשום שם חלוקה (למשל 'חלוקת פסח') בשדה 'שם החלוקה' לפני ההדפסה.")
+                "בחלוקה מיוחדת יש לרשום שם חלוקה (למשל 'חלוקת פסח') "
+                "בשדה 'שם החלוקה' לפני ההדפסה.")
             self.name_input.setFocus()
             return
         self.name_input.setStyleSheet("")
-        self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה. אפשר לבחור משמות קודמים.")
-        if not self._one_time_gate_ok("הדפסה"):
+        self.name_input.setToolTip("שם/מטרת החלוקה — בחלוקה שבועית רגילה מושלם אוטומטית. "
+                                   "אפשר לבחור משמות קודמים.")
+        if not self._ensure_one_time_picks("הדפסה"):
             return
         # Remember the name typed for print too, so it's suggested next time.
-        self._push_history("dist_names_history", name)
+        self._push_name_history(name)
         checked = self._get_export_rows()
         dist_date = _fdate(self.date_edit.get_iso())
         print_distribution_list(checked, dist_date, self, dist_name=name)
@@ -1796,21 +2145,23 @@ class GroupUpdateTab(QWidget):
     def _export_pdf(self):
         """Save the marked distribution list as a PDF in Downloads and open it —
         same gating and content as printing, no printer required (#qxnvx)."""
-        name = self.name_input.currentText().strip()
+        name = self._effective_dist_name()
         if not name:
             self.name_input.setStyleSheet(
                 "border: 2px solid #dc2626; background-color:#fff5f5;")
             self.name_input.setToolTip("חובה לרשום שם חלוקה לפני שמירת PDF")
             QMessageBox.warning(
                 self, "חסר שם חלוקה",
-                "יש לרשום שם חלוקה (למשל 'חלוקת פסח') בשדה 'שם החלוקה' לפני שמירת PDF.")
+                "בחלוקה מיוחדת יש לרשום שם חלוקה (למשל 'חלוקת פסח') "
+                "בשדה 'שם החלוקה' לפני שמירת PDF.")
             self.name_input.setFocus()
             return
         self.name_input.setStyleSheet("")
-        self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה. אפשר לבחור משמות קודמים.")
-        if not self._one_time_gate_ok("שמירת PDF"):
+        self.name_input.setToolTip("שם/מטרת החלוקה — בחלוקה שבועית רגילה מושלם אוטומטית. "
+                                   "אפשר לבחור משמות קודמים.")
+        if not self._ensure_one_time_picks("שמירת PDF"):
             return
-        self._push_history("dist_names_history", name)
+        self._push_name_history(name)
         checked = self._get_export_rows()
         if not checked:
             QMessageBox.information(self, "אין את מי לשמור",
@@ -1879,6 +2230,9 @@ class GroupUpdateTab(QWidget):
             spin.setValue(0 if key == "available_products" else 5)
             spin.blockSignals(False)
             db.set_setting(key, str(spin.value()))
+        # Fold the advanced section back down unless a non-default mode/filter
+        # is still active (never hide live state behind a closed fold).
+        self.adv_section.set_open(self._special_active())
         self.refresh()
         if self.main_win:
             self.main_win.status_msg("המסך אופס לחלוקה חדשה")

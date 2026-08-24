@@ -71,11 +71,22 @@ def _ensure_visible(w):
         p = p.parent()
 
 
-def _attr_rect(win, key, attr):
-    """Spotlight the widget stored as `tab.<attr>` on the given tab."""
+def _attr_rect(win, key, attr, section: str = None):
+    """Spotlight the widget stored as `tab.<attr>` on the given tab. If the
+    widget lives inside a collapsible section (v2.58), pass the section's
+    attribute name via `section` so the tour opens it first — otherwise a
+    folded-away widget has no geometry and the step loses its spotlight."""
     tw = _tab_widget(win, key)
     if tw is None:
         return None
+    if section:
+        sec = getattr(tw, section, None)
+        if sec is not None:
+            try:
+                sec.set_open(True)
+                sec.body.layout().activate()
+            except Exception:
+                pass
     w = getattr(tw, attr, None)
     if w is None:
         return None
@@ -190,18 +201,22 @@ def build_extended_steps(win):
     step("הערה כללית לחלוקה",
          "הערה על כל החלוקה (לא חובה) — נשמרת בלשונית \"חלוקות\" ומצורפת לכל מקבל.",
          lambda w: _attr_rect(w, "dist", "note_input"))
-    step("מה מחלקים",
-         "כאן רושמים כל פריט שמחלקים ואת הכמות שכל אדם מקבל ממנו — אפשר להוסיף "
-         "כמה פריטים לאותה חלוקה (סל מזון, עוף, שמן...). הכפתור \"הוסף פריט\" מוסיף שורה.",
-         lambda w: _attr_rect(w, "dist", "products"))
+    step("מוצרים זמינים ורזרבה",
+         "כמה מנות יש בסך הכל בחלוקה. הקבועים של השבוע נצרכים קודם, והיתרה עוברת "
+         "לחד-פעמיים. לצדו — כמה אנשי רזרבה (ממתינים) לצרף.",
+         lambda w: _attr_rect(w, "dist", "products_spin"))
+    step("כפתור \"בחר חד-פעמיים\"",
+         "כשנשארות מנות לחד-פעמיים — לוחצים כאן ונפתח חלון עם המועמדים, כשהמומלצים "
+         "כבר מסומנים לפי עדיפות וניקוד. מאשרים — והם מצטרפים לרשימה.",
+         lambda w: _attr_rect(w, "dist", "btn_pick_onetime"))
     step("חיפוש מהיר ברשימה",
          "מסננים את רשימת החלוקה לפי כל פרט של המקבל — שם, טלפון, אזור או ת״ז. "
          "הסימונים נשמרים גם כשמסננים.",
          lambda w: _attr_rect(w, "dist", "search_input"))
     step("אימייל המתנדב",
-         "כתובת המייל של המתנדב שיקבל את הרשימה למילוי. אפשר לבחור מכתובות "
-         "קודמות. נדרש רק לשליחה במייל.",
-         lambda w: _attr_rect(w, "dist", "volunteer_email_input"))
+         "כתובת המייל של המתנדב שיקבל את הרשימה למילוי. נמצא באזור המתקפל "
+         "\"שליחה למתנדב במייל\" — נפתח בלחיצה. נדרש רק לשליחה במייל.",
+         lambda w: _attr_rect(w, "dist", "volunteer_email_input", section="vol_section"))
     step("כפתור \"שלח למתנדב\"",
          "שולח למתנדב מייל עם קובץ אקסל של הרשימה. הוא מסמן מי הגיע, ממלא הערות, "
          "ושולח חזרה — והתוכנה קולטת את זה אוטומטית. (הקובץ יכול להיות נעול בסיסמה — "
