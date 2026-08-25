@@ -226,6 +226,36 @@ def filter_by_criteria(rows: list, criteria: dict) -> list:
     return [r for r in rows if matches_criteria(r, criteria)]
 
 
+def criteria_gap(rec: dict, criteria: dict) -> float:
+    """How FAR a recipient is from satisfying the filter, as a WEIGHTED RELATIVE
+    gap. 0.0 = already qualifies. For every CONSTRAINED field the recipient
+    violates, add the relative overshoot/undershoot (gap ÷ the threshold) so
+    fields on different scales stay comparable — e.g. income 1300 vs a max of 1200
+    contributes 100/1200 ≈ 0.083, right next to income 1250's 50/1200 ≈ 0.042, so
+    the nearer-to-qualifying family (1250) sorts first. A missing value on a
+    constrained field adds a full unit (1.0) — the 'חוסר נתונים → תחתית' rule, so a
+    family we can't measure never edges out one we can. Larger = farther. Pure.
+
+    Used to order the community top-up (#lejmr): when a community's quota exceeds
+    its filter-qualifiers, its NEAREST-to-qualifying members fill the rest first
+    (operator's call, 2026-08), rather than the highest need-score."""
+    total = 0.0
+    for field, _label in FILTER_FIELDS:
+        b = (criteria or {}).get(field) or {}
+        lo, hi = b.get("min"), b.get("max")
+        if lo is None and hi is None:
+            continue
+        val = to_number(rec.get(field))
+        if val is None:
+            total += 1.0            # missing data on a constrained field — worst
+            continue
+        if lo is not None and val < lo:
+            total += (lo - val) / abs(lo) if lo else (lo - val)
+        elif hi is not None and val > hi:
+            total += (val - hi) / abs(hi) if hi else (val - hi)
+    return total
+
+
 # ── Community balance (mode 'filter', #lejmr) ─────────────────────────────────
 # The operator's request (2026-08): when distributing by the broad filter, the
 # products must be split FAIRLY BETWEEN COMMUNITIES ("קהילה" = everyone sharing
@@ -239,8 +269,11 @@ def filter_by_criteria(rows: list, criteria: dict) -> list:
 #     totals are scaled down to 100 (normalising "at the expense of the others").
 #   • Inside a community the quota is filled from its FILTER-QUALIFYING members
 #     first (by need score); if the community has fewer qualifiers than quota,
-#     the remainder is filled from its OTHER active members by need score — the
-#     community's share stays inside the community (operator's explicit call).
+#     the remainder is filled from its OTHER active members by CLOSENESS to the
+#     filter (smallest weighted relative gap first — criteria_gap), so the
+#     community's near-misses come in before its far-off members. Need score is
+#     only a tie-break. A regular caught in this top-up is flagged for the screen
+#     to highlight (operator's call, 2026-08). The share stays in the community.
 #   • People without a representative form their own "ללא קהילה" group that
 #     competes for a proportional share like any community.
 #   • Whoever falls off because of the balance simply doesn't appear (no reserve).
@@ -375,13 +408,22 @@ def balance_by_community(rows: list, criteria: dict, weights: dict,
         for r in take:
             r["_balance_fill"] = False
         if len(take) < q:
-            # Top-up: the community's OTHER members (not already taken), by need
-            # — the community's share stays inside the community.
+            # Top-up: the community's OTHER members (not already taken). Ordered
+            # by CLOSENESS to the filter — the near-misses come in first (#lejmr,
+            # operator's example: income 1250 before 1300), NOT by need score.
+            # Need score is only a tie-break so equal-gap picks stay sensible.
+            # A regular caught in the top-up is flagged (_balance_regular) so the
+            # screen can highlight it.
             others = [r for r in members if all(r is not t for t in take)]
-            ranked_o = rank_by_need(others, weights)
-            fill = ranked_o[:q - len(take)]
+            scoring.annotate_need_scores(others, weights)
+            others.sort(key=lambda r: (criteria_gap(r, criteria),
+                                       -(r.get("need_score") or 0),
+                                       -(r.get("days_since") or 0),
+                                       r.get("full_name") or ""))
+            fill = others[:q - len(take)]
             for r in fill:
                 r["_balance_fill"] = True
+                r["_balance_regular"] = is_regular(r)
             take = take + fill
         for r in take:
             r["_community"] = c or NO_COMMUNITY_LABEL

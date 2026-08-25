@@ -250,6 +250,27 @@ ok("C4 quota gap filled from the community's own non-qualifiers by need",
 ok("C4b the fill rows are marked (_balance_fill)",
    any(r.get("_balance_fill") for r in _picked2 if r["full_name"] == "ק-עשיר1"))
 
+# C4c the top-up is ordered by CLOSENESS to the filter, NOT by need score, even
+# when the two disagree (#lejmr). Filter = children ≥ 6 (nobody qualifies here);
+# need is driven by income (W_INCOME). "כמעט" misses by one child (5) but is rich
+# (low need); "רחוק" misses by four (2) but is poor (high need). The near-miss
+# must be filled first — proving gap beats need.
+_gap = [crec("כמעט", "נציג ג", 9000, children=5),
+        crec("רחוק", "נציג ג", 500, children=2)]
+_pg = selection.balance_by_community(_gap, {"children_total": {"min": 6, "max": None}},
+                                     W_INCOME, 1)
+ok("C4c top-up picks the near-miss (closest to the filter), not the neediest",
+   len(_pg) == 1 and _pg[0]["full_name"] == "כמעט", str([r["full_name"] for r in _pg]))
+
+# C4d a regular swept into the top-up is flagged (_balance_regular) so the screen
+# can highlight it — monthly counts as regular too.
+_reg = [dict(crec("קבוע-חודשי", "נציג ד", 8000), frequency="חודשי"),
+        crec("חדפ", "נציג ד", 9000)]
+_pr = selection.balance_by_community(_reg, _crit_inc, W_INCOME, 1)
+ok("C4d a regular in the top-up is flagged _balance_regular",
+   any(r.get("_balance_regular") for r in _pr if r["full_name"] == "קבוע-חודשי"),
+   str([(r["full_name"], r.get("_balance_regular")) for r in _pr]))
+
 # Manual percent pin: community א pinned to 75% of 4 products → 3; ב gets 1
 _pin = selection.balance_by_community(
     [crec(f"א{i}", "נציג א", 1000) for i in range(4)]

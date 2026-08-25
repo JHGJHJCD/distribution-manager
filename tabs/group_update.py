@@ -1919,6 +1919,10 @@ class GroupUpdateTab(QWidget):
         if rec.get("_community"):
             comm_txt = f"קהילה: {rec['_community']}"
             if rec.get("_balance_fill"):
+                # a regular swept in by the community top-up — brighter amber +
+                # a 'קבוע' tag so the operator spots them at a glance (#lejmr).
+                if rec.get("_balance_regular"):
+                    return QColor("#fcd34d"), QColor("#7c2d12"), comm_txt + " · השלמה · קבוע", score_txt
                 return QColor("#fef3c7"), QColor("#92400e"), comm_txt + " · השלמה", score_txt
             return QColor("#f1f5f9"), QColor("#334155"), comm_txt, score_txt
         # scored regular — neutral tint, ranked by need-score not by date
