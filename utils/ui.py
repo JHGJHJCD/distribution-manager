@@ -648,6 +648,108 @@ def show_score_breakdown(parent, rec: dict):
     dlg.exec()
 
 
+def _fmt_criterion(lo, hi) -> str:
+    """A human range label for a filter bound (min/max), e.g. 'עד 3,000',
+    'לפחות 2', '1,000–3,000'."""
+    def _n(x):
+        try:
+            xf = float(x)
+            return f"{int(xf):,}" if xf == int(xf) else f"{xf:,.1f}"
+        except (TypeError, ValueError):
+            return str(x)
+    if lo is not None and hi is not None:
+        return f"{_n(lo)}–{_n(hi)}"
+    if hi is not None:
+        return f"עד {_n(hi)}"
+    if lo is not None:
+        return f"לפחות {_n(lo)}"
+    return "—"
+
+
+def show_filter_breakdown(parent, rec: dict, criteria: dict):
+    """Popup explaining why a recipient is on the FILTER/BALANCE list — i.e. the
+    criteria (income / children / per-soul) and this family's value for each, with
+    a ✓/✗ per criterion. This replaces the need-score popup in 'filter' mode, where
+    people are chosen by meeting the criteria (and community balance), NOT by score
+    — so the operator sees the real reason (bug #6clvq)."""
+    import html as _html
+    import selection
+    from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
+
+    name = rec.get("full_name", "")
+    rows = []
+    for field, label in selection.FILTER_FIELDS:
+        b = (criteria or {}).get(field) or {}
+        lo, hi = b.get("min"), b.get("max")
+        if lo is None and hi is None:
+            continue
+        val = selection.to_number(rec.get(field))
+        raw = rec.get(field)
+        val_txt = _html.escape(str(raw).strip()) if (raw not in (None, "")) else "— חסר —"
+        if val is None:
+            ok, mark, color = False, "✗", "#b91c1c"
+        else:
+            ok = (lo is None or val >= lo) and (hi is None or val <= hi)
+            mark = "✓" if ok else "✗"
+            color = "#334155" if ok else "#b91c1c"
+        rows.append(
+            "<tr>"
+            f"<td align='center' style='color:{color};font-weight:800'>{mark}</td>"
+            f"<td align='center'>{val_txt}</td>"
+            f"<td align='center'>{_html.escape(_fmt_criterion(lo, hi))}</td>"
+            f"<td align='right'>{_html.escape(label)}</td>"
+            "</tr>")
+
+    # Header note: how this person landed on the list.
+    if rec.get("_balance_fill"):
+        why = ("<b style='color:#b45309'>נוסף להשלמת מכסת הקהילה</b> — "
+               "אמנם לא עומד בכל הסינון, אבל הוא מהקרובים ביותר לעמוד בו בקהילה שלו.")
+    elif not rows:
+        why = "בחלוקה זו לא הוגדר סינון פעיל — הרשימה כוללת את כל המקבלים."
+    else:
+        why = "נמצא ברשימה כי הוא <b style='color:#334155'>עומד בקריטריוני הסינון</b>:"
+
+    rep = (rec.get("representative") or "").strip()
+    community_line = (f"<p style='margin:2px 0'>קהילה (נציג): <b>{_html.escape(rep)}</b></p>"
+                      if rep else "")
+    regular_line = ("<p style='margin:2px 0;color:#92400e'>◆ מקבל <b>קבוע</b></p>"
+                    if rec.get("_balance_regular") else "")
+
+    table = ""
+    if rows:
+        table = (
+            "<table dir='rtl' border='1' cellpadding='6' cellspacing='0' width='100%' "
+            "style='border-collapse:collapse;margin-top:8px'>"
+            "<tr style='background:#eef2f8;color:#334155;'>"
+            "<th>עומד?</th><th>הערך של המשפחה</th><th>הסינון</th><th align='right'>קריטריון</th></tr>"
+            + "".join(rows) + "</table>")
+
+    body = (
+        "<div dir='rtl' style='font-family:Segoe UI;font-size:13px;color:#1f2937'>"
+        f"<p style='margin:0 0 6px 0'>{why}</p>"
+        f"{community_line}{regular_line}{table}"
+        "<p style='color:#6b7280;font-size:11px;margin-top:8px'>במצב 'סינון מותאם' "
+        "הבחירה היא לפי עמידה בקריטריונים ואיזון בין קהילות — לא לפי ניקוד צורך.</p></div>")
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(f"למה ברשימה — {name}")
+    dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+    dlg.setMinimumWidth(470)
+    v = QVBoxLayout(dlg)
+    lbl = QLabel(body)
+    lbl.setTextFormat(Qt.TextFormat.RichText)
+    lbl.setWordWrap(True)
+    v.addWidget(lbl)
+    row = QHBoxLayout()
+    row.addStretch()
+    btn = QPushButton("סגור")
+    btn.setObjectName("neutral")
+    btn.clicked.connect(dlg.accept)
+    row.addWidget(btn)
+    v.addLayout(row)
+    dlg.exec()
+
+
 # ── Update-offer dialog (v2.60) ──────────────────────────────────────────────
 
 class UpdateOfferDialog(QDialog):

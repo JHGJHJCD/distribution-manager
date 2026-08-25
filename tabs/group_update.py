@@ -21,7 +21,7 @@ from utils.excel_utils import (export_distribution_to_excel, export_full_distrib
 from utils.print_view import print_distribution_list
 from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
                       enable_touch_scroll, search_icon, line_icon, reveal_in_folder,
-                      apply_header_icons, show_score_breakdown)
+                      apply_header_icons, show_score_breakdown, show_filter_breakdown)
 from utils import email_utils
 
 
@@ -149,7 +149,7 @@ class FilterCriteriaDialog(QDialog):
         self.chk_balance = QCheckBox("איזון בין קהילות — כל קהילה (לפי שם נציג) מקבלת "
                                      "חלק יחסי לגודלה מהמוצרים")
         self.chk_balance.setChecked(bool((criteria or {}).get("balance_communities", True)))
-        self.chk_balance.setStyleSheet("font-weight:600; color:#0f766e;")
+        self.chk_balance.setStyleSheet("font-weight:600; color:#334155;")
         self.chk_balance.setToolTip(
             "כשהאיזון פעיל: המוצרים מתחלקים בין הקהילות לפי גודלן (או לפי אחוזים "
             "שנקבעו בהגדרות). בתוך כל קהילה נבחרים העומדים בסינון לפי ניקוד צורך; "
@@ -162,7 +162,7 @@ class FilterCriteriaDialog(QDialog):
             f"מקבלים ללא קהילה (בלי שם נציג): {n_missing}" if n_missing
             else "לכל המקבלים הפעילים משויכת קהילה ✓")
         self.lbl_no_comm.setStyleSheet(
-            "color:#b45309; font-size:12.5px;" if n_missing else "color:#15803d; font-size:12.5px;")
+            "color:#b45309; font-size:12.5px;" if n_missing else "color:#334155; font-size:12.5px;")
         comm_row.addWidget(self.lbl_no_comm)
         comm_row.addStretch()
         btn_assign = QPushButton("שיוך קהילות…")
@@ -203,7 +203,7 @@ class FilterCriteriaDialog(QDialog):
             f"מקבלים ללא קהילה (בלי שם נציג): {n_missing}" if n_missing
             else "לכל המקבלים הפעילים משויכת קהילה ✓")
         self.lbl_no_comm.setStyleSheet(
-            "color:#b45309; font-size:12.5px;" if n_missing else "color:#15803d; font-size:12.5px;")
+            "color:#b45309; font-size:12.5px;" if n_missing else "color:#334155; font-size:12.5px;")
 
     def get_criteria(self) -> dict:
         out = {}
@@ -805,7 +805,7 @@ _BTN_RECORD  = (
     "QPushButton:pressed{background:#b45309;}")
 _CHIP_QSS    = ("QLabel{background:#eef2f8; color:#475569; border:none; border-radius:16px;"
                 " padding:5px 13px; font-size:12.5px; font-weight:700;}")
-_CHIP_GREEN  = ("QLabel{background:#e6f6ef; color:#059669; border:none; border-radius:16px;"
+_CHIP_GREEN  = ("QLabel{background:#d3ede1; color:#334155; border:none; border-radius:16px;"
                 " padding:5px 13px; font-size:12.5px; font-weight:700;}")
 
 
@@ -1217,7 +1217,7 @@ class GroupUpdateTab(QWidget):
         # bug #jcncv). The spin itself stays a manual products/portions count.
         self.lbl_regulars_count = QLabel("")
         self.lbl_regulars_count.setStyleSheet(
-            "color:#0f9d78; font-size:11.5px; font-weight:700;"
+            "color:#334155; font-size:11.5px; font-weight:700;"
             " background:transparent; border:none;")
 
         grid.addLayout(_field("שם החלוקה", self.name_input), 0, 0)
@@ -1740,6 +1740,17 @@ class GroupUpdateTab(QWidget):
             self.lbl_leftover.setText(text)
             self.leftover_card.setVisible(True)
 
+        # The 'leftover products → one-timers' concept only exists in the plain
+        # weekly 'schedule' mode: there regulars are served first and whatever is
+        # left goes to priority one-timers. In 'scored'/'filter'/'none' the whole
+        # list is chosen a different way (by score / by criteria / not at all), so
+        # the leftover hint + 'בחר חד-פעמיים' button are irrelevant there and were
+        # showing a nonsensical "מספיק לקבועים בלבד (0)" (bug #6kms5) — hide them.
+        if self._current_mode() != "schedule":
+            self.lbl_leftover.setText("")
+            self.leftover_card.setVisible(False)
+            return
+
         total = self.products_spin.value()
         if total <= 0:
             self.lbl_leftover.setText("")
@@ -1751,12 +1762,12 @@ class GroupUpdateTab(QWidget):
             _show("#b91c1c", 800,
                   f"⚠ אין מספיק מוצרים לכל הקבועים! יש {total}, צריך {regs} — חסרים {regs - total}")
         elif n <= 0:
-            _show("#059669", 700, f"מספיק לקבועים בלבד ({regs}) — אפשר להדפיס ✓")
+            _show("#334155", 700, f"מספיק לקבועים בלבד ({regs}) — אפשר להדפיס ✓")
         else:
             picks = self._main_pick_count()
             done = picks >= n
             state = "נבחרו ✓" if done else "טרם הושלם — לחץ 'בחר חד-פעמיים'"
-            _show("#059669" if done else "#b45309", 700,
+            _show("#334155" if done else "#b45309", 700,
                   f"נשאר לחד-פעמיים: {n}  ·  נבחרו: {picks}  ({state})")
 
     def _mark_leaders(self):
@@ -2034,13 +2045,21 @@ class GroupUpdateTab(QWidget):
         self.table.setFixedHeight(total)
 
     def _on_cell_clicked(self, row, col):
-        """Clicking a name (col 1) opens the need-score breakdown — same as the
-        'חד פעמי' tab — for any row that has a score (scored regulars + picks)."""
+        """Clicking a name (col 1) opens an explanation of why the recipient is on
+        the list. In 'filter' mode that's the filter/community reason (#6clvq); in
+        the other modes it's the need-score breakdown."""
         if col != 1:
             return
         rows = self._visible_rows()
-        if 0 <= row < len(rows) and rows[row].get("_score_parts"):
-            show_score_breakdown(self, rows[row])
+        if not (0 <= row < len(rows)):
+            return
+        rec = rows[row]
+        if self._current_mode() == "filter":
+            # People here are chosen by criteria + community balance, not by score,
+            # so showing the score would mislead — show the actual filter reason.
+            show_filter_breakdown(self, rec, db.get_filter_criteria())
+        elif rec.get("_score_parts"):
+            show_score_breakdown(self, rec)
 
     def _on_item_changed(self, item):
         """Keep _checked_ids in sync when the operator ticks/unticks a row."""

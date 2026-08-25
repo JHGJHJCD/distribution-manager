@@ -1,7 +1,8 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QLineEdit, QAbstractItemView,
-    QFrame, QPushButton, QMessageBox, QListWidget, QListWidgetItem, QScrollArea
+    QFrame, QPushButton, QMessageBox, QListWidget, QListWidgetItem, QScrollArea,
+    QSizePolicy
 )
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
@@ -70,108 +71,134 @@ class SearchTab(QWidget):
     # ── UI ─────────────────────────────────────────────────────────────────────
     def _build_ui(self):
         lay = QVBoxLayout(self)
-        lay.setSpacing(8)
-        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(10)
+        lay.setContentsMargins(12, 12, 12, 12)
 
         title = QLabel("חיפוש מהיר")
         title.setObjectName("title")
         lay.addWidget(title)
 
-        # Two columns: RIGHT = search + name list · LEFT = full details of the
-        # best match. (In an RTL layout the first-added widget sits on the right.)
+        # Two columns: RIGHT = search + name list · LEFT = the selected person's
+        # profile (details + history). In an RTL layout the first-added widget
+        # sits on the right.
         main = QHBoxLayout()
-        main.setSpacing(12)
+        main.setSpacing(14)
         lay.addLayout(main, 1)
 
         # ── Right column: the search box + name results ────────────────────────
-        left_panel = QFrame()
-        left_panel.setObjectName("panel")
-        left_panel.setFixedWidth(330)
-        lp = QVBoxLayout(left_panel)
-        lp.setContentsMargins(12, 12, 12, 12)
-        lp.setSpacing(8)
+        search_panel = QFrame()
+        search_panel.setObjectName("panel")
+        search_panel.setFixedWidth(320)
+        lp = QVBoxLayout(search_panel)
+        lp.setContentsMargins(14, 14, 14, 14)
+        lp.setSpacing(10)
 
         self.search_input = QLineEdit()
-        self.search_input.setMinimumHeight(40)
+        self.search_input.setMinimumHeight(44)
         self.search_input.setPlaceholderText("חיפוש: שם, טלפון, ת״ז, כתובת, אימייל...")
         self.search_input.setAlignment(ALIGN_RIGHT)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
+        self.search_input.setStyleSheet(
+            "QLineEdit{border:1.5px solid #cbd5e1; border-radius:10px; padding:0 12px;"
+            " font-size:14px; background:#ffffff;}"
+            "QLineEdit:focus{border-color:#0f766e;}")
         self.search_input.textChanged.connect(lambda: self._filter_timer.start(180))
         lp.addWidget(self.search_input)
 
         self.count_lbl = QLabel("")
-        self.count_lbl.setObjectName("subtitle")
+        self.count_lbl.setStyleSheet("color:#64748b; font-size:12px; font-weight:600;"
+                                     " background:transparent; padding-right:2px;")
         lp.addWidget(self.count_lbl)
 
         self.results_list = QListWidget()
         self.results_list.setObjectName("names-list")
         self.results_list.setStyleSheet(
-            "QListWidget#names-list { border:1px solid #e5e7eb; border-radius:8px; }"
-            "QListWidget#names-list::item { padding:9px 12px; border-bottom:1px solid #f1f5f9; }"
+            "QListWidget#names-list { border:1px solid #e5e7eb; border-radius:10px;"
+            "  background:#ffffff; outline:none; }"
+            "QListWidget#names-list::item { padding:11px 14px; border-bottom:1px solid #f1f5f9;"
+            "  color:#1f2937; }"
+            "QListWidget#names-list::item:hover { background:#f4faf7; }"
             "QListWidget#names-list::item:selected {"
-            "  background:#ddf3ec; color:#0d2a4a; border-left:3px solid #0f766e; }")
+            "  background:#d3ede1; color:#0d2a4a; border-right:3px solid #0f766e; }")
         self.results_list.currentItemChanged.connect(self._on_result_selected)
         enable_touch_scroll(self.results_list)
         lp.addWidget(self.results_list, 1)
 
-        btn_export = QPushButton("ייצוא הרשימה לאקסל")
-        btn_export.setObjectName("success")
-        btn_export.setStyleSheet(_SMALL_BTN)
+        btn_export = QPushButton("⭳  ייצוא הרשימה לאקסל")
+        btn_export.setObjectName("neutral")
+        btn_export.setMinimumHeight(34)
+        btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_export.setToolTip("ייצא את הרשימה המסוננת (התוצאות) לאקסל בתיקיית ההורדות")
         btn_export.clicked.connect(self._export_results)
         lp.addWidget(btn_export)
 
-        main.addWidget(left_panel)
+        main.addWidget(search_panel)
 
-        # ── Left column: details of the selected / best-matching recipient ─────
+        # ── Left column: the selected person's profile ─────────────────────────
         right_panel = QVBoxLayout()
-        right_panel.setSpacing(8)
+        right_panel.setSpacing(12)
         main.addLayout(right_panel, 1)
 
-        # Header (name + badges). Real QLabel "pill" widgets — not an HTML span —
-        # because QLabel's rich-text engine ignores border-radius and clips the
-        # padded background, so the badge rendered cut-off (bug #r92nz). Widget
-        # stylesheets round cleanly and never clip.
-        self.detail_header = QWidget()
-        self._hdr_lay = QHBoxLayout(self.detail_header)
-        self._hdr_lay.setContentsMargins(0, 6, 0, 6)
+        # Profile header card: a soft green banner with the name, badges and the
+        # phone(s) shown big — the two things looked up most often. Real QLabel
+        # "pill" badges (not HTML spans) so the rounded corners never clip (#r92nz).
+        self.detail_header = QFrame()
+        self.detail_header.setObjectName("profile-head")
+        self.detail_header.setStyleSheet(
+            "QFrame#profile-head{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,"
+            " stop:0 #f0faf6, stop:1 #e3f3ec); border:1px solid #cfe8de;"
+            " border-radius:14px;}")
+        head_v = QVBoxLayout(self.detail_header)
+        head_v.setContentsMargins(18, 14, 18, 14)
+        head_v.setSpacing(8)
+        # Row 1: name + badges (the layout the render code fills).
+        name_row = QWidget()
+        name_row.setStyleSheet("background:transparent;")
+        self._hdr_lay = QHBoxLayout(name_row)
+        self._hdr_lay.setContentsMargins(0, 0, 0, 0)
         self._hdr_lay.setSpacing(8)
+        head_v.addWidget(name_row)
+        # Row 2: the hero phone line (filled by _show_recipient).
+        self._hero_phone = QLabel("")
+        self._hero_phone.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._hero_phone.setStyleSheet("background:transparent; border:none;")
+        self._hero_phone.setVisible(False)
+        head_v.addWidget(self._hero_phone)
         right_panel.addWidget(self.detail_header)
 
-        # Scrollable detail rows (icon + label + value)
-        self.detail_scroll = QScrollArea()
-        self.detail_scroll.setWidgetResizable(True)
-        self.detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        # The recipient's details are the main thing on this screen — give them
-        # the bulk of the height so every field is visible without scrolling
-        # (bug #5j4hw). The history table below is capped small instead.
-        self.detail_scroll.setMinimumHeight(340)
-        enable_touch_scroll(self.detail_scroll)
+        # Details card — hugs its content (no forced height, no empty filler) so
+        # the history below can take the remaining room (the old sparse half-empty
+        # card is gone).
         self.detail_card = QFrame()
         self.detail_card.setObjectName("panel")
-        # Two-column grid: the recipient's fields sit side-by-side so the whole
-        # profile fits without pushing the history title on top of the last row
-        # (bug #5j4hw). Full-width items (notes) span both columns.
         self._detail_lay = QGridLayout(self.detail_card)
-        self._detail_lay.setContentsMargins(16, 12, 16, 12)
-        self._detail_lay.setHorizontalSpacing(24)
-        self._detail_lay.setVerticalSpacing(2)
+        self._detail_lay.setContentsMargins(18, 14, 18, 14)
+        self._detail_lay.setHorizontalSpacing(28)
+        self._detail_lay.setVerticalSpacing(3)
         self._detail_lay.setColumnStretch(0, 1)
         self._detail_lay.setColumnStretch(1, 1)
         self._detail_count = 0
+        self.detail_scroll = QScrollArea()
+        self.detail_scroll.setWidgetResizable(True)
+        self.detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.detail_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.detail_scroll.setMaximumHeight(300)
+        enable_touch_scroll(self.detail_scroll)
         self.detail_scroll.setWidget(self.detail_card)
-        right_panel.addWidget(self.detail_scroll, 1)
+        right_panel.addWidget(self.detail_scroll)
 
-        # History header row + print-card button
+        # History header row + actions. History gets generous room (stretch=1) —
+        # the operator asked to see it comfortably.
         hist_row = QHBoxLayout()
         self.hist_title = QLabel("היסטוריית חלוקות")
         self.hist_title.setObjectName("section-header")
         hist_row.addWidget(self.hist_title)
         hist_row.addStretch()
-        self.btn_print_card = QPushButton("הדפס כרטיס")
-        self.btn_print_card.setObjectName("neutral")
-        self.btn_print_card.setStyleSheet(_SMALL_BTN)
+        self.btn_print_card = QPushButton("🖶  הדפס כרטיס")
+        self.btn_print_card.setObjectName("primary")
+        self.btn_print_card.setMinimumHeight(34)
+        self.btn_print_card.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_print_card.setToolTip("הדפס כרטיס עם פרטי המקבל + היסטוריית החלוקות שלו")
         self.btn_print_card.clicked.connect(self._print_card)
         self.btn_print_card.setEnabled(False)
@@ -194,16 +221,15 @@ class SearchTab(QWidget):
         self.hist_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.hist_table.setAlternatingRowColors(True)
         self.hist_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.hist_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.hist_table.verticalHeader().setDefaultSectionSize(30)
         hdr = self.hist_table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setResizeContentsPrecision(20)
         self.hist_table.verticalHeader().setVisible(False)
-        # History is secondary here — keep it compact so the details above get
-        # the room (bug #5j4hw). It scrolls internally when there are many rows.
-        self.hist_table.setMaximumHeight(230)
         enable_touch_scroll(self.hist_table)
-        right_panel.addWidget(self.hist_table)
+        right_panel.addWidget(self.hist_table, 1)
 
     # ── data ───────────────────────────────────────────────────────────────────
     def refresh(self):
@@ -294,10 +320,12 @@ class SearchTab(QWidget):
     def _show_empty_profile(self, msg="בחר מקבל מהרשימה כדי לראות את פרטיו"):
         self._clear_header()
         lab = QLabel(msg)
-        lab.setStyleSheet("color:#94a3b8; font-size:13px; padding:14px 0; background:transparent;")
+        lab.setStyleSheet("color:#64748b; font-size:14px; padding:6px 0; background:transparent;")
         lab.setWordWrap(True)
         self._hdr_lay.addWidget(lab)
         self._hdr_lay.addStretch()
+        if hasattr(self, "_hero_phone"):
+            self._hero_phone.setVisible(False)
         self._clear_details()
         self.hist_table.clearContents()
         self.hist_table.setRowCount(0)
@@ -333,11 +361,25 @@ class SearchTab(QWidget):
                 self._hdr_lay.addWidget(badge)
         self._hdr_lay.addStretch()
 
+        # Hero phone line in the header — the number is what's looked up most.
+        phones = "   ·   ".join(p for p in [rec.get("phone1"), rec.get("phone2"),
+                                            rec.get("phone3")] if p)
+        if phones:
+            self._hero_phone.setText(f"📞  {phones}")
+            self._hero_phone.setStyleSheet(
+                "color:#0d2a4a; font-size:16px; font-weight:700; background:transparent;"
+                " border:none;")
+            self._hero_phone.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+            self._hero_phone.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self._hero_phone.setVisible(True)
+        else:
+            self._hero_phone.setText("אין מספר טלפון")
+            self._hero_phone.setStyleSheet("color:#94a3b8; font-size:13px; background:transparent;"
+                                           " border:none;")
+            self._hero_phone.setVisible(True)
+
         # Detail rows with dignified icons
         self._clear_details()
-        phones = " / ".join(p for p in [rec.get("phone1"), rec.get("phone2"),
-                                        rec.get("phone3")] if p)
-        self._add_detail_row("phone", "טלפונים", phones, ltr=True)
         self._add_detail_row("id", "ת״ז בעל", rec.get("id_number"), ltr=True)
         self._add_detail_row("id", "ת״ז אשה", rec.get("spouse_id_number"), ltr=True)
         self._add_detail_row("home", "כתובת", rec.get("address"))
@@ -389,8 +431,6 @@ class SearchTab(QWidget):
             note_row = (self._detail_count + 1) // 2
             self._detail_lay.addWidget(box, note_row, 0, 1, 2)
             self._detail_count = (note_row + 1) * 2
-        # Push all rows to the top; the empty trailing row soaks up extra height.
-        self._detail_lay.setRowStretch(self._detail_count // 2 + 1, 1)
 
         # History
         self.hist_title.setText(f"היסטוריית חלוקות ({len(hist)})")

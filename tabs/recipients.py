@@ -701,8 +701,8 @@ class RecipientDialog(QDialog):
     def __init__(self, parent=None, rec: dict = None):
         super().__init__(parent)
         self.setWindowTitle("הוספת מקבל" if rec is None else "עריכת מקבל")
-        self.setMinimumSize(520, 560)
-        self.resize(560, 620)
+        self.setMinimumSize(600, 560)
+        self.resize(640, 620)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._build(rec)
 
@@ -712,6 +712,15 @@ class RecipientDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        # The 4 tab titles didn't fit the dialog width → the last tab ('מידע מנהלי')
+        # was clipped to 'מידע' behind scroll-arrows (bug #7y8o0). Let the bar share
+        # the width evenly with compact tabs and no scroll buttons, so all four are
+        # always fully readable.
+        tabs.setObjectName("recip-tabs")
+        tabs.setStyleSheet(
+            "QTabWidget#recip-tabs QTabBar::tab{min-width:0; padding:8px 12px; margin:2px;}")
+        tabs.setUsesScrollButtons(False)
+        tabs.tabBar().setExpanding(True)
         outer.addWidget(tabs)
 
         def _tab(title):
@@ -792,10 +801,23 @@ class RecipientDialog(QDialog):
             w.textChanged.connect(lambda t, fw=w: _mark(fw, bool(t.strip()) and not _phone_valid(t),
                                                         "מספר לא תקני — 9-10 ספרות, מתחיל ב-0"))
 
+        # Most recipients have one number — show a single 'טלפון' field by default
+        # and reveal the extra two only on demand, so the form isn't cluttered with
+        # three phone rows (#4y193). The '+ הוסף מספר' link reveals the next one.
+        self.btn_add_phone = QPushButton("＋ הוסף מספר")
+        self.btn_add_phone.setObjectName("neutral")
+        self.btn_add_phone.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_add_phone.setStyleSheet(
+            "QPushButton{border:none; background:transparent; color:#0f766e;"
+            " font-size:12px; font-weight:600; padding:2px 0; text-align:right;}"
+            "QPushButton:hover{color:#0b5c55; text-decoration:underline;}")
+        self.btn_add_phone.clicked.connect(self._reveal_next_phone)
+
         f1.addRow("שם מלא:", self.f_name)
-        f1.addRow("טלפון 1:", self.f_phone1)
-        f1.addRow("טלפון 2:", self.f_phone2)
-        f1.addRow("טלפון 3:", self.f_phone3)
+        f1.addRow("טלפון:", self.f_phone1)
+        f1.addRow("טלפון נוסף:", self.f_phone2)
+        f1.addRow("טלפון נוסף:", self.f_phone3)
+        f1.addRow("", self.btn_add_phone)
         f1.addRow("כתובת:", self.f_address)
         f1.addRow("אזור:", self.f_area)
         f1.addRow("נפשות:", self.f_souls)
@@ -947,6 +969,31 @@ class RecipientDialog(QDialog):
         # Set the initial visibility of the frequency row (setCurrentIndex above
         # doesn't fire the signal when the value was already index 0 = ללא).
         self._toggle_frequency_row()
+        # Collapse the extra phone rows; on edit, keep any already-filled ones open.
+        self._init_phone_rows()
+
+    def _init_phone_rows(self):
+        """Show only 'טלפון' by default; reveal 'טלפון נוסף' rows that already hold
+        a value (edit mode). The '+ הוסף מספר' link is hidden once all three show."""
+        show2 = bool(self.f_phone2.text().strip())
+        show3 = bool(self.f_phone3.text().strip())
+        # A value in phone3 but not phone2 shouldn't leave a gap — reveal both.
+        show2 = show2 or show3
+        self._form1.setRowVisible(self.f_phone2, show2)
+        self._form1.setRowVisible(self.f_phone3, show3)
+        self._form1.setRowVisible(self.btn_add_phone, not (show2 and show3))
+
+    def _reveal_next_phone(self):
+        """Reveal the next hidden phone row (phone2, then phone3)."""
+        if not self._form1.isRowVisible(self.f_phone2):
+            self._form1.setRowVisible(self.f_phone2, True)
+            self.f_phone2.setFocus()
+        elif not self._form1.isRowVisible(self.f_phone3):
+            self._form1.setRowVisible(self.f_phone3, True)
+            self.f_phone3.setFocus()
+        # Hide the link once all three are showing.
+        if self._form1.isRowVisible(self.f_phone2) and self._form1.isRowVisible(self.f_phone3):
+            self._form1.setRowVisible(self.btn_add_phone, False)
 
     def _is_regular_selected(self) -> bool:
         """True when the priority combo currently points at 'קבוע' (4)."""

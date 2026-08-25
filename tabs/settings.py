@@ -166,7 +166,7 @@ class SettingsTab(QWidget):
         ver_row = QHBoxLayout()
         ver_row.addWidget(QLabel("גרסה נוכחית:"))
         self.lbl_version = QLabel(f"v{APP_VERSION}")
-        self.lbl_version.setStyleSheet("font-weight:700; color:#0f766e;")
+        self.lbl_version.setStyleSheet("font-weight:700; color:#334155;")
         ver_row.addWidget(self.lbl_version)
         ver_row.addStretch()
         self.btn_check_update = QPushButton("בדוק עדכונים")
@@ -565,7 +565,7 @@ class SettingsTab(QWidget):
             try:
                 parsed = datetime.fromisoformat(last_backup)
                 last_backup = parsed.strftime("%d/%m/%Y %H:%M")
-                self.lbl_last_backup.setStyleSheet("color:#16a34a;")
+                self.lbl_last_backup.setStyleSheet("color:#334155;")
             except ValueError:
                 pass
         else:
@@ -583,7 +583,7 @@ class SettingsTab(QWidget):
         self.mail_file_pw.setText(email_utils.get_checklist_password())
         if email_utils.is_configured():
             self.lbl_mail_status.setText("מוגדר ✓")
-            self.lbl_mail_status.setStyleSheet("color:#16a34a;")
+            self.lbl_mail_status.setStyleSheet("color:#334155;")
         else:
             self.lbl_mail_status.setText("לא הוגדר עדיין")
             self.lbl_mail_status.setStyleSheet("color:#9ca3af;")
@@ -653,7 +653,7 @@ class SettingsTab(QWidget):
         total = sum(s.value() for s in self._weight_spins.values())
         self.lbl_weight_preview.setText(f"סה\"כ: {total}%")
         self.lbl_weight_preview.setStyleSheet(
-            "color:#16a34a;" if total == 100 else "color:#b45309;")
+            "color:#334155;" if total == 100 else "color:#b45309;")
 
     def _save_weights(self):
         db.set_need_weights({k: s.value() for k, s in self._weight_spins.items()})
@@ -794,7 +794,7 @@ class SettingsTab(QWidget):
                  f"ממתינים לשליחה: {info.get('pending', 0)}"]
         self.lbl_sync_status.setText("\n".join(parts))
         self.lbl_sync_status.setStyleSheet(
-            "color:#15803d; font-size:12.5px;" if avail else "color:#b45309; font-size:12.5px;")
+            "color:#334155; font-size:12.5px;" if avail else "color:#b45309; font-size:12.5px;")
         self.btn_sync_now.setEnabled(True)
 
     def _open_sync_setup(self):
@@ -955,7 +955,7 @@ class SettingsTab(QWidget):
                 self.lbl_update_status.setStyleSheet("color:#b45309;")
                 self.lbl_update_status.setText(f"גרסה v{result['version']} זמינה — ניתן לעדכן בכל עת.")
         else:
-            self.lbl_update_status.setStyleSheet("color:#16a34a;")
+            self.lbl_update_status.setStyleSheet("color:#334155;")
             self.lbl_update_status.setText(f"התוכנה מעודכנת (v{APP_VERSION}) ✓")
 
     def _start_download(self, result):
@@ -1120,7 +1120,7 @@ class SyncSetupDialog(QDialog):
         if found:
             hint = QLabel("נמצאו תיקיות Drive: " + "  |  ".join(found[:3]))
             hint.setWordWrap(True)
-            hint.setStyleSheet("color:#0f766e; font-size:11.5px;")
+            hint.setStyleSheet("color:#475569; font-size:11.5px;")
             outer.addWidget(hint)
 
         name_row = QHBoxLayout()

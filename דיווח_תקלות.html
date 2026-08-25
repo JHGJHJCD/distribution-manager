@@ -8,7 +8,8 @@
 /* ============================================================================
    כלי דיווח תקלות ובקשות שיפור — מנהל חלוקה
    קובץ יחיד (HTML + CSS + JS), ללא שרת וללא התקנות. שמירה אוטומטית ב-LocalStorage.
-   העיצוב תואם את התוכנה: כחול #1565c0/#2b95ef, כרטיסים לבנים על רקע אפור בהיר.
+   העיצוב תואם את התוכנה: "ירוק רגוע" — ירוק #0f9d78/#0f766e, כתום #f59e0b לפעולה
+   משנית, כרטיסים לבנים על רקע ירקרק בהיר.
    ---------------------------------------------------------------------------
    מבנה הנתונים:
      APP_STRUCTURE = [{ key, name, icon, items:[{key,name,type,desc}] }]
@@ -18,11 +19,11 @@
    כדי להרחיב — הוסף לשונית/פריט ל-APP_STRUCTURE; שאר הכלי מתעדכן אוטומטית.
 ============================================================================ */
 :root{
-  --bg:#eef2f8; --card:#ffffff; --line:#e6eaf2; --ink:#0d2a4a; --muted:#64748b;
-  --blue:#1565c0; --blue2:#2b95ef; --blue-soft:#eaf3ff;
+  --bg:#f4faf7; --card:#ffffff; --line:#dcece5; --ink:#0f2e28; --muted:#5d7d74;
+  --blue:#0f766e; --blue2:#0f9d78; --blue-soft:#e6f6f0;
   --green:#059669; --amber:#b45309; --red:#dc2626; --purple:#6d28d9;
-  --teal:#0891b2; --teal-soft:#ecfeff;
-  --radius:12px; --shadow:0 1px 3px rgba(15,40,80,.06),0 4px 16px rgba(15,40,80,.05);
+  --teal:#0891b2; --teal-soft:#ecfeff; --orange:#f59e0b;
+  --radius:12px; --shadow:0 1px 3px rgba(15,80,60,.06),0 4px 16px rgba(15,80,60,.05);
 }
 *{box-sizing:border-box;}
 body{
@@ -34,9 +35,9 @@ textarea,input,select{font-family:inherit;}
 
 /* ── Top app-bar (mirrors the program) ─────────────────────────────────── */
 .appbar{
-  background:linear-gradient(180deg,#1e78d6,#1257ad); color:#fff;
+  background:linear-gradient(180deg,#12b088,#0f766e); color:#fff;
   padding:14px 22px; display:flex; align-items:center; gap:16px;
-  box-shadow:0 2px 10px rgba(13,42,74,.25); position:sticky; top:0; z-index:50;
+  box-shadow:0 2px 10px rgba(15,80,60,.25); position:sticky; top:0; z-index:50;
 }
 .appbar .logo{
   width:46px;height:46px;border-radius:10px;background:#fff;color:var(--blue);
@@ -64,7 +65,7 @@ textarea,input,select{font-family:inherit;}
 /* ── Toolbar ───────────────────────────────────────────────────────────── */
 .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:10px 22px 14px;}
 .toolbar input[type=search],.toolbar select{
-  border:1px solid #d7dfea;border-radius:10px;padding:9px 12px;background:#fff;font-size:14px;
+  border:1px solid #cfe2da;border-radius:10px;padding:9px 12px;background:#fff;font-size:14px;
 }
 .toolbar input[type=search]{min-width:220px;flex:1;max-width:400px;}
 .btn{
@@ -72,8 +73,8 @@ textarea,input,select{font-family:inherit;}
   background:linear-gradient(180deg,var(--blue2),var(--blue));box-shadow:var(--shadow);
 }
 .btn:hover{filter:brightness(1.06);}
-.btn.ghost{background:#fff;color:#1f2937;border:1px solid #d7dfea;}
-.btn.teal{background:linear-gradient(180deg,#22d3ee,#0891b2);}
+.btn.ghost{background:#fff;color:#1f2937;border:1px solid #cfe2da;}
+.btn.teal{background:linear-gradient(180deg,#fbbf24,#f59e0b);}
 .btn.small{padding:5px 12px;font-size:12.5px;border-radius:8px;}
 .btn.danger{background:linear-gradient(180deg,#f87171,#dc2626);}
 
@@ -85,16 +86,16 @@ textarea,input,select{font-family:inherit;}
   box-shadow:var(--shadow);overflow:hidden;
 }
 .sidebar h3{margin:0;padding:12px 16px;font-size:13px;color:var(--muted);
-  border-bottom:1px solid var(--line);background:#f7f9fc;font-weight:800;}
+  border-bottom:1px solid var(--line);background:#f2f9f5;font-weight:800;}
 .tab-btn{
   display:flex;align-items:center;gap:10px;width:100%;text-align:right;
   background:none;border:none;padding:12px 16px;font-size:15px;font-weight:700;color:var(--ink);
-  border-bottom:1px solid #f1f4f9;
+  border-bottom:1px solid #eef6f2;
 }
 .tab-btn .ic{font-size:18px;}
 .tab-btn .cnt{margin-inline-start:auto;background:var(--blue-soft);color:var(--blue);
   border-radius:20px;padding:1px 9px;font-size:12px;font-weight:800;min-width:22px;text-align:center;}
-.tab-btn:hover{background:#f7f9fc;}
+.tab-btn:hover{background:#f2f9f5;}
 .tab-btn.active{background:var(--blue-soft);color:var(--blue);box-shadow:inset 3px 0 0 var(--blue);}
 
 .content{flex:1;min-width:0;}
@@ -107,7 +108,7 @@ textarea,input,select{font-family:inherit;}
   background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
   box-shadow:var(--shadow);margin-bottom:14px;overflow:hidden;
 }
-.item-head{display:flex;align-items:center;gap:10px;padding:12px 16px;background:#f7f9fc;
+.item-head{display:flex;align-items:center;gap:10px;padding:12px 16px;background:#f2f9f5;
   border-bottom:1px solid var(--line);flex-wrap:wrap;}
 .item-head .name{font-weight:800;font-size:15.5px;}
 .type-badge{font-size:11.5px;font-weight:800;border-radius:20px;padding:2px 10px;color:#fff;}
@@ -118,28 +119,28 @@ textarea,input,select{font-family:inherit;}
 .no-bugs{color:#94a3b8;font-size:13px;padding:2px 2px 10px;}
 
 /* ── Report cards ──────────────────────────────────────────────────────── */
-.bug{border:1px solid #e2e8f0;border-radius:10px;padding:12px;margin-bottom:12px;background:#fcfdff;}
+.bug{border:1px solid #e2ede9;border-radius:10px;padding:12px;margin-bottom:12px;background:#fcfefd;}
 .bug.sev-critical{border-inline-start:5px solid var(--red);}
 .bug.sev-high{border-inline-start:5px solid #ea580c;}
 .bug.sev-medium{border-inline-start:5px solid var(--amber);}
 .bug.sev-low{border-inline-start:5px solid #16a34a;}
 .bug.kind-improvement{background:var(--teal-soft);border-inline-start:5px solid var(--teal);}
 .bug-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;}
-.bug-top select{border:1px solid #d7dfea;border-radius:8px;padding:5px 8px;font-size:12.5px;font-weight:700;background:#fff;}
+.bug-top select{border:1px solid #cfe2da;border-radius:8px;padding:5px 8px;font-size:12.5px;font-weight:700;background:#fff;}
 .bug-top select.sel-kind[data-k="improvement"]{color:var(--teal);border-color:#a5e8f2;background:#f4feff;}
 .bug-top select.sel-kind[data-k="bug"]{color:var(--red);}
 .bug-top .bug-id{color:#94a3b8;font-size:12px;margin-inline-start:auto;}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 .fieldbox label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:3px;}
 .fieldbox textarea{
-  width:100%;border:1px solid #d7dfea;border-radius:8px;padding:8px;font-size:13.5px;resize:vertical;
+  width:100%;border:1px solid #cfe2da;border-radius:8px;padding:8px;font-size:13.5px;resize:vertical;
   min-height:46px;background:#fff;
 }
 .fieldbox textarea.desc{min-height:60px;}
 .fieldbox{margin-bottom:9px;}
 .dropzone{
-  border:2px dashed #c7d2e0;border-radius:8px;padding:10px;text-align:center;color:#94a3b8;
-  font-size:12.5px;background:#f8fafc;cursor:pointer;transition:.15s;
+  border:2px dashed #bcd8cd;border-radius:8px;padding:10px;text-align:center;color:#94a3b8;
+  font-size:12.5px;background:#f6fbf9;cursor:pointer;transition:.15s;
 }
 .dropzone.over{border-color:var(--blue2);background:var(--blue-soft);color:var(--blue);}
 .shots{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
@@ -155,7 +156,7 @@ textarea,input,select{font-family:inherit;}
 .sel-status[data-v="new"]{color:var(--amber);}
 
 /* lightbox */
-.lightbox{position:fixed;inset:0;background:rgba(13,42,74,.85);display:none;align-items:center;
+.lightbox{position:fixed;inset:0;background:rgba(15,46,40,.85);display:none;align-items:center;
   justify-content:center;z-index:100;padding:30px;}
 .lightbox.show{display:flex;}
 .lightbox img{max-width:100%;max-height:100%;border-radius:8px;box-shadow:0 10px 40px rgba(0,0,0,.5);}
@@ -165,7 +166,7 @@ textarea,input,select{font-family:inherit;}
   .layout{flex-direction:column;} .sidebar{width:100%;position:static;}
   .grid2{grid-template-columns:1fr;}
 }
-.toast{position:fixed;inset-inline-end:20px;bottom:20px;background:#0d2a4a;color:#fff;padding:10px 18px;
+.toast{position:fixed;inset-inline-end:20px;bottom:20px;background:#0f2e28;color:#fff;padding:10px 18px;
   border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.3);opacity:0;transform:translateY(10px);
   transition:.2s;z-index:120;font-weight:700;}
 .toast.show{opacity:1;transform:none;}
@@ -177,7 +178,7 @@ textarea,input,select{font-family:inherit;}
   <div class="logo">🐞</div>
   <div>
     <h1>כלי דיווח תקלות ובקשות שיפור</h1>
-    <div class="sub">מנהל חלוקה · גרסה 2.56 · קופה של צדקה הר יונה · נוף הגליל</div>
+    <div class="sub">מנהל חלוקה · גרסה 2.63 · קופה של צדקה הר יונה · נוף הגליל</div>
   </div>
   <div class="spacer"></div>
   <button class="btn ghost" onclick="exportReport()">⬇ ייצוא דוח</button>
@@ -222,64 +223,62 @@ textarea,input,select{font-family:inherit;}
 
 <script>
 /* ======================= מבנה התוכנה (לשוניות ופריטים) =======================
-   מעודכן לגרסה 2.56 — כולל "הוסף מקבל ידנית", "חלוקה חדשה", "שמור PDF",
-   מצב "לפי סינון מותאם" + "הגדר סינון", ועמודת "ילדים" ברשימת החלוקה. */
+   מעודכן לגרסה 2.63 — 3 אזורים בתוכנה (חלוקה · אנשים · הגדרות). כולל:
+   שני שלבים (הכנה → רישום מי קיבל / מי לא הגיע), התראות אי-הגעה,
+   בחירת חד-פעמיים בחלון, מצב "סינון מותאם" + איזון בין קהילות,
+   שמור PDF, גודל טקסט, וסנכרון בין 2 מחשבים.
+   * לשונית "חד פעמי" הנפרדת הוסרה — הבחירה נעשית מתוך מסך החלוקה. */
 const APP_STRUCTURE = [
   { key:"dist", name:"חלוקה ורישום", icon:"📋", items:[
-    {key:"name",    name:"שדה: שם החלוקה", type:"field",  desc:"חובה לפני הדפסה; הצעות משמות קודמים (✕ למחיקת הצעה)"},
-    {key:"date",    name:"שדה: תאריך",     type:"field",  desc:"לוח שנה, ימי רביעי מסומנים"},
-    {key:"distr",   name:"שדה: מחלק",      type:"field",  desc:"שם מבצע החלוקה; נזכר אוטומטית"},
-    {key:"prod",    name:"שדה: מוצרים זמינים", type:"field", desc:"מספר המנות; קובע כמה נשאר לחד-פעמיים"},
-    {key:"reserve", name:"שדה: רזרבה",     type:"field",  desc:"כמה אנשי רזרבה לצרף (רשימת המתנה)"},
-    {key:"note",    name:"שדה: הערה כללית לחלוקה", type:"field", desc:"נשמרת פעם אחת ברמת החלוקה"},
-    {key:"leftover",name:"חיווי: נשאר לחד-פעמיים", type:"action", desc:"מציג כמה מנות נותרו ואם נבחרו"},
-    {key:"vmail",   name:"שדה: אימייל המתנדב", type:"field", desc:"כתובת המתנדב שימלא את הרשימה"},
-    {key:"vsend",   name:"כפתור: שלח למתנדב", type:"button", desc:"שולח קובץ רשימה במייל"},
-    {key:"vimport", name:"כפתור: יבוא ידני", type:"button", desc:"ייבוא ידני של קובץ שהתקבל מהמתנדב"},
-    {key:"mode",    name:"בורר: מצב חלוקה לקבועים", type:"action", desc:"רגיל (לפי לוח) / בלי קבועים / לפי ניקוד / לפי סינון מותאם"},
-    {key:"leaders", name:"כפתור: סמן מובילים", type:"button", desc:"מצב 'לפי ניקוד' — מסמן top-N בעלי הניקוד הגבוה"},
-    {key:"editfilter",name:"כפתור: הגדר סינון", type:"button", desc:"מצב 'סינון מותאם' — ספי ילדים/הכנסה/לנפש"},
+    {key:"name",     name:"שדה: שם החלוקה", type:"field",  desc:"בשבועי רגיל אפשר להשאיר ריק — נכתב אוטומטית 'חלוקה שבועית DD/MM/YYYY'; חובה במצב מיוחד"},
+    {key:"date",     name:"שדה: תאריך",     type:"field",  desc:"לוח שנה, ימי רביעי מסומנים"},
+    {key:"distr",    name:"שדה: מחלק",      type:"field",  desc:"שם מבצע החלוקה; נזכר אוטומטית"},
+    {key:"prod",     name:"שדה: מוצרים זמינים", type:"field", desc:"מספר המנות; קובע כמה נשאר לחד-פעמיים"},
+    {key:"reserve",  name:"שדה: רזרבה",     type:"field",  desc:"כמה אנשי רזרבה לצרף (רשימת המתנה)"},
+    {key:"note",     name:"שדה: הערה כללית לחלוקה", type:"field", desc:"נשמרת פעם אחת ברמת החלוקה"},
+    {key:"leftover", name:"חיווי: נשאר לחד-פעמיים", type:"action", desc:"מציג כמה מנות נותרו ואם נבחרו חד-פעמיים"},
+    {key:"pickone",  name:"כפתור: בחר חד-פעמיים", type:"button", desc:"פותח חלון בחירה — מומלצים מסומנים מראש; מוסיף אותם לחלוקה"},
     {key:"manualadd",name:"כפתור: ＋ הוסף מקבל (ידני)", type:"button", desc:"הוספת כל מקבל פעיל לחלוקה — גם אם אינו בתור השבוע"},
-    {key:"qsearch", name:"שדה: חיפוש מהיר ברשימה", type:"field", desc:"סינון הרשימה לפי כל פרט"},
-    {key:"checkall",name:"כפתורים: בחר הכל / בטל הכל", type:"button", desc:"סימון/ביטול המוני"},
-    {key:"table",   name:"טבלת המקבלים", type:"table", desc:"סימון קבלה + עמודות שם/עדיפות/ניקוד/ילדים/הערה"},
-    {key:"save",    name:"כפתור: שמור חלוקה", type:"button", desc:"רושם להיסטוריה + מייצא אקסל מלא"},
-    {key:"print",   name:"כפתור: הדפסה לחלוקה", type:"button", desc:"מדפיס את רשימת החלוקה (A4)"},
-    {key:"pdf",     name:"כפתור: שמור PDF", type:"button", desc:"שומר את הרשימה כ-PDF בתיקיית ההורדות ופותח אותה"},
-    {key:"reset",   name:"כפתור: חלוקה חדשה (איפוס מסך)", type:"button", desc:"מנקה מוצרים/רזרבה/שם/הערה/סימונים/בחירות; רישומים שמורים לא נפגעים"},
+    {key:"qsearch",  name:"שדה: חיפוש מהיר ברשימה", type:"field", desc:"סינון רשימת השבוע לפי כל פרט"},
+    {key:"stage",    name:"שני שלבים: הכנה ← רישום", type:"action", desc:"כפתור כתום 'רישום מי קיבל' עובר לשלב סימון; מי שלא סומן נרשם כ'לא הגיע'"},
+    {key:"table",    name:"טבלת המקבלים", type:"table", desc:"בשלב רישום מסמנים מי הגיע; עמודות שם/עדיפות/ניקוד/ילדים/הערה + תג 'לא הגיע'"},
+    {key:"adv",      name:"אזור מתקפל: מצבי חלוקה מתקדמים", type:"action", desc:"בורר מצב (לפי לוח / בלי קבועים / לפי ניקוד / סינון מותאם) + סמן מובילים + הגדר סינון"},
+    {key:"balance",  name:"איזון בין קהילות", type:"action", desc:"במצב 'סינון מותאם' — מכסה יחסית לכל קהילה (נציג/בית כנסת); ניתן לכבות"},
+    {key:"volmail",  name:"אזור מתקפל: שליחה למתנדב במייל", type:"action", desc:"מייל המתנדב · שלח רשימה · ייבוא הקובץ שהוחזר"},
+    {key:"register", name:"כפתור: רישום מי קיבל / שמירה", type:"button", desc:"רושם להיסטוריה (הגיע/לא הגיע) + מייצא אקסל"},
+    {key:"print",    name:"כפתור: הדפסה לחלוקה", type:"button", desc:"מדפיס את רשימת החלוקה + רזרבה (A4)"},
+    {key:"pdf",      name:"כפתור: שמור PDF", type:"button", desc:"שומר את הרשימה כ-PDF בתיקיית ההורדות ופותח אותה"},
+    {key:"reset",    name:"כפתור: חלוקה חדשה (איפוס מסך)", type:"button", desc:"מנקה מוצרים/רזרבה/שם/הערה/סימונים/בחירות; רישומים שמורים לא נפגעים"},
   ]},
-  { key:"recipients", name:"מקבלים", icon:"👥", items:[
+  { key:"recipients", name:"מקבלים (אזור 'אנשים')", icon:"👥", items:[
     {key:"search", name:"שדה חיפוש", type:"field", desc:"שם, טלפון, ת״ז, כתובת"},
     {key:"filter", name:"סינון סטטוס / עדיפות", type:"action", desc:"פעיל/מושהה, לפי דרגה"},
     {key:"add",    name:"כפתור: + הוסף מקבל", type:"button", desc:"טופס הוספת משפחה/מקבל (תדירות מוצגת רק ל'קבוע')"},
     {key:"import", name:"כפתור: יבוא מ-Excel", type:"button", desc:"ייבוא רשימה שלמה מאקסל"},
     {key:"dups",   name:"כפתור: בדיקת כפילויות", type:"button", desc:"מאתר רשומות כפולות"},
+    {key:"alert",  name:"תג 'לא הגיע' / התראת אי-הגעה", type:"action", desc:"מוצג ברשימה ובכרטיס למי שלא הגיע כמה חלוקות ברצף"},
     {key:"rowbtns",name:"כפתורים: הפעל / השהה / מחק", type:"button", desc:"פעולות על השורה"},
-    {key:"table",  name:"טבלת המקבלים (לחיצה כפולה=עריכה)", type:"table", desc:"עריכת פרטי מקבל"},
+    {key:"table",  name:"טבלת המקבלים (לחיצה כפולה=עריכה)", type:"table", desc:"עריכת פרטי מקבל (כולל נציג/קהילה)"},
   ]},
-  { key:"one_time", name:"חד פעמי", icon:"⭐", items:[
-    {key:"search", name:"שדה חיפוש", type:"field", desc:"סינון הרשימה"},
-    {key:"info",   name:"חיווי: מוצרים/קבועים/לחד-פעמיים/רזרבה", type:"action", desc:"נקרא מ'חלוקה ורישום'"},
-    {key:"calc",   name:"כפתור: חשב המלצה", type:"button", desc:"מסמן מומלצים לפי עדיפות וניקוד"},
-    {key:"table",  name:"טבלה (לחיצה על שם=פירוט ניקוד)", type:"table", desc:"בחר, שם, עדיפות, ניקוד, חלוקה אחרונה"},
-    {key:"addgrp", name:"כפתור: הוסף נבחרים לחלוקה", type:"button", desc:"מעביר את הנבחרים ל'חלוקה ורישום'"},
-  ]},
-  { key:"search", name:"חיפוש מהיר", icon:"🔍", items:[
+  { key:"search", name:"חיפוש מהיר (אזור 'אנשים')", icon:"🔍", items:[
     {key:"input",  name:"שדה חיפוש", type:"field", desc:"חיפוש מקבל בכל השדות"},
     {key:"results",name:"רשימת תוצאות", type:"table", desc:"בחירה מציגה פרופיל"},
     {key:"profile",name:"כרטיס פרופיל + היסטוריה", type:"action", desc:"פרטי המקבל וחלוקותיו (אפשר למחוק רישום בודד)"},
     {key:"export", name:"כפתור: ייצוא הרשימה", type:"button", desc:"מוריד תוצאות לאקסל"},
     {key:"printcard",name:"כפתור: הדפסת כרטיס מקבל", type:"button", desc:"מדפיס כרטיס פרטים (גופן גדול)"},
   ]},
-  { key:"distributions", name:"חלוקות", icon:"📦", items:[
+  { key:"distributions", name:"חלוקות קודמות (אזור 'אנשים')", icon:"📦", items:[
     {key:"table",  name:"טבלת החלוקות (לחיצה כפולה=פרטים)", type:"table", desc:"שורה לכל אירוע חלוקה"},
     {key:"delete", name:"כפתור: מחק חלוקה", type:"button", desc:"מוחק אצווה ורישומיה (מגלגל תאריכים)"},
   ]},
   { key:"settings", name:"הגדרות", icon:"⚙️", items:[
     {key:"pwd",    name:"אבטחה: שנה סיסמה", type:"button", desc:"שינוי סיסמת הכניסה"},
     {key:"update", name:"עדכון תוכנה: בדוק עדכונים", type:"button", desc:"בדיקת גרסה חדשה + עדכון אוטומטי"},
+    {key:"sync",   name:"סנכרון בין 2 מחשבים", type:"action", desc:"עבודה משני מחשבים על אותם נתונים דרך תיקיית Google Drive משותפת"},
     {key:"backup", name:"גיבויים: בחר תיקייה / גבה עכשיו / שחזר", type:"button", desc:"ניהול גיבויים"},
     {key:"weights",name:"משקלי ניקוד: שמור / אפס", type:"action", desc:"כיוון משקלי הניקוד (סכום 100%)"},
+    {key:"textsize",name:"גודל טקסט", type:"action", desc:"הגדלת/הקטנת גודל הכתב בכל התוכנה"},
+    {key:"alerts", name:"סף התראות אי-הגעה", type:"action", desc:"אחרי כמה חלוקות ברצף ללא הגעה להציג התראה (ברירת מחדל 3)"},
     {key:"mail",   name:"מייל למתנדבים: שמור / שלח מייל בדיקה", type:"button", desc:"הגדרות SMTP + בדיקה"},
     {key:"org",    name:"שם הארגון: כותרת / לוגו", type:"field", desc:"מיתוג הסרגל העליון"},
     {key:"reset",  name:"אזור מסוכן: אפס את כל הנתונים", type:"action", desc:"מחיקה בלתי הפיכה"},
@@ -330,6 +329,8 @@ function load(){
   }catch(e){ console.warn("load failed", e); }
   // migrate old records that predate the bug/improvement split
   for(const k in state.bugs) for(const b of state.bugs[k]) if(!b.kind) b.kind = "bug";
+  // if the saved active tab no longer exists (e.g. removed "חד פעמי"), fall back
+  if(!APP_STRUCTURE.some(t=>t.key===state.activeTab)) state.activeTab = APP_STRUCTURE[0].key;
 }
 let saveTimer=null;
 function save(){
@@ -527,7 +528,7 @@ function selectTab(k){ state.activeTab=k; save(); render(); window.scrollTo({top
 /* ============================== ייצוא / העתקה ============================== */
 function buildReport(){
   const c = countAll();
-  let md = `# דוח תקלות ובקשות שיפור — מנהל חלוקה (גרסה 2.56)\n\n`;
+  let md = `# דוח תקלות ובקשות שיפור — מנהל חלוקה (גרסה 2.63)\n\n`;
   md += `נוצר: ${new Date().toLocaleString("he-IL")}\n\n`;
   md += `**סיכום:** סה״כ ${c.total} · 🐞 תקלות ${c.bug} · 💡 שיפורים ${c.improvement} · `;
   md += `פתוחים ${(c.new||0)+(c["in-progress"]||0)} · טופלו ${(c.fixed||0)+(c.verified||0)} · תקלות קריטיות ${c.critical||0}\n`;

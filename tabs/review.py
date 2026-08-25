@@ -122,7 +122,7 @@ class ReviewTab(QWidget):
             self.count_lbl.setStyleSheet("color:#dc2626;")
         else:
             self.count_lbl.setText("לא נמצאו כפילויות או טלפונים סותרים ✓")
-            self.count_lbl.setStyleSheet("color:#16a34a;")
+            self.count_lbl.setStyleSheet("color:#334155;")
 
     def _selected_id(self):
         row = self.table.currentRow()
