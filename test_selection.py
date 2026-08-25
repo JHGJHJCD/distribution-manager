@@ -212,6 +212,97 @@ ok("filter: no active bound → list unchanged",
 ok("criteria_is_active: empty vs set",
    not selection.criteria_is_active({}) and selection.criteria_is_active(_crit))
 
+# ── community balance in filter mode (#lejmr, v2.61) ─────────────────────────
+# Operator decisions (08/2026): quota per community proportional to its TOTAL
+# size (community of 200 gets double a community of 100); a community whose
+# quota exceeds its filter-qualifiers fills the gap from its OWN members by need
+# score; manual percent pins normalise at the others' expense; rep-less people
+# are their own "ללא קהילה" group; the auto-fill infers a rep by synagogue
+# majority.
+
+def crec(name, rep, income, syn="", children=5):
+    return {"id": name, "full_name": name, "representative": rep,
+            "synagogue": syn, "income": str(income), "children_total": children}
+
+# Community sizes: א=2, ב=4 → quotas for 3 products ∝ size → א=1, ב=2
+_ca = [crec("א-עני", "נציג א", 1000), crec("א-עשיר", "נציג א", 9000)]
+_cb = [crec("ב-עני1", "נציג ב", 500), crec("ב-עני2", "נציג ב", 800),
+       crec("ב-בינוני", "נציג ב", 2000), crec("ב-עשיר", "נציג ב", 9500)]
+_crit_inc = {"income": {"min": None, "max": 3000}}
+_picked = selection.balance_by_community(_ca + _cb, _crit_inc, W_INCOME, 3)
+_names = {r["full_name"] for r in _picked}
+ok("C1 quotas ∝ community size (א=1, ב=2 of 3 products)",
+   len(_picked) == 3
+   and sum(1 for r in _picked if r["representative"] == "נציג א") == 1
+   and sum(1 for r in _picked if r["representative"] == "נציג ב") == 2, str(_names))
+ok("C2 inside a community the poorest (by need) win",
+   "ב-עני1" in _names and "ב-עני2" in _names and "א-עני" in _names, str(_names))
+ok("C3 the 'richer' of the big community fell off (original report's ask)",
+   "ב-בינוני" not in _names and "ב-עשיר" not in _names)
+
+# Quota bigger than qualifiers → top-up from the SAME community by need
+_small = [crec("ק-עני", "נציג ק", 1000), crec("ק-עשיר1", "נציג ק", 8000),
+          crec("ק-עשיר2", "נציג ק", 9000)]
+_picked2 = selection.balance_by_community(_small, _crit_inc, W_INCOME, 2)
+_n2 = [r["full_name"] for r in _picked2]
+ok("C4 quota gap filled from the community's own non-qualifiers by need",
+   len(_picked2) == 2 and "ק-עני" in _n2 and "ק-עשיר1" in _n2, str(_n2))
+ok("C4b the fill rows are marked (_balance_fill)",
+   any(r.get("_balance_fill") for r in _picked2 if r["full_name"] == "ק-עשיר1"))
+
+# Manual percent pin: community א pinned to 75% of 4 products → 3; ב gets 1
+_pin = selection.balance_by_community(
+    [crec(f"א{i}", "נציג א", 1000) for i in range(4)]
+    + [crec(f"ב{i}", "נציג ב", 1000) for i in range(4)],
+    _crit_inc, W_INCOME, 4, manual_pcts={"נציג א": 75})
+ok("C5 manual percent pin honoured (א=3, ב=1)",
+   sum(1 for r in _pin if r["representative"] == "נציג א") == 3
+   and sum(1 for r in _pin if r["representative"] == "נציג ב") == 1)
+
+# Over-100 manual pins normalise
+_q = selection.community_quotas(10, {"א": 10, "ב": 10}, {"א": 80, "ב": 120})
+ok("C6 over-100 manual pins normalise to 100 (4/6 of 10)",
+   _q == {"א": 4, "ב": 6}, str(_q))
+
+# Rep-less people are their own group with a proportional share
+_mixed = ([crec(f"נ{i}", "נציג נ", 1000) for i in range(3)]
+          + [crec(f"ללא{i}", "", 1000) for i in range(3)])
+_picked3 = selection.balance_by_community(_mixed, _crit_inc, W_INCOME, 2)
+ok("C7 'ללא קהילה' competes as its own group (1 of 2 picks)",
+   sum(1 for r in _picked3 if not r["representative"]) == 1
+   and all(r.get("_community") for r in _picked3))
+
+# Quota caps at community size (more products than people → everyone, no more)
+_q2 = selection.community_quotas(10, {"א": 2, "ב": 3})
+ok("C8 quota capped at community size (א=2, ב=3 despite 10 products)",
+   _q2 == {"א": 2, "ב": 3}, str(_q2))
+# A pinned community that can't absorb its percent frees the rest to the other
+_q3 = selection.community_quotas(10, {"א": 2, "ב": 20}, {"א": 80})
+ok("C8b pinned-but-small community caps at its size, rest flows on",
+   _q3["א"] == 2 and _q3["ב"] == 8, str(_q3))
+
+# No products count → plain filtered list (no balance)
+_plain = selection.balance_by_community(_ca + _cb, _crit_inc, W_INCOME, 0)
+ok("C9 products=0 → plain filter (everyone qualifying listed)",
+   {r["full_name"] for r in _plain} == {"א-עני", "ב-עני1", "ב-עני2", "ב-בינוני"})
+
+# Synagogue-majority inference for rep-less recipients
+_inf_rows = [
+    {"id": 1, "representative": "נציג א", "synagogue": "בית כנסת המרכזי"},
+    {"id": 2, "representative": "נציג א", "synagogue": "בית כנסת המרכזי"},
+    {"id": 3, "representative": "נציג ב", "synagogue": "בית כנסת המרכזי"},
+    {"id": 4, "representative": "",       "synagogue": "בית כנסת המרכזי"},
+    {"id": 5, "representative": "",       "synagogue": "בית כנסת אחר"},
+    {"id": 6, "representative": "",       "synagogue": ""},
+]
+_sug = selection.infer_communities(_inf_rows)
+ok("C10 rep inferred by synagogue majority (2/3 נציג א)", _sug.get(4) == "נציג א", str(_sug))
+ok("C10b no inference without a synagogue signal", 5 not in _sug and 6 not in _sug)
+_thin = selection.infer_communities([
+    {"id": 1, "representative": "נציג א", "synagogue": "קטן"},
+    {"id": 2, "representative": "", "synagogue": "קטן"}])
+ok("C10c a lone rep in a synagogue is too thin to infer from", 2 not in _thin)
+
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

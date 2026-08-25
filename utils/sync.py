@@ -1,0 +1,545 @@
+# -*- coding: utf-8 -*-
+"""Cross-computer sync over a shared folder (Google Drive for Desktop).
+
+The operator works from two computers in different places (v2.61 request). No
+server exists, so sync rides on a folder both machines see (a Google Drive
+folder synced by "Drive for Desktop"). Design:
+
+  • Each computer appends its own change journal — `journal-<device>.jsonl` —
+    in the shared folder. ONE writer per file, so Drive never has to merge.
+  • Every data change (recipient add/edit/delete, recorded distribution, batch
+    delete, shared settings) is logged as one JSON line, stamped with a UTC
+    timestamp and a per-device sequence number.
+  • Each computer periodically reads the OTHER journals and applies records it
+    hasn't seen (tracked per-device in a local state file). Concurrent edits of
+    the SAME recipient resolve by last-write-wins on the UTC stamp — the
+    operator's accepted compromise; nothing crashes, the later edit sticks.
+  • Rows are identified across machines by a stable random `guid` (never by the
+    local AUTOINCREMENT id, which differs per machine).
+  • If the Drive folder is temporarily unreachable, changes buffer in a local
+    outbox and flush on the next run — offline work is safe.
+
+Device-local state (device id, folder, seq counters) lives in sync_state.json
+NEXT TO the DB — deliberately NOT in the settings table, which is itself synced.
+"""
+
+import os
+import json
+import uuid
+import glob
+import threading
+from datetime import datetime, timezone
+
+import database as db
+
+# Settings that must NOT travel between computers: security, per-machine paths
+# and window/user-interface state.
+EXCLUDED_SETTINGS = {"password", "win_geometry", "backup_folder", "last_backup_at",
+                     "mei_last", "community_pcts_ui"}
+EXCLUDED_SETTING_PREFIXES = ("sync_",)
+
+JOURNAL_PREFIX = "journal-"
+_LOCK = threading.RLock()
+_APPLYING = False          # True while applying remote records → suppress logging
+
+
+def _state_path() -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH), "sync_state.json")
+
+
+def _outbox_path() -> str:
+    return os.path.join(os.path.dirname(db.DB_PATH), "sync_outbox.jsonl")
+
+
+def _load_state() -> dict:
+    try:
+        with open(_state_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_state(state: dict):
+    tmp = _state_path() + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, _state_path())
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def device_id() -> str:
+    with _LOCK:
+        state = _load_state()
+        dev = state.get("device_id")
+        if not dev:
+            dev = uuid.uuid4().hex[:12]
+            state["device_id"] = dev
+            _save_state(state)
+        return dev
+
+
+def get_folder() -> str:
+    return _load_state().get("folder") or ""
+
+
+def is_enabled() -> bool:
+    return bool(_load_state().get("enabled")) and bool(get_folder())
+
+
+def folder_available() -> bool:
+    return bool(get_folder()) and os.path.isdir(get_folder())
+
+
+def device_name() -> str:
+    return _load_state().get("device_name") or ""
+
+
+def set_device_name(name: str):
+    with _LOCK:
+        state = _load_state()
+        state["device_name"] = (name or "").strip()
+        _save_state(state)
+
+
+def last_run_info() -> dict:
+    s = _load_state()
+    return {"last_run": s.get("last_run") or "", "last_error": s.get("last_error") or "",
+            "pending": _pending_count()}
+
+
+def _pending_count() -> int:
+    try:
+        with open(_outbox_path(), "r", encoding="utf-8") as f:
+            return sum(1 for line in f if line.strip())
+    except OSError:
+        return 0
+
+
+def detect_drive_folders() -> list:
+    """Best-effort discovery of a Google Drive for Desktop root on this machine."""
+    found = []
+    for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+        p = f"{letter}:\\My Drive"
+        if os.path.isdir(p):
+            found.append(p)
+    home = os.path.expanduser("~")
+    for pat in ("Google Drive", "GoogleDrive", "My Drive"):
+        p = os.path.join(home, pat)
+        if os.path.isdir(p):
+            found.append(p)
+    return found
+
+
+# ─── Writing changes (the local journal) ─────────────────────────────────────
+
+def _setting_syncable(key: str) -> bool:
+    if key in EXCLUDED_SETTINGS:
+        return False
+    return not any(key.startswith(p) for p in EXCLUDED_SETTING_PREFIXES)
+
+
+def log_change(op: str, payload: dict):
+    """Called by database.py after every successful data write. Appends one
+    record to the local outbox and tries to flush it to the shared folder.
+    No-ops while sync is disabled or while APPLYING remote records."""
+    global _APPLYING
+    if _APPLYING or not is_enabled():
+        return
+    if op == "setting" and not _setting_syncable(payload.get("key", "")):
+        return
+    with _LOCK:
+        state = _load_state()
+        # Device id is created inside THIS state dict — calling device_id() here
+        # would save a separate copy that our own _save_state below overwrites.
+        dev = state.get("device_id")
+        if not dev:
+            dev = uuid.uuid4().hex[:12]
+            state["device_id"] = dev
+        seq = int(state.get("seq") or 0) + 1
+        state["seq"] = seq
+        rec = {"seq": seq, "ts": _utc_now(), "dev": dev, "op": op, **payload}
+        if op == "setting":
+            state.setdefault("setting_ts", {})[payload.get("key", "")] = rec["ts"]
+        with open(_outbox_path(), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        _save_state(state)
+    try:
+        flush()
+    except Exception:
+        pass   # stays in the outbox for the next run
+
+
+def _journal_path(dev: str) -> str:
+    return os.path.join(get_folder(), f"{JOURNAL_PREFIX}{dev}.jsonl")
+
+
+def flush() -> int:
+    """Move buffered outbox records into this device's journal in the shared
+    folder. Returns how many were pushed (0 when offline/nothing pending)."""
+    if not is_enabled() or not folder_available():
+        return 0
+    with _LOCK:
+        try:
+            with open(_outbox_path(), "r", encoding="utf-8") as f:
+                lines = [ln for ln in f.read().splitlines() if ln.strip()]
+        except OSError:
+            return 0
+        if not lines:
+            return 0
+        with open(_journal_path(device_id()), "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        # Truncate the outbox only after the shared write succeeded. A crash in
+        # between would duplicate lines — harmless, dedup'd by seq on apply.
+        with open(_outbox_path(), "w", encoding="utf-8") as f:
+            f.write("")
+        return len(lines)
+
+
+# ─── Applying remote changes ─────────────────────────────────────────────────
+
+def _recipient_columns(conn) -> set:
+    return {row["name"] for row in conn.execute("PRAGMA table_info(recipients)")}
+
+
+def _find_recipient_by_guid(conn, guid: str):
+    if not guid:
+        return None
+    return conn.execute("SELECT * FROM recipients WHERE guid=?", (guid,)).fetchone()
+
+
+def _adopt_match(conn, data: dict):
+    """When a guid is unknown, try to recognise the same PERSON that already
+    exists locally (both machines started from a copy of the same data):
+    external_id first, else exact full_name + phone1. Returns the row or None."""
+    ext = (data.get("external_id") or "").strip()
+    if ext:
+        row = conn.execute(
+            "SELECT * FROM recipients WHERE TRIM(COALESCE(external_id,''))=?",
+            (ext,)).fetchone()
+        if row:
+            return row
+    name = (data.get("full_name") or "").strip()
+    phone = (data.get("phone1") or "").strip()
+    if name:
+        rows = conn.execute(
+            "SELECT * FROM recipients WHERE TRIM(full_name)=?", (name,)).fetchall()
+        if len(rows) == 1 and (not phone or (rows[0]["phone1"] or "").strip() == phone):
+            return rows[0]
+    return None
+
+
+def _apply_rec_upsert(conn, rec: dict):
+    guid = rec.get("guid") or ""
+    data = rec.get("data") or {}
+    if not guid or not data:
+        return
+    cols = _recipient_columns(conn)
+    fields = {k: v for k, v in data.items() if k in cols and k not in ("id", "guid")}
+    local = _find_recipient_by_guid(conn, guid)
+    if local is None:
+        match = _adopt_match(conn, data)
+        if match is not None:
+            conn.execute("UPDATE recipients SET guid=? WHERE id=?", (guid, match["id"]))
+            local = _find_recipient_by_guid(conn, guid)
+    if local is not None:
+        # Last-write-wins: apply only if the incoming edit is newer than ours.
+        local_ts = local["updated_at"] or ""
+        incoming_ts = data.get("updated_at") or rec.get("ts") or ""
+        if local_ts and incoming_ts and incoming_ts <= local_ts:
+            return
+        sets = ", ".join(f"{k}=?" for k in fields)
+        conn.execute(f"UPDATE recipients SET {sets} WHERE id=?",
+                     list(fields.values()) + [local["id"]])
+    else:
+        fields["guid"] = guid
+        keys = list(fields.keys())
+        conn.execute(
+            f"INSERT INTO recipients ({','.join(keys)}) VALUES ({','.join(['?'] * len(keys))})",
+            [fields[k] for k in keys])
+
+
+def _apply_rec_delete(conn, rec: dict):
+    local = _find_recipient_by_guid(conn, rec.get("guid") or "")
+    if local is None:
+        return
+    rid = local["id"]
+    if rec.get("force"):
+        conn.execute("DELETE FROM distributions WHERE recipient_id=?", (rid,))
+        conn.execute("DELETE FROM change_log WHERE recipient_id=?", (rid,))
+        conn.execute("DELETE FROM recipients WHERE id=?", (rid,))
+    else:
+        n = conn.execute("SELECT COUNT(*) AS c FROM distributions WHERE recipient_id=?",
+                         (rid,)).fetchone()["c"]
+        if n == 0:
+            conn.execute("DELETE FROM recipients WHERE id=?", (rid,))
+
+
+def _apply_batch_add(conn, rec: dict):
+    guid = rec.get("guid") or ""
+    if not guid:
+        return
+    if conn.execute("SELECT 1 FROM dist_batches WHERE guid=?", (guid,)).fetchone():
+        return   # already applied (idempotent)
+    b = rec.get("batch") or {}
+    cur = conn.execute(
+        "INSERT INTO dist_batches (dist_name, dist_date, products, quantity, "
+        "distributor, general_note, recipient_count, souls_total, guid) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (b.get("dist_name", ""), b.get("dist_date", ""), b.get("products", ""),
+         b.get("quantity", 0), b.get("distributor", ""), b.get("general_note", ""),
+         b.get("recipient_count", 0), b.get("souls_total", 0), guid))
+    batch_id = cur.lastrowid
+    affected = []
+    for row in rec.get("rows") or []:
+        if row.get("guid") and conn.execute(
+                "SELECT 1 FROM distributions WHERE guid=?", (row["guid"],)).fetchone():
+            continue
+        local = _find_recipient_by_guid(conn, row.get("rec_guid") or "")
+        rid = local["id"] if local is not None else None
+        conn.execute(
+            "INSERT INTO distributions (recipient_id, recipient_name, dist_date, "
+            "area, souls, what_dist, quantity, distributor, notes, batch_id, "
+            "received, guid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (rid, row.get("recipient_name", ""), b.get("dist_date", ""),
+             row.get("area", ""), row.get("souls", 0), b.get("products", ""),
+             b.get("quantity", 0) if row.get("received", 1) else 0,
+             b.get("distributor", ""), row.get("notes", ""), batch_id,
+             1 if row.get("received", 1) else 0, row.get("guid") or uuid.uuid4().hex))
+        if rid is not None:
+            affected.append((rid, bool(row.get("received", 1))))
+    # Re-derive each affected recipient's last/next from the history that now
+    # exists locally (idempotent, uses the LOCAL frequency), and clear the weekly
+    # tick for those who actually received — mirroring bulk_add_distributions.
+    for rid, got in affected:
+        db._recompute_recipient_dates(conn, rid)
+        if got:
+            conn.execute("UPDATE recipients SET weekly_status='' WHERE id=?", (rid,))
+
+
+def _apply_dist_add(conn, rec: dict):
+    """A single legacy history row (no batch) from the initial snapshot."""
+    guid = rec.get("guid") or ""
+    d = rec.get("data") or {}
+    if not guid or conn.execute("SELECT 1 FROM distributions WHERE guid=?",
+                                (guid,)).fetchone():
+        return
+    local = _find_recipient_by_guid(conn, rec.get("rec_guid") or "")
+    rid = local["id"] if local is not None else None
+    conn.execute(
+        "INSERT INTO distributions (recipient_id, recipient_name, dist_date, area, "
+        "souls, what_dist, quantity, distributor, notes, batch_id, received, guid) "
+        "VALUES (?,?,?,?,?,?,?,?,?,NULL,?,?)",
+        (rid, d.get("recipient_name", ""), d.get("dist_date", ""), d.get("area", ""),
+         d.get("souls", 0), d.get("what_dist", ""), d.get("quantity", 0),
+         d.get("distributor", ""), d.get("notes", ""),
+         1 if d.get("received", 1) else 0, guid))
+    if rid is not None:
+        db._recompute_recipient_dates(conn, rid)
+
+
+def _apply_batch_delete(conn, rec: dict):
+    row = conn.execute("SELECT id FROM dist_batches WHERE guid=?",
+                       (rec.get("guid") or "",)).fetchone()
+    if not row:
+        return
+    batch_id = row["id"]
+    rec_ids = [r["recipient_id"] for r in conn.execute(
+        "SELECT DISTINCT recipient_id FROM distributions "
+        "WHERE batch_id=? AND recipient_id IS NOT NULL", (batch_id,))]
+    conn.execute("DELETE FROM distributions WHERE batch_id=?", (batch_id,))
+    conn.execute("DELETE FROM dist_batches WHERE id=?", (batch_id,))
+    for rid in rec_ids:
+        db._recompute_recipient_dates(conn, rid)
+
+
+def _apply_dist_delete(conn, rec: dict):
+    row = conn.execute("SELECT id, recipient_id FROM distributions WHERE guid=?",
+                       (rec.get("guid") or "",)).fetchone()
+    if not row:
+        return
+    conn.execute("DELETE FROM distributions WHERE id=?", (row["id"],))
+    if row["recipient_id"] is not None:
+        db._recompute_recipient_dates(conn, row["recipient_id"])
+
+
+def _apply_setting(conn, rec: dict, state: dict):
+    key = rec.get("key") or ""
+    if not key or not _setting_syncable(key):
+        return
+    known = state.setdefault("setting_ts", {})
+    if (rec.get("ts") or "") <= (known.get(key) or ""):
+        return   # our own (or a later) write already covers this key
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)",
+                 (key, rec.get("value", "")))
+    known[key] = rec.get("ts") or ""
+
+
+_APPLIERS = {
+    "rec_upsert":   _apply_rec_upsert,
+    "rec_delete":   _apply_rec_delete,
+    "batch_add":    _apply_batch_add,
+    "batch_delete": _apply_batch_delete,
+    "dist_delete":  _apply_dist_delete,
+    "dist_add":     _apply_dist_add,
+}
+
+
+def pull_changes() -> int:
+    """Read the OTHER devices' journals and apply every record not yet seen.
+    Returns how many records were applied."""
+    global _APPLYING
+    if not is_enabled() or not folder_available():
+        return 0
+    applied = 0
+    with _LOCK:
+        state = _load_state()
+        my_dev = device_id()
+        seen = state.setdefault("applied", {})
+        _APPLYING = True
+        try:
+            with db.get_connection() as conn:
+                for path in sorted(glob.glob(os.path.join(get_folder(),
+                                                          JOURNAL_PREFIX + "*.jsonl"))):
+                    dev = os.path.basename(path)[len(JOURNAL_PREFIX):-len(".jsonl")]
+                    if dev == my_dev:
+                        continue
+                    last = int(seen.get(dev) or 0)
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            lines = f.read().splitlines()
+                    except OSError:
+                        continue
+                    for ln in lines:
+                        ln = ln.strip()
+                        if not ln:
+                            continue
+                        try:
+                            rec = json.loads(ln)
+                        except ValueError:
+                            continue
+                        seq = int(rec.get("seq") or 0)
+                        if seq <= last:
+                            continue
+                        op = rec.get("op")
+                        try:
+                            if op == "setting":
+                                _apply_setting(conn, rec, state)
+                                applied += 1
+                            elif op in _APPLIERS:
+                                _APPLIERS[op](conn, rec)
+                                applied += 1
+                        except Exception:
+                            pass   # one bad record must not stall the stream
+                        last = seq
+                    seen[dev] = last
+        finally:
+            _APPLYING = False
+        state["last_run"] = _utc_now()
+        _save_state(state)
+    return applied
+
+
+def run_sync() -> dict:
+    """One full cycle: push buffered changes, then pull+apply the others'.
+    Returns {'pushed': n, 'applied': n, 'error': str}."""
+    out = {"pushed": 0, "applied": 0, "error": ""}
+    try:
+        out["pushed"] = flush()
+        out["applied"] = pull_changes()
+    except Exception as e:
+        out["error"] = str(e)
+        with _LOCK:
+            state = _load_state()
+            state["last_error"] = str(e)
+            _save_state(state)
+    return out
+
+
+# ─── Enable / seed ───────────────────────────────────────────────────────────
+
+def snapshot() -> int:
+    """Write the ENTIRE current dataset into the journal, so a second computer
+    joining the folder receives everything. Idempotent on the receiving side
+    (guids dedupe). Returns the number of records written."""
+    n = 0
+    with db.get_connection() as conn:
+        recs = [dict(r) for r in conn.execute("SELECT * FROM recipients")]
+        batches = [dict(r) for r in conn.execute("SELECT * FROM dist_batches")]
+        dists = [dict(r) for r in conn.execute("SELECT * FROM distributions")]
+        settings = {r["key"]: r["value"] for r in conn.execute("SELECT * FROM settings")}
+    guid_by_id = {r["id"]: r.get("guid") or "" for r in recs}
+    for r in recs:
+        data = {k: v for k, v in r.items() if k != "id"}
+        if not data.get("updated_at"):
+            data["updated_at"] = data.get("created_at") or _utc_now()
+        log_change("rec_upsert", {"guid": r.get("guid") or "", "data": data})
+        n += 1
+    rows_by_batch = {}
+    for d in dists:
+        if d.get("batch_id"):
+            rows_by_batch.setdefault(d["batch_id"], []).append(d)
+    for b in batches:
+        rows = [{"guid": d.get("guid") or "", "rec_guid": guid_by_id.get(d.get("recipient_id"), ""),
+                 "recipient_name": d.get("recipient_name", ""), "area": d.get("area", ""),
+                 "souls": d.get("souls", 0), "notes": d.get("notes", ""),
+                 "received": d.get("received", 1)} for d in rows_by_batch.get(b["id"], [])]
+        log_change("batch_add", {
+            "guid": b.get("guid") or "",
+            "batch": {k: b.get(k, "") for k in ("dist_name", "dist_date", "products",
+                                                "quantity", "distributor", "general_note",
+                                                "recipient_count", "souls_total")},
+            "rows": rows})
+        n += 1
+    for d in dists:
+        if not d.get("batch_id"):
+            log_change("dist_add", {
+                "guid": d.get("guid") or "",
+                "rec_guid": guid_by_id.get(d.get("recipient_id"), ""),
+                "data": {k: d.get(k, "") for k in ("recipient_name", "dist_date", "area",
+                                                   "souls", "what_dist", "quantity",
+                                                   "distributor", "notes", "received")}})
+            n += 1
+    for key, value in settings.items():
+        if _setting_syncable(key):
+            log_change("setting", {"key": key, "value": value})
+            n += 1
+    return n
+
+
+def enable_sync(folder: str, seed: bool = True) -> int:
+    """Turn sync on against the given shared folder. When seed=True the whole
+    current dataset is journaled so other computers receive it. Returns the
+    number of seeded records."""
+    os.makedirs(folder, exist_ok=True)
+    with _LOCK:
+        state = _load_state()
+        state["folder"] = folder
+        state["enabled"] = True
+        _save_state(state)
+    n = snapshot() if seed else 0
+    flush()
+    return n
+
+
+def disable_sync():
+    with _LOCK:
+        state = _load_state()
+        state["enabled"] = False
+        _save_state(state)
+
+
+def folder_has_other_devices() -> bool:
+    """True when the shared folder already carries journals from other devices —
+    used to warn/inform during setup."""
+    if not folder_available():
+        return False
+    my = device_id()
+    for path in glob.glob(os.path.join(get_folder(), JOURNAL_PREFIX + "*.jsonl")):
+        dev = os.path.basename(path)[len(JOURNAL_PREFIX):-len(".jsonl")]
+        if dev != my:
+            return True
+    return False

@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
     QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea, QListView,
     QStyledItemDelegate, QDialog, QFormLayout, QListWidget, QListWidgetItem,
-    QToolButton
+    QToolButton, QCheckBox
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QObject, QRect
 from PyQt6.QtGui import QColor, QFont, QIcon, QPalette
@@ -144,6 +144,35 @@ class FilterCriteriaDialog(QDialog):
             self._boxes[field] = (min_e, max_e)
         outer.addLayout(grid)
 
+        # ── Community balance (#lejmr) — on by default, off-switch in the dialog ─
+        outer.addSpacing(8)
+        self.chk_balance = QCheckBox("איזון בין קהילות — כל קהילה (לפי שם נציג) מקבלת "
+                                     "חלק יחסי לגודלה מהמוצרים")
+        self.chk_balance.setChecked(bool((criteria or {}).get("balance_communities", True)))
+        self.chk_balance.setStyleSheet("font-weight:600; color:#0f766e;")
+        self.chk_balance.setToolTip(
+            "כשהאיזון פעיל: המוצרים מתחלקים בין הקהילות לפי גודלן (או לפי אחוזים "
+            "שנקבעו בהגדרות). בתוך כל קהילה נבחרים העומדים בסינון לפי ניקוד צורך; "
+            "אם אין מספיק עומדים בסינון — היתרה מושלמת מאנשי אותה קהילה לפי ניקוד.")
+        outer.addWidget(self.chk_balance)
+
+        comm_row = QHBoxLayout()
+        n_missing = len(db.get_no_community())
+        self.lbl_no_comm = QLabel(
+            f"מקבלים ללא קהילה (בלי שם נציג): {n_missing}" if n_missing
+            else "לכל המקבלים הפעילים משויכת קהילה ✓")
+        self.lbl_no_comm.setStyleSheet(
+            "color:#b45309; font-size:12.5px;" if n_missing else "color:#15803d; font-size:12.5px;")
+        comm_row.addWidget(self.lbl_no_comm)
+        comm_row.addStretch()
+        btn_assign = QPushButton("שיוך קהילות…")
+        btn_assign.setStyleSheet(_BTN_GHOST)
+        btn_assign.setToolTip("הצגת המקבלים שאין להם שם נציג, השלמה אוטומטית לפי "
+                              "בית הכנסת, ושיוך ידני")
+        btn_assign.clicked.connect(self._open_assign)
+        comm_row.addWidget(btn_assign)
+        outer.addLayout(comm_row)
+
         btns = QHBoxLayout()
         btn_clear = QPushButton("נקה הכל")
         btn_clear.setStyleSheet(_BTN_GHOST)
@@ -167,52 +196,205 @@ class FilterCriteriaDialog(QDialog):
             min_e.clear()
             max_e.clear()
 
+    def _open_assign(self):
+        CommunityAssignDialog(self).exec()
+        n_missing = len(db.get_no_community())
+        self.lbl_no_comm.setText(
+            f"מקבלים ללא קהילה (בלי שם נציג): {n_missing}" if n_missing
+            else "לכל המקבלים הפעילים משויכת קהילה ✓")
+        self.lbl_no_comm.setStyleSheet(
+            "color:#b45309; font-size:12.5px;" if n_missing else "color:#15803d; font-size:12.5px;")
+
     def get_criteria(self) -> dict:
         out = {}
         for field, (min_e, max_e) in self._boxes.items():
             lo = selection.to_number(min_e.text())
             hi = selection.to_number(max_e.text())
             out[field] = {"min": lo, "max": hi}
+        out["balance_communities"] = self.chk_balance.isChecked()
         return out
 
 
+class CommunityAssignDialog(QDialog):
+    """Assign a community (שם נציג) to recipients that have none (#lejmr).
+    Offers the synagogue-majority auto-fill plus a manual combo per person.
+    Auto-filled reps are written to the card marked 'שויך אוטומטית' so the
+    recipients screen shows where they came from."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("שיוך מקבלים לקהילות")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumSize(560, 520)
+        self._combos = {}   # rec_id -> QComboBox
+        outer = QVBoxLayout(self)
+
+        intro = QLabel("המקבלים הבאים אינם משויכים לקהילה (אין להם שם נציג). "
+                       "אפשר להשלים אוטומטית לפי בית הכנסת — מי שרוב חברי בית "
+                       "הכנסת שלו שייכים לנציג מסוים ישויך אליו — או לבחור נציג ידנית.")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#475569; font-size:12.5px;")
+        outer.addWidget(intro)
+
+        btn_auto = QPushButton("השלם אוטומטית לפי בית כנסת")
+        btn_auto.setStyleSheet(_BTN_SUCCESS)
+        btn_auto.clicked.connect(self._auto_fill)
+        outer.addWidget(btn_auto, alignment=Qt.AlignmentFlag.AlignRight)
+
+        self._table = QTableWidget()
+        self._table.setColumnCount(3)
+        self._table.setHorizontalHeaderLabels(["שם", "בית כנסת", "שיוך לנציג"])
+        self._table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        hdr = self._table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        enable_touch_scroll(self._table)
+        outer.addWidget(self._table, 1)
+
+        btns = QHBoxLayout()
+        btn_save = QPushButton("שמור שיוכים")
+        btn_save.setObjectName("primary")
+        btn_save.setStyleSheet(_BTN_PRIMARY)
+        btn_save.clicked.connect(self._save)
+        btn_close = QPushButton("סגור")
+        btn_close.setStyleSheet(_BTN_GHOST)
+        btn_close.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(btn_save)
+        btns.addWidget(btn_close)
+        outer.addLayout(btns)
+        self._reload()
+
+    def _reload(self):
+        rows = db.get_no_community()
+        reps = db.get_communities()
+        self._combos.clear()
+        self._table.setRowCount(len(rows))
+        for r, rec in enumerate(rows):
+            it_name = QTableWidgetItem(rec.get("full_name", ""))
+            it_syn = QTableWidgetItem(rec.get("synagogue", "") or "—")
+            for it in (it_name, it_syn):
+                it.setTextAlignment(ALIGN_RIGHT)
+            self._table.setItem(r, 0, it_name)
+            self._table.setItem(r, 1, it_syn)
+            combo = QComboBox()
+            combo.setEditable(True)
+            combo.addItem("")           # keep unassigned
+            for rep in reps:
+                combo.addItem(rep)
+            combo.setCurrentText("")
+            self._table.setCellWidget(r, 2, combo)
+            self._combos[rec.get("id")] = combo
+        if not rows:
+            self._table.setRowCount(1)
+            it = QTableWidgetItem("אין מקבלים ללא קהילה 🎉")
+            it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(0, 0, it)
+
+    def _auto_fill(self):
+        n = db.apply_inferred_representatives()
+        QMessageBox.information(
+            self, "השלמה אוטומטית",
+            f"שויכו אוטומטית {n} מקבלים לפי בית הכנסת שלהם.\n"
+            "השיוך נרשם בכרטיס המקבל עם ציון שחושב אוטומטית — אפשר לתקן שם."
+            if n else
+            "לא נמצאו מקבלים שאפשר לשייך לפי בית הכנסת.\n"
+            "(נדרש שרוב חברי אותו בית כנסת יהיו משויכים לנציג מסוים.)")
+        self._reload()
+
+    def _save(self):
+        n = 0
+        for rid, combo in self._combos.items():
+            rep = combo.currentText().strip()
+            if rep:
+                db.update_recipient(rid, {"representative": rep, "representative_auto": 0})
+                n += 1
+        if n:
+            QMessageBox.information(self, "נשמר", f"שויכו {n} מקבלים לקהילות.")
+        self.accept()
+
+
 class _ManualAddDialog(QDialog):
-    """Pick any active recipient(s) to add to the current distribution by hand
-    (#243lo) — the full active roster, searchable, with checkboxes. People already
-    on the list are excluded. Returns the chosen ids via selected_ids()."""
+    """Pick any recipient(s) to add to the current distribution by hand (#243lo,
+    upgraded per the 24/08 report: #cdxqp #4v4gt #6gcqq) — the ENTIRE roster
+    including inactive people (clearly tagged; adding one does NOT re-activate
+    them), searchable, with priority/frequency/score columns and quick filters.
+    People already on the list are excluded. Returns ids via selected_ids()."""
+
+    _PRIORITY_TXT = {4: "קבוע", 3: "ראשונה", 2: "שנייה"}
 
     def __init__(self, parent=None, exclude_ids: set = None):
         super().__init__(parent)
         self.setWindowTitle("הוספת מקבל ידנית לחלוקה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.setMinimumSize(460, 560)
+        self.setMinimumSize(760, 620)
         self._exclude = exclude_ids or set()
-        self._all = [r for r in db.get_all_recipients(status_filter="פעיל")
+        self._checked = set()
+        # EVERYONE — active and inactive alike (#6gcqq: "אני מעוניין שיופיע שם
+        # כל האנשים"). Inactive rows are tagged and stay inactive when added.
+        self._all = [r for r in db.get_all_recipients()
                      if r.get("id") not in self._exclude]
+        # Need-score every row on one common scale so the ניקוד column means
+        # the same thing for everyone (whole numbers only, per the operator).
+        for r in self._all:
+            r["days_since"] = db.recency_days(r)
+        import scoring as _scoring
+        _scoring.annotate_need_scores(self._all, db.get_need_weights())
         self._build()
 
     def _build(self):
         outer = QVBoxLayout(self)
-        intro = QLabel("סמן את מי להוסיף לחלוקה. אפשר לבחור כמה, גם מי שאינו עומד "
-                       "בקריטריונים או אינו בתור השבוע.")
+        intro = QLabel("סמן את מי להוסיף לחלוקה. מוצגים כל המקבלים — אפשר לבחור גם "
+                       "מי שאינו עומד בקריטריונים, אינו בתור השבוע או אינו פעיל.")
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#475569; font-size:12.5px;")
         outer.addWidget(intro)
 
+        top = QHBoxLayout()
         self._search = QLineEdit()
         self._search.setPlaceholderText("חיפוש לפי שם / טלפון / אזור…")
         self._search.setAlignment(ALIGN_RIGHT)
         self._search.addAction(search_icon(18), QLineEdit.ActionPosition.LeadingPosition)
-        self._search.textChanged.connect(self._apply_search)
-        outer.addWidget(self._search)
+        self._search.textChanged.connect(self._refill)
+        top.addWidget(self._search, 1)
 
-        self._list = QListWidget()
-        self._list.setStyleSheet(
-            "QListWidget{background:#ffffff; border:1px solid #d7dfea; border-radius:8px;}"
-            "QListWidget::item{padding:6px 8px; border-bottom:1px solid #f1f4f9;}")
-        enable_touch_scroll(self._list)
-        outer.addWidget(self._list, 1)
-        self._fill(self._all)
+        # Quick filters (#4v4gt): by priority tier and by frequency.
+        self._prio_filter = QComboBox()
+        for label in ("כל העדיפויות", "קבוע", "ראשונה", "שנייה", "ללא עדיפות"):
+            self._prio_filter.addItem(label)
+        self._prio_filter.currentIndexChanged.connect(self._refill)
+        top.addWidget(self._prio_filter)
+
+        self._freq_filter = QComboBox()
+        for label in ("כל התדירויות", "שבועי", "דו-שבועי", "חודשי", "חד-פעמי", "ללא תדירות"):
+            self._freq_filter.addItem(label)
+        self._freq_filter.currentIndexChanged.connect(self._refill)
+        top.addWidget(self._freq_filter)
+        outer.addLayout(top)
+
+        self._table = QTableWidget()
+        self._table.setColumnCount(6)
+        self._table.setHorizontalHeaderLabels(["שם", "עדיפות", "תדירות", "אזור",
+                                               "ניקוד", "סטטוס"])
+        self._table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setAlternatingRowColors(True)
+        hdr = self._table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self._table.setStyleSheet(
+            "QTableWidget{background:#ffffff; border:1px solid #d7dfea; border-radius:8px;}"
+            "QTableWidget::item{padding:4px 8px; border-bottom:1px solid #f1f4f9;}")
+        self._table.itemChanged.connect(self._on_item_changed)
+        enable_touch_scroll(self._table)
+        outer.addWidget(self._table, 1)
+
+        self._lbl_count = QLabel("")
+        self._lbl_count.setStyleSheet("color:#64748b; font-size:12px;")
+        outer.addWidget(self._lbl_count)
 
         btns = QHBoxLayout()
         btn_ok = QPushButton("הוסף נבחרים")
@@ -227,32 +409,83 @@ class _ManualAddDialog(QDialog):
         btns.addWidget(btn_cancel)
         outer.addSpacing(6)
         outer.addLayout(btns)
+        self._refill()
 
-    def _fill(self, rows):
-        self._list.clear()
-        for rec in rows:
-            area = rec.get("area") or ""
-            phone = rec.get("phone1") or ""
-            extra = "  ·  ".join(x for x in (area, phone) if x)
-            label = rec.get("full_name", "") + (f"   ({extra})" if extra else "")
-            it = QListWidgetItem(label)
-            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            it.setCheckState(Qt.CheckState.Unchecked)
-            it.setData(Qt.ItemDataRole.UserRole, rec.get("id"))
-            self._list.addItem(it)
+    def _passes_filters(self, rec) -> bool:
+        p = self._prio_filter.currentText()
+        if p != "כל העדיפויות":
+            pr = rec.get("priority")
+            want = {"קבוע": pr == 4, "ראשונה": pr == 3, "שנייה": pr == 2,
+                    "ללא עדיפות": pr not in (2, 3, 4)}
+            if not want.get(p, True):
+                return False
+        f = self._freq_filter.currentText()
+        if f != "כל התדירויות":
+            freq = (rec.get("frequency") or "").strip()
+            if f == "ללא תדירות":
+                if freq:
+                    return False
+            elif freq != f:
+                return False
+        return True
 
-    def _apply_search(self):
+    def _refill(self, *_):
         txt = self._search.text().strip()
         rows = db.filter_recipients(self._all, txt, limit=100000) if txt else self._all
-        self._fill(rows)
+        rows = [r for r in rows if self._passes_filters(r)]
+        t = self._table
+        t.blockSignals(True)
+        t.setRowCount(len(rows))
+        for i, rec in enumerate(rows):
+            rid = rec.get("id")
+            inactive = (rec.get("status") or "") != "פעיל"
+            it_name = QTableWidgetItem(rec.get("full_name", ""))
+            it_name.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
+                             | Qt.ItemFlag.ItemIsSelectable)
+            it_name.setCheckState(Qt.CheckState.Checked if rid in self._checked
+                                  else Qt.CheckState.Unchecked)
+            it_name.setData(Qt.ItemDataRole.UserRole, rid)
+            nf = it_name.font(); nf.setBold(True); it_name.setFont(nf)
+
+            score = rec.get("need_score")
+            score_txt = str(int(score)) if isinstance(score, (int, float)) else ""
+            vals = [None,
+                    self._PRIORITY_TXT.get(rec.get("priority"), "—"),
+                    (rec.get("frequency") or "—"),
+                    (rec.get("area") or ""),
+                    score_txt,
+                    ("לא פעיל" if inactive else "פעיל")]
+            t.setItem(i, 0, it_name)
+            for c in range(1, 6):
+                it = QTableWidgetItem(vals[c])
+                it.setTextAlignment(ALIGN_RIGHT if c != 4 else
+                                    Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+                t.setItem(i, c, it)
+            if inactive:
+                for c in range(0, 6):
+                    t.item(i, c).setForeground(QColor("#b91c1c"))
+                t.item(i, 5).setBackground(QColor("#fee2e2"))
+                t.item(i, 0).setToolTip("מקבל לא פעיל — הוספתו לחלוקה לא תחזיר "
+                                        "אותו לסטטוס פעיל")
+        t.blockSignals(False)
+        self._lbl_count.setText(f"מוצגים {len(rows)} מתוך {len(self._all)} מקבלים · "
+                                f"נבחרו {len(self._checked)}")
+
+    def _on_item_changed(self, item):
+        if item.column() != 0:
+            return
+        rid = item.data(Qt.ItemDataRole.UserRole)
+        if item.checkState() == Qt.CheckState.Checked:
+            self._checked.add(rid)
+        else:
+            self._checked.discard(rid)
+        self._lbl_count.setText(self._lbl_count.text().rsplit("נבחרו", 1)[0]
+                                + f"נבחרו {len(self._checked)}")
 
     def selected_ids(self) -> list:
-        out = []
-        for i in range(self._list.count()):
-            it = self._list.item(i)
-            if it.checkState() == Qt.CheckState.Checked:
-                out.append(it.data(Qt.ItemDataRole.UserRole))
-        return out
+        # _checked survives search/filter changes — a person ticked and then
+        # hidden by a filter is still added.
+        return [rid for rid in self._checked if rid is not None]
 
 
 class OneTimePickerDialog(QDialog):
@@ -1177,6 +1410,18 @@ class GroupUpdateTab(QWidget):
         self.btn_add_manual.clicked.connect(self._add_manual)
         toolbar.addWidget(self.btn_add_manual)
 
+        # Pre-distribution Excel export (#gli21): the full recipient sheet of the
+        # list AS PREPARED, before anyone is recorded. Available in the prep
+        # stage; the 'קיבל חלוקה' column reads 'ברשימה/רזרבה' instead.
+        self.btn_export_prep = QPushButton("ייצוא לאקסל")
+        self.btn_export_prep.setStyleSheet(_BTN_GHOST)
+        self.btn_export_prep.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_export_prep.setToolTip("ייצוא רשימת המקבלים המוכנה לאקסל — עוד לפני "
+                                        "מעבר לרישום מי קיבל")
+        self.btn_export_prep.setIcon(QIcon(line_icon("download", 18, "#0f766e")))
+        self.btn_export_prep.clicked.connect(self._export_prep_excel)
+        toolbar.addWidget(self.btn_export_prep)
+
         self.search_input = QLineEdit()
         self.search_input.setMinimumHeight(42)
         self.search_input.setMaximumWidth(520)
@@ -1400,6 +1645,8 @@ class GroupUpdateTab(QWidget):
         self.table.setColumnHidden(0, not record)
         self.btn_check_all.setVisible(record)
         self.btn_uncheck_all.setVisible(record)
+        # Pre-distribution export belongs to the prep stage only.
+        self.btn_export_prep.setVisible(not record)
         self.lbl_checked.setVisible(record)
         self.stage_banner.setVisible(record)
         self.btn_save.setVisible(record)
@@ -1415,12 +1662,14 @@ class GroupUpdateTab(QWidget):
             if rid in base_ids:
                 continue
             rec = db.get_recipient(rid)
-            # Drop a saved one-time pick that was since deleted OR is no longer
-            # active (suspended/ended) — otherwise a recipient removed from the
-            # active roster would silently reappear on the list and in the print.
-            if not rec or rec.get("status") != "פעיל":
+            # Drop a saved pick that was since DELETED. An INACTIVE pick is kept
+            # — the operator can now add inactive people on purpose (24/08
+            # report) — but it's tagged so the list shows it clearly rather than
+            # silently reappearing (the original #243lo concern).
+            if not rec:
                 continue
             rec = dict(rec)
+            rec["_inactive"] = rec.get("status") != "פעיל"
             rec["_reserve"] = rid in self._reserve_ids
             # Give picks the same recency fields the scored/weekly lists carry, so
             # that in 'scored' mode they can be re-scored on the SAME scale as
@@ -1660,9 +1909,18 @@ class GroupUpdateTab(QWidget):
         score_txt = f"ניקוד {round(score)}" if score is not None else ""
         is_pick = rid in self._extra_ids or freq == "חד-פעמי"
         if is_pick:
+            tag = " · לא פעיל" if rec.get("_inactive") else ""
             if rec.get("_reserve") or rid in self._reserve_ids:
-                return QColor(_RESERVE_BG), QColor(_RESERVE_FG), "חד-פעמי · רזרבה", score_txt
-            return QColor(SELECTED_BG), QColor(SELECTED_FG), "חד-פעמי", score_txt
+                return QColor(_RESERVE_BG), QColor(_RESERVE_FG), "חד-פעמי · רזרבה" + tag, score_txt
+            return QColor(SELECTED_BG), QColor(SELECTED_FG), "חד-פעמי" + tag, score_txt
+        # community-balanced filter pick — show WHICH community the slot belongs
+        # to; a top-up member (didn't pass the filter, filled the community's
+        # quota) is tinted amber so the operator sees it at a glance (#lejmr).
+        if rec.get("_community"):
+            comm_txt = f"קהילה: {rec['_community']}"
+            if rec.get("_balance_fill"):
+                return QColor("#fef3c7"), QColor("#92400e"), comm_txt + " · השלמה", score_txt
+            return QColor("#f1f5f9"), QColor("#334155"), comm_txt, score_txt
         # scored regular — neutral tint, ranked by need-score not by date
         if rec.get("_scored_regular"):
             return QColor("#f1f5f9"), QColor("#334155"), freq, score_txt
@@ -1999,6 +2257,28 @@ class GroupUpdateTab(QWidget):
             reveal_in_folder(path)   # open Downloads with the file selected
             QMessageBox.information(self, "ייצוא הושלם",
                                     f"הקובץ נשמר בתיקיית ההורדות ונפתחה התיקייה:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה", str(e))
+
+    def _export_prep_excel(self):
+        """Pre-distribution FULL export (#gli21): every recipient field of the
+        prepared list, before anyone is recorded. Same detailed sheet as the
+        post-save export, but the status column reads 'ברשימה/רזרבה'."""
+        if not self._ensure_one_time_picks("ייצוא לאקסל"):
+            return
+        rows = self._get_export_rows()
+        if not rows:
+            QMessageBox.information(self, "", "אין מקבלים ברשימה לייצוא")
+            return
+        dist_date = _fdate(self.date_edit.get_iso())
+        dist_name = self._effective_dist_name() or ""
+        try:
+            with busy_cursor():
+                path = export_full_distribution_to_excel(
+                    rows, dist_date, dist_name, include_got=False)
+            reveal_in_folder(path)
+            QMessageBox.information(self, "ייצוא הושלם",
+                                    f"רשימת המקבלים המוכנה נשמרה בתיקיית ההורדות:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "שגיאה", str(e))
 

@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect
 )
 from PyQt6.QtCore import (Qt, QRect, QRectF, QPoint, QPointF, QByteArray,
-                          QSharedMemory, QTimer, QEventLoop)
+                          QSharedMemory, QTimer, QEventLoop, QThread, pyqtSignal)
 from PyQt6.QtGui import (QFont, QIcon, QColor, QPixmap, QPainter, QLinearGradient,
                          QPen, QBrush, QGuiApplication)
 
@@ -28,6 +28,24 @@ from tabs.settings import SettingsTab, _UpdateWorker
 
 from version import APP_VERSION
 from utils import updater
+
+
+class _SyncWorker(QThread):
+    """Runs one sync cycle (push local changes + pull remote) off the UI thread,
+    so a slow Drive folder never freezes the app. Emits how many remote changes
+    were applied."""
+    done = pyqtSignal(int)
+
+    def __init__(self, sync_mod, parent=None):
+        super().__init__(parent)
+        self._sync = sync_mod
+
+    def run(self):
+        try:
+            res = self._sync.run_sync()
+            self.done.emit(int(res.get("applied", 0) or 0))
+        except Exception:
+            self.done.emit(0)
 
 
 def resource_path(relative: str) -> str:
@@ -501,6 +519,7 @@ class MainWindow(QMainWindow):
 
         self._build_tabs()
         self._build_statusbar()
+        self._setup_auto_sync()
 
     def show_smart(self):
         """Open remembering last size/position; otherwise maximized (fills big
@@ -829,6 +848,37 @@ class MainWindow(QMainWindow):
 
     def status_msg(self, msg: str):
         self.statusBar().showMessage(msg, 4000)
+
+    # ── Two-computer background sync (v2.61) ──────────────────────────────────
+    def _setup_auto_sync(self):
+        """Periodically sync with the shared Drive folder off the UI thread.
+        No-op while sync is disabled; safe to leave running always."""
+        from utils import sync
+        self._sync = sync
+        self._sync_worker = None
+        self._sync_timer = QTimer(self)
+        self._sync_timer.setInterval(20000)   # every 20s — Drive settles quickly
+        self._sync_timer.timeout.connect(self._tick_sync)
+        self._sync_timer.start()
+        # A first pass shortly after startup pulls anything the other computer
+        # changed while this one was closed.
+        QTimer.singleShot(2500, self._tick_sync)
+
+    def _tick_sync(self):
+        if not self._sync.is_enabled():
+            return
+        if self._sync_worker is not None and self._sync_worker.isRunning():
+            return
+        self._sync_worker = _SyncWorker(self._sync)
+        self._sync_worker.done.connect(self._on_sync_done)
+        self._sync_worker.start()
+
+    def _on_sync_done(self, applied: int):
+        # Only redraw the screen when the other computer actually changed data —
+        # a quiet tick must not disrupt what the operator is doing.
+        if applied > 0:
+            self.refresh_all()
+            self.status_msg(f"סונכרנו {applied} עדכונים מהמחשב השני")
 
     # ── Automatic update check on startup ─────────────────────────────────────
     def _auto_check_updates(self):

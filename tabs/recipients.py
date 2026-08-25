@@ -34,7 +34,125 @@ def _fdate(s: str) -> str:
         return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
     return s or ""
 from utils.backup import auto_backup_async, auto_backup
-from utils.excel_utils import import_from_excel
+from utils.excel_utils import import_from_excel, _FULL_FIELDS
+
+# key → Hebrew label for the import-review dialog (reuses the export labels).
+_FIELD_LABELS = {k: v for k, v in _FULL_FIELDS}
+
+
+class ImportReviewDialog(QDialog):
+    """Single summary of an import before it's applied (#hlcmj). Lists how many
+    brand-new recipients will be added, and shows every proposed CHANGE to an
+    existing recipient as one checkable row (name + field: old → new). All rows
+    are checked by default; the operator unchecks any change to skip. One
+    confirmation applies everything selected — no per-recipient prompts."""
+
+    def __init__(self, diff: dict, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("אישור ייבוא — מה ישתנה")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumSize(720, 560)
+        self._diff = diff
+        self._rows = []   # (update_dict, field, checkbox_item_row)
+        outer = QVBoxLayout(self)
+
+        n_new = len(diff.get("new", []))
+        n_upd = len(diff.get("updates", []))
+        summary = QLabel(
+            f"📥 <b>{n_new}</b> מקבלים חדשים יתווספו · "
+            f"<b>{n_upd}</b> מקבלים קיימים עם שינויים מוצעים.")
+        summary.setTextFormat(Qt.TextFormat.RichText)
+        summary.setStyleSheet("font-size:13.5px; color:#0f172a;")
+        outer.addWidget(summary)
+
+        hint = QLabel("סמן אילו שינויים לבצע במקבלים הקיימים. מה שלא יסומן — יישאר "
+                      "כפי שהוא. מקבלים חדשים נוספים תמיד. (שדה ריק בקובץ לעולם "
+                      "לא מוחק נתון קיים.)")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#475569; font-size:12px;")
+        outer.addWidget(hint)
+
+        self._table = QTableWidget()
+        self._table.setColumnCount(4)
+        self._table.setHorizontalHeaderLabels(["בצע", "שם", "שדה", "שינוי"])
+        self._table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        hdr = self._table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        enable_touch_scroll(self._table)
+        outer.addWidget(self._table, 1)
+        self._fill_updates()
+
+        row_btns = QHBoxLayout()
+        btn_all = QPushButton("סמן הכל")
+        btn_all.clicked.connect(lambda: self._set_all(True))
+        btn_none = QPushButton("נקה הכל")
+        btn_none.clicked.connect(lambda: self._set_all(False))
+        for b in (btn_all, btn_none):
+            b.setStyleSheet("font-size:12px; padding:4px 12px;")
+        row_btns.addWidget(btn_all)
+        row_btns.addWidget(btn_none)
+        row_btns.addStretch()
+        outer.addLayout(row_btns)
+
+        btns = QHBoxLayout()
+        btn_ok = QPushButton("בצע ייבוא")
+        btn_ok.setObjectName("primary")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("ביטול")
+        btn_cancel.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(btn_ok)
+        btns.addWidget(btn_cancel)
+        outer.addLayout(btns)
+
+    def _fmt(self, field, val):
+        s = "" if val is None else str(val).strip()
+        if field == "priority":
+            return {4: "קבוע", 3: "עדיפות ראשונה", 2: "עדיפות שנייה"}.get(
+                int(val) if str(val).strip().isdigit() else None, s or "—")
+        return s or "—"
+
+    def _fill_updates(self):
+        updates = self._diff.get("updates", [])
+        total = sum(len(u["changes"]) for u in updates)
+        self._table.setRowCount(total)
+        r = 0
+        for u in updates:
+            for field, ch in u["changes"].items():
+                chk = QTableWidgetItem()
+                chk.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+                chk.setCheckState(Qt.CheckState.Checked)
+                self._table.setItem(r, 0, chk)
+                it_name = QTableWidgetItem(u["full_name"])
+                it_field = QTableWidgetItem(_FIELD_LABELS.get(field, field))
+                it_change = QTableWidgetItem(
+                    f"{self._fmt(field, ch['old'])}  →  {self._fmt(field, ch['new'])}")
+                for it in (it_name, it_field, it_change):
+                    it.setTextAlignment(ALIGN_RIGHT)
+                self._table.setItem(r, 1, it_name)
+                self._table.setItem(r, 2, it_field)
+                self._table.setItem(r, 3, it_change)
+                self._rows.append((u["id"], field))
+                r += 1
+
+    def _set_all(self, checked: bool):
+        st = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        for r in range(self._table.rowCount()):
+            self._table.item(r, 0).setCheckState(st)
+
+    def selected_updates(self) -> list:
+        """The updates the operator kept, in apply_import_confirmed's shape:
+        [{'id', 'changes': {field: {'old','new'}}}]."""
+        keep = {}
+        for r, (rid, field) in enumerate(self._rows):
+            if self._table.item(r, 0).checkState() == Qt.CheckState.Checked:
+                ch = next(u["changes"][field] for u in self._diff["updates"]
+                          if u["id"] == rid and field in u["changes"])
+                keep.setdefault(rid, {})[field] = ch
+        return [{"id": rid, "changes": chs} for rid, chs in keep.items()]
 from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state,
                       BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, search_icon,
                       ALIGN_RIGHT, rtl_text_area, enable_touch_scroll,
@@ -474,7 +592,7 @@ class RecipientsTab(QWidget):
             self, "אופן ייבוא",
             "להחליף את כל הנתונים הקיימים, או למזג עם הקיים?\n\n"
             "• כן  = החלפה מלאה (מוחק הכל ומייבא מחדש)\n"
-            "• לא  = מיזוג (מוסיף חדשים, משלים שדות ריקים בקיימים)",
+            "• לא  = מיזוג (מוסיף חדשים; שינויים במקבלים קיימים — רק לאחר אישור)",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.No,
@@ -482,6 +600,9 @@ class RecipientsTab(QWidget):
         if choice == QMessageBox.StandardButton.Cancel:
             return
         replace = (choice == QMessageBox.StandardButton.Yes)
+        if not replace:
+            self._run_merge_import(path)
+            return
         if replace:
             confirm = QMessageBox.warning(
                 self, "אישור החלפה מלאה",
@@ -534,6 +655,44 @@ class RecipientsTab(QWidget):
                 self.main_win.refresh_all()
         except Exception as e:
             QMessageBox.critical(self, "שגיאה ביבוא", str(e))
+
+    def _run_merge_import(self, path: str):
+        """Merge import with a single review-and-confirm step (#hlcmj): parse the
+        file (auto-detects the app's own export or the source template), compute
+        the exact changes to existing recipients, and let the operator approve
+        them in one summary dialog. New recipients are always added."""
+        try:
+            with busy_cursor():
+                rows = import_from_excel(path)
+                diff = db.diff_incoming_recipients(rows)
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה ביבוא", str(e))
+            return
+        n_new, n_upd = len(diff["new"]), len(diff["updates"])
+        if not n_new and not n_upd:
+            QMessageBox.information(self, "ייבוא", "אין נתונים חדשים או שינויים — "
+                                    "הקובץ תואם למידע הקיים.")
+            return
+        dlg = ImportReviewDialog(diff, self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        updates = dlg.selected_updates()
+        try:
+            with busy_cursor():
+                auto_backup_async()
+                added, updated = db.apply_import_confirmed(diff["new"], updates)
+                self.refresh()
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה ביבוא", str(e))
+            return
+        extra = (f"\n\nℹ {diff['unmatched_dupes']} רשומות דולגו — שם כפול "
+                 "בתוכנה, לא ברור למי לשייך.") if diff.get("unmatched_dupes") else ""
+        QMessageBox.information(
+            self, "ייבוא הושלם",
+            f"נוספו {added} מקבלים חדשים.\nעודכנו {updated} מקבלים קיימים." + extra)
+        if self.main_win:
+            self.main_win.status_msg(f"ייבוא: {added} נוספו, {updated} עודכנו")
+            self.main_win.refresh_all()
 
 
 # ─── Add/Edit dialog ──────────────────────────────────────────────────────────
@@ -709,6 +868,13 @@ class RecipientDialog(QDialog):
         f4.addRow("מס' מזהה:", self.f_external_id)
         f4.addRow("מקור:", self.f_source)
         f4.addRow("שם נציג:", self.f_representative)
+        # Marker shown when the נציג was filled by the synagogue-majority auto-fill
+        # (#lejmr) — so the operator can see it's a guess and correct it. Editing
+        # the field clears the flag on save.
+        self.lbl_rep_auto = QLabel("↳ שויך אוטומטית לפי בית הכנסת — בדוק ותקן במידת הצורך")
+        self.lbl_rep_auto.setStyleSheet("color:#b45309; font-size:11px;")
+        self.lbl_rep_auto.setVisible(False)
+        f4.addRow("", self.lbl_rep_auto)
 
         # ── fill values ──────────────────────────────────────────────────────
         if rec:
@@ -747,6 +913,7 @@ class RecipientDialog(QDialog):
             self.f_external_id.setText(rec.get("external_id") or "")
             self.f_source.setText(rec.get("source") or "")
             self.f_representative.setText(rec.get("representative") or "")
+            self.lbl_rep_auto.setVisible(bool(rec.get("representative_auto")))
 
             # priority: match by number, else by 'חובת בירור', else blank
             pr = rec.get("priority")

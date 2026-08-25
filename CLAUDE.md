@@ -59,6 +59,7 @@ tabs/
   (one_time.py הוסר ב-v2.60 — OneTimePickerDialog ב-group_update מחליף אותו)
 utils/
   email_utils.py · excel_utils.py   # זרימת מתנדבים
+  sync.py            # v2.61: סנכרון בין 2 מחשבים דרך תיקיית Google Drive (journal-per-device, LWW)
   print_view.py · updater.py · backup.py · feedback.py · ui.py  (tour.py הוסר ב-v2.60)
 dev/                # probe/screenshot/benchmark/stress/create_icon
 test_*.py           # בשורש
@@ -75,6 +76,15 @@ python main.py                                              # הפעלה (סיס
 python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/מנהל_חלוקה.exe
 ```
 אם ה-EXE נעול (WinError 5) לפני בנייה: `rm -f "dist/מנהל_חלוקה.exe" "dist/Manhal-Haluka.exe"`.
+
+## סנכרון בין 2 מחשבים (`utils/sync.py`, v2.61)
+- **דרישת המשתמש:** לעבוד משני מחשבים במקומות שונים על אותם נתונים, כולל בו-זמנית. אין שרת → הסנכרון רוכב על **תיקיית Google Drive משותפת** (Drive for Desktop).
+- **מנגנון:** כל מחשב כותב journal משלו (`journal-<device>.jsonl`) — כותב יחיד לכל קובץ, בלי מיזוג של Drive. כל שינוי נתונים ב-`database.py` קורא `_sync_log(op, payload)` → `sync.log_change` (מזהה שורות ב-`guid` יציב, לא ב-id מקומי). כל מחשב קורא את ה-journals האחרים ומחיל רשומות שלא ראה (מעקב per-device ב-`sync_state.json` **ליד ה-DB**, לא ב-settings שמסונכרן בעצמו). **התנגשות על אותו כרטיס = last-write-wins לפי חותם UTC** (`updated_at`).
+- **טבלאות:** עמודות `guid` ב-recipients/distributions/dist_batches + `updated_at`/`representative_auto` ב-recipients (מיגרציה אוטומטית, back-fill guid). ops: `rec_upsert`/`rec_delete`/`batch_add`/`batch_delete`/`dist_delete`/`dist_add`/`setting`.
+- **התאמת אישיות חוצת-מחשבים** (`_adopt_match`): guid לא מוכר → זיהוי לפי `external_id` ואז שם+טלפון, כדי לא לשכפל מי שכבר קיים בשני המחשבים.
+- **offline:** שינויים מצטברים ב-`sync_outbox.jsonl` ונשלחים בריצה הבאה. `EXCLUDED_SETTINGS` (password/win_geometry/backup) לא מסונכרנות.
+- **UI:** `SyncSetupDialog`+`_refresh_sync_status` בהגדרות (בחירת תיקייה, שם מחשב, הפעלה/כיבוי, "סנכרן עכשיו"). רקע: `MainWindow._setup_auto_sync` — `_SyncWorker(QThread)` כל 20 שנ' + ריצה 2.5 שנ' אחרי עלייה; `refresh_all` רק כשנקלטו שינויים.
+- **בדיקות:** `test_sync.py` (מדמה 2 מחשבים על 2 DB עם תיקייה משותפת: seed, הפצת add/edit/delete, batch, LWW, offline, idempotence, adopt-by-match).
 
 ## נתונים ואבטחה
 - DB + גיבויים ב-`%APPDATA%\ManhalHaluka\` (data.db, backups/) — נפרד מה-EXE, שורד עדכונים, מהגר DB ישן אוטומטית.
@@ -104,6 +114,7 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
    - **מצב "קבועים לפי ניקוד"** (`selection.rank_by_need`, דרך `db.get_scored_all`/`get_regulars_scored`): עדיפות רק שער; הסדר לפי **ניקוד בלבד** — שנייה עם ניקוד גבוה יכולה להקדים ראשונה נמוכה.
 2. **קבועים מול חד-פעמיים** — בורר "מצב חלוקה לקבועים" עם 4 מצבים: `schedule` (קבועים קודם לפי לוח; `compute_suggested_n` מנכה מהמלאי **רק את הקבועים שבתור השבוע** = `len(get_weekly_list())`, לא כל הקבועים — דו-שבועי/חודשי שלא בתור לא גוזל מנה) / `scored` (מתחרים יחד בניקוד) / `none` / **`filter`** (סינון מותאם, ראה למטה). `compute_suggested_n` מחזיר (0,0) בכל מצב שאינו `schedule` — כלומר `filter` לא שומר מנות לחד-פעמיים.
    - **מצב `filter` (סינון רחב, #vq4fx)** — מתעלם מעדיפות/תדירות לחלוטין: בוחר מ**כל המקבלים הפעילים** את מי שעונה על ספי-מספר מתכווננים (`selection.FILTER_FIELDS`: `children_total`/`income`/`per_soul`, כל אחד עם min/max). `selection.filter_by_criteria`/`matches_criteria` (AND בין שדות; **חסר נתון בשדה מסונן = לא נכלל**, שער-קשיח, לא כמו ניקוד). `selection.to_number` מפרסר שדות-טקסט ("4,500 ₪"→4500). קריטריונים נשמרים ב-settings `dist_filter_criteria` (JSON) דרך `db.get/set_filter_criteria`; הרשימה דרך `db.get_filtered_list` (מדורגת לפי ניקוד). ב-`group_update`: כפתור "הגדר סינון" (מוצג רק במצב זה) → `FilterCriteriaDialog`; כניסה למצב בלי קריטריונים פותחת אותו אוטומטית. **אזור אינו קריטריון** (הכרעת המשתמש 08/2026).
+5. **איזון בין קהילות (#lejmr, v2.61)** — במצב `filter`, ברירת מחדל **דלוקה** (`criteria["balance_communities"]`, כיבוי ב-`FilterCriteriaDialog`). "קהילה" = `representative` (שם נציג). `selection.balance_by_community`: מכסה לכל קהילה **יחסית לגודלה הכולל** (`community_quotas`, largest-remainder, תקרה=גודל הקהילה); בתוך קהילה — עומדי-הסינון לפי ניקוד קודם, ואם המכסה גדולה מהעומדים משלימים מ**אנשי אותה קהילה** לפי ניקוד (`_balance_fill`, הכרעת המשתמש). אחוזים ידניים לקהילה: settings `community_quotas` (JSON) דרך `db.get/set_community_quotas`, סכום>100 מנורמל. חסרי-נציג = קבוצת "ללא קהילה"; `selection.infer_communities`+`db.apply_inferred_representatives` משלימים נציג לפי **רוב בית הכנסת** ורושמים בכרטיס עם `representative_auto=1` (מוצג ב-`RecipientDialog`, נמחק בעריכה ידנית). דיאלוגים: `CommunityAssignDialog` (group_update), `CommunityQuotasDialog` (settings). `db.get_filtered_list` קורא `available_products` — בלי מוצרים אין איזון.
 3. **רזרבה = רשימת המתנה** — `selection.assign_roles` מסמן `_role` (main/reserve/out). רזרבה **לא נרשמת** כברירת מחדל (`recorded_by_default`→False): מגיעה ללא-סימון ב-`group_update` (`refresh` מדלג על `_reserve_ids`), אבל **כן מודפסת** כמקטע נפרד (`_get_export_rows` מוסיף רזרבה גם ללא סימון). נרשמת רק אם המפעיל מפעיל אותה במקום מי שלא הגיע.
 4. **חוסר נתונים → תחתית התור** — ב-`scoring.annotate_need_scores` גורם **חסר תורם 0 נק'** (לא ניטרלי 0.5), גם ל-"high" וגם ל-"low". נתון חסר רק פוגע, לעולם לא מזכה — משפחה עם נתונים חסרים שוקעת לתחתית.
 - קוד מקור (מאקסל): 4=קבוע→שבועי · 3=ראשונה · 2=שנייה (3/2 = `PRIORITY_TIERS`) · 1/0/בירור/**ריק = נתונים בלבד**. נשמר כ-`priority`+`priority_raw`. **המספרים לא מוצגים** — רק תוויות עברית (`PRIORITY_BADGES` ב-`utils/ui.py`).

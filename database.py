@@ -2,9 +2,26 @@ import sqlite3
 import sys
 import os
 import json
+import uuid
 import hashlib
 import secrets
 from datetime import date, datetime, timedelta
+
+
+def _utc_now() -> str:
+    """UTC timestamp for sync ordering (last-write-wins across computers)."""
+    from datetime import timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _sync_log(op: str, payload: dict):
+    """Append a change record for the cross-computer sync journal. NEVER breaks
+    the data operation itself — sync failures are logged and swallowed."""
+    try:
+        from utils import sync
+        sync.log_change(op, payload)
+    except Exception:
+        pass
 
 
 APP_DIR_NAME = "ManhalHaluka"
@@ -317,6 +334,10 @@ def init_db():
             ("representative",     "TEXT DEFAULT ''"),
             ("priority",           "INTEGER"),
             ("priority_raw",       "TEXT DEFAULT ''"),
+            # v2.61: community balance + cross-computer sync
+            ("representative_auto", "INTEGER DEFAULT 0"),  # 1 = נציג שויך אוטומטית
+            ("updated_at",         "TEXT DEFAULT ''"),     # UTC iso — last-write-wins for sync
+            ("guid",               "TEXT DEFAULT ''"),     # stable cross-device identity
         ]
         for col, definition in _migrations:
             if col not in columns:
@@ -332,6 +353,20 @@ def init_db():
         # row predates the flag and means "received", so the default is 1.
         if "received" not in dist_cols:
             conn.execute("ALTER TABLE distributions ADD COLUMN received INTEGER DEFAULT 1")
+        if "guid" not in dist_cols:
+            conn.execute("ALTER TABLE distributions ADD COLUMN guid TEXT DEFAULT ''")
+        batch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dist_batches)")}
+        if "guid" not in batch_cols:
+            conn.execute("ALTER TABLE dist_batches ADD COLUMN guid TEXT DEFAULT ''")
+
+        # Back-fill stable guids (v2.61, cross-computer sync): every row gets a
+        # random identity ONCE; new rows get theirs at insert time.
+        for table in ("recipients", "distributions", "dist_batches"):
+            missing = [r["id"] for r in conn.execute(
+                f"SELECT id FROM {table} WHERE guid IS NULL OR guid=''")]
+            for rid in missing:
+                conn.execute(f"UPDATE {table} SET guid=? WHERE id=?",
+                             (uuid.uuid4().hex, rid))
 
         # Indexes are created AFTER the column migrations so that an older DB
         # (missing a column an index references) is upgraded first, not crashed.
@@ -407,6 +442,7 @@ def get_setting(key: str) -> str:
 def set_setting(key: str, value: str):
     with get_connection() as conn:
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)", (key, value))
+    _sync_log("setting", {"key": key, "value": value})
 
 
 # ─── Recipients ──────────────────────────────────────────────────────────────
@@ -517,6 +553,7 @@ def bulk_insert_recipients(rows: list) -> int:
     sql = f"INSERT INTO recipients ({','.join(cols)}) VALUES ({','.join(['?'] * len(cols))})"
     i_name, i_status = cols.index("full_name"), cols.index("status")
     count = 0
+    new_ids = []
     with get_connection() as conn:
         for row in rows:
             name = (row.get("full_name") or "").strip()
@@ -526,8 +563,13 @@ def bulk_insert_recipients(rows: list) -> int:
             vals[i_name] = name
             if not vals[i_status]:
                 vals[i_status] = "פעיל"
-            conn.execute(sql, vals)
+            cur = conn.execute(sql, vals)
+            conn.execute("UPDATE recipients SET guid=?, updated_at=? WHERE id=?",
+                         (uuid.uuid4().hex, _utc_now(), cur.lastrowid))
+            new_ids.append(cur.lastrowid)
             count += 1
+    for rid in new_ids:
+        _sync_log("rec_upsert", _rec_sync_payload(rid))
     return count
 
 
@@ -565,13 +607,29 @@ def _coerce(field: str, val):
     return val if val is not None else ""
 
 
+def _rec_sync_payload(rec_id: int) -> dict:
+    """The full recipient row (minus the local numeric id) — the unit the sync
+    journal carries so another computer can upsert an identical card by guid."""
+    rec = get_recipient(rec_id)
+    if not rec:
+        return {}
+    data = {k: v for k, v in rec.items() if k != "id"}
+    return {"guid": rec.get("guid") or "", "data": data}
+
+
 def add_recipient(data: dict) -> int:
     cols = _RECIPIENT_FIELDS
     vals = [_coerce(c, data.get(c, "")) for c in cols]
     sql = f"INSERT INTO recipients ({','.join(cols)}) VALUES ({','.join(['?']*len(cols))})"
+    guid = (data.get("guid") or "").strip() or uuid.uuid4().hex
+    stamp = data.get("updated_at") or _utc_now()
     with get_connection() as conn:
         cur = conn.execute(sql, vals)
-        return cur.lastrowid
+        rec_id = cur.lastrowid
+        conn.execute("UPDATE recipients SET guid=?, updated_at=?, representative_auto=? WHERE id=?",
+                     (guid, stamp, int(data.get("representative_auto") or 0), rec_id))
+    _sync_log("rec_upsert", _rec_sync_payload(rec_id))
+    return rec_id
 
 
 def update_recipient(rec_id: int, data: dict):
@@ -587,13 +645,26 @@ def update_recipient(rec_id: int, data: dict):
                     "INSERT INTO change_log (recipient_id, recipient_name, field_changed, old_value, new_value) VALUES (?,?,?,?,?)",
                     (rec_id, old["full_name"], label, old.get(field, ""), data[field])
                 )
+        # A manual edit of the נציג clears the 'שויך אוטומטית' mark — the operator
+        # has now decided the community by hand.
+        if ("representative" in data and old
+                and str(data["representative"]) != str(old.get("representative") or "")
+                and "representative_auto" not in data):
+            data = dict(data)
+            data["representative_auto"] = 0
+            cols = [k for k in data if k != "id"]
         sets = ", ".join(f"{c}=?" for c in cols)
         vals = [data[c] for c in cols] + [rec_id]
         conn.execute(f"UPDATE recipients SET {sets} WHERE id=?", vals)
+        if "updated_at" not in data:
+            conn.execute("UPDATE recipients SET updated_at=? WHERE id=?",
+                         (_utc_now(), rec_id))
+    _sync_log("rec_upsert", _rec_sync_payload(rec_id))
 
 
 def delete_recipient(rec_id: int):
     """Delete a recipient. Raises ValueError if they have distribution history."""
+    rec = get_recipient(rec_id)
     with get_connection() as conn:
         count = conn.execute(
             "SELECT COUNT(*) as c FROM distributions WHERE recipient_id=?", (rec_id,)
@@ -604,14 +675,19 @@ def delete_recipient(rec_id: int):
                 "לא ניתן למחוק — שנה סטטוס ל'הסתיים' במקום."
             )
         conn.execute("DELETE FROM recipients WHERE id=?", (rec_id,))
+    if rec and rec.get("guid"):
+        _sync_log("rec_delete", {"guid": rec["guid"], "force": False})
 
 
 def force_delete_recipient(rec_id: int):
     """Delete a recipient AND all their distribution history. Use with caution."""
+    rec = get_recipient(rec_id)
     with get_connection() as conn:
         conn.execute("DELETE FROM distributions WHERE recipient_id=?", (rec_id,))
         conn.execute("DELETE FROM change_log WHERE recipient_id=?", (rec_id,))
         conn.execute("DELETE FROM recipients WHERE id=?", (rec_id,))
+    if rec and rec.get("guid"):
+        _sync_log("rec_delete", {"guid": rec["guid"], "force": True})
 
 
 # ─── Next Wednesday + frequency-aware next distribution ───────────────────────
@@ -954,17 +1030,88 @@ def get_filtered_list(criteria: dict = None, area_filter: str = "הכל"):
     that satisfies the numeric thresholds (priority/frequency are ignored — this
     is a deliberate broad filter over the whole list). Rows are need-scored and
     ordered by need (highest first) so limited products go to the neediest of the
-    matching set; clicking a name still shows the score breakdown."""
+    matching set; clicking a name still shows the score breakdown.
+
+    Community balance (#lejmr): when the criteria carry balance_communities=True
+    (the default) AND a products count is set, the pick is split between
+    communities (by שם נציג) — each community gets a share proportional to its
+    size (or the operator-pinned percent from settings), filled from its own
+    members. Whoever falls off because of the balance is simply not listed."""
     if criteria is None:
         criteria = get_filter_criteria()
     rows = get_all_recipients(status_filter="פעיל")
     if area_filter != "הכל":
         rows = [r for r in rows if r.get("area", "") == area_filter]
-    rows = selection.filter_by_criteria(rows, criteria)
     for r in rows:
         r["days_since"] = recency_days(r)
         r["_filtered"] = True
+    balance = (criteria or {}).get("balance_communities", True)
+    try:
+        products = int(get_setting("available_products") or 0)
+    except (TypeError, ValueError):
+        products = 0
+    if balance and products > 0:
+        return selection.balance_by_community(
+            rows, criteria, get_need_weights(), products, get_community_quotas())
+    rows = selection.filter_by_criteria(rows, criteria)
     return selection.rank_by_need(rows, get_need_weights())
+
+
+# ─── Communities (שם נציג) — balance data + auto-assignment ──────────────────
+
+def get_communities() -> list:
+    """Sorted distinct נציג names across ACTIVE recipients (blank excluded)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT TRIM(representative) AS rep FROM recipients "
+            "WHERE status='פעיל' AND TRIM(COALESCE(representative,'')) != '' "
+            "ORDER BY rep COLLATE NOCASE").fetchall()
+    return [r["rep"] for r in rows]
+
+
+def get_community_sizes() -> dict:
+    """{נציג: active member count}, including '' for the rep-less group."""
+    sizes = {}
+    for r in get_all_recipients(status_filter="פעיל"):
+        sizes[selection.community_key(r)] = sizes.get(selection.community_key(r), 0) + 1
+    return sizes
+
+
+def get_no_community(status_filter: str = "פעיל") -> list:
+    """Active recipients that have NO נציג — the group the operator can assign
+    (manually or by the synagogue-majority auto-fill)."""
+    return [r for r in get_all_recipients(status_filter=status_filter)
+            if not selection.community_key(r)]
+
+
+def get_community_quotas() -> dict:
+    """Operator-pinned percent per community, {נציג: percent}. Communities not
+    listed split the leftover percent proportionally to size (see selection)."""
+    raw = get_setting("community_quotas")
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return {k: float(v) for k, v in data.items()
+                if isinstance(v, (int, float)) and float(v) > 0} if isinstance(data, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def set_community_quotas(quotas: dict):
+    set_setting("community_quotas", json.dumps(quotas or {}, ensure_ascii=False))
+
+
+def apply_inferred_representatives() -> int:
+    """Auto-assign a community to rep-less recipients by their synagogue's
+    majority נציג (selection.infer_communities). Writes the נציג to the card
+    marked representative_auto=1 — visible and correctable by the operator.
+    Returns how many cards were filled."""
+    rows = get_all_recipients(status_filter="פעיל")
+    suggestions = selection.infer_communities(rows)
+    for rid, rep in suggestions.items():
+        update_recipient(rid, {"representative": rep, "representative_auto": 1})
+    return len(suggestions)
 
 
 def compute_suggested_n(total_products: int) -> tuple[int, int]:
@@ -1009,24 +1156,35 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
             souls_total += int(rec.get("souls", 0) or 0)
         except (ValueError, TypeError):
             pass
+    sync_rows = []
     with get_connection() as conn:
+        batch_guid = uuid.uuid4().hex
         cur = conn.execute(
             "INSERT INTO dist_batches "
             "(dist_name, dist_date, products, quantity, distributor, general_note, "
-            " recipient_count, souls_total) VALUES (?,?,?,?,?,?,?,?)",
+            " recipient_count, souls_total, guid) VALUES (?,?,?,?,?,?,?,?,?)",
             (dist_name or "", dist_date, what_dist, quantity or 0, distributor or "",
-             general_note or "", len(records), souls_total)
+             general_note or "", len(records), souls_total, batch_guid)
         )
         batch_id = cur.lastrowid
+
+        def _rec_guid(conn, rec):
+            rid = rec.get("id")
+            if rid is None:
+                return ""
+            row = conn.execute("SELECT guid FROM recipients WHERE id=?", (rid,)).fetchone()
+            return (row["guid"] if row else "") or ""
+
         for rec in records:
+            row_guid = uuid.uuid4().hex
             conn.execute(
                 "INSERT INTO distributions "
-                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,1)",
+                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received, guid) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,1,?)",
                 (rec.get("id"), rec.get("full_name", ""), dist_date,
                  rec.get("area", ""), rec.get("souls", 0),
                  what_dist, quantity, distributor,
-                 rec.get("notes", ""), batch_id)
+                 rec.get("notes", ""), batch_id, row_guid)
             )
             freq = rec.get("frequency", "")
             nw = "" if freq == "חד-פעמי" else calculate_next_dist(dist_date, freq).isoformat()
@@ -1036,17 +1194,36 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
                 "UPDATE recipients SET last_distribution=?, next_distribution=?, weekly_status='' WHERE id=?",
                 (dist_date, nw, rec.get("id"))
             )
+            sync_rows.append({"guid": row_guid, "rec_guid": _rec_guid(conn, rec),
+                              "recipient_name": rec.get("full_name", ""),
+                              "area": rec.get("area", ""), "souls": rec.get("souls", 0),
+                              "notes": rec.get("notes", ""), "received": 1,
+                              "frequency": rec.get("frequency", "")})
         # No-shows: record the fact (received=0) WITHOUT advancing their dates.
         for rec in not_received:
+            row_guid = uuid.uuid4().hex
             conn.execute(
                 "INSERT INTO distributions "
-                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,0)",
+                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received, guid) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,0,?)",
                 (rec.get("id"), rec.get("full_name", ""), dist_date,
                  rec.get("area", ""), rec.get("souls", 0),
                  what_dist, 0, distributor,
-                 rec.get("notes", ""), batch_id)
+                 rec.get("notes", ""), batch_id, row_guid)
             )
+            sync_rows.append({"guid": row_guid, "rec_guid": _rec_guid(conn, rec),
+                              "recipient_name": rec.get("full_name", ""),
+                              "area": rec.get("area", ""), "souls": rec.get("souls", 0),
+                              "notes": rec.get("notes", ""), "received": 0,
+                              "frequency": rec.get("frequency", "")})
+    _sync_log("batch_add", {
+        "guid": batch_guid,
+        "batch": {"dist_name": dist_name or "", "dist_date": dist_date,
+                  "products": what_dist, "quantity": quantity or 0,
+                  "distributor": distributor or "", "general_note": general_note or "",
+                  "recipient_count": len(records), "souls_total": souls_total},
+        "rows": sync_rows,
+    })
     return batch_id
 
 
@@ -1110,6 +1287,44 @@ def get_batch_recipients(batch_id: int):
             (batch_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_batch_export_rows(batch_id: int) -> list[dict]:
+    """Full recipient details for every person recorded under one batch, joined
+    from the recipients table, plus a `received` flag and the batch header info
+    (#dancj). A history row whose recipient was since deleted still exports with
+    the name/area stored on the history row itself."""
+    with get_connection() as conn:
+        batch = conn.execute("SELECT * FROM dist_batches WHERE id=?", (batch_id,)).fetchone()
+        drows = conn.execute(
+            "SELECT * FROM distributions WHERE batch_id=? ORDER BY received DESC, "
+            "recipient_name COLLATE NOCASE", (batch_id,)).fetchall()
+        out = []
+        for d in drows:
+            rec = None
+            if d["recipient_id"] is not None:
+                rec = conn.execute("SELECT * FROM recipients WHERE id=?",
+                                   (d["recipient_id"],)).fetchone()
+            merged = dict(rec) if rec else {}
+            merged["full_name"] = d["recipient_name"] or (merged.get("full_name") or "")
+            merged.setdefault("area", d["area"] or "")
+            merged.setdefault("souls", d["souls"] or 0)
+            merged["received"] = d["received"] if d["received"] is not None else 1
+            merged["_batch_name"] = (batch["dist_name"] if batch else "") or ""
+            merged["_batch_date"] = (batch["dist_date"] if batch else "") or ""
+            merged["notes"] = d["notes"] or merged.get("notes", "")
+            out.append(merged)
+        return out
+
+
+def get_all_history_export_rows() -> list[dict]:
+    """Full recipient details for EVERY recorded distribution across all batches
+    (#dancj), newest batch first. Each row carries its batch name/date and the
+    received flag, so the whole history can be reviewed in one sheet."""
+    out = []
+    for b in get_distribution_batches():
+        out.extend(get_batch_export_rows(b["id"]))
+    return out
 
 
 def find_matching_batch(dist_date, dist_name, recipient_ids):
@@ -1185,6 +1400,8 @@ def delete_batch(batch_id: int):
     back each affected recipient's last/next distribution to whatever history
     REMAINS (keeps the denormalized dates in sync with the history table)."""
     with get_connection() as conn:
+        row = conn.execute("SELECT guid FROM dist_batches WHERE id=?", (batch_id,)).fetchone()
+        batch_guid = (row["guid"] if row else "") or ""
         rec_ids = [r["recipient_id"] for r in conn.execute(
             "SELECT DISTINCT recipient_id FROM distributions "
             "WHERE batch_id=? AND recipient_id IS NOT NULL", (batch_id,))]
@@ -1192,6 +1409,8 @@ def delete_batch(batch_id: int):
         conn.execute("DELETE FROM dist_batches WHERE id=?", (batch_id,))
         for rid in rec_ids:
             _recompute_recipient_dates(conn, rid)
+    if batch_guid:
+        _sync_log("batch_delete", {"guid": batch_guid})
 
 
 def delete_distribution(dist_id: int):
@@ -1200,11 +1419,13 @@ def delete_distribution(dist_id: int):
     link and so can't be removed from the 'חלוקות' batch view). Rolls back the
     recipient's last/next distribution to the remaining history."""
     with get_connection() as conn:
-        row = conn.execute("SELECT recipient_id FROM distributions WHERE id=?",
+        row = conn.execute("SELECT recipient_id, guid FROM distributions WHERE id=?",
                            (dist_id,)).fetchone()
         conn.execute("DELETE FROM distributions WHERE id=?", (dist_id,))
         if row and row["recipient_id"] is not None:
             _recompute_recipient_dates(conn, row["recipient_id"])
+    if row and (row["guid"] or ""):
+        _sync_log("dist_delete", {"guid": row["guid"]})
 
 
 def get_distributions(recipient_name: str = None, limit: int = 1000):
@@ -1388,3 +1609,101 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
                                   **{c: row.get(c, "") for c in insert_cols if c != "full_name"}}
                 added += 1
     return added, updated, conflicts
+
+
+# Fields an import may change on an EXISTING recipient (name/status excluded —
+# name is the match key, status is managed in-app).
+_IMPORT_DIFF_FIELDS = [
+    "phone1", "phone2", "phone3", "address", "area", "souls", "frequency",
+    "external_id", "source", "birth_date", "spouse_birth_date",
+    "id_number", "spouse_id_number", "children_home", "children_married",
+    "children_total", "marital_status", "email", "synagogue",
+    "housing_expenses", "medical_expenses", "income", "per_soul",
+    "work_scope", "parent_type", "occupation", "representative",
+    "priority", "priority_raw",
+]
+
+
+def _norm_val(field, val) -> str:
+    """Normalised string form for change detection (so '0'/''/None and 3 vs '3'
+    don't look like edits)."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if field in _INT_FIELDS or field == "priority":
+        if s in ("", "None"):
+            return ""
+        try:
+            return str(int(float(s)))
+        except (ValueError, TypeError):
+            return s
+    return "" if s in ("None",) else s
+
+
+def diff_incoming_recipients(rows: list[dict]) -> dict:
+    """Compare an imported list against the DB WITHOUT writing anything.
+    Returns {'new': [row,...], 'updates': [{'id','full_name','changes':
+    {field: {'old','new'}}}], 'unmatched_dupes': int}. Matching prefers a
+    unique non-empty external_id, else a unique full_name. Used by the import
+    confirmation dialog (#hlcmj) so the operator approves changes to existing
+    recipients before they are applied."""
+    with get_connection() as conn:
+        db_rows = [dict(r) for r in conn.execute("SELECT * FROM recipients")]
+    by_name = {}
+    by_ext = {}
+    for r in db_rows:
+        by_name.setdefault((r.get("full_name") or "").strip(), []).append(r)
+        ext = (r.get("external_id") or "").strip()
+        if ext:
+            by_ext.setdefault(ext, []).append(r)
+
+    new_rows, updates, dupes = [], [], 0
+    for row in rows:
+        name = (row.get("full_name") or "").strip()
+        if not name:
+            continue
+        match = None
+        ext = (row.get("external_id") or "").strip()
+        if ext and len(by_ext.get(ext, [])) == 1:
+            match = by_ext[ext][0]
+        elif len(by_name.get(name, [])) == 1:
+            match = by_name[name][0]
+        elif len(by_name.get(name, [])) > 1:
+            dupes += 1
+            continue
+        if match is None:
+            new_rows.append(row)
+            continue
+        changes = {}
+        for field in _IMPORT_DIFF_FIELDS:
+            if field not in row:
+                continue
+            new_norm = _norm_val(field, row.get(field))
+            old_norm = _norm_val(field, match.get(field))
+            # Only a real, non-emptying change counts — never let a blank cell in
+            # the file wipe existing data.
+            if new_norm and new_norm != old_norm:
+                changes[field] = {"old": match.get(field), "new": row.get(field)}
+        if changes:
+            updates.append({"id": match["id"], "full_name": name, "changes": changes})
+    return {"new": new_rows, "updates": updates, "unmatched_dupes": dupes}
+
+
+def apply_import_confirmed(new_rows: list[dict], updates: list[dict]) -> tuple[int, int]:
+    """Apply an import the operator confirmed: insert every row in new_rows and
+    apply the approved field changes in updates (each {'id', 'changes': {field:
+    {'new':...}}} — the dialog drops fields/rows the operator unchecked). Returns
+    (added, updated). Goes through add_recipient/update_recipient so sync + the
+    change log see every write."""
+    added = 0
+    for row in new_rows:
+        add_recipient(row)
+        added += 1
+    updated = 0
+    for u in updates:
+        fields = {f: _coerce(f, ch["new"]) if f in _INT_FIELDS else ch["new"]
+                  for f, ch in u.get("changes", {}).items()}
+        if fields:
+            update_recipient(u["id"], fields)
+            updated += 1
+    return added, updated

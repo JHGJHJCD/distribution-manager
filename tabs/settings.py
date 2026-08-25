@@ -4,7 +4,8 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QLabel,
     QPushButton, QFrame, QMessageBox, QFileDialog, QInputDialog, QLineEdit,
-    QProgressDialog, QApplication, QSpinBox, QScrollArea
+    QProgressDialog, QApplication, QSpinBox, QScrollArea, QDoubleSpinBox,
+    QDialog, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
 )
 
 import database as db
@@ -12,6 +13,7 @@ from utils.backup import auto_backup, restore_from_backup
 from utils.ui import busy_cursor, ALIGN_RIGHT, section_header, line_icon, enable_touch_scroll
 from utils import updater
 from utils import email_utils
+from utils import sync
 from version import APP_VERSION
 
 
@@ -472,6 +474,51 @@ class SettingsTab(QWidget):
         org_lay.addLayout(org_btns)
         left_col.addWidget(org_frame)
 
+        # ── Community balance percentages (#lejmr) ────────────────────────────
+        comm_frame = QFrame()
+        comm_frame.setObjectName("panel")
+        comm_lay = QVBoxLayout(comm_frame)
+        comm_lay.setContentsMargins(10, 7, 10, 7)
+        comm_lay.setSpacing(6)
+        comm_lay.addWidget(section_header("איזון קהילות", "users", "#0f766e"))
+        comm_info = QLabel(
+            "כשמחלקים לפי סינון מותאם עם 'איזון בין קהילות', כל קהילה מקבלת "
+            "חלק יחסי לגודלה. כאן אפשר לקבוע ידנית אחוז קבוע לקהילה מסוימת "
+            "(השאר יחולק יחסית בין הקהילות הנותרות).")
+        comm_info.setWordWrap(True)
+        comm_info.setStyleSheet("color:#475569; font-size:12px;")
+        comm_lay.addWidget(comm_info)
+        btn_comm = QPushButton("כוונון אחוזים לקהילות…")
+        btn_comm.setObjectName("neutral")
+        btn_comm.clicked.connect(self._open_community_quotas)
+        comm_lay.addWidget(btn_comm, alignment=Qt.AlignmentFlag.AlignRight)
+        right_col.addWidget(comm_frame)
+
+        # ── Two-computer sync (Google Drive) — v2.61 ──────────────────────────
+        sync_frame = QFrame()
+        sync_frame.setObjectName("panel")
+        sync_lay = QVBoxLayout(sync_frame)
+        sync_lay.setContentsMargins(10, 7, 10, 7)
+        sync_lay.setSpacing(6)
+        sync_lay.addWidget(section_header("סנכרון בין שני מחשבים", "update", "#0f766e"))
+        self.lbl_sync_status = QLabel("")
+        self.lbl_sync_status.setWordWrap(True)
+        self.lbl_sync_status.setStyleSheet("font-size:12.5px;")
+        sync_lay.addWidget(self.lbl_sync_status)
+        sync_btns = QHBoxLayout()
+        self.btn_sync_setup = QPushButton("הגדרת סנכרון…")
+        self.btn_sync_setup.setObjectName("primary")
+        self.btn_sync_setup.clicked.connect(self._open_sync_setup)
+        sync_btns.addWidget(self.btn_sync_setup)
+        self.btn_sync_now = QPushButton("סנכרן עכשיו")
+        self.btn_sync_now.setObjectName("neutral")
+        self.btn_sync_now.clicked.connect(self._sync_now)
+        sync_btns.addWidget(self.btn_sync_now)
+        sync_btns.addStretch()
+        sync_lay.addLayout(sync_btns)
+        left_col.addWidget(sync_frame)
+        self._refresh_sync_status()
+
         # Trailing stretch keeps each column's panels packed to the top so the
         # shorter column doesn't stretch its panels to fill the taller one.
         right_col.addStretch()
@@ -724,6 +771,50 @@ class SettingsTab(QWidget):
         from utils.ui import FeedbackDialog
         FeedbackDialog.open(self)
 
+    # ── Community balance percentages (#lejmr) ───────────────────────────────
+    def _open_community_quotas(self):
+        CommunityQuotasDialog(self).exec()
+
+    # ── Two-computer sync ────────────────────────────────────────────────────
+    def _refresh_sync_status(self):
+        if not sync.is_enabled():
+            self.lbl_sync_status.setText("סנכרון כבוי. הגדר תיקיית Google Drive "
+                                         "משותפת כדי לעבוד משני מחשבים על אותם נתונים.")
+            self.lbl_sync_status.setStyleSheet("color:#64748b; font-size:12.5px;")
+            self.btn_sync_now.setEnabled(False)
+            return
+        info = sync.last_run_info()
+        folder = sync.get_folder()
+        avail = sync.folder_available()
+        name = sync.device_name() or "מחשב זה"
+        last = (info.get("last_run") or "")[:16].replace("T", " ")
+        parts = [f"✓ סנכרון פעיל · {name}",
+                 f"תיקייה: {folder}" + ("" if avail else "  ⚠ לא נמצאה כרגע"),
+                 f"סנכרון אחרון: {last}" if last else "טרם סונכרן",
+                 f"ממתינים לשליחה: {info.get('pending', 0)}"]
+        self.lbl_sync_status.setText("\n".join(parts))
+        self.lbl_sync_status.setStyleSheet(
+            "color:#15803d; font-size:12.5px;" if avail else "color:#b45309; font-size:12.5px;")
+        self.btn_sync_now.setEnabled(True)
+
+    def _open_sync_setup(self):
+        SyncSetupDialog(self).exec()
+        self._refresh_sync_status()
+
+    def _sync_now(self):
+        with busy_cursor():
+            res = sync.run_sync()
+        self._refresh_sync_status()
+        if res.get("error"):
+            QMessageBox.warning(self, "סנכרון", f"אירעה שגיאה בסנכרון:\n{res['error']}")
+        else:
+            QMessageBox.information(
+                self, "סנכרון הושלם",
+                f"נשלחו {res['pushed']} שינויים, נקלטו {res['applied']} שינויים "
+                "מהמחשב השני.")
+            if res["applied"] and self.main_win:
+                self.main_win.refresh_all()
+
     def _choose_backup_folder(self):
         if self.main_win and hasattr(self.main_win, "choose_backup_folder"):
             self.main_win.choose_backup_folder()
@@ -916,3 +1007,184 @@ class SettingsTab(QWidget):
             self, "מתעדכן",
             "העדכון הותקן בהצלחה.\nהתוכנה תיסגר כעת ותיפתח מחדש בגרסה החדשה.")
         QApplication.quit()
+
+
+class CommunityQuotasDialog(QDialog):
+    """Pin an optional fixed percentage per community (#lejmr). A blank/0 percent
+    means 'automatic' — that community shares the leftover percent proportionally
+    to size. Manual percentages over 100 in total are normalised down when the
+    distribution is built."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("כוונון אחוזים לקהילות")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumSize(480, 520)
+        self._spins = {}
+        outer = QVBoxLayout(self)
+        intro = QLabel("קבע אחוז קבוע לקהילה (לפי שם נציג). קהילה שנשארת על 0 = "
+                       "אוטומטי (חלק יחסי לגודלה). סכום מעל 100% ינורמל אוטומטית.")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#475569; font-size:12.5px;")
+        outer.addWidget(intro)
+
+        sizes = db.get_community_sizes()
+        pinned = db.get_community_quotas()
+        communities = sorted(c for c in sizes if c)   # skip the '' (no-community) key
+        table = QTableWidget()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["קהילה (נציג)", "גודל", "אחוז קבוע"])
+        table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        hdr = table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        table.setRowCount(len(communities))
+        for r, c in enumerate(communities):
+            it_name = QTableWidgetItem(c)
+            it_size = QTableWidgetItem(str(sizes.get(c, 0)))
+            for it in (it_name, it_size):
+                it.setTextAlignment(ALIGN_RIGHT)
+            table.setItem(r, 0, it_name)
+            table.setItem(r, 1, it_size)
+            spin = QDoubleSpinBox()
+            spin.setRange(0, 100)
+            spin.setDecimals(1)
+            spin.setSuffix(" %")
+            spin.setValue(float(pinned.get(c, 0) or 0))
+            table.setCellWidget(r, 2, spin)
+            self._spins[c] = spin
+        enable_touch_scroll(table)
+        outer.addWidget(table, 1)
+        if not communities:
+            outer.addWidget(QLabel("עדיין אין קהילות (שם נציג) במקבלים."))
+
+        btns = QHBoxLayout()
+        btn_save = QPushButton("שמור")
+        btn_save.setObjectName("primary")
+        btn_save.clicked.connect(self._save)
+        btn_cancel = QPushButton("ביטול")
+        btn_cancel.setObjectName("neutral")
+        btn_cancel.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(btn_save)
+        btns.addWidget(btn_cancel)
+        outer.addLayout(btns)
+
+    def _save(self):
+        quotas = {c: spin.value() for c, spin in self._spins.items() if spin.value() > 0}
+        db.set_community_quotas(quotas)
+        QMessageBox.information(self, "נשמר", "אחוזי הקהילות נשמרו ✓")
+        self.accept()
+
+
+class SyncSetupDialog(QDialog):
+    """Set up (or turn off) syncing this computer's data with a second computer
+    through a shared Google Drive folder (v2.61). Walks the operator through
+    picking the folder, naming this computer, and seeding the data."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("הגדרת סנכרון בין מחשבים")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumWidth(560)
+        outer = QVBoxLayout(self)
+
+        guide = QLabel(
+            "<div dir='rtl'>"
+            "<b>איך זה עובד:</b><br>"
+            "1. התקן <b>Google Drive למחשב</b> בשני המחשבים (drive.google.com/drive/download) "
+            "והתחבר לאותו חשבון.<br>"
+            "2. צור תיקייה אחת ב-Drive (למשל <b>חלוקה-משותף</b>) — אותה תיקייה בדיוק בשני המחשבים.<br>"
+            "3. כאן בכל מחשב: בחר את אותה תיקייה, תן שם למחשב, ולחץ הפעלה.<br>"
+            "מאותו רגע כל שינוי מסונכרן אוטומטית בין המחשבים. עבודה בו-זמנית בטוחה; "
+            "אם שניכם עורכים את אותו כרטיס באותו רגע — העריכה האחרונה גוברת.</div>")
+        guide.setTextFormat(Qt.TextFormat.RichText)
+        guide.setWordWrap(True)
+        guide.setStyleSheet("font-size:12.5px; color:#334155;")
+        outer.addWidget(guide)
+
+        folder_row = QHBoxLayout()
+        folder_row.addWidget(QLabel("תיקייה משותפת:"))
+        self.folder_edit = QLineEdit(sync.get_folder())
+        self.folder_edit.setPlaceholderText("נתיב לתיקייה בתוך Google Drive")
+        folder_row.addWidget(self.folder_edit, 1)
+        btn_browse = QPushButton("עיון…")
+        btn_browse.setObjectName("neutral")
+        btn_browse.clicked.connect(self._browse)
+        folder_row.addWidget(btn_browse)
+        outer.addLayout(folder_row)
+
+        # Offer any auto-detected Drive folders.
+        found = sync.detect_drive_folders()
+        if found:
+            hint = QLabel("נמצאו תיקיות Drive: " + "  |  ".join(found[:3]))
+            hint.setWordWrap(True)
+            hint.setStyleSheet("color:#0f766e; font-size:11.5px;")
+            outer.addWidget(hint)
+
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("שם המחשב הזה:"))
+        self.name_edit = QLineEdit(sync.device_name())
+        self.name_edit.setPlaceholderText("למשל: בית / נקודת החלוקה")
+        name_row.addWidget(self.name_edit, 1)
+        outer.addLayout(name_row)
+
+        btns = QHBoxLayout()
+        self.btn_enable = QPushButton("הפעל סנכרון")
+        self.btn_enable.setObjectName("primary")
+        self.btn_enable.clicked.connect(self._enable)
+        btns.addWidget(self.btn_enable)
+        if sync.is_enabled():
+            btn_disable = QPushButton("כבה סנכרון")
+            btn_disable.setObjectName("danger")
+            btn_disable.clicked.connect(self._disable)
+            btns.addWidget(btn_disable)
+        btn_close = QPushButton("סגור")
+        btn_close.setObjectName("neutral")
+        btn_close.clicked.connect(self.reject)
+        btns.addStretch()
+        btns.addWidget(btn_close)
+        outer.addLayout(btns)
+
+    def _browse(self):
+        start = sync.get_folder() or (sync.detect_drive_folders() or [""])[0]
+        path = QFileDialog.getExistingDirectory(self, "בחר תיקייה משותפת ב-Drive", start)
+        if path:
+            self.folder_edit.setText(path)
+
+    def _enable(self):
+        folder = self.folder_edit.text().strip()
+        if not folder:
+            QMessageBox.warning(self, "חסר", "בחר תיקייה משותפת תחילה.")
+            return
+        import os
+        if not os.path.isdir(folder):
+            QMessageBox.warning(self, "תיקייה לא קיימת",
+                                "התיקייה לא נמצאה. ודא ש-Google Drive מותקן ומסונכרן.")
+            return
+        sync.set_device_name(self.name_edit.text().strip())
+        # enable_sync seeds THIS computer's data into the shared folder; run_sync
+        # then pulls whatever the other computer already put there — so joining an
+        # existing folder merges both directions without overwriting.
+        try:
+            with busy_cursor():
+                n = sync.enable_sync(folder, seed=True)
+                res = sync.run_sync()
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה", f"הפעלת הסנכרון נכשלה:\n{e}")
+            return
+        QMessageBox.information(
+            self, "סנכרון הופעל",
+            f"הסנכרון הופעל ✓\nנשלחו {n} רשומות לתיקייה המשותפת, "
+            f"ונקלטו {res.get('applied', 0)} שינויים מהמחשב השני.\n\n"
+            "התוכנה תסנכרן אוטומטית מעתה והלאה.")
+        if self.parent() and hasattr(self.parent(), "main_win") and self.parent().main_win:
+            self.parent().main_win.refresh_all()
+        self.accept()
+
+    def _disable(self):
+        sync.disable_sync()
+        QMessageBox.information(self, "סנכרון כבוי",
+                                "הסנכרון כובה במחשב זה. הנתונים נשארים כפי שהם.")
+        self.accept()

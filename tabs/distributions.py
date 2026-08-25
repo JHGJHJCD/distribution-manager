@@ -14,7 +14,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 import database as db
 from utils.ui import (attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
-                      enable_touch_scroll, apply_header_icons)
+                      enable_touch_scroll, apply_header_icons, busy_cursor,
+                      reveal_in_folder)
+from utils.excel_utils import export_history_to_excel
 
 _SMALL_BTN = "font-size:11px; min-height:24px; min-width:0; padding:3px 12px;"
 
@@ -116,6 +118,20 @@ class DistributionsTab(QWidget):
 
         # (The manual "רענן" button was removed — the tab already reloads itself
         # every time it's opened and after a delete, so it had no real use.)
+        self.btn_export_one = QPushButton("ייצוא הנבחרת לאקסל")
+        self.btn_export_one.setStyleSheet(_SMALL_BTN)
+        self.btn_export_one.setToolTip("ייצוא החלוקה הנבחרת לאקסל — כל פרטי המקבלים "
+                                       "ומי קיבל / לא הגיע")
+        self.btn_export_one.clicked.connect(self._export_selected)
+        top.addWidget(self.btn_export_one)
+
+        self.btn_export_all = QPushButton("ייצוא כל ההיסטוריה")
+        self.btn_export_all.setStyleSheet(_SMALL_BTN)
+        self.btn_export_all.setToolTip("ייצוא כל החלוקות שנרשמו — גיליון אחד עם כל "
+                                       "פרטי המקבלים ומי קיבל בכל חלוקה")
+        self.btn_export_all.clicked.connect(self._export_all)
+        top.addWidget(self.btn_export_all)
+
         self.btn_delete = QPushButton("מחק חלוקה")
         self.btn_delete.setObjectName("danger")
         self.btn_delete.setStyleSheet(_SMALL_BTN)
@@ -188,6 +204,40 @@ class DistributionsTab(QWidget):
         b = self._selected_batch()
         if b:
             BatchDetailsDialog(b, self).exec()
+
+    def _export_selected(self):
+        b = self._selected_batch()
+        if not b:
+            QMessageBox.information(self, "", "בחר חלוקה תחילה")
+            return
+        try:
+            with busy_cursor():
+                rows = db.get_batch_export_rows(b["id"])
+                if not rows:
+                    QMessageBox.information(self, "", "אין מקבלים רשומים בחלוקה זו")
+                    return
+                name = b.get("dist_name") or "חלוקה"
+                path = export_history_to_excel(rows, f"היסטוריית חלוקה — {name}")
+            reveal_in_folder(path)
+            QMessageBox.information(self, "ייצוא הושלם",
+                                    f"הקובץ נשמר בתיקיית ההורדות:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה", str(e))
+
+    def _export_all(self):
+        try:
+            with busy_cursor():
+                rows = db.get_all_history_export_rows()
+                if not rows:
+                    QMessageBox.information(self, "", "עדיין לא נרשמו חלוקות")
+                    return
+                path = export_history_to_excel(rows, "היסטוריית חלוקות מלאה",
+                                               with_batch_cols=True)
+            reveal_in_folder(path)
+            QMessageBox.information(self, "ייצוא הושלם",
+                                    f"כל ההיסטוריה יוצאה לתיקיית ההורדות:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה", str(e))
 
     def _delete_selected(self):
         b = self._selected_batch()

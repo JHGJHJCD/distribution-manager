@@ -224,3 +224,173 @@ def filter_by_criteria(rows: list, criteria: dict) -> list:
     if not criteria_is_active(criteria):
         return list(rows)
     return [r for r in rows if matches_criteria(r, criteria)]
+
+
+# ── Community balance (mode 'filter', #lejmr) ─────────────────────────────────
+# The operator's request (2026-08): when distributing by the broad filter, the
+# products must be split FAIRLY BETWEEN COMMUNITIES ("קהילה" = everyone sharing
+# the same שם נציג), so one large community can't take everything. The decided
+# rules:
+#   • Each community's default quota is proportional to its TOTAL size (all its
+#     active members in the program), not to how many pass the filter — a
+#     community of 200 gets twice the share of a community of 100.
+#   • The operator may pin a manual percentage per community (settings); the
+#     remaining communities split the leftover percent by size. Over-100 manual
+#     totals are scaled down to 100 (normalising "at the expense of the others").
+#   • Inside a community the quota is filled from its FILTER-QUALIFYING members
+#     first (by need score); if the community has fewer qualifiers than quota,
+#     the remainder is filled from its OTHER active members by need score — the
+#     community's share stays inside the community (operator's explicit call).
+#   • People without a representative form their own "ללא קהילה" group that
+#     competes for a proportional share like any community.
+#   • Whoever falls off because of the balance simply doesn't appear (no reserve).
+
+NO_COMMUNITY = ""          # community key for people without a representative
+NO_COMMUNITY_LABEL = "ללא קהילה"
+
+
+def community_key(rec: dict) -> str:
+    """The community a recipient belongs to — their נציג name, '' if none."""
+    return (rec.get("representative") or "").strip()
+
+
+def infer_communities(rows: list) -> dict:
+    """Suggest a representative for recipients that lack one, by synagogue
+    majority: if most rep-carrying members of the same בית כנסת share one נציג,
+    a rep-less member of that synagogue is assumed to belong to that community.
+    Returns {rec_id: suggested_rep}. Pure — the caller decides whether to save
+    (the app writes it to the card marked 'שויך אוטומטית' so the operator can
+    see and fix it)."""
+    by_syn = {}
+    for r in rows:
+        syn = (r.get("synagogue") or "").strip()
+        rep = community_key(r)
+        if syn and rep:
+            by_syn.setdefault(syn, {})
+            by_syn[syn][rep] = by_syn[syn].get(rep, 0) + 1
+    out = {}
+    for r in rows:
+        if community_key(r):
+            continue
+        syn = (r.get("synagogue") or "").strip()
+        counts = by_syn.get(syn)
+        if not counts:
+            continue
+        rep, n = max(counts.items(), key=lambda kv: (kv[1], kv[0]))
+        total = sum(counts.values())
+        # Require a strict majority of at least 2 people — a lone rep in a
+        # synagogue is too thin a signal to re-assign someone's community by.
+        if n >= 2 and n * 2 > total:
+            out[r.get("id")] = rep
+    return out
+
+
+def community_quotas(n_products: int, sizes: dict, manual_pcts: dict = None) -> dict:
+    """Integer product quota per community, summing to min(n, total size).
+
+    sizes: {community: total active member count} (may include NO_COMMUNITY).
+    manual_pcts: {community: percent} pinned by the operator; communities not
+    pinned split the leftover percent proportionally to size. Manual totals over
+    100 are scaled down to 100. Quotas are capped at the community size; capped
+    leftovers are re-spread over communities with remaining capacity. Largest-
+    remainder rounding keeps the total exact. Pure."""
+    communities = [c for c in sizes if (sizes.get(c) or 0) > 0]
+    n = max(0, int(n_products or 0))
+    if not communities or n == 0:
+        return {c: 0 for c in sizes}
+    manual = {c: float(p) for c, p in (manual_pcts or {}).items()
+              if c in sizes and p is not None and float(p) > 0}
+    man_sum = sum(manual.values())
+    if man_sum > 100:
+        manual = {c: p * 100.0 / man_sum for c, p in manual.items()}
+        man_sum = 100.0
+    free = [c for c in communities if c not in manual]
+    free_size = sum(sizes[c] for c in free)
+    weights = {}
+    for c in communities:
+        if c in manual:
+            weights[c] = manual[c]
+        elif free_size > 0:
+            weights[c] = (100.0 - man_sum) * sizes[c] / free_size
+        else:
+            weights[c] = 0.0
+    total_w = sum(weights.values())
+    if total_w <= 0:
+        # degenerate (e.g. manual pins at 100% on empty communities) — by size
+        weights = {c: float(sizes[c]) for c in communities}
+        total_w = sum(weights.values())
+
+    def _largest_remainder(amount: int, weight_map: dict, caps: dict) -> dict:
+        wsum = sum(weight_map.values())
+        if wsum <= 0 or amount <= 0:
+            return {c: 0 for c in weight_map}
+        exact = {c: amount * w / wsum for c, w in weight_map.items()}
+        base = {c: min(int(exact[c]), caps[c]) for c in weight_map}
+        left = amount - sum(base.values())
+        order = sorted(weight_map,
+                       key=lambda c: (-(exact[c] - int(exact[c])), -weight_map[c], c))
+        while left > 0:
+            gave = False
+            for c in order:
+                if left <= 0:
+                    break
+                if base[c] < caps[c]:
+                    base[c] += 1
+                    left -= 1
+                    gave = True
+            if not gave:      # everyone at cap — no more room anywhere
+                break
+        return base
+
+    caps = {c: int(sizes[c]) for c in communities}
+    quotas = _largest_remainder(min(n, sum(caps.values())), weights, caps)
+    for c in sizes:
+        quotas.setdefault(c, 0)
+    return quotas
+
+
+def balance_by_community(rows: list, criteria: dict, weights: dict,
+                         n_products: int, manual_pcts: dict = None) -> list:
+    """The community-balanced filter pick: choose ~n_products recipients from
+    the ACTIVE list so each community receives its quota (proportional to size or
+    operator-pinned percent). Within a community: filter-qualifiers first by
+    need score, then (if the quota isn't filled) other members by need score,
+    each marked rec['_balance_fill']=True. Every pick carries rec['_community'].
+    Returns the picked list ordered by need score (desc). Pure."""
+    if n_products is None or n_products <= 0:
+        return rank_by_need(filter_by_criteria(rows, criteria), weights)
+    groups = {}
+    for r in rows:
+        groups.setdefault(community_key(r), []).append(r)
+    sizes = {c: len(members) for c, members in groups.items()}
+    quotas = community_quotas(n_products, sizes, manual_pcts)
+    picked = []
+    for c, members in groups.items():
+        q = quotas.get(c, 0)
+        if q <= 0:
+            continue
+        qualifying = filter_by_criteria(members, criteria)
+        ranked_q = rank_by_need(qualifying, weights)
+        take = ranked_q[:q]
+        for r in take:
+            r["_balance_fill"] = False
+        if len(take) < q:
+            # Top-up: the community's OTHER members (not already taken), by need
+            # — the community's share stays inside the community.
+            others = [r for r in members if all(r is not t for t in take)]
+            ranked_o = rank_by_need(others, weights)
+            fill = ranked_o[:q - len(take)]
+            for r in fill:
+                r["_balance_fill"] = True
+            take = take + fill
+        for r in take:
+            r["_community"] = c or NO_COMMUNITY_LABEL
+        picked.extend(take)
+    # Re-score the final picked set on ONE common scale so the displayed ניקוד is
+    # comparable across communities (each community was ranked on its own
+    # normalization above — fine for choosing WITHIN a community, but the merged
+    # list should read consistently).
+    scoring.annotate_need_scores(picked, weights)
+    return sorted(picked, key=lambda r: (-(r.get("need_score") or 0),
+                                         -(r.get("days_since") or 0),
+                                         r.get("full_name") or ""))

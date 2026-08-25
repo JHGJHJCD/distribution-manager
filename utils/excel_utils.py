@@ -142,8 +142,101 @@ def _adults_in_household(marital_status) -> int:
     return 1 if any(m in s for m in _SINGLE_PARENT_MARKERS) else 2
 
 
+def _ddmmyyyy_to_iso(v) -> str:
+    """Reverse of _fmt_date: 'dd/mm/yyyy' → 'yyyy-mm-dd'. Passes through an
+    already-iso string or blank; unknown formats are returned as-is."""
+    s = str(v or "").strip()
+    if not s:
+        return ""
+    if len(s) >= 10 and s[4] == "-":
+        return s[:10]
+    if "/" in s:
+        parts = s.split("/")
+        if len(parts) == 3 and len(parts[2]) == 4:
+            return f"{parts[2]}-{parts[1].zfill(2)}-{parts[0].zfill(2)}"
+    return s
+
+
+def import_app_export(path: str) -> List[Dict]:
+    """Read a recipients file that THIS app produced (export_recipients_to_excel,
+    header 'שם מלא'/'טלפון 1'/…). Round-trips every stored field back, so a sheet
+    exported on one computer imports cleanly on another (#hlcmj). Returns the
+    same row-dict shape as import_from_excel."""
+    import openpyxl
+    wb = openpyxl.load_workbook(path, data_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        return []
+    header_row_idx = None
+    header = []
+    for i, row in enumerate(rows):
+        texts = [str(c).strip() if c else "" for c in row]
+        if "שם מלא" in texts:
+            header, header_row_idx = texts, i
+            break
+    if header_row_idx is None:
+        raise ValueError("לא נמצאה שורת כותרת 'שם מלא' בקובץ הייצוא.")
+
+    # Reverse maps (built lazily — _FULL_FIELDS/_PRIORITY_LABELS are defined
+    # further down the module).
+    label_to_key = {label: key for key, label in _FULL_FIELDS}
+    priority_text_to_num = {v: k for k, v in _PRIORITY_LABELS.items()}
+    col_map = {}
+    for idx, h in enumerate(header):
+        key = label_to_key.get((h or "").strip())
+        if key:
+            col_map[key] = idx
+    _DATE_KEYS = {"last_distribution", "next_distribution", "birth_date", "spouse_birth_date"}
+    _INT_KEYS = {"souls", "children_home", "children_married", "children_total"}
+
+    out = []
+    for row in rows[header_row_idx + 1:]:
+        if not any(row):
+            continue
+
+        def cell(key):
+            idx = col_map.get(key)
+            if idx is None or idx >= len(row):
+                return ""
+            v = row[idx]
+            return str(v).strip() if v is not None else ""
+
+        name = cell("full_name")
+        if not name or name in ("None", "0"):
+            continue
+        rec = {}
+        for key in col_map:
+            if key == "priority":
+                continue
+            if key in _DATE_KEYS:
+                rec[key] = _ddmmyyyy_to_iso(cell(key))
+            elif key in _INT_KEYS:
+                try:
+                    rec[key] = int(float(cell(key))) if cell(key) else 0
+                except (ValueError, TypeError):
+                    rec[key] = 0
+            else:
+                rec[key] = cell(key)
+        # Priority text → number (+ keep 'חובת בירור' as raw for the gate).
+        ptext = cell("priority")
+        rec["priority"] = priority_text_to_num.get(ptext)
+        if rec["priority"] is None and "בירור" in ptext:
+            rec.setdefault("priority_raw", "חובת בירור")
+        rec["full_name"] = name
+        rec.setdefault("status", cell("status") or "פעיל")
+        out.append(rec)
+    return out
+
+
+def _is_app_export(header_texts: list) -> bool:
+    return "שם מלא" in header_texts
+
+
 def import_from_excel(path: str) -> List[Dict]:
-    """Read recipients from תבנית ליהודה format Excel file."""
+    """Read recipients from an Excel file. Auto-detects the format:
+    • the app's OWN export ('שם מלא' header) → import_app_export (#hlcmj);
+    • otherwise the 'תבנית ליהודה' source template ('משפחה'/'נייד בעל')."""
     import openpyxl
     wb = openpyxl.load_workbook(path, data_only=True)
     ws = wb.active
@@ -151,6 +244,14 @@ def import_from_excel(path: str) -> List[Dict]:
     rows = list(ws.iter_rows(values_only=True))
     if not rows:
         return []
+
+    # Detect the app's own export FIRST (its 'שם מלא' column is unambiguous).
+    for row in rows:
+        texts = [str(c).strip() if c else "" for c in row]
+        if _is_app_export(texts):
+            return import_app_export(path)
+        if any(t in ("משפחה", "מספר מזהה", "נייד בעל") for t in texts):
+            break
 
     # Find header row: look for template-specific columns
     header_row_idx = None
@@ -164,8 +265,9 @@ def import_from_excel(path: str) -> List[Dict]:
 
     if header_row_idx is None:
         raise ValueError(
-            "לא נמצאה שורת כותרת בפורמט תבנית ליהודה.\n"
-            "הקובץ חייב להכיל עמודות: 'משפחה', 'פרטי', 'נייד בעל' וכו'."
+            "לא נמצאה שורת כותרת מוכרת.\n"
+            "הקובץ חייב להיות ייצוא של התוכנה (עמודת 'שם מלא'), או תבנית ליהודה "
+            "(עמודות 'משפחה', 'פרטי', 'נייד בעל')."
         )
 
     # Map column indices — explicit template column names only
@@ -456,10 +558,15 @@ def _fmt_date(v) -> str:
 
 
 def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
-                                      dist_name: str = "") -> str:
+                                      dist_name: str = "",
+                                      include_got: bool = True) -> str:
     """Detailed export of a distribution: EVERY recipient field stored in the app,
     plus a 'קיבל חלוקה' column marking that the people listed received. Returns
-    the saved file path."""
+    the saved file path.
+
+    include_got=False is the PRE-distribution planning export (#gli21): the same
+    full sheet, but the column reads 'ברשימה' (רשימה/רזרבה) instead of implying
+    anyone already received."""
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
@@ -475,7 +582,8 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
     thin = Side(style="thin", color="CBD5E1")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
-    headers = ["מס'", "קיבל חלוקה"] + [h for _, h in _FULL_FIELDS]
+    _got_header = "קיבל חלוקה" if include_got else "ברשימה"
+    headers = ["מס'", _got_header] + [h for _, h in _FULL_FIELDS]
     ws.append(headers)
     for cell in ws[1]:
         cell.font = header_font
@@ -501,7 +609,10 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
 
     for i, rec in enumerate(recipients, 1):
         is_reserve = bool(rec.get("_reserve"))
-        got = "רזרבה" if is_reserve else "כן"
+        if include_got:
+            got = "רזרבה" if is_reserve else "כן"
+        else:
+            got = "רזרבה" if is_reserve else "רשימה"
         row = [i, got]
         for key, _ in _FULL_FIELDS:
             if key == "priority":
@@ -536,7 +647,8 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
     ws.merge_cells(f"A1:{last_col}1")
     title_cell = ws["A1"]
     _name_part = f"{dist_name} — " if dist_name else ""
-    title_cell.value = f"{_name_part}רשימת חלוקה מלאה — {dist_date}  (המופיעים קיבלו חלוקה)"
+    _subtitle = "(המופיעים קיבלו חלוקה)" if include_got else "(רשימה מוכנה — לפני חלוקה)"
+    title_cell.value = f"{_name_part}רשימת חלוקה מלאה — {dist_date}  {_subtitle}"
     title_cell.font = Font(bold=True, size=14, color="1D4ED8")
     title_cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
@@ -617,6 +729,97 @@ def export_recipients_to_excel(recipients: List[Dict]) -> str:
 
     exports_dir = _downloads_dir()
     filename = f"מקבלים_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.xlsx"
+    path = str(exports_dir / filename)
+    wb.save(path)
+    return path
+
+
+def export_history_to_excel(rows: List[Dict], title: str,
+                            with_batch_cols: bool = False) -> str:
+    """Export distribution HISTORY with full recipient details (#dancj) — a
+    single batch or the whole history. Each row carries every stored recipient
+    field plus a 'קיבל/לא קיבל' column; with_batch_cols adds the batch name+date
+    up front (used for the all-history sheet). Returns the saved file path."""
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "היסטוריית חלוקות"
+    ws.sheet_view.rightToLeft = True
+
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor="2563EB")
+    header_align = Alignment(horizontal="right", vertical="center")
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    lead = (["שם החלוקה", "תאריך חלוקה"] if with_batch_cols else [])
+    headers = ["מס'"] + lead + ["קיבל?"] + [h for _, h in _FULL_FIELDS]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = border
+    ws.row_dimensions[1].height = 22
+
+    alt_fill = PatternFill("solid", fgColor="F8FAFC")
+    normal_fill = PatternFill("solid", fgColor="FFFFFF")
+    got_fill = PatternFill("solid", fgColor="DCFCE7")     # green — received
+    missed_fill = PatternFill("solid", fgColor="FEE2E2")  # red — no-show
+    cell_align = Alignment(horizontal="right", vertical="center")
+    _DATE_KEYS = {"last_distribution", "next_distribution", "birth_date", "spouse_birth_date"}
+    got_col = 1 + len(lead) + 1   # column index of the 'קיבל?' cell
+
+    for i, rec in enumerate(rows, 1):
+        received = (rec.get("received", 1) or 0) != 0
+        row = [i]
+        if with_batch_cols:
+            row += [rec.get("_batch_name", ""), _fmt_date(rec.get("_batch_date", ""))]
+        row.append("קיבל" if received else "לא הגיע")
+        for key, _ in _FULL_FIELDS:
+            if key == "priority":
+                row.append(_priority_text(rec))
+            elif key in _DATE_KEYS:
+                row.append(_fmt_date(rec.get(key)))
+            else:
+                v = rec.get(key)
+                row.append("" if v is None else v)
+        ws.append(row)
+        fill = alt_fill if i % 2 == 0 else normal_fill
+        for cell in ws[i + 1]:
+            cell.alignment = cell_align
+            cell.fill = fill
+            cell.border = border
+        ws.cell(i + 1, got_col).fill = got_fill if received else missed_fill
+        for c, h in enumerate(headers, 1):   # phones as real numbers
+            if h.startswith("טלפון"):
+                key = _FULL_FIELDS[c - got_col - 1][0]
+                _write_phone_cell(ws.cell(i + 1, c), rec.get(key, ""))
+        ws.row_dimensions[i + 1].height = 18
+
+    lead_w = [22, 14] if with_batch_cols else []
+    widths = [6] + lead_w + [10] + [
+        26 if k == "address" else 20 if k in ("full_name", "email", "synagogue")
+        else 14 for k, _ in _FULL_FIELDS]
+    for col, width in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(col)].width = width
+
+    ncols = len(headers)
+    ws.insert_rows(1)
+    ws.merge_cells(f"A1:{get_column_letter(ncols)}1")
+    title_cell = ws["A1"]
+    title_cell.value = f"{title}  ({len(rows)})"
+    title_cell.font = Font(bold=True, size=14, color="1D4ED8")
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 28
+    ws.freeze_panes = "A3"
+
+    exports_dir = _downloads_dir()
+    _safe = "".join(c for c in title if c not in '\\/:*?"<>|').strip() or "היסטוריה"
+    filename = f"{_safe}_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.xlsx"
     path = str(exports_dir / filename)
     wb.save(path)
     return path
