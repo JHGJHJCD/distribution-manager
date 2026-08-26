@@ -326,12 +326,12 @@ class LoginDialog(QDialog):
         btn.setStyleSheet(
             "QPushButton{"
             "  background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            "    stop:0 #1cbd9f, stop:1 #0f766e);"
+            "    stop:0 #45e2ca, stop:0.49 #16b096, stop:0.51 #109a80, stop:1 #0a5648);"
             "  color:white; font-weight:800; font-size:15px;"
             "  border-radius:12px; border:none;"
             "}"
             "QPushButton:hover  { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            "    stop:0 #2fd0b0, stop:1 #0d9488); }"
+            "    stop:0 #5eecd6, stop:0.49 #1cc7b1, stop:0.51 #14b096, stop:1 #0d9488); }"
             "QPushButton:pressed{ background:#065f46; padding-top:2px; }"
         )
         btn.clicked.connect(self.try_login)

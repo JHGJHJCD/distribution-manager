@@ -122,7 +122,7 @@ QTabBar::tab {
 QTabBar::tab:selected,
 QTabBar::tab:top:selected, QTabBar::tab:bottom:selected,
 QTabBar::tab:left:selected, QTabBar::tab:right:selected {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #14b8a6, stop:1 $blue_700);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3dd6bf, stop:0.49 #16b096, stop:0.51 #109a80, stop:1 $blue_700);
     color: #ffffff;
     font-weight: 700;
 }
@@ -213,32 +213,33 @@ QPushButton {
 QPushButton:focus { outline: none; }
 QPushButton:pressed { padding-top: 7px; padding-bottom: 5px; }
 
-/* PRIMARY — the single dominant action per screen (subtle glossy gradient) */
+/* PRIMARY — the single dominant action per screen. Premium 4-stop glossy:
+   bright top sheen → light-mid → darker-mid reflection line at 50% → deep base. */
 QPushButton#primary {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #12a385, stop:1 #0b5e50);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #45e0c8, stop:0.49 #16b096, stop:0.51 #109a80, stop:1 #0a5648);
     color: #ffffff;
     border: none;
     font-weight: 800;
 }
-QPushButton#primary:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1cbd9f, stop:1 $blue_600); }
+QPushButton#primary:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #5fecd6, stop:0.49 #1cc4a8, stop:0.51 #14b096, stop:1 $blue_600); }
 QPushButton#primary:pressed { background: $blue_900; }
 QPushButton#primary:focus   { border: 2px solid $blue_200; }
 QPushButton#primary:disabled { background: $line; color: $muted; }
 
 QPushButton#danger {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #e85753, stop:1 $danger);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ff9490, stop:0.49 #e9524d, stop:0.51 #d93a35, stop:1 #a81816);
     color: #ffffff; border: none;
 }
-QPushButton#danger:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ef6b67, stop:1 $danger_dk); }
+QPushButton#danger:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ffaba7, stop:0.49 #ef625d, stop:0.51 #e34741, stop:1 $danger_dk); }
 QPushButton#danger:pressed { background: $danger_dk; }
 QPushButton#danger:focus   { border: 2px solid $danger_soft; }
 QPushButton#danger:disabled { background: $line; color: $muted; }
 
 QPushButton#success {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #43b563, stop:1 $success);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #63d488, stop:0.49 #35a556, stop:0.51 #2e9e4f, stop:1 #167030);
     color: #ffffff; border: none;
 }
-QPushButton#success:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4fc06e, stop:1 $success_dk); }
+QPushButton#success:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #78de9a, stop:0.49 #3cb060, stop:0.51 #33a656, stop:1 $success_dk); }
 QPushButton#success:pressed { background: $success_dk; }
 QPushButton#success:focus   { border: 2px solid $success_soft; }
 QPushButton#success:disabled { background: $line; color: $muted; }

@@ -785,26 +785,31 @@ _GLASS_RED_BTN = (
 _BG          = "#f5f7fb"
 _CARD_QSS    = ("QFrame#ui-card{background:#ffffff; border:1px solid #e6eaf2;"
                 " border-radius:12px;}")
+# Premium glossy: 4-stop gradient with a mid "reflection line" (bright top sheen
+# → light-mid → darker-mid step at 50% → deep base) gives every button a
+# polished, light-catching "glass" depth. The semantic colour of each role is
+# preserved exactly — only the finish is upgraded.
 _BTN_PRIMARY = (
-    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #1cbd9f,stop:1 #0f766e);"
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #55e2c8,stop:0.49 #16b599,stop:0.51 #109a80,stop:1 #085047);"
     " color:#fff; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
     " padding:0 18px; min-height:38px;}"
-    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2fd0b0,stop:1 #0d9488);}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #6ff0d7,stop:0.49 #1cc7a9,stop:0.51 #14b096,stop:1 #0d9488);}"
     "QPushButton:pressed{background:#065f46;}")
 _BTN_SUCCESS = (
-    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #34d399,stop:1 #059669);"
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #6eecad,stop:0.49 #16bd80,stop:0.51 #12a06b,stop:1 #04704b);"
     " color:#fff; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
     " padding:0 18px; min-height:38px;}"
-    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #6ee7b7,stop:1 #10b981);}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #8af3c2,stop:0.49 #1cd08e,stop:0.51 #16c085,stop:1 #059669);}"
     "QPushButton:pressed{background:#047857;}")
 _BTN_DANGER  = (
-    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f87171,stop:1 #dc2626);"
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ff9c98,stop:0.49 #ef5751,stop:0.51 #e0433d,stop:1 #a81d18);"
     " color:#fff; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
     " padding:0 18px; min-height:38px;}"
-    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #fca5a5,stop:1 #ef4444);}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffb3b0,stop:0.49 #f56761,stop:0.51 #ef4444,stop:1 #c81f1a);}"
     "QPushButton:pressed{background:#b91c1c;}")
 _BTN_GHOST   = (
-    "QPushButton{background:#ffffff; color:#1f2937; border:1px solid #d7dfea;"
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffffff,stop:1 #eef2f9);"
+    " color:#1f2937; border:1px solid #d7dfea;"
     " border-radius:9px; font-weight:700; font-size:13.5px; padding:0 16px; min-height:38px;}"
     "QPushButton:hover{background:#f8fafc; border-color:#c2cee0;}"
     "QPushButton:pressed{background:#eef2f8;}")
@@ -812,35 +817,35 @@ _BTN_GHOST   = (
 # 'הוסף מקבל' toolbar action so it stands out from the plain white buttons
 # beside it (#6uehd) without competing with the deep-green primary/print action.
 _BTN_ACCENT  = (
-    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #fbbf24,stop:1 #f59e0b);"
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffdb6e,stop:0.49 #fcb521,stop:0.51 #f59e0b,stop:1 #cf7005);"
     " color:#7c2d12; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
     " padding:0 16px; min-height:38px;}"
-    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #fcd34d,stop:1 #f59e0b);}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffe68f,stop:0.49 #ffc23a,stop:0.51 #f9a913,stop:1 #e07f06);}"
     "QPushButton:pressed{background:#d97706;}")
 # Cyan/teal accent — a second colourful toolbar action (Excel export), coloured
 # distinctly from the amber 'הוסף מקבל' beside it (#6uehd follow-up).
 _BTN_INFO    = (
-    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #22d3ee,stop:1 #0891b2);"
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #63e6f8,stop:0.49 #1bc3e0,stop:0.51 #12b0d2,stop:1 #0c7595);"
     " color:#fff; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
     " padding:0 16px; min-height:38px;}"
-    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #67e8f9,stop:1 #06b6d4);}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #86eefb,stop:0.49 #26d1ec,stop:0.51 #14bfe0,stop:1 #0e7490);}"
     "QPushButton:pressed{background:#0e7490;}")
 # The hero action of this screen — printing the distribution list. A deep brand-
 # green gradient, larger size and heavier weight make it the single most
 # prominent button in the bottom bar (paired with a soft drop-shadow in code).
 _BTN_PRINT   = (
-    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #14b8a6,stop:1 #0f766e);"
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #5fead4,stop:0.49 #1ec3ac,stop:0.51 #12a893,stop:1 #08544b);"
     " color:#fff; border:none; border-radius:12px; font-weight:900; font-size:16px;"
     " letter-spacing:0.3px; padding:0 30px; min-height:52px;}"
-    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #2dd4bf,stop:1 #0d9488);}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #78f2de,stop:0.49 #26d3ba,stop:0.51 #16b8a2,stop:1 #0d9488);}"
     "QPushButton:pressed{background:#065f46;}")
 # The record-stage entry point — warm amber so it reads as "the next step" and
 # never competes with the green hero (proposal B: orange secondary actions).
 _BTN_RECORD  = (
-    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f59e0b,stop:1 #d97706);"
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffce6b,stop:0.49 #fbb024,stop:0.51 #f59e0b,stop:1 #b85f08);"
     " color:#fff; border:none; border-radius:11px; font-weight:900; font-size:15px;"
     " padding:0 26px; min-height:48px;}"
-    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #fbbf24,stop:1 #f59e0b);}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #ffda85,stop:0.49 #ffbe36,stop:0.51 #fba916,stop:1 #d97706);}"
     "QPushButton:pressed{background:#b45309;}")
 _CHIP_QSS    = ("QLabel{background:#eef2f8; color:#475569; border:none; border-radius:16px;"
                 " padding:5px 13px; font-size:12.5px; font-weight:700;}")
