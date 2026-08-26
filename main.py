@@ -476,6 +476,24 @@ class _WinCtrlButton(QWidget):
         p.end()
 
 
+class _SyncLed(QLabel):
+    """Small status pill in the app-bar: a colored dot + label showing whether the
+    two-computer Drive sync is on and healthy. Clicking it opens Settings."""
+
+    def __init__(self, win):
+        super().__init__()
+        self._win = win
+        self.setObjectName("sync_led")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setTextFormat(Qt.TextFormat.RichText)
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._win.navigate_to_tab(self._win.settings_tab)
+            return
+        super().mousePressEvent(e)
+
+
 class _DragBar(QFrame):
     """The app-bar doubles as the window's title bar: press-and-drag moves the
     window (native move → Aero Snap works), double-click toggles maximize."""
@@ -655,6 +673,13 @@ class MainWindow(QMainWindow):
         _title_box.addWidget(_st)
         a_lay.addLayout(_title_box)
         a_lay.addStretch()
+
+        # Sync health LED: at-a-glance dot telling the operator whether the shared
+        # Drive sync is on and up to date (green=synced, amber=working, red=problem,
+        # grey=off). Click → Settings. Refreshed on every background sync tick.
+        self._sync_led = _SyncLed(self)
+        a_lay.addWidget(self._sync_led, 0, Qt.AlignmentFlag.AlignVCenter)
+        a_lay.addSpacing(6)
 
         # (v2.60: the guided tour was removed — the simplified UI no longer needs it.)
 
@@ -863,22 +888,72 @@ class MainWindow(QMainWindow):
         # A first pass shortly after startup pulls anything the other computer
         # changed while this one was closed.
         QTimer.singleShot(2500, self._tick_sync)
+        self._refresh_sync_led()
 
     def _tick_sync(self):
         if not self._sync.is_enabled():
+            self._refresh_sync_led()
             return
         if self._sync_worker is not None and self._sync_worker.isRunning():
             return
+        self._refresh_sync_led(busy=True)
         self._sync_worker = _SyncWorker(self._sync)
         self._sync_worker.done.connect(self._on_sync_done)
         self._sync_worker.start()
 
     def _on_sync_done(self, applied: int):
+        self._refresh_sync_led()
         # Only redraw the screen when the other computer actually changed data —
         # a quiet tick must not disrupt what the operator is doing.
         if applied > 0:
             self.refresh_all()
             self.status_msg(f"סונכרנו {applied} עדכונים מהמחשב השני")
+
+    def _refresh_sync_led(self, busy: bool = False):
+        """Repaint the app-bar sync LED from the current sync state.
+        green=synced · amber=working/pending · red=problem · grey=off."""
+        led = getattr(self, "_sync_led", None)
+        if led is None:
+            return
+        s = self._sync
+        if not s.is_enabled():
+            color, text, tip = "#9ca3af", "סנכרון כבוי", "סנכרון בין המחשבים כבוי — להפעלה: הגדרות"
+        elif not s.folder_available():
+            color, text, tip = ("#dc2626", "אין חיבור לדרייב",
+                                 "תיקיית הדרייב המשותפת לא נמצאה — ודא ש-Google Drive פועל")
+        else:
+            info = s.last_run_info()
+            pending = info.get("pending", 0)
+            if busy or pending:
+                color, text, tip = ("#f59e0b", "מסנכרן…",
+                                    f"מסנכרן עם המחשב השני ({pending} ממתינים)"
+                                    if pending else "מסנכרן עם המחשב השני")
+            elif info.get("last_error"):
+                color, text, tip = ("#dc2626", "בעיה בסנכרון",
+                                     f"שגיאת סנכרון אחרונה:\n{info['last_error']}")
+            else:
+                last = info.get("last_run") or ""
+                pretty = self._sync_time_pretty(last)
+                color, text = "#16a34a", "מסונכרן"
+                tip = f"מסונכרן עם המחשב השני{(' · ' + pretty) if pretty else ''}"
+        led.setText(
+            f"<span style='color:{color};font-size:15px'>●</span>"
+            f"&nbsp;<span style='color:#e6eefc'>{text}</span>")
+        led.setToolTip(tip)
+
+    @staticmethod
+    def _sync_time_pretty(iso_utc: str) -> str:
+        """UTC ISO stamp → short local 'עודכן HH:MM' (best-effort, empty on failure)."""
+        if not iso_utc:
+            return ""
+        try:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(iso_utc.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return "עודכן " + dt.astimezone().strftime("%H:%M")
+        except Exception:
+            return ""
 
     # ── Automatic update check on startup ─────────────────────────────────────
     def _auto_check_updates(self):

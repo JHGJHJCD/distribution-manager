@@ -800,11 +800,15 @@ class SettingsTab(QWidget):
     def _open_sync_setup(self):
         SyncSetupDialog(self).exec()
         self._refresh_sync_status()
+        if self.main_win and hasattr(self.main_win, "_refresh_sync_led"):
+            self.main_win._refresh_sync_led()
 
     def _sync_now(self):
         with busy_cursor():
             res = sync.run_sync()
         self._refresh_sync_status()
+        if self.main_win and hasattr(self.main_win, "_refresh_sync_led"):
+            self.main_win._refresh_sync_led()
         if res.get("error"):
             QMessageBox.warning(self, "סנכרון", f"אירעה שגיאה בסנכרון:\n{res['error']}")
         else:
