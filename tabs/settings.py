@@ -1110,6 +1110,11 @@ class SyncSetupDialog(QDialog):
     through a shared Google Drive folder (v2.61). Walks the operator through
     picking the folder, naming this computer, and seeding the data."""
 
+    # Official Google direct installer (downloads the setup .exe immediately);
+    # the info page is a fallback.
+    DRIVE_INSTALLER_URL = "https://dl.google.com/drive-file-stream/GoogleDriveSetup.exe"
+    DRIVE_PAGE_URL = "https://www.google.com/drive/download/"
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("הגדרת סנכרון בין מחשבים")
@@ -1119,21 +1124,63 @@ class SyncSetupDialog(QDialog):
 
         guide = QLabel(
             "<div dir='rtl'>"
-            "<b>איך זה עובד:</b><br>"
-            "1. התקן <b>Google Drive למחשב</b> בשני המחשבים (drive.google.com/drive/download) "
-            "והתחבר לאותו חשבון.<br>"
-            "2. צור תיקייה אחת <b>בתוך «Drive שלי» (My Drive)</b> — למשל <b>חלוקה-משותף</b> — "
-            "אותה תיקייה בדיוק בשני המחשבים.<br>"
-            "3. כאן בכל מחשב: בחר את אותה תיקייה, תן שם למחשב, ולחץ הפעלה.<br>"
-            "מאותו רגע כל שינוי מסונכרן אוטומטית בין המחשבים. עבודה בו-זמנית בטוחה; "
-            "אם שניכם עורכים את אותו כרטיס באותו רגע — העריכה האחרונה גוברת.<br>"
-            "<b style='color:#b45309;'>⚠ אזהרה חשובה:</b> אל תבחר תיקייה בתוך "
-            "<b>הורדות / שולחן העבודה / מסמכים</b> — את אלה Drive <u>מגבה בנפרד לכל מחשב</u> "
-            "ולא משתף ביניהם, והסנכרון לא יעבוד. חובה תיקייה בתוך «Drive שלי».</div>")
+            "סנכרון מאפשר לעבוד על <b>אותם נתונים משני מחשבים</b>. "
+            "צריך רק ש-<b>Google Drive למחשב</b> יהיה מותקן בשני המחשבים ומחובר "
+            "לאותו חשבון גוגל.<br>"
+            "לחצו על הכפתור הירוק בכל מחשב — התוכנה תסדר את הכול לבד. "
+            "מאותו רגע כל שינוי מסונכרן אוטומטית; עבודה בו-זמנית בטוחה.</div>")
         guide.setTextFormat(Qt.TextFormat.RichText)
         guide.setWordWrap(True)
         guide.setStyleSheet("font-size:12.5px; color:#334155;")
         outer.addWidget(guide)
+
+        # ── The easy path: one click sets up everything ──────────────────────
+        self.btn_auto = QPushButton("🔄  הפעל סנכרון אוטומטי  (מומלץ)")
+        self.btn_auto.setObjectName("primary")
+        self.btn_auto.setStyleSheet("font-size:14px; padding:10px;")
+        self.btn_auto.clicked.connect(self._auto_enable)
+        outer.addWidget(self.btn_auto)
+
+        auto_hint = QLabel(
+            "<div dir='rtl' style='color:#475569; font-size:11.5px;'>"
+            "התוכנה תמצא לבד את «Drive שלי», תיצור בתוכו תיקייה משותפת בשם קבוע, "
+            "ותיתן למחשב שם אוטומטית. עשו את אותו הדבר במחשב השני — והם יתחברו לבד."
+            "</div>")
+        auto_hint.setWordWrap(True)
+        outer.addWidget(auto_hint)
+
+        # Always-visible direct download of Google Drive for Desktop, in case it
+        # isn't installed yet on this computer.
+        dl_link = QLabel(
+            "<div dir='rtl' style='font-size:11.5px;'>"
+            "עדיין לא מותקן במחשב? "
+            f"<a href='{self.DRIVE_INSTALLER_URL}'>הורדת Google Drive למחשב ⭳</a></div>")
+        dl_link.setTextFormat(Qt.TextFormat.RichText)
+        dl_link.setOpenExternalLinks(True)
+        dl_link.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        outer.addWidget(dl_link)
+
+        # ── Advanced: manual folder / name (hidden by default) ───────────────
+        self.btn_advanced = QPushButton("▾ אפשרויות מתקדמות (בחירת תיקייה ידנית)")
+        self.btn_advanced.setObjectName("neutral")
+        self.btn_advanced.setCheckable(True)
+        self.btn_advanced.setStyleSheet("text-align:right; border:none; color:#475569;")
+        self.btn_advanced.toggled.connect(self._toggle_advanced)
+        outer.addWidget(self.btn_advanced)
+
+        self.adv = QWidget()
+        adv_lay = QVBoxLayout(self.adv)
+        adv_lay.setContentsMargins(0, 0, 0, 0)
+
+        adv_guide = QLabel(
+            "<div dir='rtl' style='font-size:11.5px; color:#334155;'>"
+            "בחרו תיקייה <b>בתוך «Drive שלי» (My Drive)</b> — אותה תיקייה בדיוק "
+            "בשני המחשבים.<br>"
+            "<b style='color:#b45309;'>⚠</b> אל תבחרו תיקייה בתוך "
+            "<b>הורדות/שולחן העבודה/מסמכים</b> — את אלה Drive מגבה בנפרד לכל מחשב "
+            "ולא משתף, והסנכרון לא יעבוד.</div>")
+        adv_guide.setWordWrap(True)
+        adv_lay.addWidget(adv_guide)
 
         folder_row = QHBoxLayout()
         folder_row.addWidget(QLabel("תיקייה משותפת:"))
@@ -1144,28 +1191,32 @@ class SyncSetupDialog(QDialog):
         btn_browse.setObjectName("neutral")
         btn_browse.clicked.connect(self._browse)
         folder_row.addWidget(btn_browse)
-        outer.addLayout(folder_row)
+        adv_lay.addLayout(folder_row)
 
-        # Offer any auto-detected Drive folders.
         found = sync.detect_drive_folders()
         if found:
             hint = QLabel("נמצאו תיקיות Drive: " + "  |  ".join(found[:3]))
             hint.setWordWrap(True)
             hint.setStyleSheet("color:#475569; font-size:11.5px;")
-            outer.addWidget(hint)
+            adv_lay.addWidget(hint)
 
         name_row = QHBoxLayout()
         name_row.addWidget(QLabel("שם המחשב הזה:"))
         self.name_edit = QLineEdit(sync.device_name())
         self.name_edit.setPlaceholderText("למשל: בית / נקודת החלוקה")
         name_row.addWidget(self.name_edit, 1)
-        outer.addLayout(name_row)
+        adv_lay.addLayout(name_row)
 
-        btns = QHBoxLayout()
-        self.btn_enable = QPushButton("הפעל סנכרון")
+        self.btn_enable = QPushButton("הפעל סנכרון (ידני)")
         self.btn_enable.setObjectName("primary")
         self.btn_enable.clicked.connect(self._enable)
-        btns.addWidget(self.btn_enable)
+        adv_lay.addWidget(self.btn_enable)
+
+        self.adv.setVisible(False)
+        outer.addWidget(self.adv)
+
+        # ── Footer buttons ───────────────────────────────────────────────────
+        btns = QHBoxLayout()
         if sync.is_enabled():
             btn_disable = QPushButton("כבה סנכרון")
             btn_disable.setObjectName("danger")
@@ -1177,6 +1228,54 @@ class SyncSetupDialog(QDialog):
         btns.addStretch()
         btns.addWidget(btn_close)
         outer.addLayout(btns)
+
+    def _toggle_advanced(self, on: bool):
+        self.adv.setVisible(on)
+        self.btn_advanced.setText(
+            ("▴ " if on else "▾ ") + "אפשרויות מתקדמות (בחירת תיקייה ידנית)")
+        self.adjustSize()
+
+    def _no_drive_message(self):
+        import webbrowser
+        ans = QMessageBox.warning(
+            self, "Google Drive לא נמצא",
+            "<div dir='rtl'>לא נמצאה תיקיית <b>«Drive שלי»</b> במחשב הזה.<br><br>"
+            "כדי לסנכרן צריך להתקין את <b>Google Drive למחשב</b> ולהתחבר "
+            "לחשבון גוגל (אותו חשבון בשני המחשבים).<br><br>"
+            "להוריד עכשיו את Google Drive למחשב?</div>",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes)
+        if ans == QMessageBox.StandardButton.Yes:
+            webbrowser.open(self.DRIVE_INSTALLER_URL)
+
+    def _auto_enable(self):
+        if not sync.drive_installed():
+            self._no_drive_message()
+            return
+        try:
+            with busy_cursor():
+                res = sync.auto_setup()
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה", f"הפעלת הסנכרון נכשלה:\n{e}")
+            return
+        if not res.get("ok"):
+            self._no_drive_message()
+            return
+        if res.get("others", 0) == 0:
+            tail = ("\n\n⚠ עדיין לא זוהה מחשב שני. זה תקין אם זהו המחשב הראשון — "
+                    "הפעילו סנכרון אוטומטי גם במחשב השני (עם אותו חשבון גוגל), "
+                    "והם יתחברו לבד תוך דקות.")
+        else:
+            tail = "\n\n✓ זוהה מחשב שני — הסנכרון מחובר."
+        QMessageBox.information(
+            self, "סנכרון הופעל",
+            f"הסנכרון הופעל אוטומטית ✓\n\nתיקייה משותפת:\n{res.get('folder','')}\n\n"
+            f"נשלחו {res.get('seeded',0)} רשומות, ונקלטו {res.get('applied',0)} "
+            f"שינויים מהמחשב השני." + tail
+            + "\n\nהתוכנה תסנכרן אוטומטית מעתה והלאה.")
+        if self.parent() and hasattr(self.parent(), "main_win") and self.parent().main_win:
+            self.parent().main_win.refresh_all()
+        self.accept()
 
     def _browse(self):
         start = sync.get_folder() or (sync.detect_drive_folders() or [""])[0]

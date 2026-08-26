@@ -27,6 +27,7 @@ import os
 import json
 import uuid
 import glob
+import socket
 import threading
 from datetime import datetime, timezone
 
@@ -133,6 +134,59 @@ def detect_drive_folders() -> list:
         if os.path.isdir(p):
             found.append(p)
     return found
+
+
+# A FIXED subfolder name. Because both computers derive the same canonical name
+# under "My Drive", they land on the exact same shared folder with zero manual
+# coordination — no path typing, no name matching, no backup-folder trap.
+SHARED_SUBFOLDER = "מנהל-חלוקה-משותף"
+
+
+def drive_installed() -> bool:
+    """True when Google Drive for Desktop appears to be present on this machine
+    (a 'My Drive' root exists)."""
+    return bool(detect_drive_folders())
+
+
+def default_shared_folder() -> str:
+    """The canonical shared-folder path inside 'My Drive' for one-click setup.
+    Returns '' when no Drive root is found. Does NOT create it (caller decides)."""
+    roots = detect_drive_folders()
+    if not roots:
+        return ""
+    return os.path.join(roots[0], SHARED_SUBFOLDER)
+
+
+def suggested_device_name() -> str:
+    """A friendly default name for this computer — its Windows hostname."""
+    existing = device_name()
+    if existing:
+        return existing
+    try:
+        host = socket.gethostname() or ""
+    except OSError:
+        host = ""
+    return host.strip() or "מחשב"
+
+
+def auto_setup() -> dict:
+    """One-click sync setup: find 'My Drive', create the canonical shared folder
+    inside it, name this computer after its hostname (if unnamed), enable + seed,
+    then pull whatever the other computer already put there.
+
+    Returns {'ok': bool, 'reason': str, 'folder': str, 'seeded': int,
+             'applied': int, 'others': int}. reason='no_drive' when Drive for
+     Desktop is not installed; the caller shows the download guidance."""
+    folder = default_shared_folder()
+    if not folder:
+        return {"ok": False, "reason": "no_drive", "folder": "", "seeded": 0,
+                "applied": 0, "others": 0}
+    if not device_name():
+        set_device_name(suggested_device_name())
+    seeded = enable_sync(folder, seed=True)
+    res = run_sync()
+    return {"ok": True, "reason": "", "folder": folder, "seeded": seeded,
+            "applied": res.get("applied", 0), "others": other_device_count(folder)}
 
 
 # ─── Writing changes (the local journal) ─────────────────────────────────────

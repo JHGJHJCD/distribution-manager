@@ -83,7 +83,7 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 - **טבלאות:** עמודות `guid` ב-recipients/distributions/dist_batches + `updated_at`/`representative_auto` ב-recipients (מיגרציה אוטומטית, back-fill guid). ops: `rec_upsert`/`rec_delete`/`batch_add`/`batch_delete`/`dist_delete`/`dist_add`/`setting`.
 - **התאמת אישיות חוצת-מחשבים** (`_adopt_match`): guid לא מוכר → זיהוי לפי `external_id` ואז שם+טלפון, כדי לא לשכפל מי שכבר קיים בשני המחשבים.
 - **offline:** שינויים מצטברים ב-`sync_outbox.jsonl` ונשלחים בריצה הבאה. `EXCLUDED_SETTINGS` (password/win_geometry/backup) לא מסונכרנות.
-- **UI:** `SyncSetupDialog`+`_refresh_sync_status` בהגדרות (בחירת תיקייה, שם מחשב, הפעלה/כיבוי, "סנכרן עכשיו"). רקע: `MainWindow._setup_auto_sync` — `_SyncWorker(QThread)` כל 20 שנ' + ריצה 2.5 שנ' אחרי עלייה; `refresh_all` רק כשנקלטו שינויים.
+- **UI:** `SyncSetupDialog`+`_refresh_sync_status` בהגדרות. **הפעלה בלחיצה אחת (v2.69):** כפתור ראשי "הפעל סנכרון אוטומטי" → `sync.auto_setup()` — מזהה את «Drive שלי» (`detect_drive_folders`), יוצר בתוכו תיקייה בשם קבוע `sync.SHARED_SUBFOLDER` ("מנהל-חלוקה-משותף") כך ש**שני המחשבים נופלים על אותה תיקייה בלי תיאום ידני**, נותן למחשב שם מ-hostname (`suggested_device_name`), מפעיל+זורע+מושך. אם Drive לא מותקן (`drive_installed()==False`) → `_no_drive_message` עם קישור הורדה ישיר (`DRIVE_INSTALLER_URL` = GoogleDriveSetup.exe). קישור הורדה גלוי תמיד בדיאלוג. הבחירה הידנית (תיקייה/שם) עברה ל"אפשרויות מתקדמות" מקופל. רקע: `MainWindow._setup_auto_sync` — `_SyncWorker(QThread)` כל 20 שנ' + ריצה 2.5 שנ' אחרי עלייה; `refresh_all` רק כשנקלטו שינויים.
 - **בדיקות:** `test_sync.py` (מדמה 2 מחשבים על 2 DB עם תיקייה משותפת: seed, הפצת add/edit/delete, batch, LWW, offline, idempotence, adopt-by-match).
 
 ## נתונים ואבטחה
