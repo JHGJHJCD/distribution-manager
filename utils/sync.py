@@ -569,14 +569,41 @@ def disable_sync():
         _save_state(state)
 
 
+def other_device_count(folder: str = "") -> int:
+    """How many OTHER devices have written a journal into the shared folder.
+    0 means this computer is alone there — a strong sign the folder is not truly
+    shared with the second computer (e.g. a per-machine Drive *backup* folder)."""
+    folder = folder or get_folder()
+    if not folder or not os.path.isdir(folder):
+        return 0
+    my = device_id()
+    devs = set()
+    for path in glob.glob(os.path.join(folder, JOURNAL_PREFIX + "*.jsonl")):
+        dev = os.path.basename(path)[len(JOURNAL_PREFIX):-len(".jsonl")]
+        if dev and dev != my:
+            devs.add(dev)
+    return len(devs)
+
+
 def folder_has_other_devices() -> bool:
     """True when the shared folder already carries journals from other devices —
     used to warn/inform during setup."""
-    if not folder_available():
+    return other_device_count() > 0
+
+
+def looks_like_backup_folder(path: str) -> bool:
+    """Heuristic: does this path look like a Google Drive *per-computer backup*
+    location (Downloads/Desktop/Documents) rather than a genuinely SHARED
+    'My Drive' / 'Shared drives' folder? Backup folders sync to the cloud but are
+    NOT mirrored to the other computer, so sync silently never connects. We warn
+    when the path sits under a known backup root and shows no 'My Drive' marker."""
+    p = (path or "").replace("\\", "/").lower()
+    if not p:
         return False
-    my = device_id()
-    for path in glob.glob(os.path.join(get_folder(), JOURNAL_PREFIX + "*.jsonl")):
-        dev = os.path.basename(path)[len(JOURNAL_PREFIX):-len(".jsonl")]
-        if dev != my:
-            return True
-    return False
+    shared_markers = ("my drive", "/mydrive", "shared drives", "shareddrives",
+                      "drive/משותף", "google drive/my drive")
+    if any(m in p for m in shared_markers):
+        return False
+    backup_markers = ("/downloads", "/desktop", "/documents",
+                      "/הורדות", "/שולחן העבודה", "/מסמכים")
+    return any(m in p for m in backup_markers)

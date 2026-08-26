@@ -789,13 +789,23 @@ class SettingsTab(QWidget):
         avail = sync.folder_available()
         name = sync.device_name() or "מחשב זה"
         last = (info.get("last_run") or "")[:16].replace("T", " ")
+        others = sync.other_device_count() if avail else 0
+        if not avail:
+            second = "⚠ התיקייה לא נמצאה כרגע"
+        elif others > 0:
+            second = f"✓ מחשב שני מחובר ({others})"
+        else:
+            second = ("⚠ לא זוהה מחשב שני — ודא ששני המחשבים מצביעים לאותה "
+                      "תיקייה בתוך «Drive שלי» (לא תיקיית גיבוי/הורדות)")
         parts = [f"✓ סנכרון פעיל · {name}",
                  f"תיקייה: {folder}" + ("" if avail else "  ⚠ לא נמצאה כרגע"),
+                 second,
                  f"סנכרון אחרון: {last}" if last else "טרם סונכרן",
                  f"ממתינים לשליחה: {info.get('pending', 0)}"]
         self.lbl_sync_status.setText("\n".join(parts))
+        healthy = avail and others > 0
         self.lbl_sync_status.setStyleSheet(
-            "color:#334155; font-size:12.5px;" if avail else "color:#b45309; font-size:12.5px;")
+            "color:#334155; font-size:12.5px;" if healthy else "color:#b45309; font-size:12.5px;")
         self.btn_sync_now.setEnabled(True)
 
     def _open_sync_setup(self):
@@ -1112,10 +1122,14 @@ class SyncSetupDialog(QDialog):
             "<b>איך זה עובד:</b><br>"
             "1. התקן <b>Google Drive למחשב</b> בשני המחשבים (drive.google.com/drive/download) "
             "והתחבר לאותו חשבון.<br>"
-            "2. צור תיקייה אחת ב-Drive (למשל <b>חלוקה-משותף</b>) — אותה תיקייה בדיוק בשני המחשבים.<br>"
+            "2. צור תיקייה אחת <b>בתוך «Drive שלי» (My Drive)</b> — למשל <b>חלוקה-משותף</b> — "
+            "אותה תיקייה בדיוק בשני המחשבים.<br>"
             "3. כאן בכל מחשב: בחר את אותה תיקייה, תן שם למחשב, ולחץ הפעלה.<br>"
             "מאותו רגע כל שינוי מסונכרן אוטומטית בין המחשבים. עבודה בו-זמנית בטוחה; "
-            "אם שניכם עורכים את אותו כרטיס באותו רגע — העריכה האחרונה גוברת.</div>")
+            "אם שניכם עורכים את אותו כרטיס באותו רגע — העריכה האחרונה גוברת.<br>"
+            "<b style='color:#b45309;'>⚠ אזהרה חשובה:</b> אל תבחר תיקייה בתוך "
+            "<b>הורדות / שולחן העבודה / מסמכים</b> — את אלה Drive <u>מגבה בנפרד לכל מחשב</u> "
+            "ולא משתף ביניהם, והסנכרון לא יעבוד. חובה תיקייה בתוך «Drive שלי».</div>")
         guide.setTextFormat(Qt.TextFormat.RichText)
         guide.setWordWrap(True)
         guide.setStyleSheet("font-size:12.5px; color:#334155;")
@@ -1180,6 +1194,24 @@ class SyncSetupDialog(QDialog):
             QMessageBox.warning(self, "תיקייה לא קיימת",
                                 "התיקייה לא נמצאה. ודא ש-Google Drive מותקן ומסונכרן.")
             return
+        # Guard against the #1 real-world failure: picking a per-computer *backup*
+        # folder (Downloads/Desktop/Documents) that Drive never shares between
+        # machines. If no second computer is present there yet AND the path looks
+        # like a backup location, make the operator confirm — this is exactly the
+        # case where sync silently stays disconnected.
+        if sync.looks_like_backup_folder(folder) and sync.other_device_count(folder) == 0:
+            ans = QMessageBox.warning(
+                self, "התיקייה כנראה לא משותפת",
+                "התיקייה שבחרת נמצאת ב<b>הורדות/שולחן העבודה/מסמכים</b>.<br><br>"
+                "את התיקיות האלה Google Drive <b>מגבה בנפרד לכל מחשב</b> — הן "
+                "<b>לא משותפות</b> בין שני המחשבים, ולכן הסנכרון לא יעבוד "
+                "(כל מחשב יישאר עם הנתונים שלו).<br><br>"
+                "מומלץ מאוד לבחור תיקייה בתוך <b>«Drive שלי» (My Drive)</b>.<br><br>"
+                "להמשיך בכל זאת עם התיקייה הזו?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if ans != QMessageBox.StandardButton.Yes:
+                return
         sync.set_device_name(self.name_edit.text().strip())
         # enable_sync seeds THIS computer's data into the shared folder; run_sync
         # then pulls whatever the other computer already put there — so joining an
@@ -1191,11 +1223,19 @@ class SyncSetupDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "שגיאה", f"הפעלת הסנכרון נכשלה:\n{e}")
             return
+        others = sync.other_device_count(folder)
+        if others == 0:
+            tail = ("\n\n⚠ עדיין לא זוהה מחשב שני בתיקייה. זה תקין אם זהו המחשב "
+                    "הראשון שמפעיל סנכרון — הפעל את המחשב השני על אותה תיקייה. "
+                    "אם כבר הפעלת את השני וזה לא מזוהה — כנראה התיקייה אינה "
+                    "באמת משותפת (בדוק שהיא בתוך «Drive שלי», לא תיקיית גיבוי).")
+        else:
+            tail = f"\n\n✓ זוהה מחשב שני בתיקייה — הסנכרון מחובר."
         QMessageBox.information(
             self, "סנכרון הופעל",
             f"הסנכרון הופעל ✓\nנשלחו {n} רשומות לתיקייה המשותפת, "
-            f"ונקלטו {res.get('applied', 0)} שינויים מהמחשב השני.\n\n"
-            "התוכנה תסנכרן אוטומטית מעתה והלאה.")
+            f"ונקלטו {res.get('applied', 0)} שינויים מהמחשב השני."
+            + tail + "\n\nהתוכנה תסנכרן אוטומטית מעתה והלאה.")
         if self.parent() and hasattr(self.parent(), "main_win") and self.parent().main_win:
             self.parent().main_win.refresh_all()
         self.accept()
