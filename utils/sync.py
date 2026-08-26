@@ -41,6 +41,7 @@ EXCLUDED_SETTING_PREFIXES = ("sync_",)
 JOURNAL_PREFIX = "journal-"
 _LOCK = threading.RLock()
 _APPLYING = False          # True while applying remote records → suppress logging
+_DEFER_FLUSH = False       # True during a bulk seed → buffer, flush once at the end
 
 
 def _state_path() -> str:
@@ -167,6 +168,8 @@ def log_change(op: str, payload: dict):
         with open(_outbox_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         _save_state(state)
+    if _DEFER_FLUSH:
+        return     # a bulk seed is running — it flushes once when done
     try:
         flush()
     except Exception:
@@ -200,6 +203,27 @@ def flush() -> int:
 
 
 # ─── Applying remote changes ─────────────────────────────────────────────────
+
+def _read_new_lines(path: str, offset: int):
+    """Read only the bytes appended since `offset`, returning
+    (complete_lines, new_offset). Stops at the last newline so a line that is
+    still mid-download by Drive is left for the next cycle (never half-parsed).
+    Byte offsets are safe on UTF-8 because a newline byte never appears inside a
+    multibyte character. If the file shrank (rotated/rewritten), re-read from 0."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        if size < offset:
+            offset = 0
+        f.seek(offset)
+        chunk = f.read()
+    nl = chunk.rfind(b"\n")
+    if nl == -1:
+        return [], offset          # no complete line yet
+    complete = chunk[:nl + 1]
+    text = complete.decode("utf-8", errors="replace")
+    return [ln for ln in text.split("\n") if ln.strip()], offset + len(complete)
+
 
 def _recipient_columns(conn) -> set:
     return {row["name"] for row in conn.execute("PRAGMA table_info(recipients)")}
@@ -398,7 +422,8 @@ def pull_changes() -> int:
     with _LOCK:
         state = _load_state()
         my_dev = device_id()
-        seen = state.setdefault("applied", {})
+        seen = state.setdefault("applied", {})       # dev → highest seq applied (safety dedup)
+        offsets = state.setdefault("offsets", {})    # dev → byte position already read
         _APPLYING = True
         try:
             with db.get_connection() as conn:
@@ -408,22 +433,19 @@ def pull_changes() -> int:
                     if dev == my_dev:
                         continue
                     last = int(seen.get(dev) or 0)
+                    off = int(offsets.get(dev) or 0)
                     try:
-                        with open(path, "r", encoding="utf-8") as f:
-                            lines = f.read().splitlines()
+                        lines, new_off = _read_new_lines(path, off)
                     except OSError:
                         continue
                     for ln in lines:
-                        ln = ln.strip()
-                        if not ln:
-                            continue
                         try:
                             rec = json.loads(ln)
                         except ValueError:
                             continue
                         seq = int(rec.get("seq") or 0)
                         if seq <= last:
-                            continue
+                            continue   # already applied (offset reset / overlap)
                         op = rec.get("op")
                         try:
                             if op == "setting":
@@ -436,6 +458,7 @@ def pull_changes() -> int:
                             pass   # one bad record must not stall the stream
                         last = seq
                     seen[dev] = last
+                    offsets[dev] = new_off
         finally:
             _APPLYING = False
         state["last_run"] = _utc_now()
@@ -465,6 +488,20 @@ def snapshot() -> int:
     """Write the ENTIRE current dataset into the journal, so a second computer
     joining the folder receives everything. Idempotent on the receiving side
     (guids dedupe). Returns the number of records written."""
+    global _DEFER_FLUSH
+    n = 0
+    _DEFER_FLUSH = True   # buffer every record, then flush the whole seed at once
+    try:
+        return _snapshot_body()
+    finally:
+        _DEFER_FLUSH = False
+        try:
+            flush()
+        except Exception:
+            pass   # stays in the outbox for the next run
+
+
+def _snapshot_body() -> int:
     n = 0
     with db.get_connection() as conn:
         recs = [dict(r) for r in conn.execute("SELECT * FROM recipients")]

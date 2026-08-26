@@ -173,6 +173,42 @@ sync.run_sync()
 count = sum(1 for r in db.get_all_recipients() if r["full_name"] == "משה מזרחי")
 ok("adopt-by-match avoided duplicate", count == 1, f"count={count}")
 
+# ── Incremental reads: byte offsets tracked, whole file not re-read ───────────
+use_machine(dir_b)
+sync.run_sync()
+st_b = json.load(open(sync._state_path(), encoding="utf-8"))
+offs = st_b.get("offsets", {})
+ok("B tracks byte offsets per device", bool(offs) and all(v > 0 for v in offs.values()),
+   str(offs))
+
+# ── Truncated last line (Drive mid-download) is deferred, not half-applied ────
+use_machine(dir_a)
+a_dev = sync.device_id()
+rid1_guid = db.get_recipient(rid1)["guid"]
+a_journal = os.path.join(real_folder, f"journal-{a_dev}.jsonl")
+db.update_recipient(rid1, {"address": "רשומה שלמה לפני הקטיעה"})
+sync.run_sync()   # push the complete record
+time.sleep(0.02)
+partial = json.dumps({"seq": 999999, "ts": sync._utc_now(), "dev": a_dev,
+                      "op": "rec_upsert", "guid": rid1_guid,
+                      "data": {"address": "חצי שורה", "updated_at": sync._utc_now()}},
+                     ensure_ascii=False)
+half = len(partial) // 2
+with open(a_journal, "a", encoding="utf-8") as f:
+    f.write(partial[:half])        # truncated — no trailing newline, as Drive mid-sync
+use_machine(dir_b)
+sync.run_sync()
+ok("B applied the complete record",
+   db.get_recipient(b_id1)["address"] == "רשומה שלמה לפני הקטיעה",
+   db.get_recipient(b_id1)["address"])
+ok("B did NOT apply the truncated tail", db.get_recipient(b_id1)["address"] != "חצי שורה")
+with open(a_journal, "a", encoding="utf-8") as f:
+    f.write(partial[half:] + "\n")  # the rest arrives → line now complete
+use_machine(dir_b)
+sync.run_sync()
+ok("B applied the line once it finished downloading",
+   db.get_recipient(b_id1)["address"] == "חצי שורה", db.get_recipient(b_id1)["address"])
+
 print()
 if fails:
     print(f"✗ {len(fails)} FAILED: {fails}")
