@@ -359,8 +359,9 @@ class _ManualAddDialog(QDialog):
 
     def _build(self):
         outer = QVBoxLayout(self)
-        intro = QLabel("סמן את מי להוסיף לחלוקה. מוצגים כל המקבלים — אפשר לבחור גם "
-                       "מי שאינו עומד בקריטריונים, אינו בתור השבוע או אינו פעיל.")
+        intro = QLabel("סמן את מי להוסיף לחלוקה. כברירת מחדל מוצגים בעלי עדיפות "
+                       "(קבוע / ראשונה / שנייה) — כולל מי שאינו בתור השבוע או אינו "
+                       "פעיל. לבחירת מי שאין לו עדיפות, בחר «ללא עדיפות» בסינון.")
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#475569; font-size:12.5px;")
         outer.addWidget(intro)
@@ -427,8 +428,15 @@ class _ManualAddDialog(QDialog):
 
     def _passes_filters(self, rec) -> bool:
         p = self._prio_filter.currentText()
-        if p != "כל העדיפויות":
-            pr = rec.get("priority")
+        pr = rec.get("priority")
+        if p == "כל העדיפויות":
+            # 'All priorities' means the real priority tiers only — קבוע(4) +
+            # ראשונה(3) + שנייה(2). Data-only people (priority 1/0/בירור/empty) are
+            # NOT distribution recipients, so they're hidden by default; the
+            # explicit 'ללא עדיפות' option still reveals them (operator request).
+            if pr not in (2, 3, 4):
+                return False
+        else:
             want = {"קבוע": pr == 4, "ראשונה": pr == 3, "שנייה": pr == 2,
                     "ללא עדיפות": pr not in (2, 3, 4)}
             if not want.get(p, True):
