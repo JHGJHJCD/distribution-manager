@@ -786,6 +786,23 @@ _BTN_GHOST   = (
     " border-radius:9px; font-weight:700; font-size:13.5px; padding:0 16px; min-height:38px;}"
     "QPushButton:hover{background:#f8fafc; border-color:#c2cee0;}"
     "QPushButton:pressed{background:#eef2f8;}")
+# Amber accent — the app's secondary-action colour (#f59e0b). Used for the
+# 'הוסף מקבל' toolbar action so it stands out from the plain white buttons
+# beside it (#6uehd) without competing with the deep-green primary/print action.
+_BTN_ACCENT  = (
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #fbbf24,stop:1 #f59e0b);"
+    " color:#7c2d12; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
+    " padding:0 16px; min-height:38px;}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #fcd34d,stop:1 #f59e0b);}"
+    "QPushButton:pressed{background:#d97706;}")
+# Cyan/teal accent — a second colourful toolbar action (Excel export), coloured
+# distinctly from the amber 'הוסף מקבל' beside it (#6uehd follow-up).
+_BTN_INFO    = (
+    "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #22d3ee,stop:1 #0891b2);"
+    " color:#fff; border:none; border-radius:9px; font-weight:800; font-size:13.5px;"
+    " padding:0 16px; min-height:38px;}"
+    "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #67e8f9,stop:1 #06b6d4);}"
+    "QPushButton:pressed{background:#0e7490;}")
 # The hero action of this screen — printing the distribution list. A deep brand-
 # green gradient, larger size and heavier weight make it the single most
 # prominent button in the bottom bar (paired with a soft drop-shadow in code).
@@ -1281,11 +1298,13 @@ class GroupUpdateTab(QWidget):
         self.mode_combo.setMinimumHeight(42)
         self.mode_combo.setToolTip(
             "כיצד להתייחס לקבועים בחלוקה זו:\n"
+            "• כל המקבלים — קבועים וחד-פעמיים יחד, מדורגים לפי ניקוד צורך (ברירת מחדל)\n"
             "• רגיל — קבועים אוטומטית לפי לוח זמנים\n"
             "• בלי קבועים — קבועים לא מקבלים\n"
-            "• קבועים לפי ניקוד — כל הקבועים מדורגים לפי ניקוד צורך, כמו חד-פעמי\n"
+            "• קבועים לפי ניקוד — רק הקבועים מדורגים לפי ניקוד צורך\n"
             "• לפי סינון מותאם — כל המקבלים שעונים על קריטריונים (מספר ילדים / הכנסה / פנוי לנפש)")
-        for label, val in (("רגיל — קבועים לפי לוח זמנים", "schedule"),
+        for label, val in (("כל המקבלים — קבועים וחד-פעמיים לפי ניקוד", "all"),
+                           ("רגיל — קבועים לפי לוח זמנים", "schedule"),
                            ("בלי קבועים", "none"),
                            ("קבועים לפי ניקוד", "scored"),
                            ("לפי סינון מותאם (מספר ילדים / הכנסה)", "filter")):
@@ -1319,8 +1338,7 @@ class GroupUpdateTab(QWidget):
         # live mode/filter behind a closed fold. (During the session all changes
         # originate inside this open section, so this is evaluated once here;
         # refresh() never force-closes it on the operator.)
-        if (cur_mode != "schedule"
-                or selection.criteria_is_active(db.get_filter_criteria())):
+        if self._special_active():
             self.adv_section.set_open(True)
         top_col.addWidget(self.adv_section)
 
@@ -1403,7 +1421,7 @@ class GroupUpdateTab(QWidget):
         # doesn't meet the filter criteria / isn't due this week (#243lo). Always
         # available, in every mode.
         self.btn_add_manual = QPushButton("＋ הוסף מקבל")
-        self.btn_add_manual.setStyleSheet(_BTN_GHOST)
+        self.btn_add_manual.setStyleSheet(_BTN_ACCENT)
         self.btn_add_manual.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_add_manual.setToolTip("הוסף לחלוקה זו מקבל כלשהו מכל הרשימה — גם אם "
                                        "אינו עומד בקריטריונים או אינו בתור השבוע")
@@ -1414,11 +1432,11 @@ class GroupUpdateTab(QWidget):
         # list AS PREPARED, before anyone is recorded. Available in the prep
         # stage; the 'קיבל חלוקה' column reads 'ברשימה/רזרבה' instead.
         self.btn_export_prep = QPushButton("ייצוא לאקסל")
-        self.btn_export_prep.setStyleSheet(_BTN_GHOST)
+        self.btn_export_prep.setStyleSheet(_BTN_INFO)
         self.btn_export_prep.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_export_prep.setToolTip("ייצוא רשימת המקבלים המוכנה לאקסל — עוד לפני "
                                         "מעבר לרישום מי קיבל")
-        self.btn_export_prep.setIcon(QIcon(line_icon("download", 18, "#0f766e")))
+        self.btn_export_prep.setIcon(QIcon(line_icon("download", 18, "#ffffff")))
         self.btn_export_prep.clicked.connect(self._export_prep_excel)
         toolbar.addWidget(self.btn_export_prep)
 
@@ -1687,7 +1705,7 @@ class GroupUpdateTab(QWidget):
     # ── distribution-mode for regulars (schedule / none / scored) ──────────────
     def _current_mode(self) -> str:
         data = self.mode_combo.currentData()
-        return data if data in ("schedule", "none", "scored", "filter") else "schedule"
+        return data if data in ("all", "schedule", "none", "scored", "filter") else "all"
 
     def _on_mode_changed(self, *_):
         db.set_setting("dist_regulars_mode", self._current_mode())
@@ -1708,7 +1726,7 @@ class GroupUpdateTab(QWidget):
         """Show the 'mark leaders' button only in the scored mode, and the 'edit
         filter' button only in the filter mode."""
         mode = self._current_mode()
-        self.btn_mark_leaders.setVisible(mode == "scored")
+        self.btn_mark_leaders.setVisible(mode in ("scored", "all"))
         self.btn_edit_filter.setVisible(mode == "filter")
 
     def _on_products_changed(self, *_):
@@ -1793,10 +1811,11 @@ class GroupUpdateTab(QWidget):
             self.main_win.status_msg(f"נוספו {added} חד-פעמיים לרשימת החלוקה")
 
     def _special_active(self) -> bool:
-        """A non-default distribution state: non-schedule mode or an active
-        broad filter. (A product count > 0 is NOT special — every weekly round
-        has leftovers for one-timers, per the operator.)"""
-        return (self._current_mode() != "schedule"
+        """A non-default distribution state: an unusual mode or an active broad
+        filter. 'all' (the default) and 'schedule' are both ordinary → NOT special
+        (auto weekly name is fine, advanced fold stays closed). (A product count >
+        0 is NOT special — every weekly round has leftovers, per the operator.)"""
+        return (self._current_mode() not in ("all", "schedule")
                 or selection.criteria_is_active(db.get_filter_criteria()))
 
     _AUTO_NAME_PREFIX = "חלוקה שבועית "
@@ -1830,6 +1849,12 @@ class GroupUpdateTab(QWidget):
         there's nothing to complete → allowed. Pure check + message — the
         in-place remedy (opening the picker) lives in _ensure_one_time_picks()
         so this stays modal-free for tests and callers that only ask."""
+        # The 'leftover products → one-timers' concept only exists in the plain
+        # weekly 'schedule' mode. In scored/filter/none the whole list is chosen a
+        # different way (by score / criteria / not at all) and there are no one-time
+        # picks to complete — so never block those with the picker (bug #y0rrd).
+        if self._current_mode() != "schedule":
+            return True
         n = self._one_time_remainder()
         if n <= 0 or self._main_pick_count() > 0:
             return True
@@ -1852,6 +1877,11 @@ class GroupUpdateTab(QWidget):
         mode = self._current_mode()
         if mode == "none":
             base = []
+        elif mode == "all":
+            # 'כל המקבלים' (default) — regulars AND one-time priority candidates
+            # together on ONE need scale, highest need first (#0e037). No separate
+            # 'בחר חד-פעמיים' step: everyone eligible is already on the list.
+            base = db.get_scored_all(area_filter="הכל")
         elif mode == "scored":
             # 'קבועים לפי ניקוד' — regulars ranked by need-score. One-timers are
             # NOT auto-included here (they used to appear before being chosen, bug
@@ -1877,13 +1907,14 @@ class GroupUpdateTab(QWidget):
         base_ids = {r["id"] for r in base}
         # Show the real regulars count for this list (bug #jcncv).
         reg_word = {"none": "בלי קבועים",
+                    "all": f"כל המקבלים: {len(base)}",
                     "scored": f"קבועים לפי ניקוד: {len(base)}",
                     "filter": f"לפי סינון: {len(base)} מקבלים"}.get(
             mode, f"קבועים השבוע: {len(base)}")
         self.lbl_regulars_count.setText(reg_word)
         extras = self._extra_recipients(base_ids)
         self._rows_data = base + extras
-        if mode == "scored":
+        if mode in ("scored", "all"):
             # Score EVERYONE (base + picks) together on ONE need scale, then order
             # by need (highest first), ties by name. Scoring the picks separately
             # would rank them on a different 0–100 scale and mis-order the merge.

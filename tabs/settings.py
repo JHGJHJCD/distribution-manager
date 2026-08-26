@@ -5,7 +5,8 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QLabel,
     QPushButton, QFrame, QMessageBox, QFileDialog, QInputDialog, QLineEdit,
     QProgressDialog, QApplication, QSpinBox, QScrollArea, QDoubleSpinBox,
-    QDialog, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
+    QDialog, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QAbstractSpinBox
 )
 
 import database as db
@@ -1023,7 +1024,7 @@ class CommunityQuotasDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("כוונון אחוזים לקהילות")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.setMinimumSize(480, 520)
+        self.setMinimumSize(560, 560)
         self._spins = {}
         outer = QVBoxLayout(self)
         intro = QLabel("קבע אחוז קבוע לקהילה (לפי שם נציג). קהילה שנשארת על 0 = "
@@ -1043,6 +1044,12 @@ class CommunityQuotasDialog(QDialog):
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         hdr = table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        # Give the size + percent columns real room so the spinbox value isn't
+        # cramped and unreadable (#7aaaf).
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        table.setColumnWidth(2, 150)
+        table.verticalHeader().setDefaultSectionSize(46)
         table.setRowCount(len(communities))
         for r, c in enumerate(communities):
             it_name = QTableWidgetItem(c)
@@ -1056,6 +1063,12 @@ class CommunityQuotasDialog(QDialog):
             spin.setDecimals(1)
             spin.setSuffix(" %")
             spin.setValue(float(pinned.get(c, 0) or 0))
+            spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+            spin.setMinimumHeight(34)
+            spin.setStyleSheet(
+                "QDoubleSpinBox{font-size:15px; font-weight:700; padding:2px 6px;"
+                " margin:4px 8px; min-width:110px;}")
             table.setCellWidget(r, 2, spin)
             self._spins[c] = spin
         enable_touch_scroll(table)

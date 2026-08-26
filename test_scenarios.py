@@ -27,6 +27,10 @@ for i, (nm, pr) in enumerate([("פלוני א", 3), ("פלוני ב", 3), ("פל
     db.add_recipient({"full_name": nm, "status": "פעיל", "frequency": "חד-פעמי", "priority": pr,
                       "souls": 4 + i, "phone1": f"05{i}2222222", "per_soul": str(400 + i * 120)})
 
+# These end-to-end scenarios exercise the schedule-mode weekly workflow (regulars
+# by timetable + separate one-time picking). The app default is now 'all' (everyone
+# by score), so pin schedule BEFORE the window builds its mode combo.
+db.set_setting("dist_regulars_mode", "schedule")
 from main import MainWindow
 win = MainWindow()
 

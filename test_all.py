@@ -340,6 +340,7 @@ check("tie-break: more souls first", idx_many < idx_few, f"(8-souls idx={idx_man
 # רובד 16 — compute_suggested_n
 # ══════════════════════════════════════════════════════════════════════════════
 print("\n=== רובד 16: compute_suggested_n ===")
+db.set_setting("dist_regulars_mode", "schedule")   # this block tests schedule math
 n, reg = db.compute_suggested_n(100)
 check("returns tuple of ints", isinstance(n, int) and isinstance(reg, int))
 check("regular_count > 0", reg > 0, f"({reg})")
