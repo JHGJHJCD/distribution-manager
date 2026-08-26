@@ -249,6 +249,10 @@ class CommunityAssignDialog(QDialog):
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        # Give each row enough height for the assignment combo — otherwise the
+        # default ~30px row is shorter than the combo, so the combos overflow and
+        # pile up on top of each other (#5lpgl).
+        self._table.verticalHeader().setDefaultSectionSize(46)
         enable_touch_scroll(self._table)
         outer.addWidget(self._table, 1)
 
@@ -280,6 +284,9 @@ class CommunityAssignDialog(QDialog):
             self._table.setItem(r, 1, it_syn)
             combo = QComboBox()
             combo.setEditable(True)
+            combo.setView(_light_popup_view())
+            combo.setFixedHeight(32)
+            combo.setStyleSheet("QComboBox{margin:3px 6px;}")
             combo.addItem("")           # keep unassigned
             for rep in reps:
                 combo.addItem(rep)
@@ -341,6 +348,13 @@ class _ManualAddDialog(QDialog):
             r["days_since"] = db.recency_days(r)
         import scoring as _scoring
         _scoring.annotate_need_scores(self._all, db.get_need_weights())
+        # Default order: neediest first (#hkdif) — the operator wants people in the
+        # hardest situation at the top so they're added at a glance. Same tie-break
+        # as the app's ranking (score → longest wait → name). Quick filters and the
+        # search box still work on this list; they only narrow it, keeping order.
+        self._all.sort(key=lambda r: (-(r.get("need_score") or 0),
+                                      -(r.get("days_since") or 0),
+                                      r.get("full_name") or ""))
         self._build()
 
     def _build(self):
@@ -1298,20 +1312,28 @@ class GroupUpdateTab(QWidget):
         self.mode_combo.setMinimumHeight(42)
         self.mode_combo.setToolTip(
             "כיצד להתייחס לקבועים בחלוקה זו:\n"
-            "• כל המקבלים — קבועים וחד-פעמיים יחד, מדורגים לפי ניקוד צורך (ברירת מחדל)\n"
-            "• רגיל — קבועים אוטומטית לפי לוח זמנים\n"
+            "• רגיל — קבועים אוטומטית לפי לוח זמנים (ברירת מחדל)\n"
             "• בלי קבועים — קבועים לא מקבלים\n"
             "• קבועים לפי ניקוד — רק הקבועים מדורגים לפי ניקוד צורך\n"
             "• לפי סינון מותאם — כל המקבלים שעונים על קריטריונים (מספר ילדים / הכנסה / פנוי לנפש)")
-        for label, val in (("כל המקבלים — קבועים וחד-פעמיים לפי ניקוד", "all"),
-                           ("רגיל — קבועים לפי לוח זמנים", "schedule"),
+        # The 'כל המקבלים' (all) mode added on 26/08 was removed from the picker
+        # per #7ycrg — the operator found it a misunderstanding. Seeing everyone
+        # ranked by need now lives where it belongs: the 'הוסף מקבל' picker opens
+        # neediest-first (#hkdif). Default reverts to the plain weekly 'schedule'.
+        # The backend 'all' path is kept for compatibility; a DB still holding it
+        # falls back to 'schedule' below.
+        for label, val in (("רגיל — קבועים לפי לוח זמנים", "schedule"),
                            ("בלי קבועים", "none"),
                            ("קבועים לפי ניקוד", "scored"),
                            ("לפי סינון מותאם (מספר ילדים / הכנסה)", "filter")):
             self.mode_combo.addItem(label, val)
         cur_mode = db.get_regulars_mode()
         idx = self.mode_combo.findData(cur_mode)
-        self.mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        if idx < 0:
+            # a saved 'all' mode that no longer has a picker entry (#7ycrg)
+            idx = 0
+            db.set_setting("dist_regulars_mode", "schedule")
+        self.mode_combo.setCurrentIndex(idx)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         adv_row.addLayout(_field("מצב חלוקה לקבועים", self.mode_combo, maxw=280))
 

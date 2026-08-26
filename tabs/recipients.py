@@ -287,6 +287,15 @@ class RecipientsTab(QWidget):
             ("עדיפות שנייה", 2),
         ]
         self.priority_filter.addItems([o[0] for o in self._PRIORITY_FILTERS])
+        # Colour the dropdown options as rounded pills, same palette as the table's
+        # priority badges, so each group is recognisable at a glance (#ld7lr).
+        _prio_chip = {
+            "קבוע":          PRIORITY_BADGES["קבוע"],
+            "עדיפות ראשונה": PRIORITY_BADGES["ראשונה"],
+            "עדיפות שנייה":  PRIORITY_BADGES["שנייה"],
+        }
+        self.priority_filter.setItemDelegate(
+            BadgeDelegate(_prio_chip, self.priority_filter))
         self.priority_filter.currentTextChanged.connect(self.refresh)
         top.addWidget(self.priority_filter)
 
@@ -295,9 +304,10 @@ class RecipientsTab(QWidget):
         btn_add.clicked.connect(self._add)
         top.addWidget(btn_add)
 
-        btn_import = QPushButton("יבוא מ-Excel")
+        # Match the 'הוסף מקבל' button's size and look — it used to be a smaller,
+        # differently-styled button beside it, which read as out of place (#eiqat).
+        btn_import = QPushButton("+ יבוא מ-Excel")
         btn_import.setObjectName("success")
-        btn_import.setStyleSheet("font-size:11px; min-height:24px; min-width:0; padding:3px 12px;")
         btn_import.setToolTip("ייבוא מקובץ Excel (פורמט תבנית ליהודה)")
         btn_import.clicked.connect(self._import_excel)
         top.addWidget(btn_import)

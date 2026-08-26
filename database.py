@@ -998,13 +998,15 @@ def get_scored_all(area_filter: str = "הכל"):
 
 
 def get_regulars_mode() -> str:
-    """Distribution mode for regulars: 'all' (default — EVERYONE, regulars and
-    one-time candidates together, ranked by need-score), 'schedule' (auto by
-    timetable), 'none' (regulars excluded), 'scored' (regulars only, ranked by
-    need-score) or 'filter' (a custom broad filter over ALL active recipients —
-    see get_filtered_list)."""
-    mode = get_setting("dist_regulars_mode") or "all"
-    return mode if mode in ("all", "schedule", "none", "scored", "filter") else "all"
+    """Distribution mode for regulars: 'schedule' (default — auto by timetable),
+    'none' (regulars excluded), 'scored' (regulars only, ranked by need-score) or
+    'filter' (a custom broad filter over ALL active recipients — see
+    get_filtered_list). 'all' (EVERYONE ranked by need) is a legacy value that was
+    dropped from the picker on 26/08 (#7ycrg); it maps back to 'schedule'."""
+    mode = get_setting("dist_regulars_mode") or "schedule"
+    if mode == "all":
+        return "schedule"
+    return mode if mode in ("schedule", "none", "scored", "filter") else "schedule"
 
 
 # ─── Custom broad filter (mode 'filter') ─────────────────────────────────────

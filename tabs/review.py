@@ -15,6 +15,14 @@ COLS = ["סוג", "מפתח", "שם מלא", "טלפון 1", "טלפון 2", "א
 # Soft alternating tints so members of the same group read as one block.
 _GROUP_BG = [QColor("#fff7ed"), QColor("#eff6ff")]   # warm / cool
 
+# Coloured pill per duplicate TYPE so the kind of problem reads at a glance
+# (#ipjgd), matching the app's badge look elsewhere. Keys must equal the exact
+# 'type' strings produced by db.find_duplicate_groups.
+TYPE_BADGES = {
+    "שם כפול":     ("#e0e7ff", "#3730a3"),   # indigo — same name
+    "טלפון משותף": ("#fef3c7", "#92400e"),   # amber  — shared phone
+}
+
 
 def _priority_text(rec: dict) -> str:
     labels = {4: "קבוע", 3: "ראשונה", 2: "שנייה"}
@@ -44,10 +52,8 @@ class ReviewTab(QWidget):
         self.count_lbl = QLabel("")
         self.count_lbl.setObjectName("subtitle")
         top.addWidget(self.count_lbl)
-        btn_refresh = QPushButton("רענן")
-        btn_refresh.setObjectName("neutral")
-        btn_refresh.clicked.connect(self.refresh)
-        top.addWidget(btn_refresh)
+        # No manual 'רענן' button (#yg76l) — the view refreshes automatically when
+        # it opens and after every edit/delete, so the button was just clutter.
         lay.addLayout(top)
 
         hint = QLabel("שורות עם אותו רקע = אותה קבוצה. לחיצה כפולה לעריכה. "
@@ -66,9 +72,13 @@ class ReviewTab(QWidget):
         self.table.doubleClicked.connect(self._edit)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # שם מלא
+        # 'שם מלא' — give it a real, roomy width. As a plain Stretch column it got
+        # starved next to the auto-sized columns and clipped names to "וי…" (#p11zo).
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
         hdr.setResizeContentsPrecision(20)
         self.table.verticalHeader().setVisible(False)
+        self.table.setColumnWidth(2, 220)
+        self.table.setItemDelegateForColumn(0, BadgeDelegate(TYPE_BADGES, self.table))       # סוג
         self.table.setItemDelegateForColumn(6, BadgeDelegate(PRIORITY_BADGES, self.table))  # עדיפות
         self.table.setItemDelegateForColumn(7, BadgeDelegate(STATUS_BADGES, self.table))    # סטטוס
         lay.addWidget(self.table)
