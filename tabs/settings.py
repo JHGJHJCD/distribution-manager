@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout, QLabel,
     QPushButton, QFrame, QMessageBox, QFileDialog, QInputDialog, QLineEdit,
@@ -569,6 +570,40 @@ class SettingsTab(QWidget):
         left_col.addWidget(sync_frame)
         self._refresh_sync_status()
 
+        # ── Manager computer + change control (#5rhe9) ────────────────────────
+        mgr_frame = QFrame()
+        mgr_frame.setObjectName("panel")
+        mgr_lay = QVBoxLayout(mgr_frame)
+        mgr_lay.setContentsMargins(10, 7, 10, 7)
+        mgr_lay.setSpacing(6)
+        mgr_lay.addWidget(section_header("מחשב מנהל ובקרת שינויים", "security", "#0f766e"))
+        mgr_desc = QLabel(
+            "אפשר להגדיר מחשב אחד כ<b>מחשב המנהל</b>. במחשב המנהל מופיע <b>יומן "
+            "שינויים</b> שמראה כל שינוי שנקלט מהמחשב השני (מי/מה/מתי), עם אפשרות "
+            "<b>לבטל</b> שינוי ולהחזיר את המצב הקודם — כך המנהל שולט בנתוני האמת. "
+            "הגדרת מחשב כמנהל מוגנת בקוד.")
+        mgr_desc.setObjectName("subtitle")
+        mgr_desc.setTextFormat(Qt.TextFormat.RichText)
+        mgr_desc.setWordWrap(True)
+        mgr_lay.addWidget(mgr_desc)
+        self.lbl_mgr_status = QLabel("")
+        self.lbl_mgr_status.setWordWrap(True)
+        self.lbl_mgr_status.setStyleSheet("font-size:12.5px;")
+        mgr_lay.addWidget(self.lbl_mgr_status)
+        mgr_btns = QHBoxLayout()
+        self.btn_mgr_toggle = QPushButton("")
+        self.btn_mgr_toggle.setObjectName("primary")
+        self.btn_mgr_toggle.clicked.connect(self._toggle_manager)
+        mgr_btns.addWidget(self.btn_mgr_toggle)
+        self.btn_mgr_log = QPushButton("יומן שינויים…")
+        self.btn_mgr_log.setObjectName("neutral")
+        self.btn_mgr_log.clicked.connect(self._open_manager_log)
+        mgr_btns.addWidget(self.btn_mgr_log)
+        mgr_btns.addStretch()
+        mgr_lay.addLayout(mgr_btns)
+        left_col.addWidget(mgr_frame)
+        self._refresh_manager_status()
+
         # Trailing stretch keeps each column's panels packed to the top so the
         # shorter column doesn't stretch its panels to fill the taller one.
         right_col.addStretch()
@@ -861,6 +896,78 @@ class SettingsTab(QWidget):
         self._refresh_sync_status()
         if self.main_win and hasattr(self.main_win, "_refresh_sync_led"):
             self.main_win._refresh_sync_led()
+
+    # ── Manager computer + change control (#5rhe9) ──────────────────────────────
+    def _refresh_manager_status(self):
+        from utils import sync
+        is_mgr = sync.is_manager_device()
+        if is_mgr:
+            self.lbl_mgr_status.setText("✓ מחשב זה מוגדר כמחשב המנהל — יומן השינויים והביטול זמינים כאן.")
+            self.lbl_mgr_status.setStyleSheet("color:#0f766e; font-size:12.5px; font-weight:600;")
+            self.btn_mgr_toggle.setText("בטל הגדרת מנהל")
+        else:
+            self.lbl_mgr_status.setText("מחשב זה אינו מוגדר כמחשב המנהל.")
+            self.lbl_mgr_status.setStyleSheet("color:#64748b; font-size:12.5px;")
+            self.btn_mgr_toggle.setText("הגדר מחשב זה כמנהל")
+        self.btn_mgr_log.setVisible(is_mgr)
+
+    def _toggle_manager(self):
+        from utils import sync
+        if sync.is_manager_device():
+            if QMessageBox.question(
+                    self, "ביטול הגדרת מנהל",
+                    "לבטל את הגדרת מחשב זה כמחשב המנהל?\nיומן השינויים לא יופיע יותר כאן.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+                sync.set_manager_device(False)
+                self._refresh_manager_status()
+            return
+        self._become_manager()
+
+    def _become_manager(self):
+        from utils import sync
+        if not db.manager_code_is_set():
+            # First time: define the manager code (entered twice).
+            code, ok = QInputDialog.getText(
+                self, "הגדרת קוד מנהל",
+                "עדיין לא הוגדר קוד מנהל.\nבחר קוד להגדרת מחשב כמנהל (זכור אותו — "
+                "צריך אותו גם במחשב השני):", QLineEdit.EchoMode.Password)
+            if not ok:
+                return
+            code = (code or "").strip()
+            if len(code) < 3:
+                QMessageBox.warning(self, "קוד קצר מדי", "הקוד חייב להכיל לפחות 3 תווים.")
+                return
+            code2, ok = QInputDialog.getText(
+                self, "אישור קוד מנהל", "הקלד שוב את הקוד לאישור:",
+                QLineEdit.EchoMode.Password)
+            if not ok:
+                return
+            if (code2 or "").strip() != code:
+                QMessageBox.warning(self, "אי-התאמה", "הקודים אינם תואמים. נסה שוב.")
+                return
+            db.set_manager_code(code)
+            sync.set_manager_device(True)
+            QMessageBox.information(self, "הוגדר", "קוד המנהל נקבע ומחשב זה הוגדר כמחשב המנהל ✓")
+        else:
+            code, ok = QInputDialog.getText(
+                self, "קוד מנהל", "הזן את קוד המנהל כדי להגדיר מחשב זה כמנהל:",
+                QLineEdit.EchoMode.Password)
+            if not ok:
+                return
+            if db.verify_manager_code((code or "").strip()):
+                sync.set_manager_device(True)
+                QMessageBox.information(self, "הוגדר", "מחשב זה הוגדר כמחשב המנהל ✓")
+            else:
+                QMessageBox.warning(self, "קוד שגוי", "קוד המנהל שגוי.")
+                return
+        self._refresh_manager_status()
+
+    def _open_manager_log(self):
+        dlg = ManagerLogDialog(self)
+        dlg.exec()
+        if self.main_win and hasattr(self.main_win, "refresh_all"):
+            self.main_win.refresh_all()
         else:
             QMessageBox.information(
                 self, "סנכרון הושלם",
@@ -1084,6 +1191,97 @@ class SettingsTab(QWidget):
             self, "מתעדכן",
             "העדכון הותקן בהצלחה.\nהתוכנה תיסגר כעת ותיפתח מחדש בגרסה החדשה.")
         QApplication.quit()
+
+
+class ManagerLogDialog(QDialog):
+    """The manager's change-log (#5rhe9): every change received from the other
+    computer, newest first, each with an 'undo' that restores the previous state
+    and syncs the correction back. Only opened on the manager computer."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("יומן שינויים — בקרת מנהל")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumSize(760, 520)
+        lay = QVBoxLayout(self)
+        head = QLabel("שינויים שנקלטו מהמחשב השני. אפשר לבטל שינוי — התוכנה תחזיר "
+                      "את הערך הקודם והתיקון יסתנכרן חזרה לכל המחשבים.")
+        head.setWordWrap(True)
+        head.setStyleSheet("color:#334155; font-size:13px;")
+        lay.addWidget(head)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["מתי", "מקבל", "מה השתנה", "פעולה"])
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.table.verticalHeader().setVisible(False)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        lay.addWidget(self.table, 1)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        close = QPushButton("סגור")
+        close.setObjectName("neutral")
+        close.clicked.connect(self.accept)
+        btns.addWidget(close)
+        lay.addLayout(btns)
+
+        self._reload()
+
+    def _reload(self):
+        from utils import timefmt
+        rows = db.get_incoming_log(limit=300)
+        self.table.setRowCount(len(rows))
+        for r, rec in enumerate(rows):
+            undone = bool(rec.get("undone"))
+            t = QTableWidgetItem(timefmt.datetime_str(rec.get("applied_at")))
+            t.setToolTip(timefmt.relative(rec.get("applied_at")))
+            self.table.setItem(r, 0, t)
+            self.table.setItem(r, 1, QTableWidgetItem(rec.get("target_name") or ""))
+            summ = QTableWidgetItem(rec.get("summary") or "")
+            summ.setToolTip(rec.get("summary") or "")
+            self.table.setItem(r, 2, summ)
+            if undone:
+                done = QTableWidgetItem("בוטל ✓")
+                done.setForeground(QColor("#94a3b8"))
+                self.table.setItem(r, 3, done)
+                for c in range(3):
+                    it = self.table.item(r, c)
+                    if it:
+                        it.setForeground(QColor("#9aa7b8"))
+            else:
+                btn = QPushButton("בטל")
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setStyleSheet(
+                    "QPushButton{background:#f59e0b; color:#ffffff; border:none;"
+                    "border-radius:8px; padding:4px 14px; font-weight:700;}"
+                    "QPushButton:hover{background:#d97706;}")
+                btn.clicked.connect(lambda _=False, i=rec.get("id"): self._undo(i))
+                self.table.setCellWidget(r, 3, btn)
+        self.table.resizeRowsToContents()
+
+    def _undo(self, incoming_id):
+        rec = next((x for x in db.get_incoming_log(limit=300)
+                    if x.get("id") == incoming_id), None)
+        name = (rec or {}).get("target_name") or "המקבל"
+        if QMessageBox.question(
+                self, "ביטול שינוי",
+                f"לבטל את השינוי על '{name}' ולהחזיר את הערך הקודם?\n"
+                "התיקון יסתנכרן חזרה לכל המחשבים.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        ok, msg = db.undo_incoming(incoming_id)
+        if ok:
+            QMessageBox.information(self, "בוטל", msg)
+        else:
+            QMessageBox.warning(self, "לא בוטל", msg)
+        self._reload()
 
 
 class CommunityQuotasDialog(QDialog):

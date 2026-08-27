@@ -50,6 +50,7 @@ JOURNAL_PREFIX = "journal-"
 _LOCK = threading.RLock()
 _APPLYING = False          # True while applying remote records → suppress logging
 _DEFER_FLUSH = False       # True during a bulk seed → buffer, flush once at the end
+_RECORD_INCOMING = False   # True (manager machine) → log incoming changes for undo (#5rhe9)
 
 
 def _state_path() -> str:
@@ -398,6 +399,48 @@ def _adopt_match(conn, data: dict):
     return None
 
 
+# Human labels for the change-log summary (#5rhe9).
+_FIELD_LABELS_HE = {
+    "full_name": "שם", "first_name": "שם פרטי", "last_name": "שם משפחה",
+    "phone1": "טלפון", "phone2": "טלפון 2", "phone3": "טלפון 3",
+    "address": "כתובת", "area": "אזור", "souls": "נפשות", "frequency": "תדירות",
+    "status": "סטטוס", "notes": "הערות", "priority": "עדיפות",
+    "id_number": "ת.ז. בעל", "spouse_id_number": "ת.ז. אשה",
+    "children_total": "מספר ילדים", "marital_status": "מצב אישי",
+    "email": "אימייל", "synagogue": "בית כנסת", "income": "הכנסות",
+    "representative": "נציג", "external_id": "מס' מזהה",
+}
+
+
+def _record_incoming(conn, op, guid, name, summary, before, after, dev):
+    """Log an applied incoming change so the manager can review/undo it (#5rhe9).
+    Only runs on the manager computer (guarded by _RECORD_INCOMING)."""
+    try:
+        conn.execute(
+            "INSERT INTO sync_incoming (applied_at, author_device, author_name, op, "
+            "target_guid, target_name, summary, before_json, after_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (_utc_now(), dev or "", "", op, guid or "", name or "", summary or "",
+             json.dumps(before, ensure_ascii=False) if before is not None else "",
+             json.dumps(after, ensure_ascii=False) if after is not None else ""))
+    except Exception:
+        pass
+
+
+def _diff_summary(before: dict, fields: dict) -> str:
+    """Short Hebrew description of what changed in a recipient upsert."""
+    changed = []
+    for k, v in fields.items():
+        old = "" if before is None else before.get(k, "")
+        if str(old or "") != str(v or ""):
+            label = _FIELD_LABELS_HE.get(k)
+            if label:
+                changed.append(f"{label}: '{old}' ← '{v}'")
+    if not changed:
+        return "עודכן"
+    return " · ".join(changed[:6]) + (" ועוד…" if len(changed) > 6 else "")
+
+
 def _apply_rec_upsert(conn, rec: dict):
     guid = rec.get("guid") or ""
     data = rec.get("data") or {}
@@ -411,37 +454,53 @@ def _apply_rec_upsert(conn, rec: dict):
         if match is not None:
             conn.execute("UPDATE recipients SET guid=? WHERE id=?", (guid, match["id"]))
             local = _find_recipient_by_guid(conn, guid)
+    name = data.get("full_name") or (dict(local).get("full_name") if local else "") or ""
     if local is not None:
         # Last-write-wins: apply only if the incoming edit is newer than ours.
         local_ts = local["updated_at"] or ""
         incoming_ts = data.get("updated_at") or rec.get("ts") or ""
         if local_ts and incoming_ts and incoming_ts <= local_ts:
             return
+        before = dict(local)
         sets = ", ".join(f"{k}=?" for k in fields)
         conn.execute(f"UPDATE recipients SET {sets} WHERE id=?",
                      list(fields.values()) + [local["id"]])
+        if _RECORD_INCOMING:
+            _record_incoming(conn, "rec_upsert", guid, name,
+                             _diff_summary(before, fields), before, fields, rec.get("dev"))
     else:
         fields["guid"] = guid
         keys = list(fields.keys())
         conn.execute(
             f"INSERT INTO recipients ({','.join(keys)}) VALUES ({','.join(['?'] * len(keys))})",
             [fields[k] for k in keys])
+        if _RECORD_INCOMING:
+            _record_incoming(conn, "rec_upsert", guid, name,
+                             f"נוסף מקבל חדש: {name}", None, fields, rec.get("dev"))
 
 
 def _apply_rec_delete(conn, rec: dict):
     local = _find_recipient_by_guid(conn, rec.get("guid") or "")
     if local is None:
         return
+    before = dict(local)
     rid = local["id"]
+    deleted = False
     if rec.get("force"):
         conn.execute("DELETE FROM distributions WHERE recipient_id=?", (rid,))
         conn.execute("DELETE FROM change_log WHERE recipient_id=?", (rid,))
         conn.execute("DELETE FROM recipients WHERE id=?", (rid,))
+        deleted = True
     else:
         n = conn.execute("SELECT COUNT(*) AS c FROM distributions WHERE recipient_id=?",
                          (rid,)).fetchone()["c"]
         if n == 0:
             conn.execute("DELETE FROM recipients WHERE id=?", (rid,))
+            deleted = True
+    if deleted and _RECORD_INCOMING:
+        _record_incoming(conn, "rec_delete", rec.get("guid") or "",
+                         before.get("full_name", ""),
+                         f"נמחק מקבל: {before.get('full_name','')}", before, None, rec.get("dev"))
 
 
 def _apply_batch_add(conn, rec: dict):
@@ -590,7 +649,7 @@ _APPLIERS = {
 def pull_changes() -> int:
     """Read the OTHER devices' journals and apply every record not yet seen.
     Returns how many records were applied."""
-    global _APPLYING
+    global _APPLYING, _RECORD_INCOMING
     if not is_enabled() or not folder_available():
         return 0
     applied = 0
@@ -600,6 +659,8 @@ def pull_changes() -> int:
         seen = state.setdefault("applied", {})       # dev → highest seq applied (safety dedup)
         offsets = state.setdefault("offsets", {})    # dev → byte position already read
         _APPLYING = True
+        # On the manager machine, record incoming recipient changes for undo (#5rhe9).
+        _RECORD_INCOMING = bool(state.get("is_manager"))
         try:
             with db.get_connection() as conn:
                 for path in sorted(glob.glob(os.path.join(get_folder(),
@@ -636,6 +697,7 @@ def pull_changes() -> int:
                     offsets[dev] = new_off
         finally:
             _APPLYING = False
+            _RECORD_INCOMING = False
         state["last_run"] = _utc_now()
         _save_state(state)
     return applied

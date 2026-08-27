@@ -485,6 +485,30 @@ def set_password(plain: str):
     set_setting("password_len", str(len(plain or "")))
 
 
+# ─── Manager code (#5rhe9) — gates designating a computer as the manager ──────
+
+def manager_code_is_set() -> bool:
+    return bool((get_setting("manager_code_hash") or "").startswith("pbkdf2$"))
+
+
+def set_manager_code(plain: str):
+    """Define the manager code (shared/synced, so both computers agree on it)."""
+    set_setting("manager_code_hash", _hash_password(plain))
+
+
+def verify_manager_code(plain: str) -> bool:
+    stored = get_setting("manager_code_hash") or ""
+    if not stored.startswith("pbkdf2$"):
+        return False
+    try:
+        _, salt_hex, hash_hex = stored.split("$", 2)
+        dk = hashlib.pbkdf2_hmac("sha256", plain.encode("utf-8"),
+                                 bytes.fromhex(salt_hex), 200_000)
+        return secrets.compare_digest(dk.hex(), hash_hex)
+    except (ValueError, AttributeError):
+        return False
+
+
 # ------------------------------------------------------------------------------- Settings ────────────────────────────────────────────────────────────────
 
 def get_setting(key: str) -> str:
@@ -1642,6 +1666,73 @@ def latest_other_read_ts(exclude_device: str = "") -> str:
             "SELECT MAX(read_ts) AS m FROM message_reads WHERE device <> ?",
             (exclude_device or "",)).fetchone()
         return (row["m"] or "") if row else ""
+
+
+# ─── Manager change-log + undo (#5rhe9) ───────────────────────────────────────
+
+def get_recipient_by_guid(guid: str):
+    if not guid:
+        return None
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM recipients WHERE guid=?", (guid,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_incoming_log(limit: int = 200, include_undone: bool = True):
+    """Changes received FROM another computer (for the manager's review/undo)."""
+    with get_connection() as conn:
+        q = "SELECT * FROM sync_incoming"
+        if not include_undone:
+            q += " WHERE undone=0"
+        q += " ORDER BY id DESC LIMIT ?"
+        return [dict(r) for r in conn.execute(q, (limit,))]
+
+
+def undo_incoming(incoming_id: int):
+    """Revert a change another computer made (#5rhe9). The revert is a normal
+    local write, so it syncs back and (being newer) overrides the change on every
+    computer. Returns (ok, message)."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM sync_incoming WHERE id=?",
+                           (incoming_id,)).fetchone()
+        if not row:
+            return False, "השינוי לא נמצא"
+        if row["undone"]:
+            return False, "השינוי כבר בוטל"
+        row = dict(row)
+    op = row["op"]
+    guid = row["target_guid"] or ""
+    try:
+        before = json.loads(row["before_json"] or "null")
+    except (ValueError, TypeError):
+        before = None
+    try:
+        if op == "rec_upsert":
+            local = get_recipient_by_guid(guid)
+            if before is None:
+                # The other computer ADDED this recipient → undo = remove it.
+                if local:
+                    try:
+                        delete_recipient(local["id"])
+                    except ValueError:
+                        force_delete_recipient(local["id"])
+            else:
+                fields = {k: v for k, v in before.items()
+                          if k not in ("id", "updated_at", "created_at")}
+                if local:
+                    update_recipient(local["id"], fields)
+                else:
+                    add_recipient(before)          # vanished locally → recreate
+        elif op == "rec_delete":
+            if before is not None and not get_recipient_by_guid(guid):
+                add_recipient(before)              # restore the deleted recipient
+        else:
+            return False, "סוג שינוי זה אינו נתמך לביטול"
+    except Exception as e:                          # noqa: BLE001 — surface to UI
+        return False, f"שגיאה בביטול: {e}"
+    with get_connection() as conn:
+        conn.execute("UPDATE sync_incoming SET undone=1 WHERE id=?", (incoming_id,))
+    return True, "השינוי בוטל והוחזר המצב הקודם"
 
 
 # ─── Summary stats ────────────────────────────────────────────────────────────
