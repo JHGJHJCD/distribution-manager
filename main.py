@@ -468,9 +468,17 @@ class _WinCtrlButton(QWidget):
             p.drawLine(QPointF(cx - s, cy - s), QPointF(cx + s, cy + s))
             p.drawLine(QPointF(cx - s, cy + s), QPointF(cx + s, cy - s))
         elif self._kind == "restore":
-            # two overlapping squares (Windows "restore down" icon)
-            p.drawRect(QRectF(cx - s + 1.5, cy - s - 0.5, 2 * s - 1.5, 2 * s - 1.5))
-            p.drawRect(QRectF(cx - s - 1, cy - s + 2, 2 * s - 1.5, 2 * s - 1.5))
+            # Clean Windows-11 "restore down" glyph: a full front square, and the
+            # back window shown as only its top + right edges (an ⌐ hook) so it
+            # reads instantly as "restore" instead of a glitchy pair of boxes
+            # (#x4rce). d = how far the back window peeks up-and-right.
+            d = 2.0
+            fs = 2 * s - d           # front square side
+            fx, fy = cx - s, cy - s + d
+            p.drawRect(QRectF(fx, fy, fs, fs))              # front square (full)
+            bx, by = fx + d, fy - d                          # back square origin
+            p.drawLine(QPointF(bx, by), QPointF(bx + fs, by))            # back top edge
+            p.drawLine(QPointF(bx + fs, by), QPointF(bx + fs, by + fs))  # back right edge
         else:   # 'max'
             p.drawRect(QRectF(cx - s, cy - s, 2 * s, 2 * s))
         p.end()

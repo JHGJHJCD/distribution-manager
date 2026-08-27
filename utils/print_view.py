@@ -1,8 +1,9 @@
 import os
 import sys
 import html
-from PyQt6.QtWidgets import QWidget
-from PyQt6.QtPrintSupport import QPrinter, QPrintPreviewDialog
+from PyQt6.QtWidgets import (QWidget, QDialog, QVBoxLayout, QHBoxLayout,
+                             QPushButton, QFrame, QLabel)
+from PyQt6.QtPrintSupport import QPrinter, QPrintPreviewWidget, QPrintDialog
 from PyQt6.QtGui import QTextDocument, QImage, QPageLayout
 from PyQt6.QtCore import QUrl, QSizeF, QMarginsF, Qt
 from datetime import date
@@ -146,21 +147,111 @@ def _build_html(recipients: List[Dict], dist_date: str, has_logo: bool = False,
     """
 
 
-def _preview(printer: QPrinter, render, parent: QWidget, title: str):
-    """Show a full print-preview dialog (RTL, Hebrew) whose pages are drawn by
-    `render(printer)`. The user prints from the dialog's own toolbar."""
-    dlg = QPrintPreviewDialog(printer, parent)
-    dlg.setWindowTitle(title)
-    # NOTE: do NOT force RightToLeft on the dialog itself — that reverses the
-    # preview toolbar and pushed the print button off the visible area (the user
-    # had to widen the window to reach it). The page CONTENT is already RTL via
-    # the HTML (direction:rtl), so the printout is unaffected.
-    dlg.paintRequested.connect(render)
-    # Open maximized so the full toolbar — including the print button — and a
-    # large, readable preview are visible immediately.
-    dlg.resize(1100, 800)
-    dlg.setWindowState(Qt.WindowState.WindowMaximized)
-    dlg.exec()
+class _PreviewDialog(QDialog):
+    """Clean, self-built print-preview window (#sdj7g). Instead of Qt's cramped
+    default toolbar of tiny unlabeled icons, it shows a clear Hebrew action bar
+    with a big, emphasised 'הדפס' button plus obvious zoom / fit / close
+    controls. The page is rendered by `render(printer)`."""
+
+    def __init__(self, printer: QPrinter, render, parent, title: str, on_pdf=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._printer = printer
+        self._render = render
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── Action bar ────────────────────────────────────────────────────────
+        bar = QFrame()
+        bar.setObjectName("prev-bar")
+        bar.setStyleSheet(
+            "QFrame#prev-bar{background:#f4faf7; border-bottom:1px solid #dce7e2;}")
+        bl = QHBoxLayout(bar)
+        bl.setContentsMargins(16, 12, 16, 12)
+        bl.setSpacing(10)
+
+        title_lbl = QLabel(title)
+        title_lbl.setStyleSheet("font-size:15px; font-weight:700; color:#0f766e;")
+        bl.addWidget(title_lbl)
+        bl.addStretch()
+
+        _ghost = ("QPushButton{background:#ffffff; color:#0f766e; border:1px solid #b6d8cd;"
+                  "border-radius:9px; padding:8px 14px; font-size:14px; font-weight:600;}"
+                  "QPushButton:hover{background:#eafaf3;}")
+        btn_zoom_out = QPushButton("‒ הקטן")
+        btn_zoom_out.setStyleSheet(_ghost)
+        btn_zoom_out.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_zoom_out.clicked.connect(lambda: self.preview.zoomOut(1.15))
+        bl.addWidget(btn_zoom_out)
+
+        btn_zoom_in = QPushButton("+ הגדל")
+        btn_zoom_in.setStyleSheet(_ghost)
+        btn_zoom_in.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_zoom_in.clicked.connect(lambda: self.preview.zoomIn(1.15))
+        bl.addWidget(btn_zoom_in)
+
+        btn_fit = QPushButton("התאם לרוחב")
+        btn_fit.setStyleSheet(_ghost)
+        btn_fit.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_fit.clicked.connect(lambda: self.preview.fitToWidth())
+        bl.addWidget(btn_fit)
+
+        if on_pdf is not None:
+            btn_pdf = QPushButton("שמור PDF")
+            btn_pdf.setStyleSheet(_ghost)
+            btn_pdf.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_pdf.clicked.connect(lambda: (on_pdf(), self.accept()))
+            bl.addWidget(btn_pdf)
+
+        # The primary action — big, teal, impossible to miss.
+        btn_print = QPushButton("🖨  הדפס")
+        btn_print.setStyleSheet(
+            "QPushButton{background:#0f9d78; color:#ffffff; border:none;"
+            "border-radius:10px; padding:10px 26px; font-size:16px; font-weight:800;}"
+            "QPushButton:hover{background:#0c8a69;}")
+        btn_print.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_print.setMinimumHeight(44)
+        btn_print.clicked.connect(self._do_print)
+        bl.addWidget(btn_print)
+
+        btn_close = QPushButton("סגור")
+        btn_close.setStyleSheet(_ghost)
+        btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_close.clicked.connect(self.reject)
+        bl.addWidget(btn_close)
+
+        root.addWidget(bar)
+
+        # ── Preview surface ───────────────────────────────────────────────────
+        # NOTE: keep the preview widget itself LTR — forcing RTL on it mirrors the
+        # page navigation. The page CONTENT is RTL via the HTML, unaffected.
+        self.preview = QPrintPreviewWidget(printer)
+        self.preview.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.preview.paintRequested.connect(render)
+        root.addWidget(self.preview, 1)
+
+        self.resize(1000, 800)
+        self.setWindowState(Qt.WindowState.WindowMaximized)
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.preview.fitToWidth()
+
+    def _do_print(self):
+        d = QPrintDialog(self._printer, self)
+        d.setWindowTitle("הדפסה")
+        if d.exec() == QDialog.DialogCode.Accepted:
+            self._render(self._printer)
+            self.accept()
+
+
+def _preview(printer: QPrinter, render, parent: QWidget, title: str, on_pdf=None):
+    """Show the custom print-preview window (RTL, Hebrew). `render(printer)` draws
+    the pages; the user prints from the big 'הדפס' button (#sdj7g)."""
+    _PreviewDialog(printer, render, parent, title, on_pdf).exec()
 
 
 def _make_dist_renderer(recipients: List[Dict], html: str, has_logo: bool, logo_path: str):
@@ -210,7 +301,8 @@ def print_distribution_list(recipients: List[Dict], dist_date: str, parent: QWid
     html = _build_html(recipients, dist_date, has_logo, dist_name)
 
     render = _make_dist_renderer(recipients, html, has_logo, logo_path)
-    _preview(printer, render, parent, "תצוגה מקדימה — רשימת חלוקה")
+    _preview(printer, render, parent, "תצוגה מקדימה — רשימת חלוקה",
+             on_pdf=lambda: export_distribution_pdf(recipients, dist_date, dist_name))
 
 
 def _safe_filename(text: str) -> str:

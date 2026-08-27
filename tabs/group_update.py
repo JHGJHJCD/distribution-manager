@@ -9,8 +9,9 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate, QDialog, QFormLayout, QListWidget, QListWidgetItem,
     QToolButton, QCheckBox
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QObject, QRect
-from PyQt6.QtGui import QColor, QFont, QIcon, QPalette
+from PyQt6.QtCore import (Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QObject, QRect,
+                          QRectF, QPropertyAnimation, QEasingCurve, pyqtProperty)
+from PyQt6.QtGui import QColor, QFont, QIcon, QPalette, QPainter
 from datetime import date
 from widgets import DateEdit
 import database as db
@@ -23,6 +24,93 @@ from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state, ALIG
                       enable_touch_scroll, search_icon, line_icon, reveal_in_folder,
                       apply_header_icons, show_score_breakdown, show_filter_breakdown)
 from utils import email_utils
+
+
+class _StageToggle(QWidget):
+    """Animated sliding two-state switch: הכנה ⇄ רישום מי קיבל (#k6bqi).
+
+    A coloured knob glides under the active label so it's obvious both which
+    stage is live AND that a second stage exists. RTL layout: 'הכנה' sits on the
+    right, 'רישום מי קיבל' on the left. Clicking either half selects that stage
+    and fires on_change(stage)."""
+
+    def __init__(self, on_change, parent=None):
+        super().__init__(parent)
+        self._on_change = on_change
+        self._labels = ("הכנה", "רישום מי קיבל")   # 0 = prep (right), 1 = record (left)
+        self._stage = "prep"
+        self._pos = 0.0                              # animated 0..1 (0=prep, 1=record)
+        self.setFixedHeight(48)
+        self.setMinimumWidth(320)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setToolTip("החלף בין הכנת הרשימה לבין רישום מי קיבל בפועל")
+        self._anim = QPropertyAnimation(self, b"pos", self)
+        self._anim.setDuration(220)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        f = self.font()
+        f.setPointSize(11)
+        f.setBold(True)
+        self.setFont(f)
+
+    def get_pos(self):
+        return self._pos
+
+    def set_pos(self, v):
+        self._pos = v
+        self.update()
+
+    pos = pyqtProperty(float, fget=get_pos, fset=set_pos)
+
+    def set_stage(self, stage, animate=True):
+        stage = "record" if stage == "record" else "prep"
+        self._stage = stage
+        target = 1.0 if stage == "record" else 0.0
+        if animate and self.isVisible():
+            self._anim.stop()
+            self._anim.setStartValue(self._pos)
+            self._anim.setEndValue(target)
+            self._anim.start()
+        else:
+            self.set_pos(target)
+
+    def _geom(self):
+        pad = 4
+        half = (self.width() - 2 * pad) / 2.0
+        return pad, half
+
+    def mousePressEvent(self, e):
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        # Right half = prep, left half = record (RTL reading order).
+        stage = "prep" if e.position().x() > self.width() / 2 else "record"
+        if stage != self._stage:
+            self.set_stage(stage)
+            self._on_change(stage)
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect())
+        pad, half = self._geom()
+        h = r.height()
+        # Track.
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor("#e2e8f2"))
+        p.drawRoundedRect(r, h / 2, h / 2)
+        # Sliding knob: teal in prep, amber (action colour) in record.
+        kx = pad + half * (1 - self._pos)              # pos 0 → right, 1 → left
+        kr = QRectF(kx, pad, half, h - 2 * pad)
+        p.setBrush(QColor("#f59e0b") if self._stage == "record" else QColor("#0f9d78"))
+        p.drawRoundedRect(kr, (h - 2 * pad) / 2, (h - 2 * pad) / 2)
+        # Labels.
+        right_rect = QRectF(pad + half, pad, half, h - 2 * pad)   # prep
+        left_rect = QRectF(pad, pad, half, h - 2 * pad)           # record
+        p.setPen(QColor("#ffffff") if self._stage == "prep" else QColor("#5b6b82"))
+        p.drawText(right_rect, Qt.AlignmentFlag.AlignCenter, self._labels[0])
+        p.setPen(QColor("#ffffff") if self._stage == "record" else QColor("#5b6b82"))
+        p.drawText(left_rect, Qt.AlignmentFlag.AlignCenter, self._labels[1])
+        p.end()
 
 
 class _InboxWorker(QThread):
@@ -1007,6 +1095,7 @@ class GroupUpdateTab(QWidget):
         # ticking who actually received. Unticked people in the record stage are
         # written to history as explicit no-shows (received=0).
         self._stage = "prep"
+        self._record_visited = False     # has the record stage been opened this cycle? (#13)
         self._checked_ids: set = set()   # who is currently ticked (survives search)
         self._seen_ids: set = set()      # ids already shown (for pre-checking new picks)
         self._search_text = ""           # quick-search filter over the list
@@ -1593,26 +1682,10 @@ class GroupUpdateTab(QWidget):
         bar.setContentsMargins(16, 10, 16, 10)
         bar.setSpacing(12)
 
-        # Stage switch: from the prep screen into the record stage (v2.60).
-        self.btn_stage_record = QPushButton("  רישום מי קיבל")
-        self.btn_stage_record.setStyleSheet(_BTN_RECORD)
-        self.btn_stage_record.setMinimumHeight(50)
-        self.btn_stage_record.setMinimumWidth(190)
-        self.btn_stage_record.setIcon(QIcon(line_icon("check", 20, "#ffffff")))
-        self.btn_stage_record.setIconSize(QSize(20, 20))
-        self.btn_stage_record.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_stage_record.setToolTip(
-            "אחרי החלוקה — עוברים לסימון מי קיבל בפועל ורושמים להיסטוריה")
-        self.btn_stage_record.clicked.connect(lambda: self._set_stage("record"))
-        bar.addWidget(self.btn_stage_record)
-
-        # Back out of the record stage without saving.
-        self.btn_stage_back = QPushButton("חזרה להכנת הרשימה")
-        self.btn_stage_back.setStyleSheet(_BTN_GHOST)
-        self.btn_stage_back.setMinimumHeight(46)
-        self.btn_stage_back.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_stage_back.clicked.connect(lambda: self._set_stage("prep"))
-        bar.addWidget(self.btn_stage_back)
+        # Stage switch: an animated toggle between the prep and record stages
+        # (#k6bqi) — replaces the old pair of push-buttons.
+        self.stage_toggle = _StageToggle(self._on_stage_toggle)
+        bar.addWidget(self.stage_toggle)
 
         self.btn_save = QPushButton(" שמור חלוקה")
         self.btn_save.setObjectName("primary")
@@ -1678,10 +1751,23 @@ class GroupUpdateTab(QWidget):
         self._apply_stage()
 
     # ── two-stage flow: prep (build the list) / record (tick who received) ─────
-    def _set_stage(self, stage: str, clear: bool = True):
-        """Switch between the prep and record stages (v2.60). Entering either
-        stage with clear=True starts with an empty tick set — the record stage
-        deliberately opens blank so the operator marks who ACTUALLY arrived."""
+    def _on_stage_toggle(self, stage: str):
+        """The animated stage toggle was clicked (#k6bqi)."""
+        self._set_stage(stage)
+
+    def _set_stage(self, stage: str, clear=None):
+        """Switch between the prep and record stages (v2.60).
+
+        Policy (#13): the record stage opens blank the FIRST time it's entered in
+        a distribution cycle (so the operator marks who ACTUALLY arrived), but
+        every later flip of the toggle — record→prep→record — PRESERVES the marks
+        already made, so peeking at the prep list never loses the operator's
+        work. `_record_visited` resets at the start of each cycle (new/save/mode
+        change). An explicit clear=True/False still overrides the policy."""
+        if clear is None:
+            clear = (stage == "record" and not self._record_visited)
+        if stage == "record":
+            self._record_visited = True
         if stage == self._stage:
             self._apply_stage()
             return
@@ -1703,8 +1789,7 @@ class GroupUpdateTab(QWidget):
         self.lbl_checked.setVisible(record)
         self.stage_banner.setVisible(record)
         self.btn_save.setVisible(record)
-        self.btn_stage_back.setVisible(record)
-        self.btn_stage_record.setVisible(not record)
+        self.stage_toggle.set_stage(self._stage)
 
     # ── data ───────────────────────────────────────────────────────────────────
     def _extra_recipients(self, base_ids: set) -> list:
@@ -1748,6 +1833,7 @@ class GroupUpdateTab(QWidget):
         # (schedule re-ticks everyone; scored starts empty for 'סמן מובילים').
         self._checked_ids.clear()
         self._seen_ids.clear()
+        self._record_visited = False     # mode change starts a fresh selection (#13)
         self._update_mode_controls()
         # Entering filter mode with no criteria set would list EVERYONE — open the
         # criteria editor first so the operator actually narrows it down. _edit_filter
@@ -2274,6 +2360,7 @@ class GroupUpdateTab(QWidget):
         self._checked_ids.clear()
         self._seen_ids.clear()
         self.note_input.clear()
+        self._record_visited = False     # new cycle → record opens blank again (#13)
         self._set_stage("prep", clear=False)
         # An auto-generated weekly name is date-stamped — clear it after saving
         # so next week's round regenerates with the right date instead of
@@ -2705,6 +2792,7 @@ class GroupUpdateTab(QWidget):
         # Fold the advanced section back down unless a non-default mode/filter
         # is still active (never hide live state behind a closed fold).
         self.adv_section.set_open(self._special_active())
+        self._record_visited = False     # new cycle → record opens blank again (#13)
         self._set_stage("prep", clear=False)
         self.refresh()
         if self.main_win:

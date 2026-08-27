@@ -266,9 +266,9 @@ class RecipientsTab(QWidget):
         top.addStretch()
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("חיפוש לפי שם...")
+        self.search_input.setPlaceholderText("חיפוש בכל השדות (שם/טלפון/כתובת/בית כנסת/נציג...)")
         self.search_input.setAlignment(ALIGN_RIGHT)
-        self.search_input.setMaximumWidth(220)
+        self.search_input.setMaximumWidth(360)
         self.search_input.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.textChanged.connect(lambda: self._filter_timer.start(220))
         top.addWidget(self.search_input)
@@ -508,7 +508,9 @@ class RecipientsTab(QWidget):
         if not text:
             self._populate(self._rows_data)
             return
-        filtered = [r for r in self._rows_data if text in (r.get("full_name") or "").lower()]
+        # Search across every field (name, phones, IDs, address, synagogue,
+        # representative, occupation, notes...) — not just the name (#p1o35).
+        filtered = db.filter_recipients(self._rows_data, text)
         self._populate(filtered)
 
     def _selected_id(self):

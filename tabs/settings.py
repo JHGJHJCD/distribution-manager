@@ -243,10 +243,16 @@ class SettingsTab(QWidget):
 
         bk_lay.addWidget(section_header("גיבויים", "backup", "#0f766e"))
 
-        bk_desc = QLabel("התוכנה מגבה את הנתונים אוטומטית. כאן אפשר לבחור לאן לשמור "
-                         "עותק נוסף (למשל כונן חיצוני), לגבות ידנית, או לשחזר מגיבוי "
-                         "אם משהו השתבש.")
+        bk_desc = QLabel(
+            "<b>מה זה?</b> גיבוי הוא צילום מלא של כל הנתונים שלך — כל המקבלים, כל "
+            "החלוקות שנרשמו, וכל ההגדרות — בקובץ אחד.<br>"
+            "<b>מתי זה מציל אותך?</b> אם המחשב נשבר או נגנב, אם הנתונים נמחקו או "
+            "השתבשו בטעות, או כשעוברים למחשב חדש — אפשר לשחזר הכול חזרה מגיבוי.<br>"
+            "<b>אוטומטי:</b> התוכנה מגבה לבד בכל פתיחה ולפני כל פעולה מסוכנת. "
+            "כאן אפשר גם לשמור עותק לתיקייה שתבחר (למשל כונן חיצוני / דיסק-און-קי), "
+            "לגבות ידנית עכשיו, או לשחזר מקובץ גיבוי.")
         bk_desc.setObjectName("subtitle")
+        bk_desc.setTextFormat(Qt.TextFormat.RichText)
         bk_desc.setWordWrap(True)
         bk_lay.addWidget(bk_desc)
 
@@ -270,21 +276,21 @@ class SettingsTab(QWidget):
 
         bk_btns = QHBoxLayout()
         bk_btns.setSpacing(6)
-        btn_folder = QPushButton("בחר תיקייה")
+        btn_folder = QPushButton("בחר תיקיית גיבוי")
         btn_folder.setObjectName("neutral")
-        btn_folder.setToolTip("בחר את תיקיית הגיבוי האוטומטי")
+        btn_folder.setToolTip("בחר לאן לשמור עותק גיבוי נוסף (למשל כונן חיצוני)")
         btn_folder.clicked.connect(self._choose_backup_folder)
         bk_btns.addWidget(btn_folder)
 
         self.btn_backup_now = QPushButton("גבה עכשיו")
         self.btn_backup_now.setObjectName("primary")
-        self.btn_backup_now.setToolTip("בצע גיבוי ידני מיידי לתיקייה שנבחרה")
+        self.btn_backup_now.setToolTip("שמור עכשיו צילום מלא של כל הנתונים לתיקייה שנבחרה")
         self.btn_backup_now.clicked.connect(self._backup_now)
         bk_btns.addWidget(self.btn_backup_now)
 
-        btn_restore = QPushButton("שחזר מגיבוי")
+        btn_restore = QPushButton("שחזר נתונים מגיבוי")
         btn_restore.setObjectName("neutral")
-        btn_restore.setToolTip("בחר קובץ גיבוי (.db) ושחזר ממנו את כל הנתונים")
+        btn_restore.setToolTip("החזר את כל הנתונים ממצב גיבוי קודם (בחר קובץ גיבוי .db)")
         btn_restore.clicked.connect(self._restore_backup)
         bk_btns.addWidget(btn_restore)
 
