@@ -320,7 +320,7 @@ def export_distribution_pdf(recipients: List[Dict], dist_date: str,
     folder (no printer needed), then open it automatically. Returns the file path.
 
     Same layout as the print preview — reuses the exact HTML + fit renderer."""
-    from utils.excel_utils import _downloads_dir   # lazy: avoid import cycle
+    from utils.excel_utils import export_dir   # lazy: avoid import cycle
 
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
     printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
@@ -329,7 +329,7 @@ def export_distribution_pdf(recipients: List[Dict], dist_date: str,
 
     stem = _safe_filename(dist_name or "רשימת_חלוקה")
     fname = f"{stem}_{date.today().strftime('%Y-%m-%d')}.pdf"
-    out_path = os.path.join(str(_downloads_dir()), fname)
+    out_path = os.path.join(str(export_dir("dist")), fname)
     printer.setOutputFileName(out_path)
 
     logo_path = _resource_path("org_logo.png")

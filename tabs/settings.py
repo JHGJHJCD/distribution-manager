@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -297,6 +298,46 @@ class SettingsTab(QWidget):
         bk_btns.addStretch()
         bk_lay.addLayout(bk_btns)
         right_col.addWidget(bk_frame)
+
+        # ── Export folders section (#5e1jc) ───────────────────────────────────
+        from utils.excel_utils import EXPORT_KINDS
+        exp_frame = QFrame()
+        exp_frame.setObjectName("panel")
+        exp_lay = QVBoxLayout(exp_frame)
+        exp_lay.setContentsMargins(10, 7, 10, 7)
+        exp_lay.setSpacing(6)
+        exp_lay.addWidget(section_header("תיקיות ייצוא", "download", "#0f766e"))
+        exp_desc = QLabel("לאן יישמרו הקבצים שהתוכנה מייצאת. אפשר לבחור תיקייה נפרדת "
+                          "לכל סוג — למשל תיקייה קבועה לכל החלוקות. ברירת המחדל: תיקיית ההורדות.")
+        exp_desc.setObjectName("subtitle")
+        exp_desc.setWordWrap(True)
+        exp_lay.addWidget(exp_desc)
+
+        self._export_path_lbls = {}
+        for kind, label in EXPORT_KINDS:
+            row = QHBoxLayout()
+            row.setSpacing(6)
+            name_lbl = QLabel(label + ":")
+            name_lbl.setMinimumWidth(150)
+            name_lbl.setStyleSheet("font-weight:600; color:#334155;")
+            row.addWidget(name_lbl)
+            path_lbl = QLabel("")
+            path_lbl.setStyleSheet("color:#475569;")
+            path_lbl.setWordWrap(True)
+            self._export_path_lbls[kind] = path_lbl
+            row.addWidget(path_lbl, 1)
+            btn_pick = QPushButton("בחר")
+            btn_pick.setObjectName("neutral")
+            btn_pick.clicked.connect(lambda _=False, k=kind: self._choose_export_dir(k))
+            row.addWidget(btn_pick)
+            btn_reset = QPushButton("ברירת מחדל")
+            btn_reset.setObjectName("neutral")
+            btn_reset.setToolTip("החזר לתיקיית ההורדות")
+            btn_reset.clicked.connect(lambda _=False, k=kind: self._reset_export_dir(k))
+            row.addWidget(btn_reset)
+            exp_lay.addLayout(row)
+        right_col.addWidget(exp_frame)
+        self._refresh_export_labels()
 
         # ── Danger zone section ───────────────────────────
         danger_frame = QFrame()
@@ -831,6 +872,29 @@ class SettingsTab(QWidget):
         if self.main_win and hasattr(self.main_win, "choose_backup_folder"):
             self.main_win.choose_backup_folder()
             self.refresh()
+
+    # ── Export folders (#5e1jc) ─────────────────────────────────────────────────
+    def _refresh_export_labels(self):
+        for kind, lbl in getattr(self, "_export_path_lbls", {}).items():
+            saved = (db.get_setting(f"export_dir_{kind}") or "").strip()
+            if saved:
+                lbl.setText(saved)
+                lbl.setStyleSheet("color:#0f766e;")
+            else:
+                lbl.setText("תיקיית ההורדות (ברירת מחדל)")
+                lbl.setStyleSheet("color:#94a3b8;")
+
+    def _choose_export_dir(self, kind: str):
+        start = ((db.get_setting(f"export_dir_{kind}") or "").strip()
+                 or os.path.join(os.path.expanduser("~"), "Downloads"))
+        path = QFileDialog.getExistingDirectory(self, "בחר תיקיית ייצוא", start)
+        if path:
+            db.set_setting(f"export_dir_{kind}", path)
+            self._refresh_export_labels()
+
+    def _reset_export_dir(self, kind: str):
+        db.set_setting(f"export_dir_{kind}", "")
+        self._refresh_export_labels()
 
     # ── Organization / branding ─────────────────────────────────────────────────
 

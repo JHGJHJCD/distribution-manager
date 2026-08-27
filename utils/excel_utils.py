@@ -67,8 +67,8 @@ def _load_maybe_encrypted(path: str, **kw):
 
 
 def _downloads_dir() -> Path:
-    """The user's Downloads folder (where all exports go). Falls back to an
-    'exports' folder next to the app if Downloads can't be resolved/created."""
+    """The user's Downloads folder (the default export destination). Falls back to
+    an 'exports' folder next to the app if Downloads can't be resolved/created."""
     try:
         d = Path(os.path.expanduser("~")) / "Downloads"
         d.mkdir(parents=True, exist_ok=True)
@@ -77,6 +77,37 @@ def _downloads_dir() -> Path:
         d = _app_dir() / "exports"
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+
+# Export kinds that can each have their own destination folder (#5e1jc). The
+# label is shown in Settings; the key suffix builds the setting name.
+EXPORT_KINDS = (
+    ("dist",       "חלוקות (רשימות / PDF)"),
+    ("recipients", "מקבלים והיסטוריה"),
+    ("volunteers", "אקסל למתנדבים"),
+)
+
+
+def export_dir(kind: str = "") -> Path:
+    """Destination folder for a given export kind ('dist' / 'recipients' /
+    'volunteers'). Uses the per-machine setting 'export_dir_<kind>' when set and
+    usable, otherwise the Downloads folder (#5e1jc). Paths are per-machine and
+    are NOT synced between computers."""
+    raw = ""
+    if kind:
+        try:
+            import database as _db
+            raw = (_db.get_setting(f"export_dir_{kind}") or "").strip()
+        except Exception:
+            raw = ""
+    if raw:
+        try:
+            d = Path(raw)
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+        except Exception:
+            pass   # configured folder unusable → fall back to Downloads
+    return _downloads_dir()
 
 
 def _parse_date(val) -> str:
@@ -514,7 +545,7 @@ def export_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
     title_cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 28
 
-    exports_dir = _downloads_dir()
+    exports_dir = export_dir("dist")
     filename = f"חלוקה_{dist_date.replace('/', '-')}_{datetime.now().strftime('%H%M%S')}.xlsx"
     path = str(exports_dir / filename)
     wb.save(path)
@@ -654,7 +685,7 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
     ws.row_dimensions[1].height = 28
     ws.freeze_panes = "A3"   # keep title + header visible while scrolling
 
-    exports_dir = _downloads_dir()
+    exports_dir = export_dir("dist")
     _safe = "".join(c for c in (dist_name or "חלוקה_מלאה") if c not in '\\/:*?"<>|').strip() or "חלוקה_מלאה"
     filename = f"{_safe}_{dist_date.replace('/', '-')}_{datetime.now().strftime('%H%M%S')}.xlsx"
     path = str(exports_dir / filename)
@@ -727,7 +758,7 @@ def export_recipients_to_excel(recipients: List[Dict]) -> str:
     ws.row_dimensions[1].height = 28
     ws.freeze_panes = "A3"
 
-    exports_dir = _downloads_dir()
+    exports_dir = export_dir("recipients")
     filename = f"מקבלים_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.xlsx"
     path = str(exports_dir / filename)
     wb.save(path)
@@ -817,7 +848,7 @@ def export_history_to_excel(rows: List[Dict], title: str,
     ws.row_dimensions[1].height = 28
     ws.freeze_panes = "A3"
 
-    exports_dir = _downloads_dir()
+    exports_dir = export_dir("recipients")
     _safe = "".join(c for c in title if c not in '\\/:*?"<>|').strip() or "היסטוריה"
     filename = f"{_safe}_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.xlsx"
     path = str(exports_dir / filename)
@@ -971,7 +1002,7 @@ def export_volunteer_checklist_to_excel(recipients: List[Dict], dist_date: str,
     meta["A5"], meta["B5"] = "dist_name", dist_name
     meta.sheet_state = "hidden"
 
-    exports_dir = _downloads_dir()
+    exports_dir = export_dir("volunteers")
     _safe = "".join(c for c in (dist_name or "רשימה_למתנדב") if c not in '\\/:*?"<>|').strip() or "רשימה_למתנדב"
     filename = f"{_safe}_{dist_date.replace('/', '-')}_{datetime.now().strftime('%H%M%S')}.xlsx"
     path = str(exports_dir / filename)

@@ -44,7 +44,7 @@ _MY_DRIVE_NAMES = ("My Drive", "האחסון שלי", "התיקיה שלי")
 # and window/user-interface state.
 EXCLUDED_SETTINGS = {"password", "win_geometry", "backup_folder", "last_backup_at",
                      "mei_last", "community_pcts_ui"}
-EXCLUDED_SETTING_PREFIXES = ("sync_",)
+EXCLUDED_SETTING_PREFIXES = ("sync_", "export_dir_")   # export_dir_* are per-machine paths (#5e1jc)
 
 JOURNAL_PREFIX = "journal-"
 _LOCK = threading.RLock()
