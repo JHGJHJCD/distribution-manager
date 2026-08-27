@@ -890,9 +890,19 @@ class MainWindow(QMainWindow):
         self._sync = sync
         self._sync_worker = None
         self._sync_timer = QTimer(self)
-        self._sync_timer.setInterval(20000)   # every 20s — Drive settles quickly
+        # Continuous background sync every 10s (#hd4as) — the operator no longer
+        # presses a 'sync now' button; changes flow both ways on their own.
+        self._sync_timer.setInterval(10000)
         self._sync_timer.timeout.connect(self._tick_sync)
         self._sync_timer.start()
+        # If sync is on but the shared Drive folder isn't mounted yet (Drive for
+        # Desktop hasn't started after a reboot — #kzuo2), nudge Drive to launch
+        # in the background so sync connects without opening anything manually.
+        if sync.is_enabled() and not sync.folder_available():
+            try:
+                sync.ensure_drive_running()
+            except Exception:
+                pass
         # A first pass shortly after startup pulls anything the other computer
         # changed while this one was closed.
         QTimer.singleShot(2500, self._tick_sync)

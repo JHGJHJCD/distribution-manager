@@ -512,15 +512,17 @@ class SettingsTab(QWidget):
         self.lbl_sync_status.setWordWrap(True)
         self.lbl_sync_status.setStyleSheet("font-size:12.5px;")
         sync_lay.addWidget(self.lbl_sync_status)
+        # Sync runs continuously in the background (every 10s) — no manual
+        # 'sync now' button is needed any more (#hd4as).
+        sync_note = QLabel("הסנכרון פועל אוטומטית ברקע כל הזמן — אין צורך ללחוץ על כלום.")
+        sync_note.setWordWrap(True)
+        sync_note.setStyleSheet("color:#0f766e; font-size:12px;")
+        sync_lay.addWidget(sync_note)
         sync_btns = QHBoxLayout()
         self.btn_sync_setup = QPushButton("הגדרת סנכרון…")
         self.btn_sync_setup.setObjectName("primary")
         self.btn_sync_setup.clicked.connect(self._open_sync_setup)
         sync_btns.addWidget(self.btn_sync_setup)
-        self.btn_sync_now = QPushButton("סנכרן עכשיו")
-        self.btn_sync_now.setObjectName("neutral")
-        self.btn_sync_now.clicked.connect(self._sync_now)
-        sync_btns.addWidget(self.btn_sync_now)
         sync_btns.addStretch()
         sync_lay.addLayout(sync_btns)
         left_col.addWidget(sync_frame)
@@ -788,7 +790,6 @@ class SettingsTab(QWidget):
             self.lbl_sync_status.setText("סנכרון כבוי. הגדר תיקיית Google Drive "
                                          "משותפת כדי לעבוד משני מחשבים על אותם נתונים.")
             self.lbl_sync_status.setStyleSheet("color:#64748b; font-size:12.5px;")
-            self.btn_sync_now.setEnabled(False)
             return
         info = sync.last_run_info()
         folder = sync.get_folder()
@@ -812,22 +813,12 @@ class SettingsTab(QWidget):
         healthy = avail and others > 0
         self.lbl_sync_status.setStyleSheet(
             "color:#334155; font-size:12.5px;" if healthy else "color:#b45309; font-size:12.5px;")
-        self.btn_sync_now.setEnabled(True)
 
     def _open_sync_setup(self):
         SyncSetupDialog(self).exec()
         self._refresh_sync_status()
         if self.main_win and hasattr(self.main_win, "_refresh_sync_led"):
             self.main_win._refresh_sync_led()
-
-    def _sync_now(self):
-        with busy_cursor():
-            res = sync.run_sync()
-        self._refresh_sync_status()
-        if self.main_win and hasattr(self.main_win, "_refresh_sync_led"):
-            self.main_win._refresh_sync_led()
-        if res.get("error"):
-            QMessageBox.warning(self, "סנכרון", f"אירעה שגיאה בסנכרון:\n{res['error']}")
         else:
             QMessageBox.information(
                 self, "סנכרון הושלם",

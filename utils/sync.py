@@ -24,14 +24,21 @@ NEXT TO the DB — deliberately NOT in the settings table, which is itself synce
 """
 
 import os
+import sys
 import json
 import uuid
 import glob
 import socket
+import subprocess
 import threading
 from datetime import datetime, timezone
 
 import database as db
+
+# Google Drive for Desktop localises the "My Drive" folder name to the Windows
+# UI language. Hebrew Windows shows it as "האחסון שלי", so scanning only for the
+# English "My Drive" missed the operator's real folder (G:\האחסון שלי) — #ysqq0.
+_MY_DRIVE_NAMES = ("My Drive", "האחסון שלי", "התיקיה שלי")
 
 # Settings that must NOT travel between computers: security, per-machine paths
 # and window/user-interface state.
@@ -122,18 +129,71 @@ def _pending_count() -> int:
 
 
 def detect_drive_folders() -> list:
-    """Best-effort discovery of a Google Drive for Desktop root on this machine."""
+    """Best-effort discovery of a Google Drive for Desktop root on this machine.
+    Handles both the English 'My Drive' and the Hebrew 'האחסון שלי' folder names
+    (Drive localises this to the Windows language — #ysqq0)."""
     found = []
     for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
-        p = f"{letter}:\\My Drive"
-        if os.path.isdir(p):
-            found.append(p)
+        for name in _MY_DRIVE_NAMES:
+            p = f"{letter}:\\{name}"
+            if os.path.isdir(p):
+                found.append(p)
     home = os.path.expanduser("~")
-    for pat in ("Google Drive", "GoogleDrive", "My Drive"):
+    for pat in ("Google Drive", "GoogleDrive", *_MY_DRIVE_NAMES):
         p = os.path.join(home, pat)
         if os.path.isdir(p):
             found.append(p)
     return found
+
+
+def _find_drive_exe() -> str:
+    """Locate GoogleDriveFS.exe (the Drive for Desktop client) so we can start it
+    if it isn't running. Checks the standard Program Files install and its
+    version-stamped subfolders. Returns '' when not found."""
+    roots = []
+    for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+        base = os.environ.get(env)
+        if base:
+            roots.append(os.path.join(base, "Google", "Drive File Stream"))
+    for d in roots:
+        direct = os.path.join(d, "GoogleDriveFS.exe")
+        if os.path.isfile(direct):
+            return direct
+        if os.path.isdir(d):
+            # Newest version subfolder first (e.g. '105.0.3.0').
+            for sub in sorted(os.listdir(d), reverse=True):
+                exe = os.path.join(d, sub, "GoogleDriveFS.exe")
+                if os.path.isfile(exe):
+                    return exe
+    return ""
+
+
+_drive_launch_tried = False
+
+
+def ensure_drive_running() -> bool:
+    """If no Drive root is mounted (Drive for Desktop hasn't started yet — common
+    right after a reboot, #kzuo2), try to launch it in the background. Best-effort
+    and non-blocking: returns True if a Drive root is already present, otherwise
+    fires the launcher once per app session and returns False (the mount appears a
+    few seconds later, and the periodic sync picks it up automatically)."""
+    global _drive_launch_tried
+    if sys.platform != "win32":
+        return bool(detect_drive_folders())
+    if detect_drive_folders():
+        return True
+    if _drive_launch_tried:
+        return False
+    _drive_launch_tried = True
+    exe = _find_drive_exe()
+    if not exe:
+        return False
+    try:
+        flags = 0x00000008 | 0x08000000    # DETACHED_PROCESS | CREATE_NO_WINDOW
+        subprocess.Popen([exe], creationflags=flags, close_fds=True)
+    except Exception:
+        return False
+    return False
 
 
 # A FIXED subfolder name. Because both computers derive the same canonical name
@@ -655,7 +715,8 @@ def looks_like_backup_folder(path: str) -> bool:
     if not p:
         return False
     shared_markers = ("my drive", "/mydrive", "shared drives", "shareddrives",
-                      "drive/משותף", "google drive/my drive")
+                      "drive/משותף", "google drive/my drive",
+                      "האחסון שלי", "התיקיה שלי")   # Hebrew 'My Drive' (#ysqq0)
     if any(m in p for m in shared_markers):
         return False
     backup_markers = ("/downloads", "/desktop", "/documents",
