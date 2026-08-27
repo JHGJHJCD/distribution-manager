@@ -158,7 +158,7 @@ from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state,
                       ALIGN_RIGHT, rtl_text_area, enable_touch_scroll,
                       apply_header_icons)
 
-COLS = ["מס'", "שם מלא", "עדיפות", "טלפון 1", "טלפון 2", "טלפון 3",
+COLS = ["מס'", "שם פרטי", "שם משפחה", "עדיפות", "טלפון 1", "טלפון 2", "טלפון 3",
         "כתובת", "אזור", "נפשות", "תדירות", "חלוקה אחרונה",
         "חלוקה הבאה", "סטטוס", "הערות",
         "מס' מזהה", "מקור", "ת. לידה", "ת. לידה בן/בת זוג",
@@ -168,7 +168,7 @@ COLS = ["מס'", "שם מלא", "עדיפות", "טלפון 1", "טלפון 2", 
         "הוצ' דיור", "הוצ' רפואיות", "הכנסות", "פנוי לנפש",
         "היקף משרה", "סוג הורה", "עיסוק בעל", "שם נציג"]
 
-COL_KEYS = ["id", "full_name", "priority", "phone1", "phone2", "phone3",
+COL_KEYS = ["id", "first_name", "last_name", "priority", "phone1", "phone2", "phone3",
             "address", "area", "souls", "frequency", "last_distribution",
             "next_distribution", "status", "notes",
             "external_id", "source", "birth_date", "spouse_birth_date",
@@ -336,22 +336,25 @@ class RecipientsTab(QWidget):
         self.table.customContextMenuRequested.connect(self._show_row_menu)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        # "שם מלא" — give it a generous fixed-but-resizable width so long names
-        # are never clipped (Stretch got squeezed to nothing next to 30+ columns).
+        # Name columns (שם פרטי / שם משפחה) — generous fixed-but-resizable widths
+        # so long names are never clipped (Stretch got squeezed next to 30+ cols).
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
         # Sample only a few rows when auto-sizing columns. Default samples up to
         # 1000 rows × every column on each refresh — with thousands of recipients
         # that O(rows×cols) scan froze/crashed the app. A small precision keeps
         # the auto-fit look at constant cost.
         hdr.setResizeContentsPrecision(20)
         self.table.verticalHeader().setVisible(False)
-        self.table.setColumnWidth(1, 230)   # roomy name column (see resize mode above)
+        self.table.setColumnWidth(1, 150)   # שם פרטי
+        self.table.setColumnWidth(2, 160)   # שם משפחה
         enable_touch_scroll(self.table)
         lay.addWidget(self.table)
         attach_empty_state(self.table, "אין מקבלים להצגה")
-        # coloured pill badges for priority + status columns
-        self.table.setItemDelegateForColumn(2, BadgeDelegate(PRIORITY_BADGES, self.table))
-        self.table.setItemDelegateForColumn(12, BadgeDelegate(STATUS_BADGES, self.table))
+        # coloured pill badges for priority + status columns (shifted +1 by the
+        # name-column split: priority col 2→3, status col 12→13).
+        self.table.setItemDelegateForColumn(3, BadgeDelegate(PRIORITY_BADGES, self.table))
+        self.table.setItemDelegateForColumn(13, BadgeDelegate(STATUS_BADGES, self.table))
 
         # Bottom bar — the per-row action buttons (הפעל/השהה/מחק) were removed
         # (#wtfnh, redundant) and moved to a right-click menu on the row. What
@@ -467,7 +470,11 @@ class RecipientsTab(QWidget):
                       else None)
             sv = lambda key, _r=rec: self._sv(_r, key)
 
-            vals = [str(rec_id or ""), rec.get("full_name", ""), _priority_display(rec),
+            _first = rec.get("first_name") or ""
+            _last = rec.get("last_name") or ""
+            if not _first and not _last:
+                _first, _last = db.split_full_name(rec.get("full_name") or "")
+            vals = [str(rec_id or ""), _first, _last, _priority_display(rec),
                     rec.get("phone1", ""), rec.get("phone2", ""), rec.get("phone3", ""),
                     rec.get("address", ""), rec.get("area", ""),
                     str(rec.get("souls", "") or ""), rec.get("frequency", ""),
@@ -494,7 +501,7 @@ class RecipientsTab(QWidget):
                 # calls per row, which adds up to seconds on thousands of rows.
                 if c == 0:
                     item.setData(Qt.ItemDataRole.UserRole, rec_id)
-                if c == 1:   # name — bold everywhere
+                if c in (1, 2):   # name columns — bold everywhere
                     nf = item.font(); nf.setBold(True); item.setFont(nf)
                 if color:
                     item.setForeground(color)
@@ -760,7 +767,8 @@ class RecipientDialog(QDialog):
         f1 = _tab("פרטים בסיסיים")
         self._form1 = f1
 
-        self.f_name    = field("שם מלא (חובה)")
+        self.f_first   = field("שם פרטי (חובה)")
+        self.f_last    = field("שם משפחה")
         self.f_phone1  = field("טלפון ראשי")
         self.f_phone2  = field("טלפון 2")
         self.f_phone3  = field("טלפון 3")
@@ -825,7 +833,8 @@ class RecipientDialog(QDialog):
             "QPushButton:hover{color:#0b5c55; text-decoration:underline;}")
         self.btn_add_phone.clicked.connect(self._reveal_next_phone)
 
-        f1.addRow("שם מלא:", self.f_name)
+        f1.addRow("שם פרטי:", self.f_first)
+        f1.addRow("שם משפחה:", self.f_last)
         f1.addRow("טלפון:", self.f_phone1)
         f1.addRow("טלפון נוסף:", self.f_phone2)
         f1.addRow("טלפון נוסף:", self.f_phone3)
@@ -912,7 +921,14 @@ class RecipientDialog(QDialog):
 
         # ── fill values ──────────────────────────────────────────────────────
         if rec:
-            self.f_name.setText(rec.get("full_name") or "")
+            # Prefer the stored first/last split; fall back to splitting full_name
+            # for any older row not yet back-filled (#aka27).
+            first = rec.get("first_name") or ""
+            last = rec.get("last_name") or ""
+            if not first and not last:
+                first, last = db.split_full_name(rec.get("full_name") or "")
+            self.f_first.setText(first)
+            self.f_last.setText(last)
             self.f_phone1.setText(rec.get("phone1") or "")
             self.f_phone2.setText(rec.get("phone2") or "")
             self.f_phone3.setText(rec.get("phone3") or "")
@@ -1061,19 +1077,22 @@ class RecipientDialog(QDialog):
         errors: list[str] = []
         today = QDate.currentDate()
 
-        # ── שם מלא ──────────────────────────────────────────────────────────
-        name = self.f_name.text().strip()
-        if not name:
-            _mark(self.f_name, True, "שם מלא הוא שדה חובה")
-            errors.append("שם מלא: שדה חובה")
-        elif len(name) < 2:
-            _mark(self.f_name, True, "שם חייב להכיל לפחות 2 תווים")
-            errors.append("שם מלא: קצר מדי (לפחות 2 תווים)")
-        elif len(name) > 60:
-            _mark(self.f_name, True, "שם ארוך מדי (עד 60 תווים)")
-            errors.append("שם מלא: ארוך מדי (עד 60 תווים)")
+        # ── שם פרטי + משפחה ─────────────────────────────────────────────────
+        first = self.f_first.text().strip()
+        last = self.f_last.text().strip()
+        full = (first + " " + last).strip()
+        if not first:
+            _mark(self.f_first, True, "שם פרטי הוא שדה חובה")
+            errors.append("שם פרטי: שדה חובה")
+        elif len(full) < 2:
+            _mark(self.f_first, True, "שם חייב להכיל לפחות 2 תווים")
+            errors.append("שם: קצר מדי (לפחות 2 תווים)")
+        elif len(full) > 60:
+            _mark(self.f_first, True, "שם ארוך מדי (עד 60 תווים)")
+            errors.append("שם: ארוך מדי (עד 60 תווים)")
         else:
-            _mark(self.f_name, False)
+            _mark(self.f_first, False)
+        _mark(self.f_last, False)
 
         # ── טלפונים ─────────────────────────────────────────────────────────
         for w, label in ((self.f_phone1, "טלפון 1"),
@@ -1109,8 +1128,14 @@ class RecipientDialog(QDialog):
         return errors
 
     def get_data(self) -> dict:
+        _first = self.f_first.text().strip()
+        _last = self.f_last.text().strip()
         return {
-            "full_name":          self.f_name.text().strip(),
+            "first_name":         _first,
+            "last_name":          _last,
+            # full_name is FAMILY-FIRST to match the app convention (#aka27); the
+            # DB layer also enforces this via _apply_name_fields.
+            "full_name":          (_last + " " + _first).strip(),
             "phone1":             self.f_phone1.text().strip(),
             "phone2":             self.f_phone2.text().strip(),
             "phone3":             self.f_phone3.text().strip(),

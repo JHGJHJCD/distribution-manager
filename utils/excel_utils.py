@@ -449,6 +449,10 @@ def import_from_excel(path: str) -> List[Dict]:
 
         results.append({
             "full_name":         name,
+            # The template supplies name in two columns (משפחה / פרטי); keep them
+            # split so the DB stores first_name/last_name directly (#aka27/#10).
+            "first_name":        first,
+            "last_name":         family,
             "phone1":            _normalize_phone(cell("phone1")),
             "phone2":            _normalize_phone(cell("phone2")),
             "phone3":            _normalize_phone(cell("phone3")),
@@ -554,7 +558,8 @@ def export_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
 
 # Full recipient field set for the detailed export (key, Hebrew header).
 _FULL_FIELDS = [
-    ("full_name", "שם מלא"), ("priority", "עדיפות"),
+    ("full_name", "שם מלא"), ("first_name", "שם פרטי"), ("last_name", "שם משפחה"),
+    ("priority", "עדיפות"),
     ("phone1", "טלפון 1"), ("phone2", "טלפון 2"), ("phone3", "טלפון 3"),
     ("address", "כתובת"), ("area", "אזור"), ("souls", "נפשות"),
     ("frequency", "תדירות"), ("last_distribution", "חלוקה אחרונה"),

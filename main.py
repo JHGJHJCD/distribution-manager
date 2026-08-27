@@ -1178,7 +1178,12 @@ def _run():
         shm.detach()
     if not shm.create(1):     # another live instance already holds it
         QMessageBox.information(None, "מנהל חלוקה", "התוכנה כבר פועלת.")
-        sys.exit(0)
+        # Hard-exit so the onefile bootloader's temp-dir cleanup is SKIPPED. A
+        # plain sys.exit() here ran that cleanup on this second instance's freshly
+        # extracted _MEI dir, which often fails (a DLL still loaded / NetFree) and
+        # pops a 'Failed to remove temporary directory' warning next to the
+        # already-running app. The leftover dir is harmless (Windows temp).
+        _hard_exit(0)
     app._single_instance = shm   # keep a reference alive
 
     _ico = resource_path("icon.ico")

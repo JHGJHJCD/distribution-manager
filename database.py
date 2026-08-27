@@ -338,10 +338,26 @@ def init_db():
             ("representative_auto", "INTEGER DEFAULT 0"),  # 1 = נציג שויך אוטומטית
             ("updated_at",         "TEXT DEFAULT ''"),     # UTC iso — last-write-wins for sync
             ("guid",               "TEXT DEFAULT ''"),     # stable cross-device identity
+            # v2.75 (#aka27): first/last name split. full_name stays the authoritative
+            # identity (history / print / sync) and is kept = first + ' ' + last.
+            ("first_name",         "TEXT DEFAULT ''"),
+            ("last_name",          "TEXT DEFAULT ''"),
         ]
+        newly_added = set()
         for col, definition in _migrations:
             if col not in columns:
                 conn.execute(f"ALTER TABLE recipients ADD COLUMN {col} {definition}")
+                newly_added.add(col)
+        # First time the name columns appear: back-fill them by splitting the
+        # existing full_name (last token = family name). Done ONCE, only for rows
+        # not yet populated — never re-splits a name the operator later edits.
+        if "first_name" in newly_added or "last_name" in newly_added:
+            for r in conn.execute(
+                    "SELECT id, full_name FROM recipients "
+                    "WHERE COALESCE(first_name,'')='' AND COALESCE(last_name,'')=''").fetchall():
+                fn, ln = split_full_name(r["full_name"] or "")
+                conn.execute("UPDATE recipients SET first_name=?, last_name=? WHERE id=?",
+                             (fn, ln, r["id"]))
 
         # Distributions: link each per-recipient row to its batch (added later,
         # so an older DB needs the column back-filled as NULL).
@@ -565,6 +581,8 @@ def bulk_insert_recipients(rows: list) -> int:
             name = (row.get("full_name") or "").strip()
             if not name or name in ("None", "0"):
                 continue
+            row = _apply_name_fields(row)   # derive/keep first_name+last_name (#aka27)
+            name = (row.get("full_name") or "").strip()
             vals = [_coerce(c, row.get(c, "")) for c in cols]
             vals[i_name] = name
             if not vals[i_status]:
@@ -580,7 +598,7 @@ def bulk_insert_recipients(rows: list) -> int:
 
 
 _RECIPIENT_FIELDS = [
-    "full_name", "phone1", "phone2", "phone3", "address", "area",
+    "full_name", "first_name", "last_name", "phone1", "phone2", "phone3", "address", "area",
     "souls", "frequency", "start_date", "last_distribution", "next_distribution",
     "status", "notes",
     "external_id", "source", "birth_date", "spouse_birth_date",
@@ -623,7 +641,46 @@ def _rec_sync_payload(rec_id: int) -> dict:
     return {"guid": rec.get("guid") or "", "data": data}
 
 
+def split_full_name(full: str):
+    """Split a combined name into (first, last). This app's full_name convention
+    is FAMILY-FIRST (the import builds 'משפחה פרטי'), so the FIRST whitespace
+    token is the family name and the rest is the given name. A single word → it's
+    the given name, family blank. The operator can correct any split in the
+    recipient form (#aka27). Returns (first_name, last_name)."""
+    parts = (full or "").split()
+    if not parts:
+        return "", ""
+    if len(parts) == 1:
+        return parts[0], ""
+    return " ".join(parts[1:]), parts[0]
+
+
+def join_name(first: str, last: str) -> str:
+    """Build full_name from a split, FAMILY-FIRST to match the app convention
+    ('משפחה פרטי') so identity/history/printouts are unchanged."""
+    return f"{(last or '').strip()} {(first or '').strip()}".strip()
+
+
+def _apply_name_fields(data: dict) -> dict:
+    """Keep full_name / first_name / last_name consistent on every write (#aka27).
+    A provided first/last split rebuilds full_name (family-first); a lone
+    full_name derives the split. Returns a NEW dict — never mutates the caller's."""
+    data = dict(data)
+    gave_split = ("first_name" in data) or ("last_name" in data)
+    fn = (data.get("first_name") or "").strip()
+    ln = (data.get("last_name") or "").strip()
+    if gave_split and (fn or ln):
+        data["first_name"], data["last_name"] = fn, ln
+        data["full_name"] = join_name(fn, ln)
+    elif (data.get("full_name") or "").strip():
+        f, l = split_full_name(data["full_name"])
+        data.setdefault("first_name", f)
+        data.setdefault("last_name", l)
+    return data
+
+
 def add_recipient(data: dict) -> int:
+    data = _apply_name_fields(data)
     cols = _RECIPIENT_FIELDS
     vals = [_coerce(c, data.get(c, "")) for c in cols]
     sql = f"INSERT INTO recipients ({','.join(cols)}) VALUES ({','.join(['?']*len(cols))})"
@@ -639,6 +696,7 @@ def add_recipient(data: dict) -> int:
 
 
 def update_recipient(rec_id: int, data: dict):
+    data = _apply_name_fields(data)
     old = get_recipient(rec_id)
     tracked_fields = {"status": "סטטוס"}
     cols = [k for k in data if k != "id"]
@@ -1601,6 +1659,7 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
                     ex.update(updates)
                     updated += 1
             else:
+                row = _apply_name_fields(row)   # derive first/last (#aka27)
                 insert_cols = _RECIPIENT_FIELDS
                 insert_vals = [_coerce(c, row.get(c, "")) for c in insert_cols]
                 # override full_name and status from parsed values
