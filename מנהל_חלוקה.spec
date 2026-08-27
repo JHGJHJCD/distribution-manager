@@ -63,6 +63,10 @@ a = Analysis(
         'utils.feedback',
         'utils.effects',
         'utils.win_frameless',
+        'utils.sync',
+        'utils.timefmt',
+        'tabs.messages',
+        'tzdata',   # Asia/Jerusalem for zoneinfo (Israel time), fallback = system tz
         'utils._secret',   # gitignored; bundled only when present on build machine
         # ── networking (in-app updater + volunteer email) ─────────────────────
         'urllib.request',

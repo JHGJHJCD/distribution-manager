@@ -55,6 +55,7 @@ BACKUP_DIR = os.path.join(_data_dir(), "backups")
 # User-supplied top-bar logo, stored in the writable data dir (NOT inside the EXE
 # bundle) so each charity can drop in its own logo and it survives updates.
 USER_LOGO_PATH = os.path.join(_data_dir(), "org_logo.png")
+CHAT_BG_PATH = os.path.join(_data_dir(), "chat_bg")   # user's chat wallpaper (any image ext)
 
 
 def _legacy_db_candidates() -> list:
@@ -299,6 +300,43 @@ def init_db():
             old_value       TEXT,
             new_value       TEXT,
             changed_at      TEXT DEFAULT (datetime('now'))
+        );
+
+        -- Team chat between the computers that have the app (manager / secretary /
+        -- board member). Rides the same Drive sync as everything else (#ya4f7).
+        CREATE TABLE IF NOT EXISTS messages (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            guid          TEXT DEFAULT '',
+            author_device TEXT DEFAULT '',
+            author_name   TEXT DEFAULT '',
+            body          TEXT NOT NULL,
+            created_at    TEXT DEFAULT ''
+        );
+
+        -- Per-device read markers for the chat (WhatsApp-style ✓✓): each device
+        -- records the newest message timestamp it has read. Synced so the sender
+        -- can tell whether the team has seen a message (#ya4f7).
+        CREATE TABLE IF NOT EXISTS message_reads (
+            device      TEXT PRIMARY KEY,
+            device_name TEXT DEFAULT '',
+            read_ts     TEXT DEFAULT ''
+        );
+
+        -- Journal of changes RECEIVED from another computer, with enough 'before'
+        -- state to undo them. Powers the manager's change-log (#5rhe9). Local only
+        -- (never synced) — each machine records what IT applied.
+        CREATE TABLE IF NOT EXISTS sync_incoming (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            applied_at    TEXT DEFAULT '',
+            author_device TEXT DEFAULT '',
+            author_name   TEXT DEFAULT '',
+            op            TEXT DEFAULT '',
+            target_guid   TEXT DEFAULT '',
+            target_name   TEXT DEFAULT '',
+            summary       TEXT DEFAULT '',
+            before_json   TEXT DEFAULT '',
+            after_json    TEXT DEFAULT '',
+            undone        INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS settings (
@@ -1527,6 +1565,83 @@ def get_change_log(limit: int = 200):
             "SELECT * FROM change_log ORDER BY changed_at DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ─── Team chat (#ya4f7) ───────────────────────────────────────────────────────
+
+def add_message(body: str, author_name: str = "", author_device: str = "",
+                guid: str = "", created_at: str = "") -> int:
+    """Post one chat message and journal it for the other computers. Returns the
+    local row id. author_name/device come from the sync identity (passed by the
+    UI, which already imports the sync module)."""
+    body = (body or "").strip()
+    if not body:
+        return 0
+    guid = (guid or "").strip() or uuid.uuid4().hex
+    created_at = created_at or _utc_now()
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO messages (guid, author_device, author_name, body, created_at) "
+            "VALUES (?,?,?,?,?)", (guid, author_device, author_name, body, created_at))
+        mid = cur.lastrowid
+    _sync_log("msg_add", {"guid": guid, "author_device": author_device,
+                          "author_name": author_name, "body": body,
+                          "created_at": created_at})
+    return mid
+
+
+def get_messages(limit: int = 400):
+    """Return the most recent chat messages in chronological order (oldest first)."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM messages ORDER BY created_at ASC, id ASC LIMIT ?", (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def messages_after(ts: str, exclude_device: str = ""):
+    """Messages created strictly after `ts` (UTC iso), optionally excluding this
+    device's own — used to count unread for the tab badge."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM messages WHERE created_at > ? AND author_device <> ? "
+            "ORDER BY created_at ASC", (ts or "", exclude_device or "")).fetchall()
+        return [dict(r) for r in rows]
+
+
+def set_read_marker(device: str, device_name: str, read_ts: str):
+    """Record (and journal) that `device` has read the chat up to `read_ts`.
+    Only advances forward; a no-op if we already knew of an equal/newer read.
+    Powers the ✓✓ read receipts (#ya4f7)."""
+    if not device or not read_ts:
+        return
+    with get_connection() as conn:
+        row = conn.execute("SELECT read_ts FROM message_reads WHERE device=?",
+                           (device,)).fetchone()
+        if row and (row["read_ts"] or "") >= read_ts:
+            return
+        conn.execute(
+            "INSERT INTO message_reads (device, device_name, read_ts) VALUES (?,?,?) "
+            "ON CONFLICT(device) DO UPDATE SET device_name=excluded.device_name, "
+            "read_ts=excluded.read_ts",
+            (device, device_name or "", read_ts))
+    _sync_log("msg_read", {"device": device, "device_name": device_name or "",
+                           "read_ts": read_ts})
+
+
+def get_read_markers():
+    with get_connection() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM message_reads")]
+
+
+def latest_other_read_ts(exclude_device: str = "") -> str:
+    """The newest read_ts among OTHER devices — a message created at/before it has
+    been seen by the team (→ ✓✓)."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT MAX(read_ts) AS m FROM message_reads WHERE device <> ?",
+            (exclude_device or "",)).fetchone()
+        return (row["m"] or "") if row else ""
 
 
 # ─── Summary stats ────────────────────────────────────────────────────────────

@@ -832,11 +832,12 @@ class SettingsTab(QWidget):
                                          "משותפת כדי לעבוד משני מחשבים על אותם נתונים.")
             self.lbl_sync_status.setStyleSheet("color:#64748b; font-size:12.5px;")
             return
+        from utils import timefmt
         info = sync.last_run_info()
         folder = sync.get_folder()
         avail = sync.folder_available()
         name = sync.device_name() or "מחשב זה"
-        last = (info.get("last_run") or "")[:16].replace("T", " ")
+        last = timefmt.datetime_str(info.get("last_run"))   # Israel time
         others = sync.other_device_count() if avail else 0
         if not avail:
             second = "⚠ התיקייה לא נמצאה כרגע"

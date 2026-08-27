@@ -43,7 +43,7 @@ _MY_DRIVE_NAMES = ("My Drive", "האחסון שלי", "התיקיה שלי")
 # Settings that must NOT travel between computers: security, per-machine paths
 # and window/user-interface state.
 EXCLUDED_SETTINGS = {"password", "win_geometry", "backup_folder", "last_backup_at",
-                     "mei_last", "community_pcts_ui"}
+                     "mei_last", "community_pcts_ui", "chat_bg_path"}
 EXCLUDED_SETTING_PREFIXES = ("sync_", "export_dir_")   # export_dir_* are per-machine paths (#5e1jc)
 
 JOURNAL_PREFIX = "journal-"
@@ -111,6 +111,34 @@ def set_device_name(name: str):
     with _LOCK:
         state = _load_state()
         state["device_name"] = (name or "").strip()
+        _save_state(state)
+
+
+def messages_read_ts() -> str:
+    """UTC stamp of the newest chat message this computer has seen (local — the
+    read marker is per-machine, never synced). '' = nothing read yet."""
+    return _load_state().get("messages_read_ts") or ""
+
+
+def set_messages_read_ts(ts: str):
+    with _LOCK:
+        state = _load_state()
+        # Never move the marker backwards.
+        if (ts or "") > (state.get("messages_read_ts") or ""):
+            state["messages_read_ts"] = ts or ""
+            _save_state(state)
+
+
+def is_manager_device() -> bool:
+    """True if THIS computer was designated the manager (#5rhe9). Local flag — the
+    manager's change-log + undo controls only appear here."""
+    return bool(_load_state().get("is_manager"))
+
+
+def set_manager_device(on: bool):
+    with _LOCK:
+        state = _load_state()
+        state["is_manager"] = bool(on)
         _save_state(state)
 
 
@@ -504,6 +532,37 @@ def _apply_dist_delete(conn, rec: dict):
         db._recompute_recipient_dates(conn, row["recipient_id"])
 
 
+def _apply_msg_add(conn, rec: dict):
+    """A chat message from another computer (#ya4f7). Idempotent by guid."""
+    guid = rec.get("guid") or ""
+    body = rec.get("body") or ""
+    if not guid or not body:
+        return
+    if conn.execute("SELECT 1 FROM messages WHERE guid=?", (guid,)).fetchone():
+        return
+    conn.execute(
+        "INSERT INTO messages (guid, author_device, author_name, body, created_at) "
+        "VALUES (?,?,?,?,?)",
+        (guid, rec.get("author_device", ""), rec.get("author_name", ""),
+         body, rec.get("created_at", "")))
+
+
+def _apply_msg_read(conn, rec: dict):
+    """A chat read-marker from another computer (#ya4f7 ✓✓). LWW by read_ts."""
+    dev = rec.get("device") or ""
+    read_ts = rec.get("read_ts") or ""
+    if not dev or not read_ts:
+        return
+    row = conn.execute("SELECT read_ts FROM message_reads WHERE device=?", (dev,)).fetchone()
+    if row and (row["read_ts"] or "") >= read_ts:
+        return
+    conn.execute(
+        "INSERT INTO message_reads (device, device_name, read_ts) VALUES (?,?,?) "
+        "ON CONFLICT(device) DO UPDATE SET device_name=excluded.device_name, "
+        "read_ts=excluded.read_ts",
+        (dev, rec.get("device_name", ""), read_ts))
+
+
 def _apply_setting(conn, rec: dict, state: dict):
     key = rec.get("key") or ""
     if not key or not _setting_syncable(key):
@@ -523,6 +582,8 @@ _APPLIERS = {
     "batch_delete": _apply_batch_delete,
     "dist_delete":  _apply_dist_delete,
     "dist_add":     _apply_dist_add,
+    "msg_add":      _apply_msg_add,
+    "msg_read":     _apply_msg_read,
 }
 
 
@@ -658,6 +719,24 @@ def _snapshot_body() -> int:
         if _setting_syncable(key):
             log_change("setting", {"key": key, "value": value})
             n += 1
+    # Chat history so a joining computer sees past messages (#ya4f7).
+    with db.get_connection() as conn:
+        msgs = [dict(r) for r in conn.execute(
+            "SELECT * FROM messages ORDER BY created_at ASC")]
+    for m in msgs:
+        log_change("msg_add", {"guid": m.get("guid") or "",
+                               "author_device": m.get("author_device", ""),
+                               "author_name": m.get("author_name", ""),
+                               "body": m.get("body", ""),
+                               "created_at": m.get("created_at", "")})
+        n += 1
+    with db.get_connection() as conn:
+        reads = [dict(r) for r in conn.execute("SELECT * FROM message_reads")]
+    for rd in reads:
+        log_change("msg_read", {"device": rd.get("device", ""),
+                                "device_name": rd.get("device_name", ""),
+                                "read_ts": rd.get("read_ts", "")})
+        n += 1
     return n
 
 

@@ -25,6 +25,7 @@ from tabs.group_update import GroupUpdateTab
 from tabs.search import SearchTab
 from tabs.distributions import DistributionsTab
 from tabs.settings import SettingsTab, _UpdateWorker
+from tabs.messages import MessagesTab
 
 from version import APP_VERSION
 from utils import updater
@@ -631,17 +632,22 @@ class MainWindow(QMainWindow):
             (self.search_tab,        "חיפוש מהיר",     "search"),
             (self.distributions_tab, "חלוקות קודמות",  "distributions"),
         ])
+        self.messages_tab = MessagesTab(self)
         self.tabs.addTab(_leaf(self.group_tab, "dist"), "חלוקה")
         self.tabs.addTab(area_people, "אנשים")
+        self._messages_tab_index = self.tabs.addTab(
+            _leaf(self.messages_tab, "messages"), "הודעות")
         self.tabs.addTab(_leaf(self.settings_tab, "settings"), "הגדרות")
         # Flat list of the real content tabs (leaves) for refresh bookkeeping.
         self._leaf_tabs = [self.group_tab, self.distributions_tab,
-                           self.recipients_tab, self.search_tab, self.settings_tab]
+                           self.recipients_tab, self.search_tab,
+                           self.messages_tab, self.settings_tab]
 
         self._restore_tab_order()
         # Save the new order whenever the user drags a tab.
         self.tabs.tabBar().tabMoved.connect(lambda *_: self._save_tab_order())
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        self._refresh_messages_badge()
         # Wrap in a container with a top margin so the pill tabs aren't clipped
         # against the window's title bar.
         central = QWidget()
@@ -870,6 +876,28 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, idx):
         self._show_leaf(self._current_leaf())
+        # Opening the messages tab marks everything read and clears its badge.
+        if self._current_leaf() is getattr(self, "messages_tab", None):
+            self.messages_tab.mark_read()
+            self._refresh_messages_badge()
+
+    def _messages_tab_pos(self) -> int:
+        """Current index of the 'הודעות' page (tabs are draggable, so the stored
+        index can go stale)."""
+        for i in range(self.tabs.count()):
+            if self.tabs.widget(i) is getattr(self, "messages_tab", None):
+                return i
+        return -1
+
+    def _refresh_messages_badge(self):
+        """Show 'הודעות (N)' when unread messages from the other computer wait —
+        unless that tab is already the one on screen."""
+        pos = self._messages_tab_pos()
+        if pos < 0:
+            return
+        showing = self._current_leaf() is self.messages_tab
+        n = 0 if showing else self.messages_tab.unread_count()
+        self.tabs.setTabText(pos, f"הודעות ({n})" if n else "הודעות")
 
     def refresh_all(self):
         for tab in self._leaf_tabs:
@@ -926,6 +954,12 @@ class MainWindow(QMainWindow):
         if applied > 0:
             self.refresh_all()
             self.status_msg(f"סונכרנו {applied} עדכונים מהמחשב השני")
+        # Always refresh the chat badge — new messages may have arrived even when
+        # the visible screen didn't need a redraw. If the chat is open, catch it up.
+        if self._current_leaf() is getattr(self, "messages_tab", None):
+            self.messages_tab.refresh()
+            self.messages_tab.mark_read()
+        self._refresh_messages_badge()
 
     def _refresh_sync_led(self, busy: bool = False):
         """Repaint the app-bar sync LED from the current sync state.
