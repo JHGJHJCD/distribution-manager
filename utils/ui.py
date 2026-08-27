@@ -2,7 +2,8 @@
 from contextlib import contextmanager
 
 from PyQt6.QtWidgets import (QApplication, QLabel, QStyledItemDelegate, QStyle,
-                             QDialog, QVBoxLayout, QHBoxLayout, QFrame, QPushButton)
+                             QDialog, QVBoxLayout, QHBoxLayout, QFrame, QPushButton,
+                             QScrollArea, QWidget)
 from PyQt6.QtCore import Qt, QObject, QEvent, QRect, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPen, QPixmap, QIcon
 
@@ -765,6 +766,13 @@ class UpdateOfferDialog(QDialog):
         self.setWindowTitle("עדכון תוכנה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.setMinimumWidth(430)
+        # Resizable window with a comfortable default so the full change list is
+        # visible; the operator can drag it bigger. Height is capped to the screen.
+        self.setSizeGripEnabled(True)
+        scr = QApplication.primaryScreen()
+        max_h = int(scr.availableGeometry().height() * 0.85) if scr else 700
+        self.setMaximumHeight(max_h)
+        self.resize(480, min(560, max_h))
         self.setStyleSheet("QDialog{background:#ffffff;}")
 
         lay = QVBoxLayout(self)
@@ -812,14 +820,31 @@ class UpdateOfferDialog(QDialog):
 
         notes = (notes or "").strip()
         if notes:
-            if len(notes) > 400:
-                notes = notes[:400] + "..."
+            # Full release notes — shown in their entirety inside a scroll area so
+            # a long change list is never truncated or clipped by a small window
+            # (the operator asked to always see all the changes).
+            cap = QLabel("מה חדש בגרסה זו:")
+            cap.setStyleSheet("color:#0f766e; font-size:12.5px; font-weight:700;")
+            body.addWidget(cap)
+
             nbox = QLabel(notes)
             nbox.setWordWrap(True)
+            nbox.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            nbox.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
             nbox.setStyleSheet(
-                "QLabel{background:#f4faf7; color:#334155; border:1px solid #d7ebe2;"
-                " border-radius:10px; padding:10px 12px; font-size:12.5px;}")
-            body.addWidget(nbox)
+                "QLabel{background:transparent; color:#334155; font-size:12.5px;}")
+
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(nbox)
+            scroll.setMinimumHeight(120)
+            scroll.setStyleSheet(
+                "QScrollArea{background:#f4faf7; border:1px solid #d7ebe2;"
+                " border-radius:10px;}"
+                "QScrollArea > QWidget > QWidget{background:transparent;}")
+            # Let the notes area take the extra space when the user enlarges the
+            # window, so more of the change list shows at once.
+            body.addWidget(scroll, 1)
 
         btns = QHBoxLayout()
         btns.setSpacing(10)

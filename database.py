@@ -1614,6 +1614,20 @@ def add_message(body: str, author_name: str = "", author_device: str = "",
     return mid
 
 
+def delete_message(guid: str) -> bool:
+    """Delete a chat message (its author removes it) and journal the removal so it
+    disappears on the other computers too (#msgdel). Idempotent by guid."""
+    guid = (guid or "").strip()
+    if not guid:
+        return False
+    with get_connection() as conn:
+        cur = conn.execute("DELETE FROM messages WHERE guid=?", (guid,))
+        deleted = cur.rowcount > 0
+    if deleted:
+        _sync_log("msg_delete", {"guid": guid})
+    return deleted
+
+
 def get_messages(limit: int = 400):
     """Return the most recent chat messages in chronological order (oldest first)."""
     with get_connection() as conn:

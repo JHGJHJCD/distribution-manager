@@ -10,7 +10,8 @@ import os
 import shutil
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
-                             QPushButton, QScrollArea, QFrame, QFileDialog)
+                             QPushButton, QScrollArea, QFrame, QFileDialog,
+                             QMessageBox)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
 
@@ -29,7 +30,8 @@ class _Bubble(QFrame):
     """One chat message. Own messages sit on the right (teal) and carry a read
     receipt (✓ sent / ✓✓ read); others sit on the left (white) with the author."""
 
-    def __init__(self, msg: dict, mine: bool, read: bool = False, parent=None):
+    def __init__(self, msg: dict, mine: bool, read: bool = False,
+                 on_delete=None, parent=None):
         super().__init__(parent)
         self.setStyleSheet("background:transparent;")
         outer = QHBoxLayout(self)
@@ -72,6 +74,19 @@ class _Bubble(QFrame):
                 "color:%s; font-size:11px; font-weight:700; %s" %
                 ("#0f9d78" if read else "#9aa7b8", _lbl))
             meta.addWidget(tick)
+            # Only the author can delete their own message; the removal syncs to
+            # the other computers too.
+            if on_delete is not None:
+                guid = msg.get("guid") or ""
+                del_btn = QPushButton("מחק")
+                del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                del_btn.setToolTip("מחק הודעה זו (אצל כל הצוות)")
+                del_btn.setStyleSheet(
+                    "QPushButton{color:#b45b5b; background:transparent; border:none;"
+                    "font-size:10.5px; font-weight:600; padding:0 2px;}"
+                    "QPushButton:hover{color:#dc2626; text-decoration:underline;}")
+                del_btn.clicked.connect(lambda _=False, g=guid: on_delete(g))
+                meta.addWidget(del_btn)
         meta.addStretch()
         cl.addLayout(meta)
 
@@ -286,9 +301,29 @@ class MessagesTab(QWidget):
             for i, m in enumerate(msgs):
                 mine = (m.get("author_device") == dev)
                 read = mine and other_read and (m.get("created_at") or "") <= other_read
-                self._vbox.insertWidget(i, _Bubble(m, mine=mine, read=bool(read)))
+                self._vbox.insertWidget(
+                    i, _Bubble(m, mine=mine, read=bool(read),
+                               on_delete=self._delete if mine else None))
 
         QTimer.singleShot(30, self._scroll_bottom)
+
+    def _delete(self, guid: str):
+        """Remove one of my own messages, after confirming — the removal syncs to
+        the whole team."""
+        if not guid:
+            return
+        box = QMessageBox(self)
+        box.setWindowTitle("מחיקת הודעה")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText("למחוק את ההודעה?\nההודעה תיעלם גם אצל שאר חברי הצוות.")
+        yes = box.addButton("מחק", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("ביטול", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is not yes:
+            return
+        db.delete_message(guid)
+        self._sig = None
+        self.refresh()
 
     def _scroll_bottom(self):
         bar = self.scroll.verticalScrollBar()

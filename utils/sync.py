@@ -606,6 +606,14 @@ def _apply_msg_add(conn, rec: dict):
          body, rec.get("created_at", "")))
 
 
+def _apply_msg_delete(conn, rec: dict):
+    """A chat message deleted by its author on another computer (#msgdel)."""
+    guid = rec.get("guid") or ""
+    if not guid:
+        return
+    conn.execute("DELETE FROM messages WHERE guid=?", (guid,))
+
+
 def _apply_msg_read(conn, rec: dict):
     """A chat read-marker from another computer (#ya4f7 ✓✓). LWW by read_ts."""
     dev = rec.get("device") or ""
@@ -642,6 +650,7 @@ _APPLIERS = {
     "dist_delete":  _apply_dist_delete,
     "dist_add":     _apply_dist_add,
     "msg_add":      _apply_msg_add,
+    "msg_delete":   _apply_msg_delete,
     "msg_read":     _apply_msg_read,
 }
 

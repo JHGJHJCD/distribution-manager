@@ -173,6 +173,23 @@ sync.run_sync()
 count = sum(1 for r in db.get_all_recipients() if r["full_name"] == "משה מזרחי")
 ok("adopt-by-match avoided duplicate", count == 1, f"count={count}")
 
+# ── Team chat: message add + author-delete both propagate (#msgdel) ───────────
+use_machine(dir_a)
+db.add_message("שלום לצוות", author_name="מנהל", author_device="dev-a")
+m_guid = db.get_messages()[-1]["guid"]
+sync.run_sync()
+use_machine(dir_b)
+sync.run_sync()
+ok("B received chat message", any(m["body"] == "שלום לצוות" for m in db.get_messages()))
+use_machine(dir_a)
+db.delete_message(m_guid)
+ok("A deleted its own message", all(m["guid"] != m_guid for m in db.get_messages()))
+sync.run_sync()
+use_machine(dir_b)
+sync.run_sync()
+ok("B mirrored the message deletion",
+   all(m["guid"] != m_guid for m in db.get_messages()))
+
 # ── Incremental reads: byte offsets tracked, whole file not re-read ───────────
 use_machine(dir_b)
 sync.run_sync()

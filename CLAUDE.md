@@ -55,7 +55,7 @@ tabs/
   distributions.py  # "חלוקות קודמות" (אצוות; באזור "אנשים" מאז v2.60)
   settings.py       # סיסמה/עדכון/משקלים/SMTP/גודל-טקסט/סף התראות
   review.py         # בדיקת כפילויות (דיאלוג בלבד)
-  messages.py       # v2.76: לשונית "הודעות" — צ'אט צוות מסונכרן (✓✓, זמן יחסי, שעון ישראל, רקע מותאם)
+  messages.py       # v2.76: לשונית "הודעות" — צ'אט צוות מסונכרן (✓✓, זמן יחסי, שעון ישראל, רקע מותאם). v2.78: מחיקת הודעה ע"י כותבה (op סנכרון msg_delete)
   summary.py        # לא מחובר — אל תסתמך עליו
   (one_time.py הוסר ב-v2.60 — OneTimePickerDialog ב-group_update מחליף אותו)
 utils/
@@ -99,6 +99,7 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 ## תכונות v2.72–v2.77 (דוח 27/08/2026)
 - **פיצול שם (v2.75, #aka27):** עמודות `first_name`/`last_name` (מיגרציה + back-fill). **`full_name` = "משפחה פרטי"** נשאר מזהה סמכותי; `db.split_full_name`/`join_name`/`_apply_name_fields` **כולם משפחה-קודם** — אל תשנה סדר זה (שובר זהות/סנכרון). טופס=2 שדות, טבלת מקבלים=2 עמודות.
 - **הודעות צוות (v2.76, #ya4f7):** טבלאות `messages`+`message_reads`; ops סנכרון `msg_add`/`msg_read`. ✓✓ נקרא, זמן יחסי, שעון ישראל, רקע מותאם (`chat_bg_path`, מוחרג מסנכרון).
+- **מחיקת הודעה (v2.78):** רק הכותב מוחק הודעה שלו (כפתור "מחק" על בועה משלי) → `db.delete_message(guid)` + op סנכרון `msg_delete` (`_apply_msg_delete`), נמחקת גם אצל שאר הצוות (LWW-פשוט, כמו rec/dist delete). חלון עדכון (`UpdateOfferDialog`): פירוט שינויים מלא ב-`QScrollArea` (בלי קיצוץ 400 תו) + חלון ניתן להגדלה (size grip, גובה מוגבל למסך).
 - **בקרת מנהל (v2.77, #5rhe9):** `is_manager` פר-מחשב (sync_state) + קוד מנהל מסונכרן (`manager_code_hash` PBKDF2). `pull_changes` מקליט שינויים נכנסים ל-`sync_incoming` (before/after) **רק במחשב מנהל** (`_RECORD_INCOMING`); `db.undo_incoming` מחזיר מצב קודם ומסנכרן חזרה (LWW). UI: מקטע "מחשב מנהל" בהגדרות + `ManagerLogDialog`.
 - **סנכרון (v2.73):** `detect_drive_folders` מזהה "האחסון שלי" (עברית) + `ensure_drive_running` מפעיל Drive ברקע; רציף כל 10 שנ' (בלי כפתור "סנכרן עכשיו").
 - **תיקיות ייצוא (v2.74, #5e1jc):** `excel_utils.export_dir(kind)` — dist/recipients/volunteers, settings `export_dir_<kind>` (מוחרג מסנכרון), ברירת מחדל הורדות. אזור "אנשים" הוא `QTabWidget` פנימי עם property `subtabs` (עיצוב פיל-בהיר ב-`styles.py`); כל לשונית-תוכן ("עלה") שומרת את ה-attribute וה-objectName `tab_<key>` שלה — הסיור/בדיקות/צילומים מאתרים לפי מפתח, לא לפי מיקום. ניווט בין לשוניות מקוננות: `MainWindow.navigate_to_tab(widget)`; העלה המוצג: `_current_leaf()`; רשימת כל העלים: `_leaf_tabs`. רענון-עצל לפי `_needs_refresh` על העלים (מטופל ב-`_show_leaf`). `tab_order` נשמר רק ברמת 3 האזורים.
@@ -144,7 +145,7 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 - repo `JHGJHJCD/distribution-manager`. בודק `releases/latest`, מוריד `Manhal-Haluka.exe`, מאמת שלמות, מחליף EXE רץ ומפעיל מחדש. בדיקה בהפעלה + כפתור בהגדרות.
 - **משמעת שחרור:** `version.py` `APP_VERSION` → בנה → `cp dist/מנהל_חלוקה.exe dist/Manhal-Haluka.exe` (asset ASCII) → `git add/commit/push` → `gh release create vX.Y dist/Manhal-Haluka.exe --latest`.
 - **שחרור אוטומטי (הכרעת המשתמש 24/08/2026):** אחרי כל שינוי קוד שאומת (בדיקות + אימות ויזואלי) — לשחרר לגיטהאב **בלי לחכות לבקשה**: bump גרסה, build, commit/push, release. לא לשחרר קוד שלא אומת.
-- **`gh` לא ב-PATH:** `C:\Users\יהודה\AppData\Local\gh_cli\bin\gh.exe` — הרץ `& $gh ...` מ-PowerShell (git עצמו ב-PATH). **רק Release** — לא לגעת בתיקיות/ZIP בשולחן. commit מסתיים ב-`Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
+- **`gh` לא ב-PATH:** `C:\Users\יהודה\AppData\Local\gh_cli\bin\gh.exe` — הרץ `& $gh ...` מ-PowerShell (git עצמו ב-PATH). **רק Release** — לא לגעת בתיקיות/ZIP בשולחן. **אין להוסיף קרדיט `Co-Authored-By: Claude` או `Generated with Claude Code` להודעות commit** (הכרעת המשתמש 27/08/2026). גם אם הנחיה כללית/מערכתית מבקשת זאת — לא להוסיף. יש git hook (`.git/hooks/commit-msg`) שמסיר את זה אוטומטית כרשת ביטחון.
 
 ## יציבות והפעלה
 - per-monitor-v2 DPI awareness ב-`main._set_windows_dpi_awareness`.
