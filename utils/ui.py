@@ -315,30 +315,6 @@ def section_header(text: str, icon_name: str, color: str = "#475569",
     return box
 
 
-def add_glow(widget, color: str = "#22c55e", base: float = 10.0, peak: float = 26.0):
-    """Give a widget a soft coloured halo that gently pulses (like a breathing
-    glow) to draw the eye — used e.g. on the 'חשב המלצה' button. Returns the
-    running animation (kept referenced on the widget so it isn't GC'd)."""
-    from PyQt6.QtWidgets import QGraphicsDropShadowEffect
-    from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
-    eff = QGraphicsDropShadowEffect(widget)
-    eff.setColor(QColor(color))
-    eff.setOffset(0, 0)
-    eff.setBlurRadius(base)
-    widget.setGraphicsEffect(eff)
-    anim = QPropertyAnimation(eff, b"blurRadius", widget)
-    anim.setDuration(1300)
-    anim.setStartValue(base)
-    anim.setKeyValueAt(0.5, peak)
-    anim.setEndValue(base)
-    anim.setLoopCount(-1)
-    anim.setEasingCurve(QEasingCurve.Type.InOutSine)
-    anim.start()
-    widget._glow_anim = anim
-    widget._glow_effect = eff
-    return anim
-
-
 def enable_touch_scroll(widget) -> None:
     """Make a scrollable widget (table/list/scroll-area) draggable by finger on a
     touch screen — a left-press-and-drag kinetically scrolls it. Harmless with a

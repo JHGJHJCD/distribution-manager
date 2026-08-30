@@ -169,20 +169,3 @@ def email_to_dev(message: str, name: str = "") -> tuple[bool, str]:
         return True, ""
     except Exception as e:
         return False, str(e)
-
-
-def read_feedback() -> list:
-    """קורא את כל ההודעות המקומיות (לשימוש המפתח). מתעלם משורות פגומות."""
-    out = []
-    if not os.path.exists(FEEDBACK_PATH):
-        return out
-    with open(FEEDBACK_PATH, "r", encoding="utf-8") as f:
-        for raw in f:
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                out.append(json.loads(raw))
-            except Exception:
-                continue
-    return out

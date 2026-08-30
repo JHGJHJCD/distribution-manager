@@ -855,17 +855,6 @@ def calculate_next_dist(last_date_str: str, frequency: str) -> date:
 
 # ─── Weekly distribution list ─────────────────────────────────────────────────
 
-def get_areas() -> list:
-    """Distinct non-empty areas present in the data, sorted — so the area filter
-    reflects whatever areas actually exist (not a hard-coded pair)."""
-    with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT area FROM recipients "
-            "WHERE area IS NOT NULL AND TRIM(area) != '' ORDER BY area"
-        ).fetchall()
-    return [r[0] for r in rows]
-
-
 def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
     """Returns active recurring recipients due by the cutoff, sorted by name.
 
@@ -987,14 +976,6 @@ def set_need_weights(weights: dict):
                 continue
             conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)",
                          ("need_w_" + key, str(w)))
-
-
-def _annotate_need_scores(rows, weights: dict = None):
-    """Thin wrapper over scoring.annotate_need_scores — fills in the
-    user-configured weights from settings when none are given."""
-    if weights is None:
-        weights = get_need_weights()
-    return scoring.annotate_need_scores(rows, weights)
 
 
 def recency_days(rec: dict, today: date = None) -> int:
@@ -1665,11 +1646,6 @@ def set_read_marker(device: str, device_name: str, read_ts: str):
             (device, device_name or "", read_ts))
     _sync_log("msg_read", {"device": device, "device_name": device_name or "",
                            "read_ts": read_ts})
-
-
-def get_read_markers():
-    with get_connection() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM message_reads")]
 
 
 def latest_other_read_ts(exclude_device: str = "") -> str:

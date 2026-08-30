@@ -3,7 +3,7 @@ import re
 import sys
 from datetime import datetime, date as _date_type
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 
 def _app_dir() -> Path:
@@ -765,6 +765,110 @@ def export_recipients_to_excel(recipients: List[Dict]) -> str:
 
     exports_dir = export_dir("recipients")
     filename = f"מקבלים_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.xlsx"
+    path = str(exports_dir / filename)
+    wb.save(path)
+    return path
+
+
+def export_single_recipient_to_excel(rec: Dict,
+                                     history: Optional[List[Dict]] = None) -> str:
+    """Export ONE recipient to its own Excel file. A single person reads best
+    vertically: sheet 'פרטי מקבל' lists every stored field as שדה→ערך rows. If
+    `history` is given, a second sheet 'היסטוריית חלוקות' lists that recipient's
+    distributions. Returns the saved file path."""
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "פרטי מקבל"
+    ws.sheet_view.rightToLeft = True
+
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor="2563EB")
+    label_font = Font(bold=True, color="1E3A8A", size=11)
+    label_fill = PatternFill("solid", fgColor="EFF6FF")
+    right = Alignment(horizontal="right", vertical="center", wrap_text=True)
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    _DATE_KEYS = {"last_distribution", "next_distribution", "birth_date", "spouse_birth_date"}
+
+    # Column header (row 1 for now — a title row is inserted above it at the end).
+    ws.append(["שדה", "ערך"])
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="right", vertical="center")
+        cell.border = border
+    ws.row_dimensions[1].height = 20
+
+    # One row per stored field.
+    for r, (key, label) in enumerate(_FULL_FIELDS, 2):
+        if key == "priority":
+            val = _priority_text(rec)
+        elif key in _DATE_KEYS:
+            val = _fmt_date(rec.get(key))
+        else:
+            v = rec.get(key)
+            val = "" if v is None else v
+        lc = ws.cell(r, 1, label)
+        lc.font = label_font
+        lc.fill = label_fill
+        lc.alignment = right
+        lc.border = border
+        vc = ws.cell(r, 2)
+        if key.startswith("phone"):
+            _write_phone_cell(vc, val)   # phone as real number, no green triangle
+        else:
+            vc.value = val
+        vc.alignment = right
+        vc.border = border
+
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 40
+
+    # Title row (merged) with the recipient's name.
+    ws.insert_rows(1)
+    ws.merge_cells("A1:B1")
+    tcell = ws["A1"]
+    tcell.value = (rec.get("full_name") or "מקבל").strip()
+    tcell.font = Font(bold=True, size=14, color="1D4ED8")
+    tcell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 28
+    ws.freeze_panes = "A3"
+
+    # Optional second sheet — distribution history.
+    if history:
+        hs = wb.create_sheet("היסטוריית חלוקות")
+        hs.sheet_view.rightToLeft = True
+        hs.append(["תאריך", "מה חולק", "כמות", "מחלק", "הערות"])
+        for cell in hs[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+            cell.border = border
+        hs.row_dimensions[1].height = 20
+        missed_fill = PatternFill("solid", fgColor="FEE2E2")   # red — no-show
+        for idx, entry in enumerate(history, 2):
+            missed = (entry.get("received", 1) or 0) == 0
+            what = "✗ לא קיבל" if missed else (entry.get("what_dist", "") or "")
+            hs.append([_fmt_date(entry.get("dist_date", "")), what,
+                       entry.get("quantity", "") or "", entry.get("distributor", "") or "",
+                       entry.get("notes", "") or ""])
+            for cell in hs[idx]:
+                cell.alignment = right
+                cell.border = border
+                if missed:
+                    cell.fill = missed_fill
+        for col, width in enumerate([14, 22, 10, 18, 30], 1):
+            hs.column_dimensions[get_column_letter(col)].width = width
+        hs.freeze_panes = "A2"
+
+    exports_dir = export_dir("recipients")
+    _name = (rec.get("full_name") or "מקבל").strip()
+    _safe = "".join(c for c in _name if c not in '\\/:*?"<>|').strip() or "מקבל"
+    filename = f"{_safe}_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.xlsx"
     path = str(exports_dir / filename)
     wb.save(path)
     return path

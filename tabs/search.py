@@ -25,14 +25,6 @@ def _fdate(s: str) -> str:
 HIST_COLS = ["תאריך", "מה חולק", "כמות", "מחלק", "הערות"]
 
 
-def _first_phone(rec: dict) -> str:
-    for k in ("phone1", "phone2", "phone3"):
-        v = rec.get(k)
-        if v:
-            return str(v)
-    return ""
-
-
 def _priority_display(rec: dict) -> str:
     labels = {4: "קבוע", 3: "ראשונה", 2: "שנייה"}
     pr = rec.get("priority")
@@ -204,6 +196,15 @@ class SearchTab(QWidget):
         self.btn_print_card.setEnabled(False)
         hist_row.addWidget(self.btn_print_card)
 
+        self.btn_export_card = QPushButton("⭳  ייצוא לאקסל")
+        self.btn_export_card.setObjectName("success")
+        self.btn_export_card.setMinimumHeight(34)
+        self.btn_export_card.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_export_card.setToolTip("ייצוא כל פרטי המקבל + היסטוריית החלוקות שלו לקובץ Excel נפרד")
+        self.btn_export_card.clicked.connect(self._export_card)
+        self.btn_export_card.setEnabled(False)
+        hist_row.addWidget(self.btn_export_card)
+
         self.btn_del_hist = QPushButton("מחק רישום")
         self.btn_del_hist.setObjectName("danger")
         self.btn_del_hist.setStyleSheet(_SMALL_BTN)
@@ -260,6 +261,7 @@ class SearchTab(QWidget):
         else:
             self._current_rec_id = None
             self.btn_print_card.setEnabled(False)
+            self.btn_export_card.setEnabled(False)
             self.btn_del_hist.setEnabled(False)
             self._show_empty_profile("לא נמצאו תוצאות")
 
@@ -332,17 +334,21 @@ class SearchTab(QWidget):
         self.hist_title.setText("היסטוריית חלוקות")
         if hasattr(self, "btn_del_hist"):
             self.btn_del_hist.setEnabled(False)
+        if hasattr(self, "btn_export_card"):
+            self.btn_export_card.setEnabled(False)
 
     def _show_recipient(self, rec_id):
         rec = db.get_recipient(rec_id)
         if not rec:
             self._current_rec_id = None
             self.btn_print_card.setEnabled(False)
+            self.btn_export_card.setEnabled(False)
             self.btn_del_hist.setEnabled(False)
             self._show_empty_profile()
             return
         self._current_rec_id = rec_id
         self.btn_print_card.setEnabled(True)
+        self.btn_export_card.setEnabled(True)
         self.btn_del_hist.setEnabled(True)
 
         hist = db.get_distributions_for_recipient(rec["id"])
@@ -508,3 +514,23 @@ class SearchTab(QWidget):
             return
         hist = db.get_distributions_for_recipient(self._current_rec_id)
         print_recipient_card(rec, hist, self)
+
+    def _export_card(self):
+        """Export the selected recipient — all fields + distribution history — to
+        its own Excel file in the recipients export folder."""
+        if not self._current_rec_id:
+            QMessageBox.information(self, "", "בחר מקבל תחילה")
+            return
+        rec = db.get_recipient(self._current_rec_id)
+        if not rec:
+            return
+        hist = db.get_distributions_for_recipient(self._current_rec_id)
+        try:
+            from utils.excel_utils import export_single_recipient_to_excel
+            with busy_cursor():
+                path = export_single_recipient_to_excel(rec, hist)
+            reveal_in_folder(path)
+            QMessageBox.information(self, "ייצוא הושלם",
+                                   f"פרטי המקבל נשמרו בקובץ Excel נפרד ונפתחה התיקייה:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה בייצוא", str(e))

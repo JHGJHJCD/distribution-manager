@@ -55,23 +55,6 @@ def resource_path(relative: str) -> str:
     return os.path.join(base, relative)
 
 
-def _load_app_fonts() -> str:
-    """Register bundled fonts (fonts/*.ttf) so the UI uses a proper Hebrew
-    typeface. Returns the primary family ('Rubik') if available, else 'Segoe UI'
-    so the app still looks fine if the font is missing."""
-    from PyQt6.QtGui import QFontDatabase
-    fonts_dir = resource_path("fonts")
-    primary = "Segoe UI"
-    if os.path.isdir(fonts_dir):
-        for fn in os.listdir(fonts_dir):
-            if fn.lower().endswith((".ttf", ".otf")):
-                fid = QFontDatabase.addApplicationFont(os.path.join(fonts_dir, fn))
-                fams = QFontDatabase.applicationFontFamilies(fid) if fid != -1 else []
-                if "Rubik" in fams:
-                    primary = "Rubik"
-    return primary
-
-
 # ─── Splash screen ───────────────────────────────────────────────────────────
 
 def _make_splash_pix(W=520, H=340) -> QPixmap:

@@ -849,12 +849,6 @@ def other_device_count(folder: str = "") -> int:
     return len(devs)
 
 
-def folder_has_other_devices() -> bool:
-    """True when the shared folder already carries journals from other devices —
-    used to warn/inform during setup."""
-    return other_device_count() > 0
-
-
 def looks_like_backup_folder(path: str) -> bool:
     """Heuristic: does this path look like a Google Drive *per-computer backup*
     location (Downloads/Desktop/Documents) rather than a genuinely SHARED

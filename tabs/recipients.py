@@ -387,6 +387,7 @@ class RecipientsTab(QWidget):
             return
         menu = QMenu(self)
         act_edit    = menu.addAction("עריכה…")
+        act_export  = menu.addAction("ייצוא לאקסל…")
         menu.addSeparator()
         act_activate = menu.addAction("הפעל")
         act_suspend  = menu.addAction("השהה")
@@ -395,6 +396,8 @@ class RecipientsTab(QWidget):
         chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
         if chosen == act_edit:
             self._edit()
+        elif chosen == act_export:
+            self._export_one()
         elif chosen == act_activate:
             self._set_status("פעיל")
         elif chosen == act_suspend:
@@ -417,6 +420,28 @@ class RecipientsTab(QWidget):
             reveal_in_folder(path)
             QMessageBox.information(self, "ייצוא הושלם",
                                     f"רשימת המקבלים נשמרה בתיקיית ההורדות ונפתחה התיקייה:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה בייצוא", str(e))
+
+    def _export_one(self):
+        """Export the right-clicked recipient — all fields + distribution history —
+        to its own Excel file in the recipients export folder."""
+        from utils.excel_utils import export_single_recipient_to_excel
+        from utils.ui import reveal_in_folder
+        rec_id = self._selected_id()
+        if not rec_id:
+            QMessageBox.information(self, "", "בחר מקבל תחילה")
+            return
+        rec = db.get_recipient(rec_id)
+        if not rec:
+            return
+        hist = db.get_distributions_for_recipient(rec_id)
+        try:
+            with busy_cursor():
+                path = export_single_recipient_to_excel(rec, hist)
+            reveal_in_folder(path)
+            QMessageBox.information(self, "ייצוא הושלם",
+                                   f"פרטי המקבל נשמרו בקובץ Excel נפרד ונפתחה התיקייה:\n{path}")
         except Exception as e:
             QMessageBox.critical(self, "שגיאה בייצוא", str(e))
 

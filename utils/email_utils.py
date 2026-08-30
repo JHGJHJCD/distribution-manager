@@ -66,21 +66,6 @@ def _connect(cfg: dict) -> smtplib.SMTP:
     return server
 
 
-def test_connection():
-    """Try to log in only (no email sent). Returns (ok: bool, message: str)."""
-    cfg = get_smtp_config()
-    if not (cfg["email"] and cfg["app_password"]):
-        return False, "יש למלא כתובת מייל וסיסמת אפליקציה תחילה."
-    try:
-        server = _connect(cfg)
-        server.quit()
-        return True, "החיבור הצליח ✓ ניתן לשלוח מיילים."
-    except smtplib.SMTPAuthenticationError:
-        return False, "החיבור נכשל — שם משתמש/סיסמת אפליקציה שגויים."
-    except Exception as e:
-        return False, f"החיבור נכשל: {e}"
-
-
 def send_email(to_addr: str, subject: str, html_body: str,
                attachment_path: str = None, inline_logo_path: str = None):
     """Send an HTML email, optionally with a file attached and an inline logo
