@@ -729,6 +729,62 @@ def show_filter_breakdown(parent, rec: dict, criteria: dict):
 
 # ── Update-offer dialog (v2.60) ──────────────────────────────────────────────
 
+def _release_notes_html(notes: str) -> str:
+    """Release-notes text → styled RTL HTML for the update dialog (v2.81).
+
+    Handles both formats this project's releases use: a one-line commit message
+    ("גרסה X — כותרת: פריט, פריט, פריט") which becomes a headline + a bullet per
+    item, and multi-line notes where -/*/• lines become styled bullets. All text
+    is escaped and right-aligned."""
+    import html as _html
+    import re
+
+    def inline(s: str) -> str:
+        return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", _html.escape(s))
+
+    def p_head(s: str) -> str:
+        return ("<p dir='rtl' align='right' style='margin:2px 0 8px 0;"
+                " color:#064e3b; font-weight:700;'>" + s + "</p>")
+
+    def p_bullet(s: str) -> str:
+        return ("<p dir='rtl' align='right' style='margin:4px 0;'>"
+                "<span style='color:#0f9d78; font-weight:700;'>●</span>&nbsp; "
+                "<span style='color:#334155;'>" + s + "</span></p>")
+
+    def p_text(s: str) -> str:
+        return ("<p dir='rtl' align='right' style='margin:5px 0;"
+                " color:#334155;'>" + s + "</p>")
+
+    lines = [ln.strip() for ln in (notes or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+
+    parts = []
+    if len(lines) == 1:
+        # One-line commit style: split the headline from the item list so a long
+        # sentence becomes a readable bulleted list.
+        m = re.match(r"^(.+?)\s*[:：]\s*(.+)$", lines[0])
+        items = re.split(r"\s*[·;]\s*|,\s+", m.group(2)) if m else []
+        items = [i.strip(" .") for i in items if i.strip(" .")]
+        if len(items) >= 2:
+            parts.append(p_head(inline(m.group(1))))
+            parts += [p_bullet(inline(i)) for i in items]
+        else:
+            parts.append(p_text(inline(lines[0])))
+    else:
+        for i, ln in enumerate(lines):
+            if ln[:1] in "-*•":
+                parts.append(p_bullet(inline(ln[1:].strip())))
+            elif ln.startswith("#"):
+                parts.append(p_head(inline(ln.lstrip("#").strip())))
+            elif i == 0:
+                parts.append(p_head(inline(ln)))
+            else:
+                parts.append(p_text(inline(ln)))
+
+    return ("<div dir='rtl' style='font-size:13px;'>" + "".join(parts) + "</div>")
+
+
 class UpdateOfferDialog(QDialog):
     """A friendly, styled 'new version available' dialog (replaces the plain
     QMessageBox). Shows the playful greeting the operator asked for, the two
@@ -776,15 +832,25 @@ class UpdateOfferDialog(QDialog):
         body.setSpacing(12)
 
         vers = QHBoxLayout()
-        vers.setSpacing(10)
-        for label, ver in (("הגרסה שלך", current_version), ("גרסה חדשה", new_version)):
+        vers.setSpacing(8)
+        for i, (label, ver, bg, fg) in enumerate((
+                ("הגרסה שלך", current_version, "#f1f5f4", "#5f7a70"),
+                ("גרסה חדשה", new_version, "#e2f6ee", "#0f766e"))):
+            if i:
+                # RTL layout: the arrow sits between the pills, pointing from the
+                # current version (right) to the new one (left).
+                arrow = QLabel("←")
+                arrow.setStyleSheet("color:#0f9d78; font-size:18px; font-weight:800;"
+                                    " background:transparent;")
+                arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                vers.addWidget(arrow)
             pill = QFrame()
-            pill.setStyleSheet("QFrame{background:#f1f5f4; border:none; border-radius:10px;}")
+            pill.setStyleSheet(f"QFrame{{background:{bg}; border:none; border-radius:10px;}}")
             pl = QVBoxLayout(pill)
             pl.setContentsMargins(12, 8, 12, 8)
             pl.setSpacing(2)
             a = QLabel(label)
-            a.setStyleSheet("color:#5f7a70; font-size:12px; background:transparent;")
+            a.setStyleSheet(f"color:{fg}; font-size:12px; background:transparent;")
             a.setAlignment(Qt.AlignmentFlag.AlignCenter)
             b = QLabel(f"v{ver}")
             b.setStyleSheet("color:#064e3b; font-size:15px; font-weight:800; background:transparent;")
@@ -803,12 +869,14 @@ class UpdateOfferDialog(QDialog):
             cap.setStyleSheet("color:#0f766e; font-size:12.5px; font-weight:700;")
             body.addWidget(cap)
 
-            nbox = QLabel(notes)
+            nbox = QLabel(_release_notes_html(notes))
+            nbox.setTextFormat(Qt.TextFormat.RichText)
             nbox.setWordWrap(True)
             nbox.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             nbox.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
             nbox.setStyleSheet(
-                "QLabel{background:transparent; color:#334155; font-size:12.5px;}")
+                "QLabel{background:transparent; color:#334155; font-size:12.5px;"
+                " padding:8px 10px;}")
 
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)

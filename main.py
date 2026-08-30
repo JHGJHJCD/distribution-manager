@@ -989,26 +989,89 @@ class MainWindow(QMainWindow):
         except Exception:
             return ""
 
-    # ── Automatic update check on startup ─────────────────────────────────────
+    # ── Automatic update check (startup + hourly while running, v2.81) ────────
+    UPDATE_CHECK_MS = 60 * 60 * 1000   # re-check GitHub every hour
+
     def _auto_check_updates(self):
-        """Silently check GitHub for a newer version on startup. If one exists,
-        offer a one-click install. No-op when running from source (can't self-
-        replace a script) and silent on any network failure."""
+        """Startup check: if a newer version exists, open the offer dialog right
+        away. Also starts an hourly background re-check, so a release published
+        while the app is running pops a Windows notification. No-op when running
+        from source (can't self-replace a script), silent on network failure."""
         if not updater.current_exe():
             return
+        self._upd_timer = QTimer(self)
+        self._upd_timer.setInterval(self.UPDATE_CHECK_MS)
+        self._upd_timer.timeout.connect(lambda: self._run_update_check(False))
+        self._upd_timer.start()
+        self._run_update_check(True)
+
+    def _run_update_check(self, startup: bool):
+        w = getattr(self, "_auto_worker", None)
+        if w is not None and w.isRunning():
+            return
         self._auto_worker = _UpdateWorker("check")
-        self._auto_worker.checked.connect(self._on_auto_update_checked)
+        self._auto_worker.checked.connect(
+            lambda result, st=startup: self._on_auto_update_checked(result, st))
         self._auto_worker.start()
 
-    def _on_auto_update_checked(self, result):
+    def _on_auto_update_checked(self, result, startup: bool):
         # Background check — stay quiet on errors / no newer version.
         if isinstance(result, Exception) or not result or not result.get("url"):
             return
         if not updater.is_newer(result["version"], APP_VERSION):
             return
+        self._pending_update = result
+        if startup:
+            self._offer_pending_update()
+        else:
+            self._notify_update(result["version"])
+
+    def _notify_update(self, ver: str):
+        """A new version was found while the app is running — pop a Windows
+        notification (tray balloon); clicking it opens the update dialog.
+        Notifies once per version so the hourly check doesn't nag."""
+        if getattr(self, "_notified_update_ver", "") == ver:
+            return
+        self._notified_update_ver = ver
+        from PyQt6.QtWidgets import QSystemTrayIcon
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            self._offer_pending_update()          # no tray → fall back to dialog
+            return
+        tray = getattr(self, "_upd_tray", None)
+        if tray is None:
+            tray = QSystemTrayIcon(self.windowIcon(), self)
+            tray.setToolTip("מנהל חלוקה — גרסה חדשה זמינה, לחץ לעדכון")
+            tray.activated.connect(lambda *_: self._offer_pending_update())
+            tray.messageClicked.connect(self._offer_pending_update)
+            self._upd_tray = tray
+        tray.show()
+        icon = self.windowIcon()
+        if icon.isNull():
+            tray.showMessage("עדכון חדש למנהל חלוקה 🎁",
+                             f"גרסה v{ver} מוכנה להתקנה — לחץ כאן לפרטים ולעדכון",
+                             QSystemTrayIcon.MessageIcon.Information, 15000)
+        else:
+            tray.showMessage("עדכון חדש למנהל חלוקה 🎁",
+                             f"גרסה v{ver} מוכנה להתקנה — לחץ כאן לפרטים ולעדכון",
+                             icon, 15000)
+
+    def _offer_pending_update(self):
+        result = getattr(self, "_pending_update", None)
+        if not result or getattr(self, "_offer_open", False):
+            return
+        # Bring the window forward first — the notification may be clicked while
+        # the app is minimized or behind other windows.
+        self.show()
+        self.raise_()
+        self.activateWindow()
         from utils.ui import UpdateOfferDialog
-        if UpdateOfferDialog.offer(self, result["version"], APP_VERSION,
-                                   result.get("notes") or ""):
+        self._offer_open = True
+        try:
+            install = UpdateOfferDialog.offer(self, result["version"], APP_VERSION,
+                                              result.get("notes") or "")
+        finally:
+            self._offer_open = False
+        if install:
             # Reuse the Settings tab's full download → install → restart flow.
             self.settings_tab._start_download(result)
 
