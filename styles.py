@@ -484,6 +484,43 @@ QT_MATERIAL_EXTRA = {
     "density_scale": "0",
 }
 
+
+# ── גודל-טקסט באחוזים, מוחל מיידית (v2.80, #x2yn5) ──────────────────────────
+def _scale_font_sizes(qss: str, scale: float) -> str:
+    """Scale every 'font-size: Npx' in a stylesheet by `scale`. Most of the UI's
+    text sizes live in QSS (qt-material + EXTRA_QSS), so scaling the sheet — not
+    just the app font — is what makes the setting actually change the screen."""
+    import re
+
+    def rep(m):
+        return f"font-size: {max(7, round(float(m.group(1)) * scale))}px"
+
+    return re.sub(r"font-size:\s*([\d.]+)\s*px", rep, qss)
+
+
+def apply_app_theme(app, percent: int = 100):
+    """Apply the full app theme (qt-material + EXTRA_QSS) with every font size
+    scaled to `percent` (100 = the default look). Safe to call again at runtime —
+    Qt repolishes all open widgets, so a Settings change takes effect instantly.
+    Falls back to plain EXTRA_QSS if qt-material is unavailable."""
+    from PyQt6.QtGui import QFont
+    try:
+        scale = max(0.5, min(2.0, (int(percent) or 100) / 100.0))
+    except (TypeError, ValueError):
+        scale = 1.0
+    try:
+        from qt_material import apply_stylesheet
+        apply_stylesheet(app, theme="light_teal.xml", invert_secondary=True,
+                         extra=QT_MATERIAL_EXTRA)
+        qss = app.styleSheet() + EXTRA_QSS
+    except Exception:
+        qss = EXTRA_QSS
+    if abs(scale - 1.0) > 0.001:
+        qss = _scale_font_sizes(qss, scale)
+    app.setStyleSheet(qss)
+    # Segoe UI renders Hebrew crisply at every DPI (Rubik looked soft/blurry).
+    app.setFont(QFont("Segoe UI", max(7, round(11 * scale))))
+
 # ── Row highlight tokens (referenced directly in tab code) ──────────────────
 OVERDUE_BG  = "#ffebee"
 OVERDUE_FG  = "#b71c1c"

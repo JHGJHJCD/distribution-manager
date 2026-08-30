@@ -129,13 +129,59 @@ def _send_online(entry: dict) -> None:
 
 
 def save_feedback(message: str, name: str = "") -> None:
-    """שומר את ההודעה מקומית (סינכרוני) ושולח ברקע לגיטאב/טופס Google."""
+    """שומר את ההודעה מקומית (סינכרוני) ושולח ברקע לגיטאב/טופס Google.
+    מ-v2.80 (#ce6a0) ההודעה נשמרת גם בטבלת feedback שב-DB, כך שהיא מוצגת בתוך
+    התוכנה (הגדרות ← הודעות שנשלחו) ומסונכרנת לשני המחשבים."""
     message = (message or "").strip()
     if not message:
         return
     entry = _entry(message, name)
     _save_local(entry)        # always — never lose a message
+    try:
+        db.add_feedback(message, author_name=entry["name"], host=entry["host"],
+                        version=entry["version"])
+    except Exception:
+        pass                  # the JSONL copy is the safety net
     threading.Thread(target=_send_online, args=(entry,), daemon=True).start()
+
+
+def import_legacy_jsonl() -> int:
+    """ייבוא חד-פעמי של הודעות ישנות מ-feedback.jsonl אל טבלת ה-DB (#ce6a0),
+    כדי שגם דיווחים שנשלחו לפני v2.80 יופיעו במסך ההודעות. ה-guid נגזר
+    דטרמיניסטית מהתוכן, כך שהרצה חוזרת (או ייבוא של אותו קובץ בשני מחשבים)
+    לא יוצרת כפילויות. רץ פעם אחת פר-מחשב (דגל מקומי שלא מסונכרן)."""
+    import uuid as _uuid
+    try:
+        if db.get_setting("feedback_legacy_imported"):
+            return 0
+    except Exception:
+        return 0
+    n = 0
+    try:
+        if os.path.exists(FEEDBACK_PATH):
+            with open(FEEDBACK_PATH, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    body = (e.get("message") or "").strip()
+                    if not body:
+                        continue
+                    guid = _uuid.uuid5(_uuid.NAMESPACE_URL,
+                                       f"manhal-fb|{e.get('ts','')}|{e.get('host','')}|{body}").hex
+                    if db.add_feedback(body, author_name=e.get("name", ""),
+                                       host=e.get("host", ""),
+                                       version=e.get("version", ""),
+                                       guid=guid, created_at=e.get("ts", "")):
+                        n += 1
+        db.set_setting("feedback_legacy_imported", "1")
+    except Exception:
+        pass
+    return n
 
 
 # The developer's inbox — used by the optional "send a copy to my email" path in

@@ -190,6 +190,23 @@ sync.run_sync()
 ok("B mirrored the message deletion",
    all(m["guid"] != m_guid for m in db.get_messages()))
 
+# ── הודעות למפתח (#ce6a0): add + mark-handled propagate between machines ─────
+use_machine(dir_a)
+db.add_feedback("הכפתור לא עובד אצלי", author_name="מזכירה", host="PC-A")
+fb_guid = db.get_feedback()[0]["guid"]
+sync.run_sync()
+use_machine(dir_b)
+sync.run_sync()
+ok("B received feedback message",
+   any(f["body"] == "הכפתור לא עובד אצלי" for f in db.get_feedback()))
+ok("feedback starts open", db.open_feedback_count() >= 1)
+db.set_feedback_status(fb_guid, "done")
+sync.run_sync()
+use_machine(dir_a)
+sync.run_sync()
+fb_a = next(f for f in db.get_feedback() if f["guid"] == fb_guid)
+ok("A mirrored the handled-mark", fb_a["status"] == "done", str(fb_a))
+
 # ── Incremental reads: byte offsets tracked, whole file not re-read ───────────
 use_machine(dir_b)
 sync.run_sync()

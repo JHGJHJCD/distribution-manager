@@ -19,7 +19,6 @@ from PyQt6.QtGui import (QFont, QIcon, QColor, QPixmap, QPainter, QLinearGradien
                          QPen, QBrush, QGuiApplication)
 
 import database as db
-from styles import EXTRA_QSS, QT_MATERIAL_EXTRA
 from tabs.recipients import RecipientsTab
 from tabs.group_update import GroupUpdateTab
 from tabs.search import SearchTab
@@ -1069,12 +1068,6 @@ def _set_windows_dpi_awareness():
             continue
 
 
-def _ui_font_pt() -> int:
-    """The app-wide font size, per the operator's Settings choice.
-    Keys: 'small' / 'normal' / 'large' under the 'ui_font_size' setting."""
-    return {"small": 10, "large": 13}.get(db.get_setting("ui_font_size") or "", 11)
-
-
 def _set_window_icon(widget):
     ico = resource_path("icon.ico")
     if os.path.exists(ico):
@@ -1120,14 +1113,10 @@ def _cleanup_prev_mei():
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 def _apply_theme(app: "QApplication"):
-    """Apply qt_material theme; fall back to plain QSS on any failure."""
-    try:
-        from qt_material import apply_stylesheet
-        apply_stylesheet(app, theme="light_teal.xml", invert_secondary=True,
-                         extra=QT_MATERIAL_EXTRA)
-        app.setStyleSheet(app.styleSheet() + EXTRA_QSS)
-    except Exception:
-        app.setStyleSheet(EXTRA_QSS)
+    """Apply the app theme at the operator's chosen text-size percent (v2.80).
+    get_ui_font_percent never raises, so this is safe even before init_db."""
+    import styles
+    styles.apply_app_theme(app, db.get_ui_font_percent())
 
 
 def _crash_dialog(msg: str):
@@ -1207,11 +1196,9 @@ def _run():
     if os.path.exists(_ico):
         app.setWindowIcon(QIcon(_ico))
 
+    # Theme + Segoe UI font, scaled to the operator's text-size percent — both
+    # are set inside apply_app_theme (v2.80, #x2yn5).
     _apply_theme(app)
-
-    # Segoe UI renders Hebrew crisply at every DPI; the bundled variable font
-    # (Rubik) looked soft/blurry, so the UI uses the system font.
-    app.setFont(QFont("Segoe UI", 11))
 
     import time
     splash = _show_splash(app)
@@ -1231,9 +1218,14 @@ def _run():
 
     db.init_db()
     _target["v"] = 45
-    # Operator-tunable UI text size (Settings → כללי): small/normal/large.
-    app.setFont(QFont("Segoe UI", _ui_font_pt()))
     _cleanup_prev_mei()   # remove a temp dir a prior hard exit may have left
+
+    # One-time import of pre-v2.80 feedback messages into the in-app viewer (#ce6a0).
+    try:
+        from utils import feedback as _fb
+        _fb.import_legacy_jsonl()
+    except Exception:
+        pass
 
     # Startup safety backup (non-blocking) — a restore point on every launch.
     try:

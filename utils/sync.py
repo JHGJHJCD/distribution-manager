@@ -43,7 +43,10 @@ _MY_DRIVE_NAMES = ("My Drive", "האחסון שלי", "התיקיה שלי")
 # Settings that must NOT travel between computers: security, per-machine paths
 # and window/user-interface state.
 EXCLUDED_SETTINGS = {"password", "win_geometry", "backup_folder", "last_backup_at",
-                     "mei_last", "community_pcts_ui", "chat_bg_path"}
+                     "mei_last", "community_pcts_ui", "chat_bg_path",
+                     # per-machine display preference (screens differ) + the
+                     # per-machine one-time legacy feedback import marker
+                     "ui_font_scale", "ui_font_size", "feedback_legacy_imported"}
 EXCLUDED_SETTING_PREFIXES = ("sync_", "export_dir_")   # export_dir_* are per-machine paths (#5e1jc)
 
 JOURNAL_PREFIX = "journal-"
@@ -630,6 +633,37 @@ def _apply_msg_read(conn, rec: dict):
         (dev, rec.get("device_name", ""), read_ts))
 
 
+def _apply_fb_add(conn, rec: dict):
+    """A feedback message ('הודעה למפתח') from another computer (#ce6a0).
+    Idempotent by guid."""
+    guid = rec.get("guid") or ""
+    body = rec.get("body") or ""
+    if not guid or not body:
+        return
+    if conn.execute("SELECT 1 FROM feedback WHERE guid=?", (guid,)).fetchone():
+        return
+    conn.execute(
+        "INSERT INTO feedback (guid, author_name, host, version, body, created_at) "
+        "VALUES (?,?,?,?,?,?)",
+        (guid, rec.get("author_name", ""), rec.get("host", ""),
+         rec.get("version", ""), body, rec.get("created_at", "")))
+
+
+def _apply_fb_status(conn, rec: dict):
+    """A handled/open mark on a feedback message from another computer (#ce6a0).
+    LWW by status_ts."""
+    guid = rec.get("guid") or ""
+    status = rec.get("status") or ""
+    ts = rec.get("ts") or ""
+    if not guid or status not in ("open", "done"):
+        return
+    row = conn.execute("SELECT status_ts FROM feedback WHERE guid=?", (guid,)).fetchone()
+    if not row or (row["status_ts"] or "") >= ts:
+        return
+    conn.execute("UPDATE feedback SET status=?, status_ts=? WHERE guid=?",
+                 (status, ts, guid))
+
+
 def _apply_setting(conn, rec: dict, state: dict):
     key = rec.get("key") or ""
     if not key or not _setting_syncable(key):
@@ -652,6 +686,8 @@ _APPLIERS = {
     "msg_add":      _apply_msg_add,
     "msg_delete":   _apply_msg_delete,
     "msg_read":     _apply_msg_read,
+    "fb_add":       _apply_fb_add,
+    "fb_status":    _apply_fb_status,
 }
 
 
@@ -808,6 +844,22 @@ def _snapshot_body() -> int:
                                 "device_name": rd.get("device_name", ""),
                                 "read_ts": rd.get("read_ts", "")})
         n += 1
+    # Feedback messages ('הודעות למפתח') so the manager sees reports left on the
+    # other computer, including their handled-marks (#ce6a0).
+    with db.get_connection() as conn:
+        fbs = [dict(r) for r in conn.execute("SELECT * FROM feedback ORDER BY created_at ASC")]
+    for fb in fbs:
+        log_change("fb_add", {"guid": fb.get("guid") or "",
+                              "author_name": fb.get("author_name", ""),
+                              "host": fb.get("host", ""),
+                              "version": fb.get("version", ""),
+                              "body": fb.get("body", ""),
+                              "created_at": fb.get("created_at", "")})
+        n += 1
+        if fb.get("status") == "done" and fb.get("status_ts"):
+            log_change("fb_status", {"guid": fb.get("guid") or "",
+                                     "status": "done", "ts": fb.get("status_ts", "")})
+            n += 1
     return n
 
 

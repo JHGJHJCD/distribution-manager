@@ -322,6 +322,21 @@ def init_db():
             read_ts     TEXT DEFAULT ''
         );
 
+        -- הודעות למפתח (#ce6a0): every feedback message is also kept here so the
+        -- operator can review it INSIDE the app (copy / mark handled), instead of
+        -- chasing GitHub. Synced between the computers like the team chat.
+        CREATE TABLE IF NOT EXISTS feedback (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            guid          TEXT DEFAULT '',
+            author_name   TEXT DEFAULT '',
+            host          TEXT DEFAULT '',
+            version       TEXT DEFAULT '',
+            body          TEXT NOT NULL,
+            created_at    TEXT DEFAULT '',
+            status        TEXT DEFAULT 'open',
+            status_ts     TEXT DEFAULT ''
+        );
+
         -- Journal of changes RECEIVED from another computer, with enough 'before'
         -- state to undo them. Powers the manager's change-log (#5rhe9). Local only
         -- (never synced) — each machine records what IT applied.
@@ -1337,15 +1352,34 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
     return batch_id
 
 
-def get_distribution_batches(limit: int = 500):
+def get_distribution_batches(limit: int = None):
     """Every distribution event (batch), newest first — one row per distribution
-    for the 'חלוקות' tab."""
+    for the 'חלוקות' tab. limit=None (the default) returns EVERYTHING — the old
+    default of 500 silently hid history past ~10 years and truncated the full-
+    history export (#o8l0v)."""
+    q = "SELECT * FROM dist_batches ORDER BY dist_date DESC, id DESC"
+    args = ()
+    if limit:
+        q += " LIMIT ?"
+        args = (limit,)
     with get_connection() as conn:
-        rows = conn.execute(
-            "SELECT * FROM dist_batches ORDER BY dist_date DESC, id DESC LIMIT ?",
-            (limit,)
-        ).fetchall()
+        rows = conn.execute(q, args).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_ui_font_percent() -> int:
+    """The operator's UI text size as a percentage (v2.80, #x2yn5): 100 = the
+    default look, clamped to 80–150. Falls back to the legacy small/normal/large
+    keys so an existing choice survives the upgrade. Never raises — the theme is
+    applied before init_db on first launch."""
+    try:
+        v = get_setting("ui_font_scale")
+        if v:
+            return min(150, max(80, int(v)))
+        legacy = get_setting("ui_font_size") or ""
+        return {"small": 90, "large": 120}.get(legacy, 100)
+    except Exception:
+        return 100
 
 
 def get_no_show_threshold() -> int:
@@ -1538,18 +1572,20 @@ def delete_distribution(dist_id: int):
         _sync_log("dist_delete", {"guid": row["guid"]})
 
 
-def get_distributions(recipient_name: str = None, limit: int = 1000):
+def get_distributions(recipient_name: str = None, limit: int = None):
+    """History rows, newest first. limit=None (the default) returns EVERY row —
+    a hard cap here would silently hide old history from view/export (#o8l0v)."""
+    q = "SELECT * FROM distributions"
+    args = []
+    if recipient_name:
+        q += " WHERE recipient_name=?"
+        args.append(recipient_name)
+    q += " ORDER BY dist_date DESC"
+    if limit:
+        q += " LIMIT ?"
+        args.append(limit)
     with get_connection() as conn:
-        if recipient_name:
-            rows = conn.execute(
-                "SELECT * FROM distributions WHERE recipient_name=? ORDER BY dist_date DESC LIMIT ?",
-                (recipient_name, limit)
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM distributions ORDER BY dist_date DESC LIMIT ?",
-                (limit,)
-            ).fetchall()
+        rows = conn.execute(q, args).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -1610,10 +1646,15 @@ def delete_message(guid: str) -> bool:
 
 
 def get_messages(limit: int = 400):
-    """Return the most recent chat messages in chronological order (oldest first)."""
+    """Return the most recent chat messages in chronological order (oldest first).
+
+    The cap keeps the NEWEST rows (inner DESC query) — the old ASC+LIMIT form
+    kept the OLDEST 400, so once the chat passed 400 messages new ones would
+    never appear (#o8l0v)."""
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT * FROM messages ORDER BY created_at ASC, id ASC LIMIT ?", (limit,)
+            "SELECT * FROM (SELECT * FROM messages ORDER BY created_at DESC, id DESC "
+            "LIMIT ?) ORDER BY created_at ASC, id ASC", (limit,)
         ).fetchall()
         return [dict(r) for r in rows]
 
@@ -1656,6 +1697,64 @@ def latest_other_read_ts(exclude_device: str = "") -> str:
             "SELECT MAX(read_ts) AS m FROM message_reads WHERE device <> ?",
             (exclude_device or "",)).fetchone()
         return (row["m"] or "") if row else ""
+
+
+# ─── הודעות למפתח בתוך התוכנה (#ce6a0) ───────────────────────────────────────
+
+def add_feedback(body: str, author_name: str = "", host: str = "",
+                 version: str = "", guid: str = "", created_at: str = "") -> int:
+    """Keep one feedback message in the DB (viewable in-app) and journal it so
+    the manager sees reports left on the other computer too. Idempotent by guid
+    (a deterministic guid lets both machines import the same legacy JSONL line
+    without duplicating it)."""
+    body = (body or "").strip()
+    if not body:
+        return 0
+    guid = (guid or "").strip() or uuid.uuid4().hex
+    created_at = created_at or _utc_now()
+    with get_connection() as conn:
+        if conn.execute("SELECT 1 FROM feedback WHERE guid=?", (guid,)).fetchone():
+            return 0
+        cur = conn.execute(
+            "INSERT INTO feedback (guid, author_name, host, version, body, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (guid, author_name or "", host or "", version or "", body, created_at))
+        fid = cur.lastrowid
+    _sync_log("fb_add", {"guid": guid, "author_name": author_name or "",
+                         "host": host or "", "version": version or "",
+                         "body": body, "created_at": created_at})
+    return fid
+
+
+def get_feedback():
+    """Every feedback message, newest first, with its handled-status."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM feedback ORDER BY created_at DESC, id DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def set_feedback_status(guid: str, status: str) -> bool:
+    """Mark a feedback message handled ('done') or reopen it ('open'), and sync
+    the mark to the other computer (LWW by status_ts)."""
+    guid = (guid or "").strip()
+    status = "done" if status == "done" else "open"
+    if not guid:
+        return False
+    ts = _utc_now()
+    with get_connection() as conn:
+        cur = conn.execute("UPDATE feedback SET status=?, status_ts=? WHERE guid=?",
+                           (status, ts, guid))
+        if cur.rowcount == 0:
+            return False
+    _sync_log("fb_status", {"guid": guid, "status": status, "ts": ts})
+    return True
+
+
+def open_feedback_count() -> int:
+    with get_connection() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM feedback WHERE status='open'").fetchone()
+        return int(row["n"] or 0)
 
 
 # ─── Manager change-log + undo (#5rhe9) ───────────────────────────────────────

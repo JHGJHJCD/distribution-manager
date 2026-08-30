@@ -124,16 +124,23 @@ class SettingsTab(QWidget):
 
         font_row = QHBoxLayout()
         font_row.addWidget(QLabel("גודל הטקסט בתוכנה:"))
-        from PyQt6.QtWidgets import QComboBox
-        self.font_combo = QComboBox()
-        for label, key in (("קטן", "small"), ("רגיל", "normal"), ("גדול", "large")):
-            self.font_combo.addItem(label, key)
-        cur_font = db.get_setting("ui_font_size") or "normal"
-        idx = self.font_combo.findData(cur_font)
-        self.font_combo.setCurrentIndex(idx if idx >= 0 else 1)
-        self.font_combo.setToolTip("מגדיל או מקטין את הטקסט בכל התוכנה")
-        self.font_combo.currentIndexChanged.connect(self._on_font_size_changed)
-        font_row.addWidget(self.font_combo)
+        # v2.80 (#x2yn5): percent-based, applied INSTANTLY to the whole app.
+        self.font_spin = QSpinBox()
+        self.font_spin.setRange(80, 150)
+        self.font_spin.setSingleStep(5)
+        self.font_spin.setSuffix(" %")
+        self.font_spin.setMinimumWidth(90)
+        self.font_spin.setValue(db.get_ui_font_percent())
+        self.font_spin.setToolTip("מגדיל או מקטין את הטקסט בכל התוכנה מיידית "
+                                  "(100% = הגודל הרגיל)")
+        from PyQt6.QtCore import QTimer
+        self._font_apply_timer = QTimer(self)
+        self._font_apply_timer.setSingleShot(True)
+        self._font_apply_timer.setInterval(250)
+        self._font_apply_timer.timeout.connect(self._apply_font_percent)
+        self.font_spin.valueChanged.connect(
+            lambda *_: self._font_apply_timer.start())
+        font_row.addWidget(self.font_spin)
         font_row.addStretch()
         gen_lay.addLayout(font_row)
 
@@ -550,10 +557,26 @@ class SettingsTab(QWidget):
         sync_lay.setContentsMargins(10, 7, 10, 7)
         sync_lay.setSpacing(6)
         sync_lay.addWidget(section_header("סנכרון בין שני מחשבים", "update", "#0f766e"))
-        self.lbl_sync_status = QLabel("")
-        self.lbl_sync_status.setWordWrap(True)
-        self.lbl_sync_status.setStyleSheet("font-size:12.5px;")
-        sync_lay.addWidget(self.lbl_sync_status)
+        # Visual status card (v2.80, #n02fc): colored dot + headline + stat chips
+        # instead of a static block of text lines.
+        head_row = QHBoxLayout()
+        head_row.setSpacing(8)
+        self.sync_dot = QLabel("")
+        self.sync_dot.setFixedSize(14, 14)
+        head_row.addWidget(self.sync_dot)
+        self.sync_headline = QLabel("")
+        self.sync_headline.setStyleSheet("font-size:13.5px; font-weight:700;")
+        head_row.addWidget(self.sync_headline)
+        head_row.addStretch()
+        sync_lay.addLayout(head_row)
+        self.sync_chips_lay = QHBoxLayout()
+        self.sync_chips_lay.setSpacing(6)
+        self.sync_chips_lay.addStretch()
+        sync_lay.addLayout(self.sync_chips_lay)
+        self.lbl_sync_folder = QLabel("")
+        self.lbl_sync_folder.setWordWrap(True)
+        self.lbl_sync_folder.setStyleSheet("color:#64748b; font-size:11.5px;")
+        sync_lay.addWidget(self.lbl_sync_folder)
         # Sync runs continuously in the background (every 10s) — no manual
         # 'sync now' button is needed any more (#hd4as).
         sync_note = QLabel("הסנכרון פועל אוטומטית ברקע כל הזמן — אין צורך ללחוץ על כלום.")
@@ -619,6 +642,16 @@ class SettingsTab(QWidget):
         self.btn_feedback.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_feedback.clicked.connect(self._open_feedback)
         bottom_row.addWidget(self.btn_feedback)
+        # v2.80 (#ce6a0): the operator can review every message INSIDE the app —
+        # from both computers — copy it, and mark it handled. No GitHub needed.
+        self.btn_feedback_inbox = QPushButton("📥 הודעות שנשלחו")
+        self.btn_feedback_inbox.setObjectName("neutral")
+        self.btn_feedback_inbox.setToolTip(
+            "כל ההודעות שנשלחו למפתח משני המחשבים — צפייה, העתקה וסימון כטופל")
+        self.btn_feedback_inbox.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_feedback_inbox.clicked.connect(self._open_feedback_inbox)
+        bottom_row.addWidget(self.btn_feedback_inbox)
+        self._refresh_feedback_inbox_btn()
         bottom_row.addStretch()
         # (The manual "רענן" button was removed — the settings screen reloads
         # itself every time the tab is opened, so it served no purpose.)
@@ -672,6 +705,23 @@ class SettingsTab(QWidget):
         else:
             self.lbl_mail_status.setText("לא הוגדר עדיין")
             self.lbl_mail_status.setStyleSheet("color:#9ca3af;")
+
+        # Live statuses each time the tab is opened (v2.80).
+        self._refresh_sync_status()
+        self._refresh_manager_status()
+        self._refresh_feedback_inbox_btn()
+
+    def _refresh_feedback_inbox_btn(self):
+        try:
+            n = db.open_feedback_count()
+        except Exception:
+            n = 0
+        self.btn_feedback_inbox.setText(
+            f"📥 הודעות שנשלחו ({n} פתוחות)" if n else "📥 הודעות שנשלחו")
+
+    def _open_feedback_inbox(self):
+        FeedbackInboxDialog(self).exec()
+        self._refresh_feedback_inbox_btn()
 
     # ── Need-score weights ────────────────────────────────────────────────────
 
@@ -861,35 +911,75 @@ class SettingsTab(QWidget):
         CommunityQuotasDialog(self).exec()
 
     # ── Two-computer sync ────────────────────────────────────────────────────
+    def _set_sync_dot(self, color: str):
+        self.sync_dot.setStyleSheet(
+            f"background-color:{color}; border-radius:7px; border:2px solid #ffffff;")
+
+    def _clear_sync_chips(self):
+        while self.sync_chips_lay.count() > 1:   # keep the trailing stretch
+            item = self.sync_chips_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    def _add_sync_chip(self, text: str, fg: str = "#334155", bg: str = "#eef4f1"):
+        chip = QLabel(text)
+        chip.setStyleSheet(
+            f"background-color:{bg}; color:{fg}; border-radius:10px; "
+            "padding:3px 10px; font-size:12px; font-weight:600;")
+        self.sync_chips_lay.insertWidget(self.sync_chips_lay.count() - 1, chip)
+
     def _refresh_sync_status(self):
+        """Visual sync status (v2.80, #n02fc): a colored state dot + headline and
+        chips for device / last run / pending / peers — not a wall of text."""
+        self._clear_sync_chips()
         if not sync.is_enabled():
-            self.lbl_sync_status.setText("סנכרון כבוי. הגדר תיקיית Google Drive "
-                                         "משותפת כדי לעבוד משני מחשבים על אותם נתונים.")
-            self.lbl_sync_status.setStyleSheet("color:#64748b; font-size:12.5px;")
+            self._set_sync_dot("#94a3b8")
+            self.sync_headline.setText("סנכרון כבוי")
+            self.sync_headline.setStyleSheet(
+                "font-size:13.5px; font-weight:700; color:#64748b;")
+            self.lbl_sync_folder.setText(
+                "הגדר תיקיית Google Drive משותפת כדי לעבוד משני מחשבים על אותם נתונים.")
             return
         from utils import timefmt
         info = sync.last_run_info()
         folder = sync.get_folder()
         avail = sync.folder_available()
         name = sync.device_name() or "מחשב זה"
-        last = timefmt.datetime_str(info.get("last_run"))   # Israel time
         others = sync.other_device_count() if avail else 0
+        pending = int(info.get("pending", 0) or 0)
         if not avail:
-            second = "⚠ התיקייה לא נמצאה כרגע"
+            self._set_sync_dot("#dc2626")
+            self.sync_headline.setText("התיקייה המשותפת לא נמצאה כרגע")
+            hl_color = "#b91c1c"
         elif others > 0:
-            second = f"✓ מחשב שני מחובר ({others})"
+            self._set_sync_dot("#16a34a")
+            self.sync_headline.setText("מסונכרן — המחשב השני מחובר")
+            hl_color = "#166534"
         else:
-            second = ("⚠ לא זוהה מחשב שני — ודא ששני המחשבים מצביעים לאותה "
-                      "תיקייה בתוך «Drive שלי» (לא תיקיית גיבוי/הורדות)")
-        parts = [f"✓ סנכרון פעיל · {name}",
-                 f"תיקייה: {folder}" + ("" if avail else "  ⚠ לא נמצאה כרגע"),
-                 second,
-                 f"סנכרון אחרון: {last}" if last else "טרם סונכרן",
-                 f"ממתינים לשליחה: {info.get('pending', 0)}"]
-        self.lbl_sync_status.setText("\n".join(parts))
-        healthy = avail and others > 0
-        self.lbl_sync_status.setStyleSheet(
-            "color:#334155; font-size:12.5px;" if healthy else "color:#b45309; font-size:12.5px;")
+            self._set_sync_dot("#f59e0b")
+            self.sync_headline.setText("פעיל — עדיין לא זוהה מחשב שני")
+            hl_color = "#b45309"
+        self.sync_headline.setStyleSheet(
+            f"font-size:13.5px; font-weight:700; color:{hl_color};")
+        last_rel = timefmt.relative(info.get("last_run") or "")
+        self._add_sync_chip(f"🖥 {name}")
+        self._add_sync_chip("⏱ סונכרן " + last_rel if last_rel else "⏱ טרם סונכרן",
+                            fg="#334155" if last_rel else "#b45309",
+                            bg="#eef4f1" if last_rel else "#fef3c7")
+        if pending:
+            self._add_sync_chip(f"📤 ממתינים לשליחה: {pending}",
+                                fg="#b45309", bg="#fef3c7")
+        else:
+            self._add_sync_chip("✓ הכול נשלח", fg="#166534", bg="#dcfce7")
+        if avail:
+            self._add_sync_chip(f"💻 מחשבים נוספים: {others}",
+                                fg="#166534" if others else "#b45309",
+                                bg="#dcfce7" if others else "#fef3c7")
+        note = "" if avail else "  ⚠ ודא ש-Google Drive פועל ושהתיקייה קיימת"
+        hint = ("" if others or not avail else
+                "\nודא ששני המחשבים מצביעים לאותה תיקייה בתוך «Drive שלי».")
+        self.lbl_sync_folder.setText(f"תיקייה: {folder}{note}{hint}")
 
     def _open_sync_setup(self):
         SyncSetupDialog(self).exec()
@@ -1099,17 +1189,19 @@ class SettingsTab(QWidget):
         if email and password:
             email_utils.set_smtp_config(email, password)
 
-    def _on_font_size_changed(self, *_):
-        """Persist + apply the chosen UI text size immediately (v2.60)."""
-        key = self.font_combo.currentData() or "normal"
-        db.set_setting("ui_font_size", key)
-        from PyQt6.QtGui import QFont
-        pt = {"small": 10, "large": 13}.get(key, 11)
+    def _apply_font_percent(self):
+        """Persist + apply the chosen UI text size to the WHOLE app right now
+        (v2.80, #x2yn5): the entire stylesheet is re-applied with every font-size
+        scaled, so open screens update instantly — no restart needed."""
+        pct = self.font_spin.value()
+        db.set_setting("ui_font_scale", str(pct))
         app = QApplication.instance()
         if app is not None:
-            app.setFont(QFont("Segoe UI", pt))
+            import styles
+            with busy_cursor():
+                styles.apply_app_theme(app, pct)
         if self.main_win:
-            self.main_win.status_msg("גודל הטקסט עודכן — חלק מהמסכים יתעדכנו בפתיחה הבאה")
+            self.main_win.status_msg(f"גודל הטקסט: {pct}%")
 
     # ── Software update ───────────────────────────────────────────────────────
 
@@ -1191,6 +1283,155 @@ class SettingsTab(QWidget):
             self, "מתעדכן",
             "העדכון הותקן בהצלחה.\nהתוכנה תיסגר כעת ותיפתח מחדש בגרסה החדשה.")
         QApplication.quit()
+
+
+class FeedbackInboxDialog(QDialog):
+    """'הודעות שנשלחו למפתח' (v2.80, #ce6a0): כל הודעות המשוב — משני המחשבים —
+    מוצגות בתוך התוכנה, עם העתקה וסימון 'טופל'. כך המפעיל יודע אילו תקלות
+    דווחו בלי ללכת לגיטהאב."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("הודעות שנשלחו למפתח")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumSize(760, 540)
+        self.setSizeGripEnabled(True)
+        lay = QVBoxLayout(self)
+        head = QLabel("כל ההודעות שנשלחו למפתח דרך \"השאר הודעה למפתח\" — משני "
+                      "המחשבים. לחיצה על שורה מציגה את ההודעה המלאה; אפשר להעתיק "
+                      "אותה ולסמן שטופלה.")
+        head.setWordWrap(True)
+        head.setStyleSheet("color:#334155; font-size:13px;")
+        lay.addWidget(head)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["מתי", "מאת", "מחשב", "ההודעה", "פעולה"])
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.verticalHeader().setVisible(False)
+        hdr = self.table.horizontalHeader()
+        for c in (0, 1, 2, 4):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        self.table.itemSelectionChanged.connect(self._show_selected)
+        lay.addWidget(self.table, 2)
+
+        from PyQt6.QtWidgets import QPlainTextEdit
+        self.preview = QPlainTextEdit()
+        self.preview.setReadOnly(True)
+        self.preview.setPlaceholderText("בחר הודעה ברשימה כדי לראות אותה במלואה")
+        self.preview.setMinimumHeight(110)
+        try:
+            from utils.ui import rtl_text_area
+            rtl_text_area(self.preview)
+        except Exception:
+            pass
+        lay.addWidget(self.preview, 1)
+
+        btns = QHBoxLayout()
+        self.btn_copy = QPushButton("העתק הודעה")
+        self.btn_copy.setObjectName("neutral")
+        self.btn_copy.clicked.connect(self._copy_selected)
+        btns.addWidget(self.btn_copy)
+        self.btn_copy_open = QPushButton("העתק את כל הפתוחות")
+        self.btn_copy_open.setObjectName("neutral")
+        self.btn_copy_open.setToolTip("מעתיק את כל ההודעות שטרם טופלו — נוח "
+                                      "להדבקה בבקשת תיקון אחת")
+        self.btn_copy_open.clicked.connect(self._copy_open)
+        btns.addWidget(self.btn_copy_open)
+        btns.addStretch()
+        close = QPushButton("סגור")
+        close.setObjectName("neutral")
+        close.clicked.connect(self.accept)
+        btns.addWidget(close)
+        lay.addLayout(btns)
+
+        self._rows = []
+        self._reload()
+
+    @staticmethod
+    def _entry_text(fb: dict) -> str:
+        from utils import timefmt
+        when = timefmt.datetime_str(fb.get("created_at") or "") or (fb.get("created_at") or "")
+        meta = " · ".join(x for x in (
+            when, fb.get("author_name") or "", fb.get("host") or "",
+            f"v{fb['version']}" if fb.get("version") else "") if x)
+        return f"[{meta}]\n{fb.get('body') or ''}"
+
+    def _reload(self, keep_row: int = -1):
+        from utils import timefmt
+        self._rows = db.get_feedback()
+        self.table.setRowCount(len(self._rows))
+        for r, fb in enumerate(self._rows):
+            done = (fb.get("status") == "done")
+            when = QTableWidgetItem(timefmt.datetime_str(fb.get("created_at") or "")
+                                    or (fb.get("created_at") or ""))
+            when.setToolTip(timefmt.relative(fb.get("created_at") or ""))
+            self.table.setItem(r, 0, when)
+            self.table.setItem(r, 1, QTableWidgetItem(fb.get("author_name") or "—"))
+            self.table.setItem(r, 2, QTableWidgetItem(fb.get("host") or ""))
+            body = (fb.get("body") or "").replace("\n", " ")
+            body_item = QTableWidgetItem(body if len(body) <= 90 else body[:90] + "…")
+            body_item.setToolTip(fb.get("body") or "")
+            self.table.setItem(r, 3, body_item)
+            if done:
+                for c in range(4):
+                    it = self.table.item(r, c)
+                    if it:
+                        it.setForeground(QColor("#9aa7b8"))
+            btn = QPushButton("החזר לפתוח" if done else "סמן כטופל")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                "QPushButton{background:%s; color:#ffffff; border:none;"
+                "border-radius:8px; padding:4px 12px; font-weight:700;}"
+                "QPushButton:hover{background:%s;}"
+                % (("#94a3b8", "#64748b") if done else ("#0f9d78", "#0b7e60")))
+            btn.clicked.connect(lambda _=False, g=fb.get("guid"), d=done:
+                                self._set_status(g, "open" if d else "done"))
+            self.table.setCellWidget(r, 4, btn)
+        self.table.resizeRowsToContents()
+        if 0 <= keep_row < len(self._rows):
+            # setCurrentCell (not selectRow) — with SelectRows behavior it
+            # highlights the whole row AND reliably fires itemSelectionChanged.
+            self.table.setCurrentCell(keep_row, 0)
+
+    def _selected_fb(self):
+        r = self.table.currentRow()
+        return self._rows[r] if 0 <= r < len(self._rows) else None
+
+    def _show_selected(self):
+        fb = self._selected_fb()
+        self.preview.setPlainText(self._entry_text(fb) if fb else "")
+
+    def _set_status(self, guid, status):
+        row = self.table.currentRow()
+        db.set_feedback_status(guid or "", status)
+        self._reload(keep_row=row)
+
+    def _flash(self, btn, text="הועתק ✓"):
+        from PyQt6.QtCore import QTimer
+        orig = btn.text()
+        btn.setText(text)
+        QTimer.singleShot(1500, lambda: btn.setText(orig))
+
+    def _copy_selected(self):
+        fb = self._selected_fb()
+        if not fb:
+            QMessageBox.information(self, "", "בחר קודם הודעה ברשימה.")
+            return
+        QApplication.clipboard().setText(self._entry_text(fb))
+        self._flash(self.btn_copy)
+
+    def _copy_open(self):
+        open_fbs = [fb for fb in self._rows if fb.get("status") != "done"]
+        if not open_fbs:
+            QMessageBox.information(self, "", "אין הודעות פתוחות להעתקה.")
+            return
+        QApplication.clipboard().setText(
+            "\n\n———\n\n".join(self._entry_text(fb) for fb in open_fbs))
+        self._flash(self.btn_copy_open)
 
 
 class ManagerLogDialog(QDialog):

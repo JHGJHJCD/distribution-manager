@@ -18,6 +18,14 @@ Traps that have cost us time before. Check the relevant one before touching that
   Use `WA_DontShowOnScreen` + `grab()`.
 - Keep full RTL and user-facing simplicity on every UI change.
 
+- **App-wide text size (v2.80):** most text sizes live in the QSS, so `app.setFont` alone changes
+  almost nothing. The ONLY way to change text size is `styles.apply_app_theme(app, percent)`
+  (rebuilds qt-material + EXTRA_QSS with every `font-size: Npx` scaled, then sets the font).
+  Setting key: `ui_font_scale` (percent, per-machine, excluded from sync).
+- **`QTableWidget.selectRow()` can silently no-op** in dialog tables — use
+  `setCurrentCell(row, 0)`; with SelectRows behavior it selects the row AND fires
+  `itemSelectionChanged` reliably.
+
 ## Excel / printing
 - **openpyxl:** use `get_column_letter(col)` only — `.column_letter` crashes on `MergedCell`.
 - **Printing:** `QTextDocument` ignores `dir` → RTL columns must be written in reverse order manually

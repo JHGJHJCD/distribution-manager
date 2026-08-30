@@ -64,6 +64,22 @@ after `boot()` via the normal `database.py` helpers (`db.add_recipient(...)`, et
 navigating — mirror how `dev/_shot_msgdel.py` seeds messages. Keep it minimal: just enough
 to exercise the thing you changed.
 
+## Traps learned the hard way (v2.80)
+
+- **Blank/garbled tab in a MainWindow grab:** the settings tab (QScrollArea content)
+  can paint EMPTY or with smeared stale pixels in WA_DontShowOnScreen mode —
+  especially after scrolling the scroll area before grabbing. It is a paint
+  artifact, not a layout bug. Fixes: re-apply the app theme once after navigating
+  (`styles.apply_app_theme(app, pct)` repolishes and wakes the content), run 4+
+  `processEvents()`, and for a full-page proof grab the INNER widget directly:
+  `tab.findChild(QScrollArea).widget().grab()` — that render is always clean.
+- **Selecting a table row in a probe:** `table.selectRow(n)` silently does nothing
+  in dialog tables here — use `table.setCurrentCell(n, 0)` (with SelectRows
+  behavior it highlights the whole row and fires `itemSelectionChanged`).
+- **Text-size feature (v2.80):** theme+font come from `styles.apply_app_theme(app, percent)`;
+  a probe that calls `apply_stylesheet` + `EXTRA_QSS` manually still works, but the
+  one-liner is now the canonical boot idiom.
+
 ## When you're done
 
 Confirm the change visually in the PNG, then give the user a one-line plain-Hebrew note

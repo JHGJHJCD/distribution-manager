@@ -58,10 +58,15 @@ other side by a handler in `utils/sync.py`. Two cases:
 - **Field on an already-synced row** (e.g. a new recipient attribute): include it in
   that row's existing payload builder (`_rec_sync_payload`) and its apply handler
   (`rec_upsert`). Often no new op is needed.
-- **A new kind of record:** add a new op (mirror `msg_add`/`msg_delete`): call
-  `_sync_log("my_op", {...})` at the write, and add an `_apply_my_op` handler in
-  `utils/sync.py`. Conflicts resolve **last-write-wins by UTC `updated_at`** — set
-  `updated_at` on writes so LWW has something to compare.
+- **A new kind of record:** add a new op (mirror `msg_add`/`msg_delete`, or
+  `fb_add`/`fb_status` from v2.80): call `_sync_log("my_op", {...})` at the write, and
+  add an `_apply_my_op` handler registered in `_APPLIERS` in `utils/sync.py`. Conflicts
+  resolve **last-write-wins by UTC `updated_at`** — set `updated_at` on writes so LWW
+  has something to compare (a status-flag change gets its own ts field, e.g.
+  `status_ts`, compared in the applier).
+- **Don't forget `snapshot()`:** a new synced record kind must also be seeded there,
+  or a computer that joins later never receives the existing rows (messages, reads
+  and feedback all do this).
 
 Settings that must **not** sync (secrets, local paths, geometry) go in
 `EXCLUDED_SETTINGS` in `utils/sync.py`.
