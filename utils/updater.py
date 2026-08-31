@@ -166,7 +166,34 @@ def apply_update(downloaded_path: str):
         return f"לא ניתן להחליף את קובץ התוכנה: {e}"
 
     try:
-        subprocess.Popen([exe], close_fds=True)
+        subprocess.Popen([exe], close_fds=True, env=_child_env())
     except OSError as e:
         return f"העדכון הותקן, אך ההפעלה מחדש נכשלה. הפעל את התוכנה ידנית.\n({e})"
     return None
+
+
+# ─── relaunch environment ─────────────────────────────────────────────────────
+
+# PyInstaller onefile marks its extraction with these env vars. If the freshly
+# launched EXE inherits them, its bootloader thinks it is already a "second
+# stage" and re-uses the CURRENT process's _MEI temp dir instead of extracting
+# its own. When this (old) process then exits, its bootloader deletes that _MEI,
+# and the new process dies on its first lazy import — the FileNotFoundError from
+# zipimport at startup that appeared after every update. Scrubbing them forces a
+# clean, independent extraction for the child.
+_PYI_ENV_VARS = (
+    "_MEIPASS2",                  # classic (<6)
+    "_PYI_ARCHIVE_FILE",
+    "_PYI_APPLICATION_HOME_DIR",
+    "_PYI_PARENT_PID",
+    "_PYI_ONEFILE_TEMPDIR",
+    "_PYI_SPLASH_IPC",
+    "_PYI_LINK_TARGET",
+)
+
+
+def _child_env():
+    env = dict(os.environ)
+    for var in _PYI_ENV_VARS:
+        env.pop(var, None)
+    return env
