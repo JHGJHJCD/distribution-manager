@@ -680,7 +680,8 @@ def _apply_tz_add(conn, rec: dict):
         (guid, rec.get("name", ""), rec.get("sent_at", ""),
          rec.get("dist_date", ""), str(rec.get("template_id", "")),
          rec.get("campaign_id", ""), rec.get("device", ""),
-         int(rec.get("total") or 0), "sending", rec.get("sent_at", "")))
+         int(rec.get("total") or 0), rec.get("status") or "sending",
+         rec.get("sent_at", "")))
 
 
 def _apply_tz_update(conn, rec: dict):
@@ -694,11 +695,19 @@ def _apply_tz_update(conn, rec: dict):
                        (guid,)).fetchone()
     if not row or (row["status_ts"] or "") >= ts:
         return
-    conn.execute(
-        "UPDATE tzintuk_campaigns SET delivered=?, failed=?, status=?, "
-        "status_ts=?, report_json=? WHERE guid=?",
-        (int(rec.get("delivered") or 0), int(rec.get("failed") or 0),
-         rec.get("status", "sending"), ts, rec.get("report_json", ""), guid))
+    sets = "delivered=?, failed=?, status=?, status_ts=?, report_json=?"
+    args = [int(rec.get("delivered") or 0), int(rec.get("failed") or 0),
+            rec.get("status", "sending"), ts, rec.get("report_json", "")]
+    # A scheduled campaign that ran carries the real campaignId + run time
+    # (#xi85i); older-version payloads simply don't have these keys.
+    if rec.get("campaign_id"):
+        sets += ", campaign_id=?"
+        args.append(str(rec.get("campaign_id")))
+    if rec.get("sent_at"):
+        sets += ", sent_at=?"
+        args.append(rec.get("sent_at"))
+    conn.execute(f"UPDATE tzintuk_campaigns SET {sets} WHERE guid=?",
+                 (*args, guid))
 
 
 def _apply_setting(conn, rec: dict, state: dict):
@@ -907,7 +916,8 @@ def _snapshot_body() -> int:
     for c in camps:
         log_change("tz_add", {k: c.get(k, "") for k in
                               ("guid", "name", "sent_at", "dist_date",
-                               "template_id", "campaign_id", "device", "total")})
+                               "template_id", "campaign_id", "device", "total",
+                               "status")})
         n += 1
         if c.get("status_ts"):
             log_change("tz_update", {"guid": c.get("guid") or "",

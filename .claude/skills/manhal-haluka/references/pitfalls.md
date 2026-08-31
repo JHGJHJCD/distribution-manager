@@ -26,6 +26,11 @@ Traps that have cost us time before. Check the relevant one before touching that
   `setCurrentCell(row, 0)`; with SelectRows behavior it selects the row AND fires
   `itemSelectionChanged` reliably.
 
+- **QDateEdit/QDateTimeEdit in RTL:** the app-wide RTL direction reverses the date/time
+  SECTION order (dd/MM/yyyy renders as yyyy/MM/dd, time and date swap). Fix: set the field
+  `setLayoutDirection(LeftToRight)` **before** `setDisplayFormat(...)` — LTR after the format
+  does NOT fix it. Canonical example: `widgets.DateEdit`; hit again in v2.87 `_ScheduleDialog`.
+
 ## Excel / printing
 - **openpyxl:** use `get_column_letter(col)` only — `.column_letter` crashes on `MergedCell`.
 - **Printing:** `QTextDocument` ignores `dir` → RTL columns must be written in reverse order manually

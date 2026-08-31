@@ -12,6 +12,13 @@ except Exception:
     pass
 sys.path.insert(0, ".")
 
+import database as db
+# DB זמני — הבדיקות לא נוגעות בנתונים האמיתיים (וגם לא במפתח האמיתי).
+_dbdir = tempfile.mkdtemp(prefix="tts_db_")
+db.DB_PATH = os.path.join(_dbdir, "data.db")
+db.BACKUP_DIR = os.path.join(_dbdir, "backups")
+db.init_db()
+
 from utils import tts
 
 fails = []
@@ -76,17 +83,34 @@ ok("קובץ שנעלם מסונן מהרשימה", tts.library_list() == [])
 # ── 3. שגיאות synthesize ─────────────────────────────────────────────────────
 print("— שגיאות —")
 try:
-    tts.synthesize("", "he-IL-AvriNeural", os.path.join(root, "x.mp3"))
+    tts.synthesize("", "he-IL-AvriNeural", os.path.join(root, "x"))
     ok("טקסט ריק נחסם", False)
 except tts.TtsError as e:
     ok("טקסט ריק נחסם", "טקסט" in str(e))
 
+try:
+    tts._gemini_synthesize("שלום", "Charon", os.path.join(root, "g.wav"))
+    ok("גמיני בלי מפתח נחסם", False)
+except tts.TtsError as e:
+    ok("גמיני בלי מפתח נחסם", "מפתח" in str(e))
+
+ok("לכל קול גמיני יש קול-גיבוי",
+   all(v in tts._GEMINI_FALLBACK for _l, v in tts.VOICES if v.startswith("gemini:")))
+
 # ── 4. יצירה אמיתית (אינטרנט; אזהרה בלבד בכישלון רשת) ────────────────────────
 print("— יצירה אמיתית מול השירות —")
-out = os.path.join(root, "real.mp3")
 try:
-    tts.synthesize("בדיקה קצרה.", "he-IL-AvriNeural", out)
-    ok("נוצר MP3 אמיתי", os.path.getsize(out) > 1000, f"{os.path.getsize(out)} bytes")
+    path, note = tts.synthesize("בדיקה קצרה.", "he-IL-AvriNeural",
+                                os.path.join(root, "real"))
+    ok("נוצר MP3 אמיתי", path.endswith(".mp3") and os.path.getsize(path) > 1000,
+       f"{os.path.getsize(path)} bytes")
+    ok("בלי הערת נפילה בקול רגיל", note == "")
+    # גמיני בלי מפתח (DB זמני ריק) — נופל אוטומטית לקול הרגיל עם הערה.
+    path2, note2 = tts.synthesize("בדיקה קצרה.", "gemini:Charon",
+                                  os.path.join(root, "real2"))
+    ok("נפילת גמיני→אברי אוטומטית", path2.endswith(".mp3")
+       and os.path.getsize(path2) > 1000)
+    ok("הערת הנפילה מוסברת", "גמיני" in note2 and "מפתח" in note2)
 except tts.TtsError as e:
     print(f"  ⚠  יצירה אמיתית דולגה (אין רשת / חסימה): {e}")
 

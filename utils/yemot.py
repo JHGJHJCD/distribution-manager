@@ -364,6 +364,90 @@ def run_campaign(phones: dict, template_id: str | None = None) -> dict:
     return _call("RunCampaign", params, post=True)
 
 
+# ─── Scheduled campaigns (server-side — run even when this computer is off) ──
+
+def set_template_entries(phones: dict, template_id: str) -> int:
+    """Store `phones` ({'0501234567': 'שם', …}) as the template's distribution
+    list. A scheduled campaign dials the STORED list (ScheduleCampaign has no
+    inline phones param like RunCampaign), so this must run before scheduling.
+    Returns how many numbers were stored."""
+    numbers = {p: n for p, n in phones.items() if normalize_phone(p)}
+    if not numbers:
+        raise YemotError("אין אף מספר תקין לשליחה")
+    _call("ClearTemplateEntries", {"templateId": template_id}, post=True)
+    data = "\n".join(f"{p}\t{(n or '')[:60]}" for p, n in numbers.items())
+    _call("UploadPhoneList", {"templateId": template_id, "data": data,
+                              "delimiter": "TAB", "nameColumns": "1",
+                              "updateType": "NEW"}, post=True)
+    # A scheduled run takes the caller-id from the template (no per-run param).
+    caller = (db.get_setting(SET_CALLER_ID) or "").strip()
+    if caller:
+        try:
+            _call("UpdateTemplate", {"templateId": template_id,
+                                     "callerId": caller}, post=True)
+        except YemotError:
+            pass                      # cosmetic — never blocks the scheduling
+    return len(numbers)
+
+
+def schedule_campaign(when: datetime, phones: dict,
+                      template_id: str | None = None) -> dict:
+    """Schedule the campaign on Yemot's server for `when` (Israel local time) —
+    it dials at that moment even when this computer is completely off.
+    Returns {'schedId', 'count'}."""
+    template_id = template_id or ensure_template()
+    count = set_template_entries(phones, template_id)
+    data = _call("ScheduleCampaign",
+                 {"templateId": template_id,
+                  "time": when.strftime("%Y-%m-%d %H:%M")}, post=True)
+    sched_id = str(_dig(data, "schedId") or _dig(data, "id") or "").strip()
+    if not sched_id:
+        # Server variants may not echo the id — find the newest pending one
+        # for our template in the scheduled list.
+        for c in reversed(get_scheduled_campaigns("PENDING")):
+            if str(_dig(c, "templateId") or "") == str(template_id):
+                sched_id = str(_dig(c, "schedId") or _dig(c, "id") or "").strip()
+                break
+    return {"schedId": sched_id, "count": count, "raw": data}
+
+
+def get_scheduled_campaigns(sched_type: str = "PENDING") -> list:
+    """The account's scheduled campaigns of one type
+    (PENDING / SUCCESSFUL / FAILED)."""
+    data = _call("GetScheduledCampaigns", {"type": sched_type})
+    for v in data.values():
+        if isinstance(v, list):
+            return v
+    return []
+
+
+def find_scheduled(sched_id) -> tuple:
+    """Locate a scheduled campaign by its id on the server →
+    ('pending'|'successful'|'failed'|'missing', record|None)."""
+    sid = str(sched_id or "").strip()
+    if not sid:
+        return "missing", None
+    for typ, word in (("PENDING", "pending"), ("SUCCESSFUL", "successful"),
+                      ("FAILED", "failed")):
+        for c in get_scheduled_campaigns(typ):
+            if str(_dig(c, "schedId") or _dig(c, "id") or "") == sid:
+                return word, c
+    return "missing", None
+
+
+def delete_scheduled_campaign(sched_id) -> None:
+    """Cancel a pending scheduled campaign. Raises a clear Hebrew error when it
+    already ran (106) or is not on the server (105)."""
+    try:
+        _call("DeleteScheduledCampaign", {"schedId": str(sched_id)}, post=True)
+    except YemotError as e:
+        if e.code == 106:
+            raise YemotError("הקמפיין המתוזמן כבר בוצע — אי אפשר לבטל אותו", 106)
+        if e.code == 105:
+            raise YemotError("התזמון לא נמצא בשרת ימות (ייתכן שכבר בוטל)", 105)
+        raise
+
+
 # entryStatus → coarse bucket for the live counters / results screen.
 _DELIVERED = {"accepted", "done", "up", "bridged", "amd"}
 _FAILED = {"failed", "no_answer", "busy", "canceled", "error", "blocked",

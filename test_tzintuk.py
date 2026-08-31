@@ -294,6 +294,128 @@ with db.get_connection() as conn:
 row2 = [c for c in db.get_tzintuk_campaigns() if c["guid"] == g2][0]
 ok("LWW: עדכון ישן נדחה", row2["delivered"] == 30 and row2["status"] == "done")
 
+# ── 6. תזמון צינתוקים (#xi85i) — ScheduleCampaign בצד השרת ──────────────────
+print("— תזמון צינתוקים —")
+canned["ScheduleCampaign"] = {"responseStatus": "OK", "schedId": 777}
+canned["ClearTemplateEntries"] = {"responseStatus": "OK"}
+canned["UploadPhoneList"] = {"responseStatus": "OK"}
+res = yemot.schedule_campaign(datetime(2026, 9, 16, 9, 0),
+                              {"0521234567": "כהן יוסף", "05-12": "שבור"})
+ok("schedule_campaign מחזיר schedId", res["schedId"] == "777")
+sched_calls = [c for c in calls if c[0] in
+               ("ClearTemplateEntries", "UploadPhoneList", "ScheduleCampaign")]
+ok("הרשימה נוקתה לפני העלאה", sched_calls[0][0] == "ClearTemplateEntries"
+   and sched_calls[0][1].get("templateId") == "1117319")
+up = sched_calls[1]
+ok("UploadPhoneList עם המספרים התקינים בלבד",
+   up[0] == "UploadPhoneList" and "0521234567\tכהן יוסף" in up[1].get("data", "")
+   and "05-12" not in up[1].get("data", ""))
+ok("UploadPhoneList בפורמט TAB/NEW", up[1].get("delimiter") == "TAB"
+   and up[1].get("updateType") == "NEW")
+sc = sched_calls[2]
+ok("ScheduleCampaign עם זמן בפורמט הנכון",
+   sc[0] == "ScheduleCampaign" and sc[1].get("time") == "2026-09-16 09:00"
+   and sc[1].get("templateId") == "1117319")
+try:
+    yemot.schedule_campaign(datetime(2026, 9, 16, 9, 0), {"05-12": "שבור"})
+    ok("תזמון בלי מספרים נחסם", False)
+except yemot.YemotError:
+    ok("תזמון בלי מספרים נחסם", True)
+
+# schedId לא הוחזר → איתור ברשימת הממתינים
+canned["ScheduleCampaign"] = {"responseStatus": "OK"}
+canned["GetScheduledCampaigns"] = {"responseStatus": "OK", "scheduled": [
+    {"schedId": 555, "templateId": 1117319, "time": "2026-09-16 09:00"}]}
+res = yemot.schedule_campaign(datetime(2026, 9, 16, 9, 0), {"0521234567": "כהן"})
+ok("schedId מאותר ברשימה כשלא הוחזר", res["schedId"] == "555")
+
+# find_scheduled לפי סוג הרשימה שהשרת מחזיר
+def typed_transport(url, data):
+    q = urllib.parse.urlparse(url)
+    command = q.path.rsplit("/", 1)[-1]
+    params = {k: v[0] for k, v in urllib.parse.parse_qs(q.query).items()}
+    if command == "GetScheduledCampaigns":
+        items = ([{"schedId": 777, "templateId": 1117319,
+                   "campaignId": "camp-777"}]
+                 if params.get("type") == "SUCCESSFUL" else [])
+        return json.dumps({"responseStatus": "OK",
+                           "scheduled": items}).encode("utf-8")
+    return fake_transport(url, data)
+yemot._TRANSPORT = typed_transport
+state, rec777 = yemot.find_scheduled(777)
+ok("find_scheduled מזהה שהתזמון רץ (SUCCESSFUL)",
+   state == "successful" and rec777.get("campaignId") == "camp-777")
+ok("find_scheduled לתזמון שאינו קיים", yemot.find_scheduled(999)[0] == "missing")
+yemot._TRANSPORT = fake_transport
+
+# ביטול תזמון + שגיאות בעברית
+canned["DeleteScheduledCampaign"] = {"responseStatus": "OK"}
+yemot.delete_scheduled_campaign(777)
+ok("DeleteScheduledCampaign נשלח", calls[-1][0] == "DeleteScheduledCampaign"
+   and calls[-1][1].get("schedId") == "777")
+canned["DeleteScheduledCampaign"] = {"responseStatus": "ERROR",
+                                     "messageCode": 106,
+                                     "message": "schedId is not pending"}
+try:
+    yemot.delete_scheduled_campaign(777)
+    ok("ביטול תזמון שכבר רץ → הודעה ברורה", False)
+except yemot.YemotError as e:
+    ok("ביטול תזמון שכבר רץ → הודעה ברורה", "כבר בוצע" in str(e) and e.code == 106)
+canned["DeleteScheduledCampaign"] = {"responseStatus": "ERROR",
+                                     "messageCode": 105,
+                                     "message": "invalid schedId"}
+try:
+    yemot.delete_scheduled_campaign(777)
+    ok("ביטול תזמון לא קיים → הודעה ברורה", False)
+except yemot.YemotError as e:
+    ok("ביטול תזמון לא קיים → הודעה ברורה", "לא נמצא" in str(e) and e.code == 105)
+
+# DB: רשומת תזמון, ואז ריצה → campaignId אמיתי + זמן ריצה
+g3 = db.add_tzintuk_campaign("צינתוק מתוזמן", "2026-09-16", "1117319",
+                             "777", 12, sent_at="2026-09-16T06:00:00+00:00",
+                             device="מחשב א", status="scheduled")
+row3 = [c for c in db.get_tzintuk_campaigns() if c["guid"] == g3][0]
+ok("רשומת תזמון נשמרת בסטטוס scheduled", row3["status"] == "scheduled"
+   and row3["campaign_id"] == "777")
+ok("שומר הכפילות רואה גם תזמון",
+   (db.tzintuk_campaign_for_date("2026-09-16") or {}).get("guid") == g3)
+db.update_tzintuk_campaign(g3, 0, 0, "sending", campaign_id="camp-777",
+                           sent_at="2026-09-16T06:01:00+00:00")
+row3 = [c for c in db.get_tzintuk_campaigns() if c["guid"] == g3][0]
+ok("כשהתזמון רץ — campaignId אמיתי נשמר", row3["campaign_id"] == "camp-777"
+   and row3["status"] == "sending")
+db.update_tzintuk_campaign(g3, 0, 0, "canceled")
+ok("תזמון מבוטל לא נחשב בשומר הכפילות",
+   db.tzintuk_campaign_for_date("2026-09-16") is None)
+ok("update בלי campaign_id לא דורס אותו",
+   [c for c in db.get_tzintuk_campaigns() if c["guid"] == g3][0]["campaign_id"]
+   == "camp-777")
+
+# סנכרון: תזמון עובר בין המחשבים עם הסטטוס והחלפת ה-campaignId
+with db.get_connection() as conn:
+    sync._apply_tz_add(conn, {"guid": "sched-guid-b", "name": "מתוזמן מ-B",
+                              "sent_at": "2026-09-23T06:00:00+00:00",
+                              "dist_date": "2026-09-23", "template_id": "1117319",
+                              "campaign_id": "888", "device": "מחשב ב",
+                              "total": 5, "status": "scheduled"})
+    sync._apply_tz_update(conn, {"guid": "sched-guid-b", "delivered": 0,
+                                 "failed": 0, "status": "sending",
+                                 "ts": "2026-09-23T06:02:00+00:00",
+                                 "campaign_id": "camp-888",
+                                 "sent_at": "2026-09-23T06:01:30+00:00"})
+rowb = [c for c in db.get_tzintuk_campaigns() if c["guid"] == "sched-guid-b"][0]
+ok("tz_add עם סטטוס scheduled מסונכרן", True)
+ok("tz_update מעדכן campaign_id וזמן ריצה", rowb["campaign_id"] == "camp-888"
+   and rowb["status"] == "sending"
+   and rowb["sent_at"] == "2026-09-23T06:01:30+00:00")
+with db.get_connection() as conn:
+    sync._apply_tz_add(conn, {"guid": "old-ver-guid", "name": "ממחשב ישן",
+                              "sent_at": "2026-09-23T07:00:00+00:00",
+                              "dist_date": "2026-09-24", "template_id": "t",
+                              "campaign_id": "c-old", "device": "", "total": 3})
+rowo = [c for c in db.get_tzintuk_campaigns() if c["guid"] == "old-ver-guid"][0]
+ok("payload ישן בלי status → ברירת מחדל sending", rowo["status"] == "sending")
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")

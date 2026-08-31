@@ -659,9 +659,19 @@ class SettingsTab(QWidget):
         self.ym_test_phone.setPlaceholderText("המספר שלך — לצינתוק ניסיון")
         self.ym_test_phone.setAlignment(ALIGN_RIGHT)
         self.ym_test_phone.setText(db.get_setting("yemot_test_phone") or "")
+        self.ym_gemini_key = QLineEdit()
+        self.ym_gemini_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ym_gemini_key.setPlaceholderText("לקול המשופר ב\"צור הקלטה מטקסט\" "
+                                              "(לא חובה)")
+        self.ym_gemini_key.setToolTip(
+            "מפתח API חינמי של Google Gemini — משמש רק ליצירת הקלטה מטקסט "
+            "בקול המשופר. בלעדיו עדיין עובדים הקולות הרגילים (אברי/הילה).")
+        self.ym_gemini_key.setAlignment(ALIGN_RIGHT)
+        self.ym_gemini_key.setText(db.get_setting("gemini_api_key") or "")
         ym_form.addRow("מספר מערכת:", self.ym_system)
         ym_form.addRow("סיסמה:", self.ym_password)
         ym_form.addRow("מספר לבדיקות:", self.ym_test_phone)
+        ym_form.addRow("מפתח Gemini:", self.ym_gemini_key)
         ym_lay.addLayout(ym_form)
         ym_btns = QHBoxLayout()
         btn_ym_save = QPushButton("שמור")
@@ -1257,6 +1267,7 @@ class SettingsTab(QWidget):
         db.set_setting(yemot.SET_SYSTEM, system)
         db.set_setting(yemot.SET_PASSWORD, password)
         db.set_setting(yemot.SET_TEST_PHONE, test_phone)
+        db.set_setting("gemini_api_key", self.ym_gemini_key.text().strip())
         if not silent:
             self.lbl_ym_status.setText("הפרטים נשמרו ✓ — עכשיו לחץ \"בדוק חיבור\"")
 

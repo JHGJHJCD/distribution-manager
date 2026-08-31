@@ -1781,11 +1781,15 @@ def open_feedback_count() -> int:
 
 def add_tzintuk_campaign(name: str, dist_date: str, template_id: str,
                          campaign_id: str, total: int, guid: str = "",
-                         sent_at: str = "", device: str = "") -> str:
+                         sent_at: str = "", device: str = "",
+                         status: str = "sending") -> str:
     """Record one voice-notification send. Idempotent by guid (also used when
-    the record arrives from the other computer / seed). Returns the guid."""
+    the record arrives from the other computer / seed). Returns the guid.
+    status 'scheduled' (#xi85i) = server-side scheduled campaign: campaign_id
+    holds the Yemot schedId and sent_at holds the planned run time."""
     guid = (guid or "").strip() or uuid.uuid4().hex
     sent_at = sent_at or _utc_now()
+    status = status or "sending"
     with get_connection() as conn:
         if conn.execute("SELECT 1 FROM tzintuk_campaigns WHERE guid=?",
                         (guid,)).fetchone():
@@ -1795,34 +1799,49 @@ def add_tzintuk_campaign(name: str, dist_date: str, template_id: str,
             "template_id, campaign_id, device, total, status, status_ts) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (guid, name or "", sent_at, dist_date or "", str(template_id or ""),
-             campaign_id or "", device or "", int(total or 0), "sending", sent_at))
+             campaign_id or "", device or "", int(total or 0), status, sent_at))
     _sync_log("tz_add", {"guid": guid, "name": name or "", "sent_at": sent_at,
                          "dist_date": dist_date or "",
                          "template_id": str(template_id or ""),
                          "campaign_id": campaign_id or "", "device": device or "",
-                         "total": int(total or 0)})
+                         "total": int(total or 0), "status": status})
     return guid
 
 
 def update_tzintuk_campaign(guid: str, delivered: int, failed: int,
-                            status: str, report_json: str = "") -> bool:
-    """Progress/result update for a campaign (LWW by status_ts when syncing)."""
+                            status: str, report_json: str = "",
+                            campaign_id: str | None = None,
+                            sent_at: str | None = None) -> bool:
+    """Progress/result update for a campaign (LWW by status_ts when syncing).
+    campaign_id/sent_at update only when given — used when a scheduled campaign
+    actually runs (schedId → the real campaignId, planned time → run time)."""
     guid = (guid or "").strip()
     if not guid:
         return False
     ts = _utc_now()
+    sets = "delivered=?, failed=?, status=?, status_ts=?, report_json=?"
+    args = [int(delivered or 0), int(failed or 0), status or "sending", ts,
+            report_json or ""]
+    if campaign_id is not None:
+        sets += ", campaign_id=?"
+        args.append(str(campaign_id))
+    if sent_at is not None:
+        sets += ", sent_at=?"
+        args.append(sent_at)
     with get_connection() as conn:
         cur = conn.execute(
-            "UPDATE tzintuk_campaigns SET delivered=?, failed=?, status=?, "
-            "status_ts=?, report_json=? WHERE guid=?",
-            (int(delivered or 0), int(failed or 0), status or "sending", ts,
-             report_json or "", guid))
+            f"UPDATE tzintuk_campaigns SET {sets} WHERE guid=?", (*args, guid))
         if cur.rowcount == 0:
             return False
-    _sync_log("tz_update", {"guid": guid, "delivered": int(delivered or 0),
-                            "failed": int(failed or 0),
-                            "status": status or "sending", "ts": ts,
-                            "report_json": report_json or ""})
+    payload = {"guid": guid, "delivered": int(delivered or 0),
+               "failed": int(failed or 0),
+               "status": status or "sending", "ts": ts,
+               "report_json": report_json or ""}
+    if campaign_id is not None:
+        payload["campaign_id"] = str(campaign_id)
+    if sent_at is not None:
+        payload["sent_at"] = sent_at
+    _sync_log("tz_update", payload)
     return True
 
 
@@ -1845,6 +1864,7 @@ def tzintuk_campaign_for_date(dist_date: str):
     with get_connection() as conn:
         row = conn.execute(
             "SELECT * FROM tzintuk_campaigns WHERE dist_date=? "
+            "AND status NOT IN ('canceled','sched_failed') "
             "ORDER BY sent_at DESC LIMIT 1", (dist_date,)).fetchone()
         return dict(row) if row else None
 

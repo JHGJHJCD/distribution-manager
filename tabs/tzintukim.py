@@ -12,14 +12,16 @@
 import json
 import os
 import time
+from datetime import datetime, timedelta, timezone
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDateTime
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QMessageBox, QProgressBar, QScrollArea, QDialog, QLineEdit,
-    QListWidget, QListWidgetItem, QFileDialog, QInputDialog, QTextEdit
+    QListWidget, QListWidgetItem, QFileDialog, QInputDialog, QTextEdit,
+    QDateTimeEdit
 )
 
 import database as db
@@ -116,6 +118,67 @@ class _AddPersonDialog(QDialog):
         self.accept()
 
 
+class _ScheduleDialog(QDialog):
+    """בחירת תאריך ושעה לצינתוק מתוזמן (#xi85i) — התזמון נשמר בשרת של ימות
+    ורץ גם כשהמחשב כבוי."""
+
+    def __init__(self, count: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("תזמון שליחה")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.when = None
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        info = QLabel(f"הצינתוק יישלח ל-{count} נמענים במועד שתבחר.\n"
+                      "השליחה מתבצעת מהשרת של ימות המשיח — "
+                      "המחשב לא חייב להיות דלוק באותה שעה.")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        self.dt_edit = QDateTimeEdit()
+        self.dt_edit.setCalendarPopup(True)
+        # RTL reverses the date/time sections (widgets.DateEdit trap): go LTR
+        # FIRST and only then set the display format, or the section order
+        # sticks reversed. The dialog around the field stays RTL.
+        self.dt_edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.dt_edit.setDisplayFormat("dd/MM/yyyy  HH:mm")
+        self.dt_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tomorrow = datetime.now() + timedelta(days=1)
+        self.dt_edit.setDateTime(QDateTime(
+            tomorrow.year, tomorrow.month, tomorrow.day, 9, 0))
+        self.dt_edit.setMinimumDateTime(QDateTime.currentDateTime())
+        lay.addWidget(self.dt_edit)
+        hint = QLabel("מותר לתזמן רק לשעות המותרות בחוק "
+                      "(08:00–21:00, לא בערב שבת ושבת).")
+        hint.setObjectName("subtitle")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        btns = QHBoxLayout()
+        ok = QPushButton("תזמן »")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self._accept)
+        cancel = QPushButton("ביטול")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(ok)
+        btns.addWidget(cancel)
+        btns.addStretch()
+        lay.addLayout(btns)
+
+    def _accept(self):
+        when = self.dt_edit.dateTime().toPyDateTime().replace(second=0,
+                                                              microsecond=0)
+        if when <= datetime.now() + timedelta(minutes=2):
+            QMessageBox.warning(self, "תזמון שליחה",
+                                "בחר מועד עתידי (לפחות כמה דקות מעכשיו).")
+            return
+        reason = yemot.send_block_reason(when)
+        if reason:
+            QMessageBox.warning(self, "תזמון שליחה",
+                                reason + " — בחר שעה אחרת.")
+            return
+        self.when = when
+        self.accept()
+
+
 class _TaskWorker(QThread):
     """Runs one blocking callable off the UI thread (TTS synthesis takes a few
     seconds — freezing the dialog would look like a hang)."""
@@ -141,12 +204,14 @@ class TtsDialog(QDialog):
         self.setWindowTitle("יצירת הקלטה מטקסט")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.resize(560, 460)
-        self.result_path = ""          # ההקלטה המאושרת (mp3)
+        self.result_path = ""          # ההקלטה המאושרת (wav/mp3)
         self.result_text = ""
         self.result_voice = ""
+        self.result_note = ""          # הערת נפילה-לקול-גיבוי, אם הייתה
         self._worker = None
         self._preview_key = None       # (text, voice, rate) של הקובץ האחרון שנוצר
-        self._preview_path = os.path.join(tts.recordings_dir(), "_preview.mp3")
+        self._preview_base = os.path.join(tts.recordings_dir(), "_preview")
+        self._preview_path = ""        # הנתיב שנכתב בפועל (הסיומת לפי המנוע)
 
         lay = QVBoxLayout(self)
         lay.setSpacing(8)
@@ -222,12 +287,13 @@ class TtsDialog(QDialog):
         if self._worker is not None:
             return
         key = (text, voice, rate)
-        if key == self._preview_key and os.path.exists(self._preview_path):
+        if (key == self._preview_key and self._preview_path
+                and os.path.exists(self._preview_path)):
             on_ready()                    # כבר נוצר בדיוק אותו דבר — אין צורך שוב
             return
         self._set_busy(True)
         self._worker = _TaskWorker(
-            lambda: tts.synthesize(text, voice, self._preview_path, rate), self)
+            lambda: tts.synthesize(text, voice, self._preview_base, rate), self)
 
         def _done(res):
             self._worker = None
@@ -235,7 +301,10 @@ class TtsDialog(QDialog):
             if isinstance(res, Exception):
                 QMessageBox.warning(self, "יצירת הקלטה", str(res))
                 return
+            self._preview_path, note = res
             self._preview_key = key
+            if note:
+                self.status.setText("⚠ " + note)
             on_ready()
         self._worker.done.connect(_done)
         self._worker.start()
@@ -249,8 +318,10 @@ class TtsDialog(QDialog):
         def _play():
             try:
                 os.startfile(self._preview_path)
-                self.status.setText("ההקלטה נפתחה בנגן — אם הנוסח טוב, לחץ "
-                                    "\"אשר\" למטה.")
+                note = self.status.text()
+                self.status.setText(
+                    (note + "\n" if note.startswith("⚠") else "")
+                    + "ההקלטה נפתחה בנגן — אם הנוסח טוב, לחץ \"אשר\" למטה.")
             except OSError as e:
                 QMessageBox.warning(self, "השמעה", f"פתיחת הנגן נכשלה: {e}")
         self._generate(_play)
@@ -261,6 +332,8 @@ class TtsDialog(QDialog):
             self.result_path = self._preview_path
             self.result_text = text
             self.result_voice = voice
+            self.result_note = (self.status.text()
+                                if self.status.text().startswith("⚠") else "")
             db.set_setting(tts.SET_LAST_TEXT, text)
             db.set_setting(tts.SET_LAST_VOICE, voice)
             self.accept()
@@ -399,6 +472,7 @@ class TzintukimTab(QWidget):
         self._worker = None
         self._active_guid = ""    # DB guid of the campaign being tracked
         self._last_failed = []    # [{'phone','name'}] from the last finished run
+        self._sched_checker = None   # worker probing the server for due schedules
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -529,11 +603,35 @@ class TzintukimTab(QWidget):
         btn_test.clicked.connect(self._send_test)
         row.addWidget(btn_test)
         row.addStretch()
+        self.btn_sched = QPushButton("🕒 תזמן שליחה…")
+        self.btn_sched.setObjectName("neutral")
+        self.btn_sched.setToolTip("קובעים תאריך ושעה — והצינתוק יוצא לבד "
+                                  "מהשרת של ימות המשיח, גם כשהמחשב כבוי")
+        self.btn_sched.clicked.connect(self._schedule)
+        row.addWidget(self.btn_sched)
         self.btn_send = QPushButton("")
         self.btn_send.setObjectName("primary")
         self.btn_send.clicked.connect(self._send)
         row.addWidget(self.btn_send)
         a_lay.addLayout(row)
+
+        # Scheduled-campaign strip (#xi85i) — visible while a schedule waits.
+        self.sched_frame = QFrame()
+        self.sched_frame.setStyleSheet(
+            "QFrame{background:#fdf7e7; border:1px solid #efdead;"
+            "border-radius:8px;}")
+        s_lay = QHBoxLayout(self.sched_frame)
+        s_lay.setContentsMargins(10, 6, 10, 6)
+        self.lbl_sched = QLabel("")
+        self.lbl_sched.setStyleSheet("color:#8a6410; font-weight:600; " + _LBL)
+        self.lbl_sched.setWordWrap(True)
+        s_lay.addWidget(self.lbl_sched, 1)
+        self.btn_cancel_sched = QPushButton("בטל תזמון")
+        self.btn_cancel_sched.setObjectName("neutral")
+        self.btn_cancel_sched.clicked.connect(self._cancel_sched)
+        s_lay.addWidget(self.btn_cancel_sched)
+        self.sched_frame.setVisible(False)
+        a_lay.addWidget(self.sched_frame)
 
         # Live-progress strip (hidden until a campaign runs).
         self.prog_frame = QFrame()
@@ -728,6 +826,7 @@ class TzintukimTab(QWidget):
         self.m_bad["val"].setText(str(bad))
         self.btn_send.setText(f"אשר ושלח ל-{ready} »" if ready else "אין למי לשלוח")
         self.btn_send.setEnabled(ready > 0 and self._worker is None)
+        self.btn_sched.setEnabled(ready > 0 and self._worker is None)
 
     def _ready_rows(self):
         return [r for r in self._rows if r["checked"] and r["chosen"]]
@@ -817,6 +916,8 @@ class TzintukimTab(QWidget):
         except OSError as e:
             QMessageBox.warning(self, "יצירת הקלטה", f"שמירת ההקלטה במאגר נכשלה: {e}")
             path = dlg.result_path
+        if dlg.result_note:
+            QMessageBox.information(self, "יצירת הקלטה", dlg.result_note)
         self._upload_path(path, "יצירת הקלטה")
 
     def _open_library(self):
@@ -868,7 +969,9 @@ class TzintukimTab(QWidget):
         if prev:
             when = timefmt.datetime_str(prev.get("sent_at") or "")
             src = prev.get("device") or "מחשב אחר"
-            extra = (f"\n\n⚠ שים לב: כבר נשלח צינתוק לחלוקה של תאריך זה "
+            verb = ("כבר מתוזמן צינתוק"
+                    if prev.get("status") == "scheduled" else "כבר נשלח צינתוק")
+            extra = (f"\n\n⚠ שים לב: {verb} לחלוקה של תאריך זה "
                      f"({when}, מ{src}). שליחה נוספת תצלצל לאנשים פעם שנייה!")
         bad = sum(1 for r in self._rows if r["why"])
         ans = QMessageBox.question(
@@ -937,6 +1040,202 @@ class TzintukimTab(QWidget):
             device=sync.device_name() or "")
         self._refresh_history()
         self._start_tracking(str(res.get("campaignId") or ""), len(phones))
+
+    # ── Scheduled campaigns (#xi85i) ─────────────────────────────────────────
+
+    @staticmethod
+    def _to_utc_iso(when: datetime) -> str:
+        """Naive Israel-local time → UTC iso stamp (the sent_at convention)."""
+        zone = timefmt._israel_zone()
+        aware = when.replace(tzinfo=zone) if zone is not None else when.astimezone()
+        return aware.astimezone(timezone.utc).isoformat()
+
+    @staticmethod
+    def _sched_dt(camp: dict):
+        """The planned run time of a scheduled record, as aware Israel time."""
+        return timefmt.to_israel(camp.get("sent_at") or "")
+
+    def _pending_sched(self):
+        for c in db.get_tzintuk_campaigns(limit=25):
+            if c.get("status") == "scheduled":
+                return c
+        return None
+
+    def _schedule(self):
+        if not self._require_config():
+            return
+        rows = self._ready_rows()
+        phones = {}
+        for r in rows:
+            phones.setdefault(r["chosen"], r["rec"].get("full_name") or "")
+        if not phones:
+            QMessageBox.warning(self, "תזמון שליחה",
+                                "אין אף נמען מסומן עם מספר תקין.")
+            return
+        pending = self._pending_sched()
+        if pending:
+            when = timefmt.datetime_str(pending.get("sent_at") or "")
+            QMessageBox.information(
+                self, "תזמון שליחה",
+                f"כבר קיים צינתוק מתוזמן ({when}).\n"
+                "אפשר לתזמן רק צינתוק אחד בכל פעם — בטל אותו קודם "
+                "(כפתור \"בטל תזמון\") ואז תזמן מחדש.")
+            return
+        dlg = _ScheduleDialog(len(phones), self)
+        if not dlg.exec() or dlg.when is None:
+            return
+        when = dlg.when
+        dist_date = db.next_wednesday().isoformat()
+        prev = db.tzintuk_campaign_for_date(dist_date)
+        extra = ""
+        if prev:
+            prev_when = timefmt.datetime_str(prev.get("sent_at") or "")
+            verb = ("כבר מתוזמן צינתוק"
+                    if prev.get("status") == "scheduled" else "כבר נשלח צינתוק")
+            extra = (f"\n\n⚠ שים לב: {verb} לחלוקה של תאריך זה ({prev_when}). "
+                     "שליחה נוספת תצלצל לאנשים פעם שנייה!")
+        bad = sum(1 for r in self._rows if r["why"])
+        ans = QMessageBox.question(
+            self, "אישור תזמון",
+            f"הצינתוק יישלח ל-{len(phones)} נמענים "
+            f"ביום {when.strftime('%d/%m/%Y')} בשעה {when.strftime('%H:%M')}.\n"
+            f"חריגים שלא יישלחו: {bad}.\n"
+            f"עלות משוערת: כ-{len(phones)} יחידות.\n"
+            "השליחה תצא מהשרת של ימות המשיח גם אם המחשב יהיה כבוי; "
+            f"התוצאות ייקלטו בתוכנה בהפעלה הבאה.{extra}\n\nלתזמן?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        with busy_cursor():
+            try:
+                template_id = yemot.ensure_template()
+                res = yemot.schedule_campaign(when, phones, template_id)
+            except yemot.YemotError as e:
+                QMessageBox.warning(self, "תזמון שליחה", str(e))
+                return
+            except Exception as e:
+                QMessageBox.warning(self, "תזמון שליחה", f"התזמון נכשל: {e}")
+                return
+        from utils import sync
+        db.add_tzintuk_campaign(
+            f"צינתוק מתוזמן — חלוקה של {db.next_wednesday().strftime('%d/%m/%Y')}",
+            dist_date, template_id, str(res.get("schedId") or ""),
+            int(res.get("count") or len(phones)),
+            sent_at=self._to_utc_iso(when),
+            device=sync.device_name() or "", status="scheduled")
+        self._refresh_history()
+        QMessageBox.information(
+            self, "תזמון שליחה",
+            f"נקבע ✓ — הצינתוק יישלח ביום {when.strftime('%d/%m/%Y')} "
+            f"בשעה {when.strftime('%H:%M')}, גם אם המחשב יהיה כבוי.")
+
+    def _refresh_sched_banner(self):
+        camp = self._pending_sched()
+        if camp is None:
+            self.sched_frame.setVisible(False)
+            return
+        when = timefmt.datetime_str(camp.get("sent_at") or "")
+        src = camp.get("device") or ""
+        self.lbl_sched.setText(
+            f"🕒 צינתוק מתוזמן ל-{when} — ל-{camp.get('total') or 0} נמענים"
+            + (f" (נקבע מ{src})" if src else "")
+            + ". המחשב לא חייב להיות דלוק בשעת השליחה.")
+        self.sched_frame.setVisible(True)
+
+    def _cancel_sched(self):
+        camp = self._pending_sched()
+        if camp is None:
+            self.sched_frame.setVisible(False)
+            return
+        when = timefmt.datetime_str(camp.get("sent_at") or "")
+        ans = QMessageBox.question(
+            self, "ביטול תזמון",
+            f"לבטל את הצינתוק המתוזמן ל-{when}?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        with busy_cursor():
+            try:
+                yemot.delete_scheduled_campaign(camp.get("campaign_id") or "")
+                db.update_tzintuk_campaign(camp["guid"], 0, 0, "canceled")
+                ok, msg = True, "התזמון בוטל — לא יישלח צינתוק."
+            except yemot.YemotError as e:
+                if e.code == 106:      # already ran — go pick up the results
+                    ok, msg = False, str(e)
+                elif e.code == 105:    # not on the server → nothing will ring
+                    db.update_tzintuk_campaign(camp["guid"], 0, 0, "canceled")
+                    ok, msg = True, "התזמון כבר לא קיים בשרת — סומן כמבוטל."
+                else:
+                    ok, msg = False, str(e)
+            except Exception as e:
+                ok, msg = False, f"הביטול נכשל: {e}"
+        (QMessageBox.information if ok else QMessageBox.warning)(
+            self, "ביטול תזמון", msg)
+        self._refresh_history()
+        self._maybe_resume_tracking()
+
+    def _check_scheduled(self):
+        """A scheduled campaign whose time passed while the app was off (or
+        closed): ask the server what happened, off the UI thread, and continue
+        with the normal live tracking once the real campaignId is known."""
+        self._refresh_sched_banner()
+        if (self._sched_checker is not None or self._worker is not None
+                or not yemot.is_configured()):
+            return
+        zone = timefmt._israel_zone()
+        now = datetime.now(zone) if zone is not None else datetime.now().astimezone()
+        due = []
+        for c in db.get_tzintuk_campaigns(limit=25):
+            if c.get("status") != "scheduled":
+                continue
+            dt = self._sched_dt(c)
+            if dt is not None and now >= dt:
+                due.append(c)
+        if not due:
+            return
+
+        def probe(items=due):
+            return [(c, yemot.find_scheduled(c.get("campaign_id"))) for c in items]
+
+        self._sched_checker = _TaskWorker(probe, self)
+        self._sched_checker.done.connect(self._on_sched_checked)
+        self._sched_checker.start()
+
+    def _on_sched_checked(self, res):
+        self._sched_checker = None
+        if isinstance(res, Exception):
+            return                       # transient — retried on the next refresh
+        track = None                     # (guid, campaignId, total)
+        changed = False
+        zone = timefmt._israel_zone()
+        now = datetime.now(zone) if zone is not None else datetime.now().astimezone()
+        for camp, (state, rec) in res:
+            if state == "pending":
+                continue                 # the server is a little behind — wait
+            if state == "successful":
+                cid = str(yemot._dig(rec, "campaignId") or "").strip()
+                db.update_tzintuk_campaign(
+                    camp["guid"], 0, 0, "sending",
+                    campaign_id=cid or str(camp.get("campaign_id") or ""),
+                    sent_at=db._utc_now())
+                changed = True
+                if cid:
+                    track = (camp["guid"], cid, int(camp.get("total") or 0))
+            elif state == "failed":
+                db.update_tzintuk_campaign(camp["guid"], 0, 0, "sched_failed")
+                changed = True
+            else:                        # missing on the server
+                dt = self._sched_dt(camp)
+                if dt is not None and now - dt > timedelta(hours=1):
+                    db.update_tzintuk_campaign(camp["guid"], 0, 0, "sched_failed")
+                    changed = True
+        if changed:
+            self._refresh_history()
+            self._refresh_sched_banner()
+        if track and self._worker is None:
+            self._active_guid = track[0]
+            self._start_tracking(track[1], track[2])
 
     # ── Live tracking ─────────────────────────────────────────────────────────
 
@@ -1025,9 +1324,11 @@ class TzintukimTab(QWidget):
         """The app (or the tab) was closed mid-campaign: the newest record is
         still 'sending'. Pick its tracking back up so the results get written —
         works also for a campaign the OTHER computer started (same account)."""
+        self._check_scheduled()          # #xi85i — due schedules first
         if self._worker is not None or not yemot.is_configured():
             return
-        camps = db.get_tzintuk_campaigns(limit=1)
+        camps = [c for c in db.get_tzintuk_campaigns(limit=5)
+                 if c.get("status") != "scheduled"][:1]
         if (camps and camps[0].get("status") == "sending"
                 and camps[0].get("campaign_id")):
             self._active_guid = camps[0]["guid"]
@@ -1039,7 +1340,9 @@ class TzintukimTab(QWidget):
     def _refresh_history(self):
         camps = db.get_tzintuk_campaigns(limit=100)
         self.hist.setRowCount(len(camps))
-        status_he = {"sending": "בתהליך", "done": "הסתיים"}
+        status_he = {"sending": "בתהליך", "done": "הסתיים",
+                     "scheduled": "מתוזמן ⏳", "canceled": "בוטל",
+                     "sched_failed": "התזמון נכשל"}
         for i, c in enumerate(camps):
             when = timefmt.datetime_str(c.get("sent_at") or "")
             src = c.get("device") or ""
