@@ -1004,14 +1004,14 @@ class MainWindow(QMainWindow):
         except Exception:
             return ""
 
-    # ── Automatic update check (startup + hourly while running, v2.81) ────────
-    UPDATE_CHECK_MS = 60 * 60 * 1000   # re-check GitHub every hour
+    # ── Automatic update check (startup + every 2 minutes while running) ──────
+    UPDATE_CHECK_MS = 2 * 60 * 1000   # re-check GitHub every 2 minutes
 
     def _auto_check_updates(self):
         """Startup check: if a newer version exists, open the offer dialog right
-        away. Also starts an hourly background re-check, so a release published
-        while the app is running pops a Windows notification. No-op when running
-        from source (can't self-replace a script), silent on network failure."""
+        away. Also starts a background re-check every 2 minutes, so a release
+        published while the app is running pops a Windows notification. No-op when
+        running from source (can't self-replace a script), silent on network failure."""
         if not updater.current_exe():
             return
         self._upd_timer = QTimer(self)
