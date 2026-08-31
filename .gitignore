@@ -28,3 +28,9 @@ _secret.py
 
 build.log
 .vs/
+
+# Private Yemot phone-line config skills — hold live secrets (system password,
+# menu passwords, API tokens, personal phone numbers). NEVER commit/distribute.
+.claude/skills/yemot-line-state/
+.claude/skills/yemot-line-howto/
+.claude/skills/yemot-line-knowledge/

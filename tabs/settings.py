@@ -655,10 +655,8 @@ class SettingsTab(QWidget):
         self.ym_password.setPlaceholderText("הסיסמה של המערכת בימות")
         self.ym_password.setAlignment(ALIGN_RIGHT)
         self.ym_password.setText(db.get_setting("yemot_password") or "")
-        self.ym_test_phone = QLineEdit()
-        self.ym_test_phone.setPlaceholderText("המספר שלך — לצינתוק ניסיון")
-        self.ym_test_phone.setAlignment(ALIGN_RIGHT)
-        self.ym_test_phone.setText(db.get_setting("yemot_test_phone") or "")
+        # (שדה "מספר לבדיקות" הוסר ב-#dx28e — המספר מוזן ונשמר ישירות
+        #  בכפתור "שלח בדיקה למספר שלי" שבלשונית הצינתוקים.)
         self.ym_gemini_key = QLineEdit()
         self.ym_gemini_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.ym_gemini_key.setPlaceholderText("לקול המשופר ב\"צור הקלטה מטקסט\" "
@@ -670,7 +668,6 @@ class SettingsTab(QWidget):
         self.ym_gemini_key.setText(db.get_setting("gemini_api_key") or "")
         ym_form.addRow("מספר מערכת:", self.ym_system)
         ym_form.addRow("סיסמה:", self.ym_password)
-        ym_form.addRow("מספר לבדיקות:", self.ym_test_phone)
         ym_form.addRow("מפתח Gemini:", self.ym_gemini_key)
         ym_lay.addLayout(ym_form)
         ym_btns = QHBoxLayout()
@@ -1259,14 +1256,12 @@ class SettingsTab(QWidget):
         from utils import yemot
         system = self.ym_system.text().strip()
         password = self.ym_password.text().strip()
-        test_phone = self.ym_test_phone.text().strip()
         # An API key stands on its own; a regular password needs the system no.
         if not silent and not password:
             QMessageBox.warning(self, "", "יש למלא סיסמה (או מפתח API) של ימות המשיח.")
             return
         db.set_setting(yemot.SET_SYSTEM, system)
         db.set_setting(yemot.SET_PASSWORD, password)
-        db.set_setting(yemot.SET_TEST_PHONE, test_phone)
         db.set_setting("gemini_api_key", self.ym_gemini_key.text().strip())
         if not silent:
             self.lbl_ym_status.setText("הפרטים נשמרו ✓ — עכשיו לחץ \"בדוק חיבור\"")

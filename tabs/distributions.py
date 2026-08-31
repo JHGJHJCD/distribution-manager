@@ -8,7 +8,7 @@ received and the full note."""
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QLabel, QPushButton, QMessageBox, QAbstractItemView,
-    QDialog, QListWidget
+    QDialog, QListWidget, QMenu
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -140,7 +140,8 @@ class DistributionsTab(QWidget):
         top.addWidget(self.btn_delete)
         lay.addLayout(top)
 
-        hint = QLabel("לחיצה כפולה על שורה מציגה מי קיבל ואת ההערה המלאה")
+        hint = QLabel("לחיצה כפולה על שורה מציגה מי קיבל ואת ההערה המלאה · "
+                      "קליק ימני — הדפסה, PDF, אקסל וצינתוק לרשימת החלוקה")
         hint.setStyleSheet("color:#64748b; font-size:11px;")
         lay.addWidget(hint)
 
@@ -158,6 +159,9 @@ class DistributionsTab(QWidget):
         hdr.setResizeContentsPrecision(20)
         self.table.verticalHeader().setVisible(False)
         self.table.doubleClicked.connect(self._open_selected)
+        # #9hgvi — right-click: the prep-screen actions on any PAST distribution.
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
         enable_touch_scroll(self.table)
         lay.addWidget(self.table)
         attach_empty_state(self.table, "עדיין לא נרשמו חלוקות")
@@ -204,6 +208,68 @@ class DistributionsTab(QWidget):
         b = self._selected_batch()
         if b:
             BatchDetailsDialog(b, self).exec()
+
+    # ── Right-click actions on one past distribution (#9hgvi) ─────────────────
+
+    def _context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        if row >= 0:
+            self.table.selectRow(row)
+        b = self._selected_batch()
+        if not b:
+            return
+        menu = QMenu(self)
+        menu.addAction("פרטי החלוקה", lambda: BatchDetailsDialog(b, self).exec())
+        menu.addSeparator()
+        menu.addAction("🖨 הדפסה לחלוקה", lambda: self._print_batch(b))
+        menu.addAction("📄 שמור PDF", lambda: self._pdf_batch(b))
+        menu.addAction("📊 ייצוא לאקסל", self._export_selected)
+        menu.addAction("📞 שלח צינתוק לרשימה זו", lambda: self._tzintuk_batch(b))
+        menu.addSeparator()
+        menu.addAction("🗑 מחק חלוקה", self._delete_selected)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _batch_rows(self, b):
+        rows = db.get_batch_export_rows(b["id"])
+        if not rows:
+            QMessageBox.information(self, "", "אין מקבלים רשומים בחלוקה זו")
+        return rows
+
+    def _print_batch(self, b):
+        from utils.print_view import print_distribution_list
+        try:
+            with busy_cursor():
+                rows = self._batch_rows(b)
+            if rows:
+                print_distribution_list(rows, _fdate(b.get("dist_date", "")),
+                                        self, b.get("dist_name") or "")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה", str(e))
+
+    def _pdf_batch(self, b):
+        from utils.print_view import export_distribution_pdf
+        try:
+            with busy_cursor():
+                rows = self._batch_rows(b)
+                if not rows:
+                    return
+                path = export_distribution_pdf(rows, _fdate(b.get("dist_date", "")),
+                                               b.get("dist_name") or "")
+            QMessageBox.information(self, "שמירת PDF",
+                                    f"הקובץ נשמר ונפתח:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה", str(e))
+
+    def _tzintuk_batch(self, b):
+        """Load this distribution's recipients into the tzintukim tab — a
+        reminder call to a list prepared in advance."""
+        main = self.main_win
+        tz = getattr(main, "tzintukim_tab", None)
+        if tz is None:
+            return
+        tz.load_batch(b)
+        if hasattr(main, "navigate_to_tab"):
+            main.navigate_to_tab(tz)
 
     def _export_selected(self):
         b = self._selected_batch()

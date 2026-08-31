@@ -7,8 +7,13 @@
 אישור מפורש → שליחה עם מעקב חי (RunCampaign + GetCampaignStatus) → תוצאות
 עם "שלח שוב לנכשלים" → היסטוריה מסונכרנת בין שני המחשבים.
 
-הגנות: חסימת שעות אסורות (21:00–08:00, ערב שבת ושבת), שומר שליחה-כפולה
-לאותה חלוקה (חוצה-מחשבים, דרך הסנכרון), נעילת הכפתור בזמן שליחה."""
+v2.88: כל המספרים של כל מקבל מצולצלים (#gaira, בלי קומבו בחירה); אפשר לטעון
+רשימה מחלוקה קודמת (#9hgvi, קליק ימני בלשונית "חלוקות קודמות"); ההודעה
+מתפרסמת גם בשלוחה 1 של הקו (#kx6wd) ומושמעת למי שמתקשר חזרה (#z4xy9);
+אין חסימת שעות (#n6wte).
+
+הגנות: שומר שליחה-כפולה לאותה חלוקה (חוצה-מחשבים, דרך הסנכרון),
+נעילת הכפתור בזמן שליחה."""
 import json
 import os
 import time
@@ -122,7 +127,7 @@ class _ScheduleDialog(QDialog):
     """בחירת תאריך ושעה לצינתוק מתוזמן (#xi85i) — התזמון נשמר בשרת של ימות
     ורץ גם כשהמחשב כבוי."""
 
-    def __init__(self, count: int, parent=None):
+    def __init__(self, count: int, parent=None, smart_hint: str = ""):
         super().__init__(parent)
         self.setWindowTitle("תזמון שליחה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -147,11 +152,11 @@ class _ScheduleDialog(QDialog):
             tomorrow.year, tomorrow.month, tomorrow.day, 9, 0))
         self.dt_edit.setMinimumDateTime(QDateTime.currentDateTime())
         lay.addWidget(self.dt_edit)
-        hint = QLabel("מותר לתזמן רק לשעות המותרות בחוק "
-                      "(08:00–21:00, לא בערב שבת ושבת).")
-        hint.setObjectName("subtitle")
-        hint.setWordWrap(True)
-        lay.addWidget(hint)
+        if smart_hint:              # #y7jr0 שלב 1 — המלצה מתוך ההיסטוריה
+            hint = QLabel("💡 " + smart_hint)
+            hint.setObjectName("subtitle")
+            hint.setWordWrap(True)
+            lay.addWidget(hint)
         btns = QHBoxLayout()
         ok = QPushButton("תזמן »")
         ok.setObjectName("primary")
@@ -169,11 +174,6 @@ class _ScheduleDialog(QDialog):
         if when <= datetime.now() + timedelta(minutes=2):
             QMessageBox.warning(self, "תזמון שליחה",
                                 "בחר מועד עתידי (לפחות כמה דקות מעכשיו).")
-            return
-        reason = yemot.send_block_reason(when)
-        if reason:
-            QMessageBox.warning(self, "תזמון שליחה",
-                                reason + " — בחר שעה אחרת.")
             return
         self.when = when
         self.accept()
@@ -468,11 +468,13 @@ class TzintukimTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main = parent
-        self._rows = []           # [{'rec', 'phones', 'chosen', 'checked', 'why'}]
+        self._rows = []           # [{'rec', 'phones', 'send', 'checked', 'why'}]
         self._worker = None
         self._active_guid = ""    # DB guid of the campaign being tracked
         self._last_failed = []    # [{'phone','name'}] from the last finished run
         self._sched_checker = None   # worker probing the server for due schedules
+        self._batch = None        # #9hgvi: past-distribution batch loaded as list
+        self._stats = {}          # #y7jr0: per-phone answer history (tooltips)
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -517,6 +519,23 @@ class TzintukimTab(QWidget):
         b_lay.addWidget(b_btn)
         lay.addWidget(self.banner)
 
+        # #9hgvi — strip shown while a PAST distribution's list is loaded.
+        self.batch_frame = QFrame()
+        self.batch_frame.setStyleSheet("QFrame{background:#eef2ff; border:1px solid"
+                                       " #c7d2fe; border-radius:8px;}")
+        bt_lay = QHBoxLayout(self.batch_frame)
+        bt_lay.setContentsMargins(10, 6, 10, 6)
+        self.lbl_batch = QLabel("")
+        self.lbl_batch.setStyleSheet("color:#3730a3; font-weight:600; " + _LBL)
+        self.lbl_batch.setWordWrap(True)
+        bt_lay.addWidget(self.lbl_batch, 1)
+        b_back = QPushButton("חזור לרשימת השבוע")
+        b_back.setObjectName("neutral")
+        b_back.clicked.connect(self._clear_batch)
+        bt_lay.addWidget(b_back)
+        self.batch_frame.setVisible(False)
+        lay.addWidget(self.batch_frame)
+
         # Metric chips: eligible / ready / exceptions.
         metrics = QHBoxLayout()
         metrics.setSpacing(8)
@@ -542,19 +561,19 @@ class TzintukimTab(QWidget):
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        # Fixed width: ResizeToContents ignores cell widgets, so the phone
-        # combo would get clipped to a few digits.
+        # Fixed width — several numbers can share one cell (#gaira).
         hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(2, 180)
+        self.table.setColumnWidth(2, 340)
         hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        # Rows tall enough for the themed phone-combo (it overflows 30px rows).
-        self.table.verticalHeader().setDefaultSectionSize(48)
+        self.table.verticalHeader().setDefaultSectionSize(40)
         self.table.setMinimumHeight(260)
         self.table.itemChanged.connect(self._on_item_changed)
         lf_lay.addWidget(self.table)
-        hint = QLabel("☑ = יקבל צינתוק. אפשר לבטל סימון למי שלא רוצים לצלצל אליו, "
-                      "ולבחור מספר אחר למי שיש כמה.")
+        hint = QLabel("☑ = יקבל צינתוק. מי שיש לו כמה מספרים — כולם מצולצלים, "
+                      "כדי שההודעה תגיע לכל המשפחה. מספר שמופיע אצל שני מקבלים "
+                      "מצולצל פעם אחת בלבד.")
         hint.setObjectName("subtitle")
+        hint.setWordWrap(True)
         lf_lay.addWidget(hint)
         lay.addWidget(list_frame)
 
@@ -710,8 +729,10 @@ class TzintukimTab(QWidget):
 
     def refresh(self):
         """Rebuild the call list from the CURRENT distribution list (the same
-        rows the 'חלוקה ורישום' screen shows, minus the reserve section)."""
+        rows the 'חלוקה ורישום' screen shows, minus the reserve section) — or,
+        when a past distribution was loaded (#9hgvi), from that batch."""
         self.banner.setVisible(not yemot.is_configured())
+        self._refresh_batch_banner()
         base = self._distribution_rows()
         manual = [r for r in self._rows if r.get("manual")]
         manual_ids = {r["rec"].get("id") for r in manual}
@@ -721,6 +742,10 @@ class TzintukimTab(QWidget):
                 manual = [m for m in manual if m["rec"].get("id") != rec.get("id")]
             self._rows.append(self._make_row(rec))
         self._rows.extend(manual)      # keep hand-added people across refreshes
+        try:                           # #y7jr0 — tooltips of answer history
+            self._stats = yemot.answer_stats()
+        except Exception:
+            self._stats = {}
         self._flag_duplicates()
         self._populate()
         self._refresh_recording_label()
@@ -728,6 +753,11 @@ class TzintukimTab(QWidget):
         self._maybe_resume_tracking()
 
     def _distribution_rows(self):
+        if self._batch is not None:            # past distribution (#9hgvi)
+            try:
+                return db.get_batch_export_rows(self._batch.get("id"))
+            except Exception:
+                return []
         gt = getattr(self.main, "group_tab", None)
         if gt is None:
             return []
@@ -740,34 +770,92 @@ class TzintukimTab(QWidget):
         return [dict(r) for r in (gt._rows_data or [])
                 if not r.get("_reserve") and r.get("id") not in reserve_ids]
 
+    # ── Past-distribution mode (#9hgvi) ───────────────────────────────────────
+
+    def load_batch(self, batch: dict):
+        """Show a PAST distribution's recipients as the call list — entry point
+        of the right-click 'שלח צינתוק' action in 'חלוקות קודמות'."""
+        self._batch = dict(batch or {})
+        self._rows = []                # drop week-list rows and manual picks
+        self.refresh()
+
+    def _clear_batch(self):
+        self._batch = None
+        self._rows = []
+        self.refresh()
+
+    def _refresh_batch_banner(self):
+        if self._batch is None:
+            self.batch_frame.setVisible(False)
+            return
+        name = self._batch.get("dist_name") or ""
+        date = self._batch.get("dist_date") or ""
+        if date and len(date) >= 10 and date[4] == "-":
+            date = f"{date[8:10]}/{date[5:7]}/{date[:4]}"
+        self.lbl_batch.setText(f"📋 הרשימה נטענה מחלוקה קודמת: {name or date}"
+                               + (f" ({date})" if name and date else ""))
+        self.batch_frame.setVisible(True)
+
+    def _dist_date_iso(self) -> str:
+        """The distribution date the campaign belongs to (double-send guard)."""
+        if self._batch is not None and (self._batch.get("dist_date") or ""):
+            return self._batch["dist_date"]
+        return db.next_wednesday().isoformat()
+
+    def _campaign_name(self) -> str:
+        if self._batch is not None:
+            label = self._batch.get("dist_name") or self._dist_date_iso()
+            return f"צינתוק לחלוקה — {label}"
+        return f"חלוקה של {db.next_wednesday().strftime('%d/%m/%Y')}"
+
+    # ── Row model ─────────────────────────────────────────────────────────────
+
     def _make_row(self, rec: dict, manual: bool = False) -> dict:
         phones = yemot.pick_phones(rec)
         raw_any = any((rec.get(f) or "").strip()
                       for f in ("phone1", "phone2", "phone3"))
         why = "" if phones else ("מספר לא תקין" if raw_any else "אין מספר טלפון")
-        return {"rec": rec, "phones": phones, "chosen": phones[0] if phones else "",
+        return {"rec": rec, "phones": phones, "send": list(phones),
                 "checked": bool(phones), "why": why, "manual": manual}
 
     def _flag_duplicates(self):
-        """Two list rows with the SAME chosen number: the first stays, the rest
-        become unchecked exceptions (one household — one call)."""
-        seen = {}
-        for row in self._rows:
-            if not row["chosen"]:
-                continue
-            first = seen.get(row["chosen"])
-            if first is None:
-                seen[row["chosen"]] = row
-                if row["why"].startswith("אותו מספר"):
-                    row["why"] = ""
-            else:
+        """All of a recipient's numbers ring (#gaira); a number shared by two
+        rows rings only for the FIRST (one household — one call). A row left
+        with no numbers at all becomes an unchecked exception."""
+        allocated = yemot.allocate_phones([r["phones"] for r in self._rows])
+        first_owner = {}
+        for row, mine in zip(self._rows, allocated):
+            for p in mine:
+                first_owner.setdefault(p, row["rec"].get("full_name") or "")
+            row["send"] = mine
+            if row["phones"] and not mine:
                 row["checked"] = False
-                row["why"] = f"אותו מספר כמו {first['rec'].get('full_name', '')}"
+                owner = first_owner.get(row["phones"][0], "")
+                row["why"] = f"אותו מספר כמו {owner}"
+            elif row["why"].startswith("אותו מספר"):
+                row["why"] = ""
+
+    def _phone_tooltip(self, row) -> str:
+        """#y7jr0 שלב 1 — היסטוריית מענה לכל מספר של השורה, מתוך הדוחות
+        השמורים; שעה מומלצת מופיעה אחרי MIN_SMART_HISTORY שליחות."""
+        parts = []
+        for p in row["phones"]:
+            s = self._stats.get(p)
+            if not s:
+                continue
+            line = f"{p}: ענה ב-{s['answered']} מתוך {s['attempts']} צינתוקים"
+            if s.get("best_hour") is not None:
+                line += f" · השעה עם הכי הרבה מענה: {s['best_hour']:02d}:00"
+            elif s["attempts"] < yemot.MIN_SMART_HISTORY:
+                line += (f" (שעה מומלצת תוצג אחרי "
+                         f"{yemot.MIN_SMART_HISTORY} שליחות)")
+            parts.append(line)
+        return "\n".join(parts)
 
     def _populate(self):
         self.table.blockSignals(True)
-        # Full reset: clearContents also drops previous cell widgets (leftover
-        # phone combos would otherwise float over the repopulated table).
+        # Full reset: clearContents also drops leftover cell widgets from the
+        # pre-v2.88 phone combos (they would float over the repopulated table).
         self.table.clearContents()
         self.table.setRowCount(len(self._rows))
         for i, row in enumerate(self._rows):
@@ -783,31 +871,20 @@ class TzintukimTab(QWidget):
             if row["manual"]:
                 name.setText((rec.get("full_name") or "") + "  (נוסף ידנית)")
             self.table.setItem(i, 1, name)
-            if len(row["phones"]) > 1:
-                combo = QComboBox()
-                combo.addItems(row["phones"])
-                combo.setCurrentText(row["chosen"])
-                combo.setFixedHeight(40)
-                combo.currentTextChanged.connect(
-                    lambda text, r=row: self._choose_phone(r, text))
-                self.table.setCellWidget(i, 2, combo)
-            else:
-                self.table.setItem(i, 2, QTableWidgetItem(row["chosen"] or "—"))
-            status = QTableWidgetItem("מוכן" if row["checked"] and row["phones"]
+            shown = row["send"] or row["phones"]
+            phones_item = QTableWidgetItem(", ".join(shown) if shown else "—")
+            tip = self._phone_tooltip(row)
+            if tip:
+                phones_item.setToolTip(tip)
+                name.setToolTip(tip)
+            self.table.setItem(i, 2, phones_item)
+            status = QTableWidgetItem("מוכן" if row["checked"] and row["send"]
                                       else ("⚠ " + row["why"] if row["why"] else "לא נשלח"))
             if row["why"]:
                 status.setForeground(Qt.GlobalColor.darkYellow)
             self.table.setItem(i, 3, status)
         self.table.blockSignals(False)
         self._update_metrics()
-
-    def _choose_phone(self, row, text):
-        row["chosen"] = text
-        self._flag_duplicates()
-        # Deferred: repopulating destroys the combo that emitted this signal —
-        # rebuilding it synchronously mid-emit is a crash risk.
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(0, self._populate)
 
     def _on_item_changed(self, item):
         if item.column() != 0:
@@ -829,7 +906,16 @@ class TzintukimTab(QWidget):
         self.btn_sched.setEnabled(ready > 0 and self._worker is None)
 
     def _ready_rows(self):
-        return [r for r in self._rows if r["checked"] and r["chosen"]]
+        return [r for r in self._rows if r["checked"] and r["send"]]
+
+    def _phones_map(self, rows) -> dict:
+        """{'0501234567': 'שם', …} — every number of every checked row (#gaira);
+        cross-row duplicates were already removed by _flag_duplicates."""
+        phones = {}
+        for r in rows:
+            for p in r["send"]:
+                phones.setdefault(p, r["rec"].get("full_name") or "")
+        return phones
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
@@ -928,17 +1014,21 @@ class TzintukimTab(QWidget):
             self._upload_path(dlg.picked_path, "מאגר הקלטות")
 
     def _send_test(self):
+        # #dx28e — the test number is entered/edited right here (pre-filled with
+        # the saved one) and remembered; no settings-screen field any more.
         if not self._require_config():
             return
-        phone = (db.get_setting(yemot.SET_TEST_PHONE) or "").strip()
+        saved = (db.get_setting(yemot.SET_TEST_PHONE) or "").strip()
+        phone, okd = QInputDialog.getText(
+            self, "שליחת בדיקה",
+            "לאיזה מספר לצלצל? (המספר שלך — נשמר לפעם הבאה)", text=saved)
+        if not okd:
+            return
+        phone = phone.strip()
         if not yemot.normalize_phone(phone):
-            phone, okd = QInputDialog.getText(
-                self, "שליחת בדיקה", "לאיזה מספר לצלצל? (המספר שלך)")
-            if not okd or not yemot.normalize_phone(phone):
-                if okd:
-                    QMessageBox.warning(self, "שליחת בדיקה", "המספר שהוזן אינו תקין.")
-                return
-            db.set_setting(yemot.SET_TEST_PHONE, phone.strip())
+            QMessageBox.warning(self, "שליחת בדיקה", "המספר שהוזן אינו תקין.")
+            return
+        db.set_setting(yemot.SET_TEST_PHONE, phone)
         with busy_cursor():
             try:
                 yemot.run_test(phone)
@@ -952,18 +1042,12 @@ class TzintukimTab(QWidget):
     def _send(self):
         if not self._require_config():
             return
-        reason = yemot.send_block_reason()
-        if reason:
-            QMessageBox.warning(self, "צינתוקים", reason + " — נסה שוב בשעות המותרות.")
-            return
         rows = self._ready_rows()
-        phones = {}
-        for r in rows:
-            phones.setdefault(r["chosen"], r["rec"].get("full_name") or "")
+        phones = self._phones_map(rows)
         if not phones:
             QMessageBox.warning(self, "צינתוקים", "אין אף נמען מסומן עם מספר תקין.")
             return
-        dist_date = db.next_wednesday().isoformat()
+        dist_date = self._dist_date_iso()
         prev = db.tzintuk_campaign_for_date(dist_date)
         extra = ""
         if prev:
@@ -976,10 +1060,13 @@ class TzintukimTab(QWidget):
         bad = sum(1 for r in self._rows if r["why"])
         ans = QMessageBox.question(
             self, "אישור שליחה",
-            f"עומד לשלוח הודעה קולית ל-{len(phones)} נמענים.\n"
+            f"עומד לשלוח הודעה קולית ל-{len(rows)} משפחות "
+            f"({len(phones)} מספרי טלפון — כל המספרים של כל משפחה).\n"
             f"חריגים שלא יישלחו: {bad}.\n"
             f"עלות משוערת: כ-{len(phones)} יחידות.\n"
-            f"מי שיקיש 7 בשיחה יסומן בתוכנה כ\"אישר הגעה\".{extra}\n\nלשלוח עכשיו?",
+            "מי שיקיש 7 בשיחה יסומן בתוכנה כ\"אישר הגעה\".\n"
+            "ההודעה תתפרסם גם בשלוחת ההודעות בקו (שלוחה 1), ומי שלא ענה "
+            f"ישמע אותה כשיתקשר חזרה לקו.{extra}\n\nלשלוח עכשיו?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes:
@@ -989,7 +1076,9 @@ class TzintukimTab(QWidget):
         with busy_cursor():
             try:
                 template_id = yemot.ensure_template()
-                res = yemot.run_campaign(phones, template_id)
+                # store_list=True — הרשימה נשמרת בתבנית כדי שהקו ישמיע את
+                # ההודעה למי שמתקשר חזרה (#z4xy9, campaign_message_to_play).
+                res = yemot.run_campaign(phones, template_id, store_list=True)
             except yemot.YemotError as e:
                 QMessageBox.warning(self, "צינתוקים", str(e))
                 self._update_metrics()
@@ -998,14 +1087,27 @@ class TzintukimTab(QWidget):
                 QMessageBox.warning(self, "צינתוקים", f"השליחה נכשלה: {e}")
                 self._update_metrics()
                 return
+        self._publish_to_line()              # #kx6wd — best effort
         from utils import sync
-        name = f"חלוקה של {db.next_wednesday().strftime('%d/%m/%Y')}"
         self._active_guid = db.add_tzintuk_campaign(
-            name, dist_date, template_id, str(res.get("campaignId") or ""),
+            self._campaign_name(), dist_date, template_id,
+            str(res.get("campaignId") or ""),
             int(res.get("entriesCount") or len(phones)),
             device=sync.device_name() or "")
         self._refresh_history()
         self._start_tracking(str(res.get("campaignId") or ""), len(phones))
+
+    def _publish_to_line(self):
+        """#kx6wd — copy the campaign recording into the line's central
+        messages extension (שלוחה 1) as an additional message. Best-effort:
+        a failure never blocks the campaign that already went out."""
+        try:
+            yemot.publish_to_extension()
+        except Exception as e:
+            QMessageBox.warning(
+                self, "פרסום בשלוחת ההודעות",
+                "הצינתוק נשלח, אך פרסום ההודעה בשלוחה 1 של הקו נכשל:\n"
+                f"{e}")
 
     def _resend_failed(self):
         if not self._last_failed:
@@ -1013,10 +1115,6 @@ class TzintukimTab(QWidget):
         phones = {e["phone"]: e.get("name") or "" for e in self._last_failed
                   if e.get("phone")}
         if not phones:
-            return
-        reason = yemot.send_block_reason()
-        if reason:
-            QMessageBox.warning(self, "צינתוקים", reason + " — נסה שוב בשעות המותרות.")
             return
         ans = QMessageBox.question(
             self, "שליחה חוזרת",
@@ -1033,7 +1131,7 @@ class TzintukimTab(QWidget):
                 QMessageBox.warning(self, "צינתוקים", f"השליחה נכשלה: {e}")
                 return
         from utils import sync
-        dist_date = db.next_wednesday().isoformat()
+        dist_date = self._dist_date_iso()
         self._active_guid = db.add_tzintuk_campaign(
             f"שליחה חוזרת לנכשלים ({len(phones)})", dist_date, template_id,
             str(res.get("campaignId") or ""), len(phones),
@@ -1061,13 +1159,30 @@ class TzintukimTab(QWidget):
                 return c
         return None
 
+    def _smart_hint(self, phones) -> str:
+        """#y7jr0 שלב 1 — ההמלצה בדיאלוג התזמון: השעה עם אחוז המענה הגבוה
+        ביותר על פני כל המספרים שברשימה (רק ממי שכבר יש עליו היסטוריה)."""
+        by_hour = {}
+        for p in phones:
+            s = self._stats.get(p)
+            if not s:
+                continue
+            for h, (a, t) in s["by_hour"].items():
+                bucket = by_hour.setdefault(h, [0, 0])
+                bucket[0] += a
+                bucket[1] += t
+        best = [(a / t, t, h) for h, (a, t) in by_hour.items() if t >= 10]
+        if not best:
+            return ""
+        rate, total, hour = max(best)
+        return (f"לפי ההיסטוריה של הרשימה הזו, השעה עם הכי הרבה מענה היא "
+                f"{hour:02d}:00 ({rate:.0%} מענה, {total} שיחות שנבדקו).")
+
     def _schedule(self):
         if not self._require_config():
             return
         rows = self._ready_rows()
-        phones = {}
-        for r in rows:
-            phones.setdefault(r["chosen"], r["rec"].get("full_name") or "")
+        phones = self._phones_map(rows)
         if not phones:
             QMessageBox.warning(self, "תזמון שליחה",
                                 "אין אף נמען מסומן עם מספר תקין.")
@@ -1081,11 +1196,11 @@ class TzintukimTab(QWidget):
                 "אפשר לתזמן רק צינתוק אחד בכל פעם — בטל אותו קודם "
                 "(כפתור \"בטל תזמון\") ואז תזמן מחדש.")
             return
-        dlg = _ScheduleDialog(len(phones), self)
+        dlg = _ScheduleDialog(len(phones), self, smart_hint=self._smart_hint(phones))
         if not dlg.exec() or dlg.when is None:
             return
         when = dlg.when
-        dist_date = db.next_wednesday().isoformat()
+        dist_date = self._dist_date_iso()
         prev = db.tzintuk_campaign_for_date(dist_date)
         extra = ""
         if prev:
@@ -1117,9 +1232,10 @@ class TzintukimTab(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "תזמון שליחה", f"התזמון נכשל: {e}")
                 return
+        self._publish_to_line()              # #kx6wd — ההקלטה כבר בתבנית
         from utils import sync
         db.add_tzintuk_campaign(
-            f"צינתוק מתוזמן — חלוקה של {db.next_wednesday().strftime('%d/%m/%Y')}",
+            f"צינתוק מתוזמן — {self._campaign_name()}",
             dist_date, template_id, str(res.get("schedId") or ""),
             int(res.get("count") or len(phones)),
             sent_at=self._to_utc_iso(when),
@@ -1296,18 +1412,19 @@ class TzintukimTab(QWidget):
     def _apply_results_to_table(self, entries):
         """Write each person's final result into the status column, so the
         operator sees WHO confirmed (pressed 7), who just got the call, and
-        who failed — matched by the number that was dialed."""
+        who failed. A row may have several dialed numbers (#gaira) — the BEST
+        outcome among them wins (confirmed > delivered > failed)."""
         by_phone = {e.get("phone"): e for e in entries if e.get("phone")}
         self.table.blockSignals(True)
         for i, row in enumerate(self._rows):
-            e = by_phone.get(row.get("chosen"))
-            if e is None or i >= self.table.rowCount():
+            mine = [by_phone[p] for p in row.get("send") or [] if p in by_phone]
+            if not mine or i >= self.table.rowCount():
                 continue
-            if e.get("confirmed"):
+            if any(e.get("confirmed") for e in mine):
                 txt, color = "✓ אישר הגעה", QColor("#166534")
-            elif e.get("ok"):
+            elif any(e.get("ok") for e in mine):
                 txt, color = "קיבל את ההודעה", QColor("#0f6e56")
-            elif e.get("failed"):
+            elif all(e.get("failed") for e in mine):
                 txt, color = "⚠ לא נענה / נכשל", QColor("#a32d2d")
             else:
                 continue

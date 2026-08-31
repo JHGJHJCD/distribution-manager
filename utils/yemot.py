@@ -206,23 +206,26 @@ def pick_phones(rec: dict) -> list:
     return out
 
 
-# ─── Legal sending hours ─────────────────────────────────────────────────────
+def allocate_phones(phone_lists: list) -> list:
+    """Cross-row dedupe for the all-numbers send (#gaira): every recipient gets
+    ALL their numbers, but a number shared by two list rows rings only for the
+    first row. Input: [[phones of row 0], [phones of row 1], …] → same shape,
+    with already-claimed numbers removed from later rows."""
+    seen, out = set(), []
+    for phones in phone_lists:
+        mine = [p for p in (phones or []) if p not in seen]
+        seen.update(mine)
+        out.append(mine)
+    return out
+
+
+# ─── Sending hours ───────────────────────────────────────────────────────────
 
 def send_block_reason(now: datetime | None = None) -> str:
-    """'' when sending is allowed now, else a Hebrew reason. The law forbids
-    automated calls 21:00–08:00; Friday afternoon and Saturday are blocked for
-    Shabbat (Yemot also blocks Shabbat/chag server-side — error 104 — but we
-    stop earlier, with a clear message). Times are Israel clock."""
-    if now is None:
-        zone = timefmt._israel_zone()
-        now = datetime.now(zone) if zone is not None else datetime.now()
-    wd, hour = now.weekday(), now.hour        # Mon=0 … Fri=4, Sat=5, Sun=6
-    if wd == 5:
-        return "אי אפשר לשלוח בשבת"
-    if wd == 4 and hour >= 12:
-        return "אי אפשר לשלוח בערב שבת (מהצהריים)"
-    if hour >= 21 or hour < 8:
-        return "החוק אוסר שיחות אוטומטיות בין 21:00 ל-08:00"
+    """Always '' — the operator asked for every hour to be open (#n6wte,
+    user decision 31/08/2026): no night/Shabbat block and no warning. Yemot's
+    own server still refuses Shabbat/chag (error 104), which stays the only
+    guard. The function is kept so existing call sites need no change."""
     return ""
 
 
@@ -285,15 +288,21 @@ def _ensure_confirm_context(template_id: str):
     """One-time per template: set the campaign type to REPEAT so key presses
     work during the message (Yemot's built-in keys: 1 = replay, 7 = confirm →
     the entry becomes entryStatus 'accepted' in the report). Non-fatal — a
-    failure never blocks sending; retried on the next send."""
-    if (db.get_setting(SET_CONFIRM_CTX) or "").strip() == str(template_id):
+    failure never blocks sending. Verified 31/08/2026: the CURRENT server
+    rejects REPEAT via UpdateTemplate ("yemotContext value is invalid"; the
+    API enum is SIMPLE/MESSAGE/VOICEMAIL/BRIDGE) — that answer is remembered
+    as 'na:<id>' so we stop re-asking on every send; a network error is NOT
+    remembered and gets retried."""
+    flag = (db.get_setting(SET_CONFIRM_CTX) or "").strip()
+    if flag in (str(template_id), f"na:{template_id}"):
         return
     try:
         _call("UpdateTemplate", {"templateId": template_id,
                                  "yemotContext": "REPEAT"}, post=True)
         db.set_setting(SET_CONFIRM_CTX, str(template_id))
-    except YemotError:
-        pass
+    except YemotError as e:
+        if e.code != -1:
+            db.set_setting(SET_CONFIRM_CTX, f"na:{template_id}")
 
 
 def upload_message_wav(file_path: str, template_id: str | None = None) -> dict:
@@ -312,9 +321,9 @@ def upload_message_wav(file_path: str, template_id: str | None = None) -> dict:
         raise
 
 
-def _upload_multipart(path: str, content: bytes) -> dict:
+def _upload_multipart(path: str, content: bytes, convert: str = "1") -> dict:
     boundary = "----ManhalHaluka"
-    fields = {"token": _token(), "path": path, "convertAudio": "1"}
+    fields = {"token": _token(), "path": path, "convertAudio": convert}
     body = b""
     for k, v in fields.items():
         body += (f"--{boundary}\r\nContent-Disposition: form-data; "
@@ -347,14 +356,27 @@ def _upload_multipart(path: str, content: bytes) -> dict:
     return data
 
 
-def run_campaign(phones: dict, template_id: str | None = None) -> dict:
+def run_campaign(phones: dict, template_id: str | None = None,
+                 store_list: bool = False) -> dict:
     """Send the voice message to `phones` ({'0501234567': 'שם', ...}).
     Returns the server answer: campaignId, entriesCount, estimatedPrice,
-    customerUnits…  Refuses an empty list locally."""
+    customerUnits…  Refuses an empty list locally.
+
+    store_list=True (#z4xy9): before dialing, also store the numbers as the
+    template's distribution list. The line's entry menu plays the campaign
+    message to callers whose number is ACTIVE in that list
+    (campaign_message_to_play) — so someone who missed the call can dial the
+    line and hear the message. Best-effort: a storing failure never blocks
+    the actual send."""
     numbers = {p: n for p, n in phones.items() if normalize_phone(p)}
     if not numbers:
         raise YemotError("אין אף מספר תקין לשליחה")
     template_id = template_id or ensure_template()
+    if store_list:
+        try:
+            set_template_entries(numbers, template_id)
+        except YemotError:
+            pass
     payload = json.dumps({p: {"name": (n or "")[:60]} for p, n in numbers.items()},
                          ensure_ascii=False)
     params = {"templateId": template_id, "phones": payload}
@@ -362,6 +384,41 @@ def run_campaign(phones: dict, template_id: str | None = None) -> dict:
     if caller:
         params["callerId"] = caller
     return _call("RunCampaign", params, post=True)
+
+
+# ─── Publishing the message on the line itself ───────────────────────────────
+
+MESSAGES_EXT = "1"          # שלוחת ההודעות המרכזית בקו (הכרעת המשתמש, #kx6wd)
+
+
+def publish_to_extension(ext: str = MESSAGES_EXT,
+                         template_id: str | None = None) -> str:
+    """Copy the campaign's recording into the line's central messages
+    extension as an ADDITIONAL file (#kx6wd) — server-side copy, so it works
+    from either computer: DownloadFile tpl:<id> → next free number in the
+    extension (GetIVR2Dir) → UploadFile ivr2:/<ext>/<n>.wav.
+    Returns the uploaded file name."""
+    template_id = template_id or ensure_template()
+    query = urllib.parse.urlencode({"token": _token(),
+                                    "path": f"tpl:{template_id}"})
+    try:
+        content = _http(f"{BASE_URL}/DownloadFile?{query}")
+    except YemotError as e:
+        if e.code != -1:
+            raise
+        content = _http(f"{ALT_URL}/DownloadFile?{query}")
+    if not content or content[:1] == b"{":
+        raise YemotError("להודעת הצינתוק אין הקלטה בשרת — העלה קודם הקלטה")
+    listing = _call("GetIVR2Dir", {"path": f"ivr2:/{ext}"})
+    highest = 0
+    for f in _dig(listing, "files") or []:
+        m = re.match(r"^(\d+)\.", str(f.get("name") or ""))
+        if m:
+            highest = max(highest, int(m.group(1)))
+    name = f"{highest + 1:03d}.wav"
+    # Already in telephony WAV format (it came from the template) — no convert.
+    _upload_multipart(f"ivr2:/{ext}/{name}", content, convert="0")
+    return name
 
 
 # ─── Scheduled campaigns (server-side — run even when this computer is off) ──
@@ -512,6 +569,60 @@ def confirmed_phones(dist_date: str) -> set:
                 if p:
                     out.add(p)
     return out
+
+
+# ─── Smart-timing statistics (#y7jr0, stage 1) ───────────────────────────────
+
+MIN_SMART_HISTORY = 10   # attempts needed before a personal best hour is shown
+
+
+def answer_stats() -> dict:
+    """Per-phone answer history, built from the campaign reports already stored
+    (and synced) in tzintuk_campaigns — nothing new is recorded:
+    {phone: {"attempts": n, "answered": n, "by_hour": {hour: [answered, tries]},
+             "best_hour": int|None}}.
+    The hour is the campaign's send hour on the Israel clock (the reports hold
+    no per-entry time). best_hour appears only after MIN_SMART_HISTORY
+    attempts — the hour with the highest answer rate among hours tried at
+    least twice. Stage 2 (a future version) will use it to auto-split the
+    send by personal hours."""
+    stats = {}
+    for camp in db.get_tzintuk_campaigns():
+        if camp.get("status") != "done":
+            continue
+        try:
+            entries = json.loads(camp.get("report_json") or "[]")
+        except ValueError:
+            continue
+        when = timefmt.to_israel(camp.get("sent_at") or "")
+        if when is None or not entries:
+            continue
+        hour = when.hour
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            status = str(e.get("status") or "").lower()
+            answered = bool(e.get("ok")) or status in _DELIVERED
+            failed = bool(e.get("failed")) or status in _FAILED
+            if not answered and not failed:
+                continue               # pending/unknown — not an attempt
+            p = normalize_phone(e.get("phone"))
+            if not p:
+                continue
+            s = stats.setdefault(p, {"attempts": 0, "answered": 0,
+                                     "by_hour": {}, "best_hour": None})
+            s["attempts"] += 1
+            s["answered"] += 1 if answered else 0
+            bucket = s["by_hour"].setdefault(hour, [0, 0])
+            bucket[1] += 1
+            bucket[0] += 1 if answered else 0
+    for s in stats.values():
+        if s["attempts"] < MIN_SMART_HISTORY:
+            continue
+        candidates = [(a / t, t, h) for h, (a, t) in s["by_hour"].items() if t >= 2]
+        if candidates:
+            s["best_hour"] = max(candidates)[2]
+    return stats
 
 
 def run_test(phone: str) -> dict:

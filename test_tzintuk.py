@@ -57,15 +57,24 @@ ok("pick_phones מסיר כפולים ושומר סדר",
    yemot.pick_phones(rec) == ["0521234567", "046543210"])
 ok("pick_phones בלי מספרים", yemot.pick_phones({"phone1": "אין"}) == [])
 
-# ── 2. חוקי שעות שליחה ───────────────────────────────────────────────────────
+# ── 2. שעות שליחה — אין חסימה (#n6wte, הכרעת המשתמש 31/08/2026) ─────────────
 print("— שעות שליחה —")
-ok("יום חול בבוקר מותר",
-   yemot.send_block_reason(datetime(2026, 9, 2, 10, 0)) == "")          # רביעי
-ok("לילה חסום (23:00)", "21:00" in yemot.send_block_reason(datetime(2026, 9, 2, 23, 0)))
-ok("בוקר מוקדם חסום (07:00)", "21:00" in yemot.send_block_reason(datetime(2026, 9, 2, 7, 0)))
-ok("שבת חסומה", "שבת" in yemot.send_block_reason(datetime(2026, 9, 5, 11, 0)))     # שבת
-ok("ערב שבת אחה\"צ חסום", "ערב שבת" in yemot.send_block_reason(datetime(2026, 9, 4, 14, 0)))
-ok("שישי בבוקר מותר", yemot.send_block_reason(datetime(2026, 9, 4, 9, 0)) == "")
+ok("כל השעות פתוחות — יום חול",
+   yemot.send_block_reason(datetime(2026, 9, 2, 10, 0)) == "")
+ok("כל השעות פתוחות — לילה",
+   yemot.send_block_reason(datetime(2026, 9, 2, 23, 0)) == "")
+ok("כל השעות פתוחות — שבת",
+   yemot.send_block_reason(datetime(2026, 9, 5, 11, 0)) == "")
+ok("כל השעות פתוחות — בלי ארגומנט", yemot.send_block_reason() == "")
+
+# ── 2ב. חלוקת מספרים — כל המספרים של כל מקבל (#gaira) ───────────────────────
+print("— כל המספרים למשפחה —")
+alloc = yemot.allocate_phones([["0521", "0522"], ["0523"], ["0522", "0524"], []])
+ok("כל המספרים נשמרים לכל שורה", alloc[0] == ["0521", "0522"] and alloc[1] == ["0523"])
+ok("מספר כפול בין שורות מצולצל פעם אחת", alloc[2] == ["0524"])
+ok("שורה בלי מספרים נשארת ריקה", alloc[3] == [])
+ok("שורה שכל מספריה כפולים מתרוקנת",
+   yemot.allocate_phones([["0521"], ["0521"]])[1] == [])
 
 # ── 3. תחבורה מדומה — בקשות ותשובות ─────────────────────────────────────────
 print("— בקשות API (מדומה) —")
@@ -228,6 +237,60 @@ try:
 except yemot.YemotError:
     ok("בדיקה עם מספר שבור נחסמת", True)
 
+# ── 3ב. store_list — הרשימה נשמרת בתבנית לפני שליחה (#z4xy9) ────────────────
+print("— שמירת הרשימה בתבנית + פרסום בשלוחה —")
+canned["RunCampaign"] = {"responseStatus": "OK", "campaignId": "c-x",
+                         "entriesCount": 1}
+canned["ClearTemplateEntries"] = {"responseStatus": "OK"}
+canned["UploadPhoneList"] = {"responseStatus": "OK"}
+n0 = len(calls)
+yemot.run_campaign({"0521234567": "כהן"}, store_list=True)
+seq = [c[0] for c in calls[n0:]]
+ok("store_list: ניקוי+העלאת רשימה לפני RunCampaign",
+   seq[:2] == ["ClearTemplateEntries", "UploadPhoneList"]
+   and seq[-1] == "RunCampaign", str(seq))
+n0 = len(calls)
+yemot.run_campaign({"0521234567": "כהן"})
+ok("בלי store_list — אין נגיעה ברשימה",
+   [c[0] for c in calls[n0:]] == ["RunCampaign"])
+
+# publish_to_extension (#kx6wd): הורדת ההקלטה מהתבנית → מספר פנוי → העלאה
+WAV = b"RIFF\xff\x00fake-wav"
+def media_transport(url, data):
+    if "DownloadFile" in url:
+        calls.append(("DownloadFile",
+                      {k: v[0] for k, v in urllib.parse.parse_qs(
+                          urllib.parse.urlparse(url).query).items()}))
+        return WAV
+    return fake_transport(url, data)
+yemot._TRANSPORT = media_transport
+canned["GetIVR2Dir"] = {"responseStatus": "OK", "files": [
+    {"name": "007.wav"}, {"name": "003.ogg"}, {"name": "בלי-מספר.wav"}]}
+canned["UploadFile"] = {"responseStatus": "OK", "path": "x"}
+name = yemot.publish_to_extension()
+ok("publish: מוריד את הקלטת התבנית", any(
+    c[0] == "DownloadFile" and c[1].get("path", "").startswith("tpl:")
+    for c in calls))
+ok("publish: הקובץ מקבל את המספר הפנוי הבא", name == "008.wav")
+up_call = calls[-1]
+ok("publish: הועלה לשלוחה 1 בלי המרה", up_call[0] == "UploadFile"
+   and b"ivr2:/1/008.wav" in (up_call[1].get("_raw") or b""))
+
+# שלוחה ריקה → הקובץ הראשון 001; תבנית בלי הקלטה → שגיאה ברורה
+canned["GetIVR2Dir"] = {"responseStatus": "OK", "files": []}
+ok("publish לשלוחה ריקה — 001", yemot.publish_to_extension() == "001.wav")
+def no_media_transport(url, data):
+    if "DownloadFile" in url:
+        return json.dumps({"responseStatus": "ERROR"}).encode()
+    return fake_transport(url, data)
+yemot._TRANSPORT = no_media_transport
+try:
+    yemot.publish_to_extension()
+    ok("publish בלי הקלטה — שגיאה ברורה", False)
+except yemot.YemotError as e:
+    ok("publish בלי הקלטה — שגיאה ברורה", "הקלטה" in str(e))
+yemot._TRANSPORT = fake_transport
+
 # ── 4. היסטוריה ב-DB + שומר שליחה-כפולה ─────────────────────────────────────
 print("— היסטוריה ושומר כפילות —")
 g1 = db.add_tzintuk_campaign("חלוקה שבועית 02/09/2026", "2026-09-02",
@@ -299,10 +362,11 @@ print("— תזמון צינתוקים —")
 canned["ScheduleCampaign"] = {"responseStatus": "OK", "schedId": 777}
 canned["ClearTemplateEntries"] = {"responseStatus": "OK"}
 canned["UploadPhoneList"] = {"responseStatus": "OK"}
+n_sched = len(calls)
 res = yemot.schedule_campaign(datetime(2026, 9, 16, 9, 0),
                               {"0521234567": "כהן יוסף", "05-12": "שבור"})
 ok("schedule_campaign מחזיר schedId", res["schedId"] == "777")
-sched_calls = [c for c in calls if c[0] in
+sched_calls = [c for c in calls[n_sched:] if c[0] in
                ("ClearTemplateEntries", "UploadPhoneList", "ScheduleCampaign")]
 ok("הרשימה נוקתה לפני העלאה", sched_calls[0][0] == "ClearTemplateEntries"
    and sched_calls[0][1].get("templateId") == "1117319")
@@ -415,6 +479,38 @@ with db.get_connection() as conn:
                               "campaign_id": "c-old", "device": "", "total": 3})
 rowo = [c for c in db.get_tzintuk_campaigns() if c["guid"] == "old-ver-guid"][0]
 ok("payload ישן בלי status → ברירת מחדל sending", rowo["status"] == "sending")
+
+# ── 7. סטטיסטיקת שעות מענה (#y7jr0 שלב 1) ───────────────────────────────────
+print("— שעות מענה —")
+P_HOT, P_NEW = "0529999999", "0528888888"
+
+
+def _hist_campaign(i, hour, status_hot):
+    g = db.add_tzintuk_campaign(f"היסטוריה {i}", f"2026-07-{i + 1:02d}",
+                                "t", f"h-{i}", 2,
+                                sent_at=f"2026-07-{i + 1:02d}T{hour:02d}:00:00+03:00")
+    report = [{"phone": P_HOT, "status": status_hot,
+               "ok": status_hot == "done", "failed": status_hot != "done"}]
+    if i < 3:                       # למספר החדש יש רק 3 ניסיונות
+        report.append({"phone": P_NEW, "status": "done", "ok": True})
+    db.update_tzintuk_campaign(g, 1, 1, "done",
+                               json.dumps(report, ensure_ascii=False))
+
+
+# 8 שליחות ב-18:00 (6 ענו) + 4 שליחות ב-10:00 (ענה אחת) = 12 ניסיונות
+for i in range(8):
+    _hist_campaign(i, 18, "done" if i < 6 else "no_answer")
+for i in range(8, 12):
+    _hist_campaign(i, 10, "done" if i == 8 else "busy")
+stats = yemot.answer_stats()
+hot = stats.get(P_HOT) or {}
+ok("נספרו כל הניסיונות", hot.get("attempts") == 12 and hot.get("answered") == 7,
+   str(hot))
+ok("השעה המומלצת = השעה עם אחוז המענה הגבוה", hot.get("best_hour") == 18)
+new = stats.get(P_NEW) or {}
+ok(f"מתחת ל-{yemot.MIN_SMART_HISTORY} שליחות אין המלצה",
+   new.get("attempts") == 3 and new.get("best_hour") is None)
+ok("מי שלא הופיע בדוחות — אין רשומה", "0520000000" not in stats)
 
 print()
 if fails:
