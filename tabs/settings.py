@@ -637,7 +637,9 @@ class SettingsTab(QWidget):
         ym_desc = QLabel(
             "חיבור למערכת הטלפונית של ימות המשיח — לשליחת הודעה קולית לזכאי "
             "החלוקה מתוך לשונית \"צינתוקים\". הזן את מספר המערכת (077…) ואת "
-            "הסיסמה של ימות, ולחץ \"בדוק חיבור\".")
+            "הסיסמה של ימות, ולחץ \"בדוק חיבור\". אם במערכת שלך מופעל אימות "
+            "דו-שלבי — צור \"מפתח API\" בממשק ימות (חומת אש) והדבק אותו בשדה "
+            "הסיסמה במקום הסיסמה הרגילה.")
         ym_desc.setObjectName("subtitle")
         ym_desc.setWordWrap(True)
         ym_lay.addWidget(ym_desc)
@@ -1248,8 +1250,9 @@ class SettingsTab(QWidget):
         system = self.ym_system.text().strip()
         password = self.ym_password.text().strip()
         test_phone = self.ym_test_phone.text().strip()
-        if not silent and (not system or not password):
-            QMessageBox.warning(self, "", "יש למלא מספר מערכת וסיסמה של ימות המשיח.")
+        # An API key stands on its own; a regular password needs the system no.
+        if not silent and not password:
+            QMessageBox.warning(self, "", "יש למלא סיסמה (או מפתח API) של ימות המשיח.")
             return
         db.set_setting(yemot.SET_SYSTEM, system)
         db.set_setting(yemot.SET_PASSWORD, password)

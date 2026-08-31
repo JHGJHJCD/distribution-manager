@@ -45,6 +45,16 @@ Traps that have cost us time before. Check the relevant one before touching that
   the folder for scanning so the delete fails. It does **not** harm data. The only real fix is a
   onedir build, which would break the single-EXE updater. **User's decision (27/08/2026): leave
   it as is — do not invest in blocking it again.**
+- **v2.84 (31/08/2026): `_cleanup_prev_mei` gutted a LIVE instance's _MEI dir** in the
+  update-relaunch window (`mei_last` pointed at a running instance's dir; rmtree removed its
+  unlocked files incl. `base_library.zip` → the app's first lazy import — the tzintuk
+  connection check — died with "[Errno 2] ... base_library.zip", masquerading as a network
+  error). Fixes, keep BOTH: (1) delete only after an **atomic `os.rename` liveness probe** —
+  renaming a dir fails on Windows while any file inside is open/mapped, so a live (or
+  NetFree-held) dir is skipped; (2) main.py **warms lazy network imports** (`ssl`,
+  `http.client`, `urllib.request`, `encodings.idna`) at startup so a damaged _MEI can't break
+  networking mid-run. Diagnostic that cracked it: the surviving files in the gutted dir were
+  exactly the LOCKED ones (mapped DLLs/pyds) — the rmtree(ignore_errors) signature.
 
 ## NetFree (network)
 - NetFree can inject **HTTP 418 "Blocked by NetFree"** and break builds/downloads with no obvious

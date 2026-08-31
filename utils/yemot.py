@@ -20,6 +20,9 @@ import database as db
 from utils import timefmt
 
 BASE_URL = "https://www.call2all.co.il/ym/api"
+# Official twin endpoint (f2.freeivr.co.il/topic/55) — tried automatically when
+# the main host fails at the network level.
+ALT_URL = "https://private.call2all.co.il/ym/api"
 TEMPLATE_DESCRIPTION = "מנהל חלוקה — צינתוקים"
 
 # settings keys (synced between the computers, like the SMTP credentials)
@@ -31,7 +34,8 @@ SET_TEST_PHONE = "yemot_test_phone"
 
 
 class YemotError(Exception):
-    """A non-OK answer from the Yemot server (or no connection)."""
+    """A non-OK answer from the Yemot server (or no connection).
+    code -1 = network-level failure (no server answer at all)."""
 
     def __init__(self, message: str, code: int = 0):
         super().__init__(message)
@@ -80,32 +84,54 @@ def _http(url: str, data: bytes | None = None) -> bytes:
         # was DNS, SSL, a timeout or a filter block (learned in the v2.82 E2E).
         detail = str(last_err) or type(last_err).__name__
         raise YemotError("אין חיבור לשרת ימות המשיח — בדוק את האינטרנט.\n"
-                         f"פרטים טכניים: {detail}") from (
+                         f"פרטים טכניים: {detail}", code=-1) from (
             last_err if isinstance(last_err, BaseException) else None)
+
+
+def _is_api_key(password: str) -> bool:
+    """An API key (made in Yemot's 'חומת אש' screen) is long/lettered and is
+    sent ALONE as the token; the classic short numeric password needs the
+    system number prefixed (system:password)."""
+    return bool(re.search(r"[A-Za-z]", password)) or len(password) >= 20
 
 
 def _token() -> str:
     system = (db.get_setting(SET_SYSTEM) or "").strip()
     password = (db.get_setting(SET_PASSWORD) or "").strip()
-    if not system or not password:
+    if not password:
         raise YemotError("חסרים פרטי גישה לימות המשיח — הזן אותם בהגדרות")
+    if _is_api_key(password):
+        return password
+    if not system:
+        raise YemotError("חסר מספר מערכת — הזן אותו בהגדרות")
     return f"{system}:{password}"
 
 
 def is_configured() -> bool:
-    return bool((db.get_setting(SET_SYSTEM) or "").strip()
-                and (db.get_setting(SET_PASSWORD) or "").strip())
+    password = (db.get_setting(SET_PASSWORD) or "").strip()
+    if not password:
+        return False
+    return _is_api_key(password) or bool((db.get_setting(SET_SYSTEM) or "").strip())
 
 
 def _call(command: str, params: dict | None = None, post: bool = False) -> dict:
-    """One API request. Raises YemotError on any non-OK answer."""
+    """One API request. Raises YemotError on any non-OK answer. A network-level
+    failure on the main host is retried once against the official twin host."""
     query = {"token": _token()}
     query.update({k: v for k, v in (params or {}).items() if v not in (None, "")})
     encoded = urllib.parse.urlencode(query)
-    if post:
-        raw = _http(f"{BASE_URL}/{command}", encoded.encode("utf-8"))
-    else:
-        raw = _http(f"{BASE_URL}/{command}?{encoded}")
+
+    def _fetch(base):
+        if post:
+            return _http(f"{base}/{command}", encoded.encode("utf-8"))
+        return _http(f"{base}/{command}?{encoded}")
+
+    try:
+        raw = _fetch(BASE_URL)
+    except YemotError as e:
+        if e.code != -1:
+            raise
+        raw = _fetch(ALT_URL)
     try:
         data = json.loads(raw.decode("utf-8", errors="replace"))
     except ValueError:
@@ -140,6 +166,10 @@ def _hebrew_error(data: dict) -> str:
     # "creating login token error(user name or password do not match)"
     if "password" in low and ("incorrect" in low or "do not match" in low):
         return _ERROR_HE[1]
+    if "mfa" in low:
+        return ("המערכת בימות דורשת אימות דו-שלבי לכניסה. הפתרון: היכנס לממשק "
+                "הניהול של ימות ← \"חומת אש\" ← צור מפתח API, והדבק את המפתח "
+                "בשדה הסיסמה בהגדרות התוכנה (במקום הסיסמה הרגילה).")
     return f"שגיאה משרת ימות המשיח: {msg}"
 
 
@@ -275,15 +305,25 @@ def _upload_multipart(path: str, content: bytes) -> dict:
     body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
              f"filename=\"message.wav\"\r\nContent-Type: application/octet-stream"
              f"\r\n\r\n").encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode()
-    if _TRANSPORT is not None:
-        raw = _TRANSPORT(f"{BASE_URL}/UploadFile", body)
-    else:
+
+    def _post(base):
+        if _TRANSPORT is not None:
+            return _TRANSPORT(f"{base}/UploadFile", body)
         req = urllib.request.Request(
-            f"{BASE_URL}/UploadFile", data=body,
+            f"{base}/UploadFile", data=body,
             headers={"User-Agent": "ManhalHaluka",
                      "Content-Type": f"multipart/form-data; boundary={boundary}"})
         with urllib.request.urlopen(req, timeout=120) as resp:
-            raw = resp.read()
+            return resp.read()
+
+    try:
+        raw = _post(BASE_URL)
+    except YemotError as e:
+        if e.code != -1:
+            raise
+        raw = _post(ALT_URL)
+    except (urllib.error.URLError, TimeoutError, OSError):
+        raw = _post(ALT_URL)
     data = json.loads(raw.decode("utf-8", errors="replace"))
     if data.get("responseStatus") != "OK":
         raise YemotError(_hebrew_error(data), int(data.get("messageCode") or 0))

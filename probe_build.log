@@ -1,0 +1,100 @@
+338 INFO: PyInstaller: 6.19.0, contrib hooks: 2026.4
+354 INFO: Python: 3.12.10
+401 INFO: Platform: Windows-11-10.0.26200-SP0
+401 INFO: Python environment: C:\Users\יהודה\AppData\Local\Programs\Python\Python312
+401 INFO: wrote C:\Users\87CB~1\AppData\Local\Temp\claude\C--Users-------Desktop-----------\3e01dab3-80b8-43b3-9fcf-5da1a0791730\scratchpad\probe_build\yemot_probe.spec
+417 INFO: Module search paths (PYTHONPATH):
+['C:\\Users\\יהודה\\Desktop\\מנהל_חלוקה',
+ 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\python312.zip',
+ 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\DLLs',
+ 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib',
+ 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312',
+ 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages',
+ 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\win32',
+ 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\win32\\lib',
+ 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\Pythonwin',
+ 'C:\\Users\\יהודה\\Desktop\\מנהל_חלוקה\\dev']
+468 WARNING: qt_material must be imported after PySide or PyQt!
+1382 INFO: checking Analysis
+1382 INFO: Building Analysis because Analysis-00.toc is non existent
+1382 INFO: Looking for Python shared library...
+1382 INFO: Using Python shared library: C:\Users\יהודה\AppData\Local\Programs\Python\Python312\python312.dll
+1382 INFO: Running Analysis Analysis-00.toc
+1382 INFO: Target bytecode optimization level: 0
+1382 INFO: Initializing module dependency graph...
+1382 INFO: Initializing module graph hook caches...
+1412 INFO: Analyzing modules for base_library.zip ...
+3690 INFO: Processing standard module hook 'hook-encodings.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+6197 INFO: Processing standard module hook 'hook-pickle.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+7501 INFO: Processing standard module hook 'hook-heapq.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+8162 INFO: Caching module dependency graph...
+8212 INFO: Analyzing C:\Users\יהודה\Desktop\מנהל_חלוקה\dev\_probe_yemot_frozen.py
+8289 INFO: Processing standard module hook 'hook-sqlite3.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+9171 INFO: Processing standard module hook 'hook-platform.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+9681 INFO: Processing standard module hook 'hook-zoneinfo.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+9722 INFO: Processing standard module hook 'hook-sysconfig.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+9814 INFO: Processing standard module hook 'hook-_ctypes.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+9883 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+9883 INFO: SetuptoolsInfo: initializing cached setuptools info...
+11937 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+12051 INFO: Processing standard module hook 'hook-xml.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+13049 INFO: Processing standard module hook 'hook-urllib3.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+13188 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+13188 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+13204 INFO: Processing standard module hook 'hook-setuptools.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+13220 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+13268 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+13275 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+13289 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+13291 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.more_itertools'!
+13610 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+13893 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+13893 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+14124 INFO: Processing pre-safe-import-module hook 'hook-importlib_metadata.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+14156 INFO: Processing standard module hook 'hook-importlib_metadata.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+14188 INFO: Processing pre-safe-import-module hook 'hook-zipp.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+14645 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+14645 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+15493 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+15493 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+16199 INFO: Processing standard module hook 'hook-charset_normalizer.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+16382 INFO: Processing standard module hook 'hook-cryptography.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+19078 INFO: hook-cryptography: cryptography does not seem to be using dynamically linked OpenSSL.
+19578 INFO: Processing standard module hook 'hook-certifi.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+19757 INFO: Processing module hooks (post-graph stage)...
+21147 INFO: Processing standard module hook 'hook-difflib.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks'
+22659 INFO: Processing standard module hook 'hook-tzdata.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+26882 INFO: Performing binary vs. data reclassification (622 entries)
+27047 INFO: Looking for ctypes DLLs
+27073 INFO: Analyzing run-time hooks ...
+27080 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+27084 INFO: Including run-time hook 'pyi_rth_cryptography_openssl.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\rthooks'
+27086 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+27086 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+27091 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'C:\\Users\\יהודה\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+27122 INFO: Creating base_library.zip...
+27153 INFO: Looking for dynamic libraries
+28608 INFO: Extra DLL search directories (AddDllDirectory): []
+28608 INFO: Extra DLL search directories (PATH): []
+29211 INFO: Warnings written to C:\Users\87CB~1\AppData\Local\Temp\claude\C--Users-------Desktop-----------\3e01dab3-80b8-43b3-9fcf-5da1a0791730\scratchpad\probe_build\yemot_probe\warn-yemot_probe.txt
+29250 INFO: Graph cross-reference written to C:\Users\87CB~1\AppData\Local\Temp\claude\C--Users-------Desktop-----------\3e01dab3-80b8-43b3-9fcf-5da1a0791730\scratchpad\probe_build\yemot_probe\xref-yemot_probe.html
+29289 INFO: checking PYZ
+29289 INFO: Building PYZ because PYZ-00.toc is non existent
+29289 INFO: Building PYZ (ZlibArchive) C:\Users\87CB~1\AppData\Local\Temp\claude\C--Users-------Desktop-----------\3e01dab3-80b8-43b3-9fcf-5da1a0791730\scratchpad\probe_build\yemot_probe\PYZ-00.pyz
+29947 INFO: Building PYZ (ZlibArchive) C:\Users\87CB~1\AppData\Local\Temp\claude\C--Users-------Desktop-----------\3e01dab3-80b8-43b3-9fcf-5da1a0791730\scratchpad\probe_build\yemot_probe\PYZ-00.pyz completed successfully.
+29990 INFO: checking PKG
+29990 INFO: Building PKG because PKG-00.toc is non existent
+29990 INFO: Building PKG (CArchive) yemot_probe.pkg
+41399 INFO: Building PKG (CArchive) yemot_probe.pkg completed successfully.
+41464 INFO: Bootloader C:\Users\יהודה\AppData\Local\Programs\Python\Python312\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\run.exe
+41464 INFO: checking EXE
+41464 INFO: Building EXE because EXE-00.toc is non existent
+41464 INFO: Building EXE from EXE-00.toc
+41464 INFO: Copying bootloader EXE to C:\Users\יהודה\Desktop\מנהל_חלוקה\dev\_probe_dist\yemot_probe.exe
+41908 INFO: Copying icon to EXE
+42125 INFO: Copying 0 resources to EXE
+42125 INFO: Embedding manifest in EXE
+42317 INFO: Appending PKG archive to EXE
+42665 INFO: Fixing EXE headers
+43762 INFO: Building EXE from EXE-00.toc completed successfully.
+43797 INFO: Build complete! The results are available in: C:\Users\יהודה\Desktop\מנהל_חלוקה\dev\_probe_dist

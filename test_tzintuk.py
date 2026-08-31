@@ -157,6 +157,38 @@ try:
 except yemot.YemotError as e:
     ok("שגיאת יחידות בעברית", "יחידות" in str(e) and e.code == 103)
 
+# מפתח API (ארוך/עם אותיות) נשלח לבדו כ-token, בלי מספר המערכת
+db.set_setting(yemot.SET_PASSWORD, "AbCd1234EfGh5678IjKl")
+canned["GetSession"] = {"responseStatus": "OK", "units": 1}
+yemot.check_connection()
+ok("מפתח API נשלח לבדו", calls[-1][1].get("token") == "AbCd1234EfGh5678IjKl")
+db.set_setting(yemot.SET_SYSTEM, "")
+ok("מפתח API מספיק בלי מספר מערכת", yemot.is_configured())
+db.set_setting(yemot.SET_SYSTEM, "0771234567")
+db.set_setting(yemot.SET_PASSWORD, "123456")
+yemot.check_connection()
+ok("סיסמה רגילה חוזרת לפורמט מספר:סיסמה",
+   calls[-1][1].get("token") == "0771234567:123456")
+
+# MFA_REQUIRED → הסבר בעברית על מפתח API
+canned["GetSession"] = {"responseStatus": "ERROR", "message": "MFA_REQUIRED"}
+try:
+    yemot.check_connection()
+    ok("שגיאת MFA מוסברת", False)
+except yemot.YemotError as e:
+    ok("שגיאת MFA מוסברת", "מפתח API" in str(e))
+canned["GetSession"] = {"responseStatus": "OK", "units": 512.5}
+
+# נפילה לשרת התאום: כשל רשת ב-www → private עונה
+def flaky_transport(url, data):
+    if "www.call2all" in url:
+        raise yemot.YemotError("אין חיבור", code=-1)
+    return fake_transport(url.replace("private.call2all", "www.call2all"), data)
+yemot._TRANSPORT = flaky_transport
+st_ok = yemot.check_connection()
+ok("נפילה אוטומטית לשרת private", st_ok.get("responseStatus") == "OK")
+yemot._TRANSPORT = fake_transport
+
 # סטטוס קמפיין: ספירה, דגל סיום
 canned["GetCampaignStatus"] = {"responseStatus": "OK", "campaign": {
     "campaignId": "x", "campaignStatus": "RUNNING", "templateId": 1117319,

@@ -7,6 +7,16 @@ if getattr(sys, "frozen", False):
 else:
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
+# Warm the stdlib's LAZY network imports now (v2.84 lesson): if the onefile
+# temp dir (_MEI) is ever damaged while the app runs, modules already in memory
+# keep working — without this, the first outbound call (e.g. the tzintuk
+# connection check) crashed on importing encodings.idna from a vanished
+# base_library.zip.
+import ssl                # noqa: F401,E402
+import http.client        # noqa: F401,E402
+import urllib.request     # noqa: F401,E402
+import encodings.idna     # noqa: F401,E402
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QDialog,
     QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -1163,15 +1173,34 @@ def _hard_exit(code: int = 0):
 def _cleanup_prev_mei():
     """Remove the previous run's onefile temp dir if a hard exit left it behind.
     Targeted to the single path we recorded, so it never touches another app's
-    _MEI dir; keeps at most one stale dir around."""
+    _MEI dir; keeps at most one stale dir around.
+
+    v2.84 hard lesson: during an update relaunch, mei_last can still point at a
+    directory whose instance is ALIVE, and the old rmtree gutted its unlocked
+    files (base_library.zip!) — the live app then died on its first lazy import
+    ("אין חיבור לשרת" on the tzintuk check). Deleting is now allowed only after
+    an atomic liveness probe: renaming a directory FAILS on Windows while any
+    file inside is open/mapped (a running instance maps its DLLs; NetFree scans
+    hold handles too) — so only a truly orphaned leak can be renamed, and only
+    then is it removed."""
     if not getattr(sys, "frozen", False):
         return
     try:
         cur = getattr(sys, "_MEIPASS", "") or ""
         prev = db.get_setting("mei_last") or ""
-        if prev and prev != cur and os.path.isdir(prev):
+        base = os.path.basename(prev.rstrip("\\/")) if prev else ""
+        if (prev and prev != cur and base.startswith("_MEI")
+                and os.path.isdir(prev)):
             import shutil
-            shutil.rmtree(prev, ignore_errors=True)
+            probe = prev + ".stale"
+            if os.path.isdir(probe):                  # leftover of a past pass
+                shutil.rmtree(probe, ignore_errors=True)
+            try:
+                os.rename(prev, probe)                # fails while dir is in use
+            except OSError:
+                pass    # live instance / scanner holds it — never touch
+            else:
+                shutil.rmtree(probe, ignore_errors=True)
         if cur:
             db.set_setting("mei_last", cur)
     except Exception:
