@@ -60,6 +60,18 @@ Traps that have cost us time before. Check the relevant one before touching that
   `http.client`, `urllib.request`, `encodings.idna`) at startup so a damaged _MEI can't break
   networking mid-run. Diagnostic that cracked it: the surviving files in the gutted dir were
   exactly the LOCKED ones (mapped DLLs/pyds) — the rmtree(ignore_errors) signature.
+- **v2.91 (31/08/2026): ROOT CAUSE of the update-relaunch _MEI crash — PyInstaller env-var
+  inheritance.** Symptom: `FileNotFoundError [Errno 2]` from **zipimport at startup** (main.py's
+  top imports, e.g. `encodings.idna`) — **every time after an update**. Cause: `apply_update`
+  relaunched the new EXE with `subprocess.Popen([exe])` **inheriting the parent's environment**,
+  including PyInstaller's onefile markers (`_PYI_APPLICATION_HOME_DIR`, `_PYI_ARCHIVE_FILE`,
+  `_PYI_PARENT_PID`, `_MEIPASS2`, …). The child bootloader then **reused the OLD process's `_MEI`
+  dir instead of extracting its own**; when the old process hard-exited, its bootloader deleted
+  that dir → the new process's `base_library.zip` vanished → crash on the first import. Fix
+  (`utils/updater.py` `_child_env`): scrub all `_PYI_*`/`_MEIPASS2` vars from the env passed to
+  `Popen`, forcing a clean independent extraction. **Whenever a frozen onefile app spawns another
+  onefile EXE (self-relaunch included), always pass a scrubbed env** — never a bare `Popen([exe])`.
+  This is the real fix; the v2.84 liveness-probe + import-warming are belt-and-suspenders.
 
 ## NetFree (network)
 - NetFree can inject **HTTP 418 "Blocked by NetFree"** and break builds/downloads with no obvious
