@@ -2113,6 +2113,13 @@ class GroupUpdateTab(QWidget):
         # "לא הגיע" at/over the operator-set threshold (0 disables).
         thr = db.get_no_show_threshold()
         streaks = db.no_show_streaks([r.get("id") for r in rows]) if thr else {}
+        # Arrival confirmations (v2.85): who pressed the confirm key in this
+        # week's tzintuk call — parsed from the synced campaign reports.
+        try:
+            from utils import yemot
+            confirmed_ph = yemot.confirmed_phones(db.next_wednesday().isoformat())
+        except Exception:
+            yemot, confirmed_ph = None, set()
         self.table.blockSignals(True)
         self.table.clearContents()
         self.table.setRowCount(0)
@@ -2153,6 +2160,13 @@ class GroupUpdateTab(QWidget):
                         item.setForeground(QColor("#b91c1c"))
                         item.setToolTip(f"לא הגיע לקחת {streak} פעמים ברצף — "
                                         "כדאי לבדוק מולו. הסף ניתן לשינוי בהגדרות.")
+                    elif confirmed_ph and any(
+                            yemot.normalize_phone(rec.get(f)) in confirmed_ph
+                            for f in ("phone1", "phone2", "phone3")):
+                        item.setText(f"{v}   ✓ אישר הגעה")
+                        item.setBackground(QColor("#dcfce7"))
+                        item.setForeground(QColor("#166534"))
+                        item.setToolTip("אישר הגעה בהקשה על 7 בצינתוק של השבוע")
                 self.table.setItem(r, col, item)
 
         self.table.blockSignals(False)

@@ -120,6 +120,10 @@ canned["CreateTemplate"] = {"responseStatus": "OK", "templateId": 1117319}
 tid = yemot.ensure_template()
 ok("ensure_template יוצר ושומר", tid == "1117319"
    and db.get_setting(yemot.SET_TEMPLATE) == "1117319")
+upd = [c for c in calls if c[0] == "UpdateTemplate"]
+ok("סוג הקמפיין הוגדר REPEAT (מקשי אישור הגעה)",
+   len(upd) == 1 and upd[0][1].get("yemotContext") == "REPEAT"
+   and db.get_setting(yemot.SET_CONFIRM_CTX) == "1117319")
 n_before = len(calls)
 ok("ensure_template לא פונה שוב לשרת",
    yemot.ensure_template() == "1117319" and len(calls) == n_before)
@@ -203,6 +207,8 @@ st = yemot.get_campaign_status("x")
 ok("סטטוס רץ — לא סיים", not st["finished"])
 ok("ספירת נמסרו/נכשלו", st["delivered"] == 1 and st["failed"] == 1
    and st["pending"] == 2, str(st))
+ok("הקשת אישור (7) נספרת ומסומנת", st["confirmed"] == 1
+   and st["entries"][0]["confirmed"] and not st["entries"][1]["confirmed"])
 canned["GetCampaignStatus"]["campaign"].update(
     {"campaignStatus": "DONE", "pendingEntries": 0, "activeEntries": 0,
      "entries": [
@@ -214,6 +220,7 @@ canned["GetCampaignStatus"]["campaign"].update(
 st = yemot.get_campaign_status("x")
 ok("סטטוס סיים", st["finished"])
 ok("משיבון נספר כנמסר", st["delivered"] == 2 and st["failed"] == 2, str(st))
+ok("משיבון אינו אישור הגעה", st["confirmed"] == 1, str(st))
 
 try:
     yemot.run_test("שטויות")
@@ -235,6 +242,22 @@ ok("שומר כפילות מוצא לפי תאריך", row is not None and row["
    and row["status"] == "done")
 ok("תאריך בלי קמפיין — אין שומר", db.tzintuk_campaign_for_date("2026-09-09") is None)
 ok("עדכון guid לא קיים נכשל בשקט", not db.update_tzintuk_campaign("אין", 0, 0, "done"))
+
+# אישורי הגעה מהדוח השמור (confirmed_phones — מזין את התגים במסך החלוקה)
+report = json.dumps([
+    {"phone": "0521111111", "name": "א", "status": "accepted", "confirmed": True},
+    {"phone": "0522222222", "name": "ב", "status": "no_answer"},
+    {"phone": "052-111-1111", "name": "כפול-פורמט", "status": "accepted"},
+], ensure_ascii=False)
+db.update_tzintuk_campaign(g1, 45, 3, "done", report)
+ok("confirmed_phones מחלץ את המאשרים (מנורמל)",
+   yemot.confirmed_phones("2026-09-02") == {"0521111111"})
+ok("confirmed_phones לתאריך בלי קמפיין ריק",
+   yemot.confirmed_phones("2026-09-09") == set())
+ok("confirmed_phones עמיד ל-json שבור",
+   db.update_tzintuk_campaign(g1, 45, 3, "done", "{שבור")
+   and yemot.confirmed_phones("2026-09-02") == set()
+   and db.update_tzintuk_campaign(g1, 45, 3, "done", report))
 
 # ── 5. סנכרון בין 2 מחשבים ──────────────────────────────────────────────────
 print("— סנכרון 2 מחשבים —")

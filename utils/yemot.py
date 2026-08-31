@@ -31,6 +31,8 @@ SET_PASSWORD = "yemot_password"
 SET_TEMPLATE = "yemot_template_id"
 SET_CALLER_ID = "yemot_caller_id"
 SET_TEST_PHONE = "yemot_test_phone"
+# Which template already got the REPEAT campaign type (arrival-confirm keys).
+SET_CONFIRM_CTX = "yemot_confirm_ctx"
 
 
 class YemotError(Exception):
@@ -269,14 +271,29 @@ def ensure_template() -> str:
     """The campaign template the app sends with. Created once via the API and
     remembered in settings; the recording is then attached to this template."""
     tid = (db.get_setting(SET_TEMPLATE) or "").strip()
-    if tid:
-        return tid
-    data = _call("CreateTemplate", {"description": TEMPLATE_DESCRIPTION}, post=True)
-    tid = str(_dig(data, "templateId") or "").strip()
     if not tid:
-        raise YemotError("יצירת תבנית קמפיין נכשלה — לא התקבל מזהה")
-    db.set_setting(SET_TEMPLATE, tid)
+        data = _call("CreateTemplate", {"description": TEMPLATE_DESCRIPTION}, post=True)
+        tid = str(_dig(data, "templateId") or "").strip()
+        if not tid:
+            raise YemotError("יצירת תבנית קמפיין נכשלה — לא התקבל מזהה")
+        db.set_setting(SET_TEMPLATE, tid)
+    _ensure_confirm_context(tid)
     return tid
+
+
+def _ensure_confirm_context(template_id: str):
+    """One-time per template: set the campaign type to REPEAT so key presses
+    work during the message (Yemot's built-in keys: 1 = replay, 7 = confirm →
+    the entry becomes entryStatus 'accepted' in the report). Non-fatal — a
+    failure never blocks sending; retried on the next send."""
+    if (db.get_setting(SET_CONFIRM_CTX) or "").strip() == str(template_id):
+        return
+    try:
+        _call("UpdateTemplate", {"templateId": template_id,
+                                 "yemotContext": "REPEAT"}, post=True)
+        db.set_setting(SET_CONFIRM_CTX, str(template_id))
+    except YemotError:
+        pass
 
 
 def upload_message_wav(file_path: str, template_id: str | None = None) -> dict:
@@ -355,7 +372,10 @@ _FAILED = {"failed", "no_answer", "busy", "canceled", "error", "blocked",
 
 def get_campaign_status(campaign_id: str) -> dict:
     """Live campaign status → {'finished': bool, 'total': n, 'delivered': n,
-    'failed': n, 'pending': n, 'entries': [{'phone','name','status','ok'}…]}."""
+    'confirmed': n, 'failed': n, 'pending': n,
+    'entries': [{'phone','name','status','ok','confirmed'}…]}.
+    'confirmed' = pressed the confirm key (7) during the message —
+    entryStatus 'accepted' ("אישרו מסירה"); always a subset of delivered."""
     data = _call("GetCampaignStatus", {"campaignId": campaign_id, "entries": "all"})
     camp = data.get("campaign") or data
     entries = []
@@ -366,9 +386,11 @@ def get_campaign_status(campaign_id: str) -> dict:
             "name": e.get("name") or "",
             "status": status,
             "ok": status in _DELIVERED,
+            "confirmed": status == "accepted",
             "failed": status in _FAILED,
         })
     delivered = sum(1 for e in entries if e["ok"])
+    confirmed = sum(1 for e in entries if e["confirmed"])
     failed = sum(1 for e in entries if e["failed"])
     total = int(camp.get("totalEntries") or len(entries) or 0)
     pending = max(0, total - delivered - failed)
@@ -380,8 +402,32 @@ def get_campaign_status(campaign_id: str) -> dict:
     if running == 0 and pending == 0 and entries:
         finished = True
     return {"finished": finished, "total": total, "delivered": delivered,
-            "failed": failed, "pending": pending, "entries": entries,
-            "campaign_status": status_word}
+            "confirmed": confirmed, "failed": failed, "pending": pending,
+            "entries": entries, "campaign_status": status_word}
+
+
+def confirmed_phones(dist_date: str) -> set:
+    """Phones that pressed the confirm key (entryStatus 'accepted') in any
+    campaign sent for this distribution date — parsed from the reports stored
+    in tzintuk_campaigns.report_json (synced, so both computers see them)."""
+    out = set()
+    if not dist_date:
+        return out
+    for camp in db.get_tzintuk_campaigns():
+        if (camp.get("dist_date") or "") != dist_date:
+            continue
+        try:
+            entries = json.loads(camp.get("report_json") or "[]")
+        except ValueError:
+            continue
+        for e in entries or []:
+            if not isinstance(e, dict):
+                continue
+            if e.get("confirmed") or str(e.get("status") or "").lower() == "accepted":
+                p = normalize_phone(e.get("phone"))
+                if p:
+                    out.add(p)
+    return out
 
 
 def run_test(phone: str) -> dict:

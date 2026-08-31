@@ -13,6 +13,7 @@ import json
 import time
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
@@ -259,13 +260,15 @@ class TzintukimTab(QWidget):
         self.progress.setFixedHeight(12)
         p_lay.addWidget(self.progress)
         counters = QHBoxLayout()
+        self.lbl_conf = QLabel("")
+        self.lbl_conf.setStyleSheet("color:#166534; font-weight:700; " + _LBL)
         self.lbl_done = QLabel("")
         self.lbl_done.setStyleSheet("color:#0f6e56; font-weight:600; " + _LBL)
         self.lbl_fail = QLabel("")
         self.lbl_fail.setStyleSheet("color:#a32d2d; font-weight:600; " + _LBL)
         self.lbl_wait = QLabel("")
         self.lbl_wait.setStyleSheet("color:#5f6d69; " + _LBL)
-        for w in (self.lbl_done, self.lbl_fail, self.lbl_wait):
+        for w in (self.lbl_conf, self.lbl_done, self.lbl_fail, self.lbl_wait):
             counters.addWidget(w)
         counters.addStretch()
         self.btn_resend = QPushButton("🔄 שלח שוב לנכשלים")
@@ -285,15 +288,16 @@ class TzintukimTab(QWidget):
         h_lay.setContentsMargins(10, 7, 10, 7)
         h_lay.setSpacing(6)
         h_lay.addWidget(section_header("היסטוריית צינתוקים", "calendar", "#0f766e"))
-        self.hist = QTableWidget(0, 5)
-        self.hist.setHorizontalHeaderLabels(["מתי", "שם", "נשלחו", "הצליחו", "נכשלו"])
+        self.hist = QTableWidget(0, 6)
+        self.hist.setHorizontalHeaderLabels(
+            ["מתי", "שם", "נשלחו", "הצליחו", "אישרו הגעה", "נכשלו"])
         self.hist.verticalHeader().setVisible(False)
         self.hist.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.hist.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         hh2 = self.hist.horizontalHeader()
         hh2.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hh2.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for c in (2, 3, 4):
+        for c in (2, 3, 4, 5):
             hh2.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
         self.hist.setMinimumHeight(140)
         h_lay.addWidget(self.hist)
@@ -453,16 +457,20 @@ class TzintukimTab(QWidget):
 
     def _refresh_recording_label(self):
         tid = (db.get_setting(yemot.SET_TEMPLATE) or "").strip()
+        confirm_tip = ("\n💡 כדאי לומר בסוף ההקלטה: \"לאישור הגעה — הקש 7, "
+                       "לשמיעה חוזרת — הקש 1\". מי שיקיש 7 יסומן בתוכנה "
+                       "כ\"אישר הגעה\" (המקשים קבועים ע\"י ימות המשיח).")
         if not yemot.is_configured():
             self.lbl_rec.setText("ההודעה המושמעת: תוגדר אחרי חיבור המערכת (בהגדרות).")
         elif tid:
             self.lbl_rec.setText(
                 f"ההודעה המושמעת שמורה בימות המשיח (תבנית {tid}). "
-                "להחלפה — העלה קובץ הקלטה, ואז \"שלח בדיקה\" כדי לשמוע אותה.")
+                "להחלפה — העלה קובץ הקלטה, ואז \"שלח בדיקה\" כדי לשמוע אותה."
+                + confirm_tip)
         else:
             self.lbl_rec.setText(
                 "עוד לא הוגדרה הודעה: העלה קובץ הקלטה (או שלח בדיקה — התבנית "
-                "תיווצר אוטומטית ותוכל להקליט דרך ימות).")
+                "תיווצר אוטומטית ותוכל להקליט דרך ימות)." + confirm_tip)
 
     def _require_config(self) -> bool:
         if yemot.is_configured():
@@ -542,7 +550,8 @@ class TzintukimTab(QWidget):
             self, "אישור שליחה",
             f"עומד לשלוח הודעה קולית ל-{len(phones)} נמענים.\n"
             f"חריגים שלא יישלחו: {bad}.\n"
-            f"עלות משוערת: כ-{len(phones)} יחידות.{extra}\n\nלשלוח עכשיו?",
+            f"עלות משוערת: כ-{len(phones)} יחידות.\n"
+            f"מי שיקיש 7 בשיחה יסומן בתוכנה כ\"אישר הגעה\".{extra}\n\nלשלוח עכשיו?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes:
@@ -612,6 +621,7 @@ class TzintukimTab(QWidget):
         self.lbl_prog.setText("שולח בזמן אמת… אפשר להמשיך לעבוד, אל תסגור את התוכנה")
         self.progress.setRange(0, max(1, total))
         self.progress.setValue(0)
+        self.lbl_conf.setText("✓ אישרו הגעה 0")
         self.lbl_done.setText("הצליחו 0")
         self.lbl_fail.setText("נכשלו 0")
         self.lbl_wait.setText(f"ממתינים {total}")
@@ -629,6 +639,7 @@ class TzintukimTab(QWidget):
         done = st["delivered"] + st["failed"]
         self.progress.setRange(0, max(1, st["total"]))
         self.progress.setValue(min(done, st["total"]))
+        self.lbl_conf.setText(f"✓ אישרו הגעה {st.get('confirmed', 0)}")
         self.lbl_done.setText(f"הצליחו {st['delivered']}")
         self.lbl_fail.setText(f"נכשלו {st['failed']}")
         self.lbl_wait.setText(f"ממתינים {st['pending']}")
@@ -642,11 +653,44 @@ class TzintukimTab(QWidget):
         if st.get("finished"):
             self._last_failed = [e for e in st.get("entries") or [] if e.get("failed")]
             self.lbl_prog.setText(
-                f"הקמפיין הסתיים ✓ — {st['delivered']} קיבלו את ההודעה, "
+                f"הקמפיין הסתיים ✓ — {st['delivered']} קיבלו את ההודעה "
+                f"(מתוכם {st.get('confirmed', 0)} אישרו הגעה בהקשה), "
                 f"{st['failed']} נכשלו.")
             self.btn_resend.setText(f"🔄 שלח שוב ל-{len(self._last_failed)} שנכשלו")
             self.btn_resend.setVisible(bool(self._last_failed))
+            self._apply_results_to_table(st.get("entries") or [])
             self._refresh_history()
+            # The confirmation badges on the "חלוקה ורישום" list come from the
+            # stored report — repaint it so they appear without a tab switch.
+            gt = getattr(self.main, "group_tab", None)
+            if gt is not None:
+                try:
+                    gt._populate()
+                except Exception:
+                    pass
+
+    def _apply_results_to_table(self, entries):
+        """Write each person's final result into the status column, so the
+        operator sees WHO confirmed (pressed 7), who just got the call, and
+        who failed — matched by the number that was dialed."""
+        by_phone = {e.get("phone"): e for e in entries if e.get("phone")}
+        self.table.blockSignals(True)
+        for i, row in enumerate(self._rows):
+            e = by_phone.get(row.get("chosen"))
+            if e is None or i >= self.table.rowCount():
+                continue
+            if e.get("confirmed"):
+                txt, color = "✓ אישר הגעה", QColor("#166534")
+            elif e.get("ok"):
+                txt, color = "קיבל את ההודעה", QColor("#0f6e56")
+            elif e.get("failed"):
+                txt, color = "⚠ לא נענה / נכשל", QColor("#a32d2d")
+            else:
+                continue
+            it = QTableWidgetItem(txt)
+            it.setForeground(color)
+            self.table.setItem(i, 3, it)
+        self.table.blockSignals(False)
 
     def _on_worker_done(self):
         self._worker = None
@@ -680,4 +724,20 @@ class TzintukimTab(QWidget):
             self.hist.setItem(i, 1, QTableWidgetItem(f"{name} — {st}"))
             self.hist.setItem(i, 2, QTableWidgetItem(str(c.get("total") or 0)))
             self.hist.setItem(i, 3, QTableWidgetItem(str(c.get("delivered") or 0)))
-            self.hist.setItem(i, 4, QTableWidgetItem(str(c.get("failed") or 0)))
+            conf = QTableWidgetItem(str(self._confirmed_count(c)))
+            conf.setForeground(QColor("#166534"))
+            self.hist.setItem(i, 4, conf)
+            self.hist.setItem(i, 5, QTableWidgetItem(str(c.get("failed") or 0)))
+
+    @staticmethod
+    def _confirmed_count(camp: dict) -> int:
+        """How many pressed the confirm key — derived from the stored report
+        (no DB column; the report is synced so both computers agree)."""
+        try:
+            entries = json.loads(camp.get("report_json") or "[]")
+        except ValueError:
+            return 0
+        return sum(1 for e in entries or []
+                   if isinstance(e, dict)
+                   and (e.get("confirmed")
+                        or str(e.get("status") or "").lower() == "accepted"))
