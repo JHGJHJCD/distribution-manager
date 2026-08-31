@@ -9,8 +9,9 @@
 
 v2.88: כל המספרים של כל מקבל מצולצלים (#gaira, בלי קומבו בחירה); אפשר לטעון
 רשימה מחלוקה קודמת (#9hgvi, קליק ימני בלשונית "חלוקות קודמות"); ההודעה
-מתפרסמת גם בשלוחה 1 של הקו (#kx6wd) ומושמעת למי שמתקשר חזרה (#z4xy9);
-אין חסימת שעות (#n6wte).
+מושמעת למי שברשימה כשהוא מתקשר חזרה לקו (#z4xy9, פרטי); אין חסימת שעות
+(#n6wte). v2.89: פרסום בשלוחה 1 (#kx6wd) הוא ידני בלבד — כפתור עם אזהרה;
+שום דבר לא מתפרסם אוטומטית (הודעת מקבלים היא פרטית — הכרעת המשתמש).
 
 הגנות: שומר שליחה-כפולה לאותה חלוקה (חוצה-מחשבים, דרך הסנכרון),
 נעילת הכפתור בזמן שליחה."""
@@ -607,6 +608,13 @@ class TzintukimTab(QWidget):
                                     "או להעלות שוב בלי להקליט מחדש")
         self.btn_library.clicked.connect(self._open_library)
         rec_row.addWidget(self.btn_library)
+        btn_publish = QPushButton("📢 פרסם בשלוחה 1…")
+        btn_publish.setObjectName("neutral")
+        btn_publish.setToolTip("מעתיק את ההודעה הנוכחית לשלוחת ההודעות של הקו — "
+                               "שם כל מתקשר ישמע אותה. לא קורה אוטומטית אף פעם; "
+                               "רק בלחיצה כאן ואחרי אישור.")
+        btn_publish.clicked.connect(self._publish_to_line)
+        rec_row.addWidget(btn_publish)
         rec_row.addStretch()
         a_lay.addLayout(rec_row)
 
@@ -1065,8 +1073,8 @@ class TzintukimTab(QWidget):
             f"חריגים שלא יישלחו: {bad}.\n"
             f"עלות משוערת: כ-{len(phones)} יחידות.\n"
             "מי שיקיש 7 בשיחה יסומן בתוכנה כ\"אישר הגעה\".\n"
-            "ההודעה תתפרסם גם בשלוחת ההודעות בקו (שלוחה 1), ומי שלא ענה "
-            f"ישמע אותה כשיתקשר חזרה לקו.{extra}\n\nלשלוח עכשיו?",
+            "מי שלא ענה ישמע את ההודעה כשיתקשר חזרה לקו "
+            f"(מושמעת רק למי שברשימה הזו).{extra}\n\nלשלוח עכשיו?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes:
@@ -1087,7 +1095,6 @@ class TzintukimTab(QWidget):
                 QMessageBox.warning(self, "צינתוקים", f"השליחה נכשלה: {e}")
                 self._update_metrics()
                 return
-        self._publish_to_line()              # #kx6wd — best effort
         from utils import sync
         self._active_guid = db.add_tzintuk_campaign(
             self._campaign_name(), dist_date, template_id,
@@ -1098,16 +1105,32 @@ class TzintukimTab(QWidget):
         self._start_tracking(str(res.get("campaignId") or ""), len(phones))
 
     def _publish_to_line(self):
-        """#kx6wd — copy the campaign recording into the line's central
-        messages extension (שלוחה 1) as an additional message. Best-effort:
-        a failure never blocks the campaign that already went out."""
-        try:
-            yemot.publish_to_extension()
-        except Exception as e:
-            QMessageBox.warning(
-                self, "פרסום בשלוחת ההודעות",
-                "הצינתוק נשלח, אך פרסום ההודעה בשלוחה 1 של הקו נכשל:\n"
-                f"{e}")
+        """#kx6wd — copy the current campaign recording into the line's central
+        messages extension (שלוחה 1). MANUAL ONLY (user decision 31/08/2026):
+        the extension is heard by EVERY caller, and a tzintuk to aid recipients
+        is private — so nothing is ever published automatically; this runs only
+        from the explicit button, behind a clear warning."""
+        if not self._require_config():
+            return
+        ans = QMessageBox.question(
+            self, "פרסום בשלוחת ההודעות",
+            "⚠ שים לב: שלוחה 1 פתוחה לכל מי שמתקשר לקו.\n"
+            "ההודעה הנוכחית של הצינתוק תתפרסם שם כהודעה נוספת, "
+            "וכל שומעי הקו יוכלו לשמוע אותה — לא רק מקבלי החלוקה.\n\n"
+            "לפרסם הודעה זו לכולם?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        with busy_cursor():
+            try:
+                name = yemot.publish_to_extension()
+                ok, msg = True, ("ההודעה פורסמה בשלוחה 1 ✓ "
+                                 f"(קובץ {name}).")
+            except Exception as e:
+                ok, msg = False, f"הפרסום נכשל:\n{e}"
+        (QMessageBox.information if ok else QMessageBox.warning)(
+            self, "פרסום בשלוחת ההודעות", msg)
 
     def _resend_failed(self):
         if not self._last_failed:
@@ -1232,7 +1255,6 @@ class TzintukimTab(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "תזמון שליחה", f"התזמון נכשל: {e}")
                 return
-        self._publish_to_line()              # #kx6wd — ההקלטה כבר בתבנית
         from utils import sync
         db.add_tzintuk_campaign(
             f"צינתוק מתוזמן — {self._campaign_name()}",
