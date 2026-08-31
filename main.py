@@ -1268,6 +1268,29 @@ def main():
         sys.exit(1)
 
 
+def _focus_running_instance():
+    """Best-effort: bring the already-open main window to the foreground
+    (silent single-instance behavior, #0zgz7). Never raises."""
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+
+        @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        def _enum(hwnd, _l):
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetWindowTextW(hwnd, buf, 256)
+            if buf.value.startswith("מנהל חלוקה") and user32.IsWindowVisible(hwnd):
+                if user32.IsIconic(hwnd):
+                    user32.ShowWindow(hwnd, 9)          # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+                return False                             # stop enumeration
+            return True
+
+        user32.EnumWindows(_enum, 0)
+    except Exception:
+        pass
+
+
 def _run():
     app = QApplication(sys.argv)
     app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -1280,7 +1303,9 @@ def _run():
     if shm.attach():          # clean up a stale segment from a crashed instance
         shm.detach()
     if not shm.create(1):     # another live instance already holds it
-        QMessageBox.information(None, "מנהל חלוקה", "התוכנה כבר פועלת.")
+        # #0zgz7: exit silently (no popup) — just bring the running window to
+        # the front so a double-click feels like "the app opened".
+        _focus_running_instance()
         # Hard-exit so the onefile bootloader's temp-dir cleanup is SKIPPED. A
         # plain sys.exit() here ran that cleanup on this second instance's freshly
         # extracted _MEI dir, which often fails (a DLL still loaded / NetFree) and

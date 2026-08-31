@@ -12,8 +12,8 @@ import shutil
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
                              QPushButton, QScrollArea, QFrame, QFileDialog,
                              QMessageBox)
-from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import Qt, QTimer, QRect
+from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor
 
 import database as db
 from utils.ui import line_icon
@@ -24,6 +24,37 @@ def _chat_bg_file() -> str:
     """Path to the stored chat wallpaper, or '' if none set for this computer."""
     p = db.get_setting("chat_bg_path") or ""
     return p if p and os.path.exists(p) else ""
+
+
+class _WallpaperArea(QWidget):
+    """Message-stream container that paints the user's wallpaper itself.
+
+    Painting the pixmap in code (instead of a QSS background-image url) fixes
+    #uvee0 — QSS silently showed nothing for some images/paths, while QPixmap
+    either loads or lets us tell the user why not. The image is scaled to
+    cover the whole area (center-crop), like a phone-chat wallpaper."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._pix = QPixmap()
+
+    def set_wallpaper(self, pix: QPixmap):
+        self._pix = pix if pix and not pix.isNull() else QPixmap()
+        self.update()
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor("#f4f7fb"))
+        if not self._pix.isNull():
+            scaled = self._pix.scaled(
+                self.size(), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation)
+            x = (scaled.width() - self.width()) // 2
+            y = (scaled.height() - self.height()) // 2
+            p.drawPixmap(0, 0, scaled, max(0, x), max(0, y),
+                         self.width(), self.height())
+        p.end()
+        super().paintEvent(ev)
 
 
 class _Bubble(QFrame):
@@ -144,7 +175,7 @@ class MessagesTab(QWidget):
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet(
             "QScrollArea{border:1px solid #e6eaf2; border-radius:14px;}")
-        self._stream = QWidget()
+        self._stream = _WallpaperArea()
         self._vbox = QVBoxLayout(self._stream)
         self._vbox.setContentsMargins(8, 8, 8, 8)
         self._vbox.setSpacing(2)
@@ -185,21 +216,28 @@ class MessagesTab(QWidget):
         root.addLayout(row)
 
     # ── wallpaper ────────────────────────────────────────────────────────────────
-    def _apply_bg(self):
+    def _apply_bg(self) -> bool:
+        """Load and paint the stored wallpaper. Returns True if one is shown."""
         f = _chat_bg_file()
-        if f:
-            url = f.replace("\\", "/")
-            self._stream.setStyleSheet(
-                "background-image:url('%s'); background-position:center;"
-                "background-repeat:no-repeat; background-attachment:fixed;" % url)
-        else:
-            self._stream.setStyleSheet("background:#f4f7fb;")
-        self.btn_bg_clear.setVisible(bool(f))
+        pix = QPixmap(f) if f else QPixmap()
+        ok = bool(f) and not pix.isNull()
+        self._stream.set_wallpaper(pix)
+        self.btn_bg_clear.setVisible(ok)
+        return ok
 
     def _choose_bg(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "בחר תמונת רקע להודעות", "", "תמונות (*.png *.jpg *.jpeg *.bmp *.webp)")
+            self, "בחר תמונת רקע להודעות", "",
+            "תמונות (*.png *.jpg *.jpeg *.bmp *.webp *.gif)")
         if not path:
+            return
+        # Validate the picked image BEFORE storing it — a silent failure here
+        # was bug #uvee0 ("chose a wallpaper and nothing changed").
+        if QPixmap(path).isNull():
+            QMessageBox.warning(
+                self, "תמונת רקע",
+                "לא הצלחתי לקרוא את התמונה שנבחרה.\n"
+                "נסה תמונה אחרת (JPG או PNG רגילים עובדים הכי טוב).")
             return
         try:
             ext = os.path.splitext(path)[1] or ".png"
@@ -208,9 +246,16 @@ class MessagesTab(QWidget):
             self._remove_bg_files()
             shutil.copyfile(path, dest)
             db.set_setting("chat_bg_path", dest)
-        except Exception:
-            pass
-        self._apply_bg()
+        except Exception as e:
+            QMessageBox.warning(
+                self, "תמונת רקע",
+                "שמירת תמונת הרקע נכשלה:\n%s" % e)
+            return
+        if not self._apply_bg():
+            QMessageBox.warning(
+                self, "תמונת רקע",
+                "התמונה נשמרה אך לא ניתן להציג אותה.\n"
+                "נסה תמונה אחרת (JPG או PNG רגילים).")
 
     def _remove_bg_files(self):
         base = db.CHAT_BG_PATH

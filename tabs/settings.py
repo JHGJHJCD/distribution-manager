@@ -1378,9 +1378,8 @@ class SettingsTab(QWidget):
         if err:
             QMessageBox.critical(self, "שגיאת עדכון", err)
             return
-        QMessageBox.information(
-            self, "מתעדכן",
-            "העדכון הותקן בהצלחה.\nהתוכנה תיסגר כעת ותיפתח מחדש בגרסה החדשה.")
+        # #ko0a0: no confirmation click — the app closes itself and the updated
+        # version opens automatically (apply_update already relaunched it).
         QApplication.quit()
 
 

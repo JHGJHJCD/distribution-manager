@@ -296,6 +296,10 @@ class RecipientsTab(QWidget):
         }
         self.priority_filter.setItemDelegate(
             BadgeDelegate(_prio_chip, self.priority_filter))
+        self._prio_chip = _prio_chip
+        # #7b5i3: when a priority is picked, the CLOSED combo shows it in its
+        # badge colours too (the delegate only paints the open dropdown list).
+        self.priority_filter.currentTextChanged.connect(self._tint_priority_filter)
         self.priority_filter.currentTextChanged.connect(self.refresh)
         top.addWidget(self.priority_filter)
 
@@ -460,6 +464,19 @@ class RecipientsTab(QWidget):
         self.refresh()   # a duplicate may have been deleted
 
         self._rows_data = []
+
+    def _tint_priority_filter(self, label: str):
+        """Paint the closed priority-filter combo in the chosen badge's colours
+        (#7b5i3); back to the normal look on 'כל העדיפויות'."""
+        pal = self._prio_chip.get(label)
+        if pal:
+            bg, fg = pal
+            self.priority_filter.setStyleSheet(
+                "QComboBox{background:%s; color:%s; font-weight:700;"
+                "border:1.5px solid %s; border-radius:14px; padding:2px 10px;}" %
+                (bg, fg, fg))
+        else:
+            self.priority_filter.setStyleSheet("")
 
     def refresh(self):
         sf = self.status_filter.currentText()

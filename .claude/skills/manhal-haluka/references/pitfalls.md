@@ -89,3 +89,12 @@ Traps that have cost us time before. Check the relevant one before touching that
   `ResizeToContents` ignores cell widgets and clips them.
 - Never rebuild the table synchronously from the combo's own signal (`currentTextChanged` →
   repopulate destroys the emitting combo mid-emit) — defer with `QTimer.singleShot(0, ...)`.
+
+## רקע מ-QSS `background-image` נכשל בשקט (נלמד 31/08/2026, #uvee0)
+- `setStyleSheet("background-image:url(...)")` על ווידג'ט רגיל עלול פשוט לא להציג כלום —
+  בלי שגיאה — כשהתמונה/הנתיב לא נטענים (וגם אין דרך לגלות שנכשל). ב-QSS גם אי אפשר
+  למתוח את התמונה (scale-to-cover).
+- הדפוס הנכון (מיושם ב-`tabs/messages.py::_WallpaperArea`): לטעון `QPixmap` בקוד —
+  אם `isNull()` מציגים הודעת שגיאה למשתמש — ולצייר ב-`paintEvent` עם
+  `KeepAspectRatioByExpanding` (מילוי מרכזי כמו וואטסאפ). לבדוק את ה-pixmap **לפני**
+  שמירת הקובץ/ההגדרה, כדי שכישלון לא ייראה כ"לא קרה כלום".
