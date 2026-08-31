@@ -664,6 +664,43 @@ def _apply_fb_status(conn, rec: dict):
                  (status, ts, guid))
 
 
+def _apply_tz_add(conn, rec: dict):
+    """A tzintuk campaign sent from another computer (v2.81). Idempotent by
+    guid — also powers the cross-machine double-send guard."""
+    guid = rec.get("guid") or ""
+    if not guid:
+        return
+    if conn.execute("SELECT 1 FROM tzintuk_campaigns WHERE guid=?",
+                    (guid,)).fetchone():
+        return
+    conn.execute(
+        "INSERT INTO tzintuk_campaigns (guid, name, sent_at, dist_date, "
+        "template_id, campaign_id, device, total, status, status_ts) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (guid, rec.get("name", ""), rec.get("sent_at", ""),
+         rec.get("dist_date", ""), str(rec.get("template_id", "")),
+         rec.get("campaign_id", ""), rec.get("device", ""),
+         int(rec.get("total") or 0), "sending", rec.get("sent_at", "")))
+
+
+def _apply_tz_update(conn, rec: dict):
+    """Progress/result of a tzintuk campaign from another computer. LWW by
+    status_ts."""
+    guid = rec.get("guid") or ""
+    ts = rec.get("ts") or ""
+    if not guid:
+        return
+    row = conn.execute("SELECT status_ts FROM tzintuk_campaigns WHERE guid=?",
+                       (guid,)).fetchone()
+    if not row or (row["status_ts"] or "") >= ts:
+        return
+    conn.execute(
+        "UPDATE tzintuk_campaigns SET delivered=?, failed=?, status=?, "
+        "status_ts=?, report_json=? WHERE guid=?",
+        (int(rec.get("delivered") or 0), int(rec.get("failed") or 0),
+         rec.get("status", "sending"), ts, rec.get("report_json", ""), guid))
+
+
 def _apply_setting(conn, rec: dict, state: dict):
     key = rec.get("key") or ""
     if not key or not _setting_syncable(key):
@@ -688,6 +725,8 @@ _APPLIERS = {
     "msg_read":     _apply_msg_read,
     "fb_add":       _apply_fb_add,
     "fb_status":    _apply_fb_status,
+    "tz_add":       _apply_tz_add,
+    "tz_update":    _apply_tz_update,
 }
 
 
@@ -859,6 +898,24 @@ def _snapshot_body() -> int:
         if fb.get("status") == "done" and fb.get("status_ts"):
             log_change("fb_status", {"guid": fb.get("guid") or "",
                                      "status": "done", "ts": fb.get("status_ts", "")})
+            n += 1
+    # Tzintuk-campaign history (v2.81) — so a joining computer sees past sends
+    # and its double-send guard covers campaigns sent from this machine.
+    with db.get_connection() as conn:
+        camps = [dict(r) for r in conn.execute(
+            "SELECT * FROM tzintuk_campaigns ORDER BY sent_at ASC")]
+    for c in camps:
+        log_change("tz_add", {k: c.get(k, "") for k in
+                              ("guid", "name", "sent_at", "dist_date",
+                               "template_id", "campaign_id", "device", "total")})
+        n += 1
+        if c.get("status_ts"):
+            log_change("tz_update", {"guid": c.get("guid") or "",
+                                     "delivered": c.get("delivered", 0),
+                                     "failed": c.get("failed", 0),
+                                     "status": c.get("status", "sending"),
+                                     "ts": c.get("status_ts", ""),
+                                     "report_json": c.get("report_json", "")})
             n += 1
     return n
 

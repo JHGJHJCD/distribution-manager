@@ -627,6 +627,58 @@ class SettingsTab(QWidget):
         left_col.addWidget(mgr_frame)
         self._refresh_manager_status()
 
+        # ── Tzintukim — Yemot HaMashiach credentials (v2.81) ──────────────────
+        ym_frame = QFrame()
+        ym_frame.setObjectName("panel")
+        ym_lay = QVBoxLayout(ym_frame)
+        ym_lay.setContentsMargins(10, 7, 10, 7)
+        ym_lay.setSpacing(6)
+        ym_lay.addWidget(section_header("צינתוקים (ימות המשיח)", "phone", "#0f766e"))
+        ym_desc = QLabel(
+            "חיבור למערכת הטלפונית של ימות המשיח — לשליחת הודעה קולית לזכאי "
+            "החלוקה מתוך לשונית \"צינתוקים\". הזן את מספר המערכת (077…) ואת "
+            "הסיסמה של ימות, ולחץ \"בדוק חיבור\".")
+        ym_desc.setObjectName("subtitle")
+        ym_desc.setWordWrap(True)
+        ym_lay.addWidget(ym_desc)
+        ym_form = QFormLayout()
+        ym_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        ym_form.setSpacing(6)
+        self.ym_system = QLineEdit()
+        self.ym_system.setPlaceholderText("למשל 0773137770")
+        self.ym_system.setAlignment(ALIGN_RIGHT)
+        self.ym_system.setText(db.get_setting("yemot_system") or "")
+        self.ym_password = QLineEdit()
+        self.ym_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.ym_password.setPlaceholderText("הסיסמה של המערכת בימות")
+        self.ym_password.setAlignment(ALIGN_RIGHT)
+        self.ym_password.setText(db.get_setting("yemot_password") or "")
+        self.ym_test_phone = QLineEdit()
+        self.ym_test_phone.setPlaceholderText("המספר שלך — לצינתוק ניסיון")
+        self.ym_test_phone.setAlignment(ALIGN_RIGHT)
+        self.ym_test_phone.setText(db.get_setting("yemot_test_phone") or "")
+        ym_form.addRow("מספר מערכת:", self.ym_system)
+        ym_form.addRow("סיסמה:", self.ym_password)
+        ym_form.addRow("מספר לבדיקות:", self.ym_test_phone)
+        ym_lay.addLayout(ym_form)
+        ym_btns = QHBoxLayout()
+        btn_ym_save = QPushButton("שמור")
+        btn_ym_save.setObjectName("primary")
+        btn_ym_save.clicked.connect(self._save_yemot_settings)
+        ym_btns.addWidget(btn_ym_save)
+        btn_ym_test = QPushButton("בדוק חיבור")
+        btn_ym_test.setObjectName("neutral")
+        btn_ym_test.setToolTip("מתחבר לימות המשיח ומוודא שהפרטים נכונים")
+        btn_ym_test.clicked.connect(self._test_yemot_connection)
+        ym_btns.addWidget(btn_ym_test)
+        ym_btns.addStretch()
+        ym_lay.addLayout(ym_btns)
+        self.lbl_ym_status = QLabel("")
+        self.lbl_ym_status.setObjectName("subtitle")
+        self.lbl_ym_status.setWordWrap(True)
+        ym_lay.addWidget(self.lbl_ym_status)
+        left_col.addWidget(ym_frame)
+
         # Trailing stretch keeps each column's panels packed to the top so the
         # shorter column doesn't stretch its panels to fill the taller one.
         right_col.addStretch()
@@ -1188,6 +1240,50 @@ class SettingsTab(QWidget):
         email_utils.set_checklist_password(self.mail_file_pw.text())
         if email and password:
             email_utils.set_smtp_config(email, password)
+
+    # ── Tzintukim — Yemot HaMashiach (v2.81) ─────────────────────────────────
+
+    def _save_yemot_settings(self, silent: bool = False):
+        from utils import yemot
+        system = self.ym_system.text().strip()
+        password = self.ym_password.text().strip()
+        test_phone = self.ym_test_phone.text().strip()
+        if not silent and (not system or not password):
+            QMessageBox.warning(self, "", "יש למלא מספר מערכת וסיסמה של ימות המשיח.")
+            return
+        db.set_setting(yemot.SET_SYSTEM, system)
+        db.set_setting(yemot.SET_PASSWORD, password)
+        db.set_setting(yemot.SET_TEST_PHONE, test_phone)
+        if not silent:
+            self.lbl_ym_status.setText("הפרטים נשמרו ✓ — עכשיו לחץ \"בדוק חיבור\"")
+
+    def _test_yemot_connection(self):
+        from utils import yemot
+        self._save_yemot_settings(silent=True)
+        if not yemot.is_configured():
+            QMessageBox.warning(self, "בדיקת חיבור",
+                                "יש למלא מספר מערכת וסיסמה תחילה.")
+            return
+        with busy_cursor():
+            try:
+                yemot.check_connection()
+                balance = None
+                try:
+                    balance = yemot.get_balance()
+                except Exception:
+                    pass
+                ok, msg = True, "החיבור לימות המשיח תקין ✓"
+                if balance is not None:
+                    msg += f"\nיתרת יחידות במערכת: {balance:,.1f}"
+            except yemot.YemotError as e:
+                ok, msg = False, str(e)
+            except Exception as e:
+                ok, msg = False, f"שגיאה לא צפויה: {e}"
+        self.lbl_ym_status.setText(("✓ " if ok else "✗ ") + msg.replace("\n", " · "))
+        if ok:
+            QMessageBox.information(self, "בדיקת חיבור", msg)
+        else:
+            QMessageBox.warning(self, "בדיקת חיבור", msg)
 
     def _apply_font_percent(self):
         """Persist + apply the chosen UI text size to the WHOLE app right now

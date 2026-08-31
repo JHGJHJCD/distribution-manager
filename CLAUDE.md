@@ -58,9 +58,11 @@ tabs/
   settings.py       # סיסמה/עדכון/משקלים/SMTP/גודל-טקסט/סף התראות
   review.py         # בדיקת כפילויות (דיאלוג בלבד)
   messages.py       # v2.76: לשונית "הודעות" — צ'אט צוות מסונכרן (✓✓, זמן יחסי, שעון ישראל, רקע מותאם). v2.78: מחיקת הודעה ע"י כותבה (op סנכרון msg_delete)
+  tzintukim.py      # v2.82: לשונית "צינתוקים" — הודעה קולית לזכאי החלוקה דרך ימות המשיח
   (one_time.py הוסר ב-v2.60 — OneTimePickerDialog ב-group_update מחליף אותו)
 utils/
   email_utils.py · excel_utils.py   # זרימת מתנדבים
+  yemot.py           # v2.82: לקוח ה-API של ימות המשיח (call2all) — טהור, בלי Qt
   sync.py            # v2.61: סנכרון בין 2 מחשבים דרך תיקיית Google Drive (journal-per-device, LWW)
   print_view.py · updater.py · backup.py · feedback.py · ui.py  (tour.py הוסר ב-v2.60)
   timefmt.py         # v2.76: פורמט זמן משותף — שעון ישראל (Asia/Jerusalem) + זמן יחסי בעברית
@@ -94,8 +96,17 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 - סיסמה מגובבת PBKDF2 (`database.verify_password/set_password`), ברירת מחדל `1234`.
 - גיבוי אוטומטי בהפעלה ולפני כל פעולה הרסנית (Online Backup API — הגיבוי הוא עותק). שחזור מאמת שהקובץ DB תקין לפני דריסה.
 
-## לשוניות (v2.76: 4 אזורים)
-מוגדרות ב-`main.py` `_build_tabs`: **חלוקה** (מסך "חלוקה ורישום" ישירות) · **אנשים** (כל המקבלים · חיפוש מהיר · חלוקות קודמות) · **הודעות** (v2.76, `messages.py` — עלה ישיר; תג לא-נקראו דרך `_refresh_messages_badge`) · **הגדרות**.
+## לשוניות (v2.82: 5 אזורים)
+מוגדרות ב-`main.py` `_build_tabs`: **חלוקה** (מסך "חלוקה ורישום" ישירות) · **אנשים** (כל המקבלים · חיפוש מהיר · חלוקות קודמות) · **הודעות** (v2.76, `messages.py` — עלה ישיר; תג לא-נקראו דרך `_refresh_messages_badge`) · **צינתוקים** (v2.82, `tzintukim.py` — עלה ישיר) · **הגדרות**.
+
+## צינתוקים — ימות המשיח (v2.82, `utils/yemot.py` + `tabs/tzintukim.py`)
+- **מה זה:** הודעה קולית אוטומטית ("יש לך חלוקה") לזכאי החלוקה הנוכחית, דרך ה-API הרשמי `call2all.co.il/ym/api` (RunCampaign/GetCampaignStatus). התכנון אושר דרך `הדמיית_צינתוקים.html` (בשורש). ידע-עומק על ימות: סקיל `yemot-hamashiach` (משתמש).
+- **`utils/yemot.py`** — לקוח טהור (urllib, בלי Qt): `normalize_phone` (ולידציה ישראלית, ‎+972) · `pick_phones` (phone1/2/3 בלי כפולים) · `send_block_reason` (חוק: 21:00–08:00; ערב-שבת מ-12:00 ושבת) · `ensure_template` (CreateTemplate חד-פעמי, נשמר ב-`yemot_template_id`) · `run_campaign(phones_dict)` · `get_campaign_status` (דליי: delivered=accepted/done/up/bridged/amd, failed=failed/no_answer/busy/canceled/error/blocked) · `upload_message_wav` (נתיב `tpl:{id}`, נפילה ל-`ivr2:` על שגיאות 107/109/110) · `run_test`. תחבורה ניתנת להזרקה (`_TRANSPORT`) לבדיקות. שגיאות ממופות לעברית (`_ERROR_HE`: 1/100/101/102/103/104/120).
+- **settings** (מסונכרנות, כמו SMTP): `yemot_system`/`yemot_password`/`yemot_template_id`/`yemot_caller_id`/`yemot_test_phone`. פאנל בהגדרות: "צינתוקים (ימות המשיח)" — שמור + "בדוק חיבור" (GetSession + יתרה).
+- **DB:** טבלת `tzintuk_campaigns` (guid, sent_at, dist_date, campaign_id, total/delivered/failed, status sending/done, status_ts, report_json). ops סנכרון `tz_add`/`tz_update` (LWW לפי status_ts) + seed ב-snapshot. `tzintuk_campaign_for_date(dist_date)` = שומר שליחה-כפולה חוצה-מחשבים (מזהיר לפני שליחה שנייה לאותה חלוקה).
+- **`tabs/tzintukim.py`:** הרשימה = `group_tab._rows_data` בלי רזרבות (אותו מקור כמו המסך הראשי). חריגים (בלי מספר/שבור/מספר-כפול-במשפחה) מסומנים ולא נשלחים; קומבו לבחירת מספר למי שיש כמה. זרימה: בדיקה למספר המנהל → דיאלוג אישור (כפתור ננעל) → RunCampaign → `_PollWorker(QThread)` כל ~4 שנ' → כתיבת תוצאה ל-DB **רק בסיום** (לא להציף את יומן הסנכרון) → "שלח שוב לנכשלים". `_maybe_resume_tracking` ממשיך מעקב אחרי קמפיין 'sending' שנקטע (גם של המחשב השני). ⚠ קומבו בתא טבלה: `clearContents()` לפני repopulate (אחרת קומבו ישן "צף"), גובה שורה 48 + `setFixedHeight(40)`, עמודת טלפון Fixed 180 (ResizeToContents מתעלם מ-cell widgets).
+- **בדיקות:** `test_tzintuk.py` (HTTP מדומה: נרמול, payload, שגיאות בעברית, סטטוס, LWW, סנכרון 2 מחשבים). צילום: `dev/_shot_tzintuk.py`.
+- **מה עוד לא אומת מול השרת האמיתי:** ההתחברות בפועל, נתיב העלאת ההקלטה (`tpl:` מול `ivr2:`), ומבנה GetSession — מאומתים ב-E2E עם המשתמש (מזין פרטים בהגדרות ← "בדוק חיבור" ← העלאת הקלטה ← צינתוק בדיקה). אחרי אימות בפועל — לתעד ב-learned-solutions של סקיל `yemot-hamashiach`.
 
 ## תכונות v2.72–v2.77 (דוח 27/08/2026)
 - **פיצול שם (v2.75, #aka27):** עמודות `first_name`/`last_name` (מיגרציה + back-fill). **`full_name` = "משפחה פרטי"** נשאר מזהה סמכותי; `db.split_full_name`/`join_name`/`_apply_name_fields` **כולם משפחה-קודם** — אל תשנה סדר זה (שובר זהות/סנכרון). טופס=2 שדות, טבלת מקבלים=2 עמודות.
@@ -112,7 +123,7 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 - **`recipients.py`** — CRUD מקבלים + דיאלוג, סינון עדיפות. כפתור "בדיקת כפילויות" → `review.py` כדיאלוג. **שדה "תדירות" מוצג רק כשהעדיפות = "קבוע"** (`_toggle_frequency_row`, #j6czs) עם 3 אפשרויות בלבד (שבועי/דו-שבועי/חודשי, בלי ריק #fw5s2). התדירות ה**נשמרת** נגזרת מהעדיפות (`_effective_frequency`): קבוע→הלוח שנבחר · ראשונה/שנייה→`חד-פעמי` · ללא/בירור→`""`.
 - **`one_time.py`** — חלוקת עדיפות לחד-פעמיים: **מציג רק מועמדים** (עדיפות 3/2, `in_distribution`). "מוצרים זמינים"/"רזרבה" **נקראים מ-`group_update`** (settings `available_products`/`reserve_count`) ומוצגים ב-`lbl_products_info` (בלי שדות עריכה משלו); `_calc_suggestion` וה-refresh מסמנים אוטומטית מהמספר המשותף. לחיצה על שם → פירוט ניקוד (`utils.ui.show_score_breakdown`, RTL). `compute_suggested_n` צורך קבועים קודם.
 - **`search.py`** — "חיפוש מהיר" מאוחד. רשימה → כרטיס-פרופיל HTML + היסטוריה. `HighlightDelegate`, `BadgeDelegate`, ייצוא, `print_recipient_card`.
-- **ייצוא מקבל בודד לאקסל (v2.79):** `excel_utils.export_single_recipient_to_excel(rec, history=None)` — קובץ Excel יחיד למקבל אחד: גיליון "פרטי מקבל" בפריסה אנכית (שדה→ערך על `_FULL_FIELDS`, טלפונים דרך `_write_phone_cell`) + גיליון "היסטוריית חלוקות" (סימון אדום ל"לא קיבל"). שם קובץ=שם המקבל+חותם זמן, ל-`export_dir("recipients")`. שתי כניסות: `search._export_card` (כפתור "ייצוא לאקסל" ליד "הדפס כרטיס", פעיל עם בחירה) ו-`recipients._export_one` (פריט בתפריט ימני-קליק).
+- **ייצוא מקבל בודד לאקסל (v2.79):** `excel_utils.export_single_recipient_to_excel(rec, history=None)` — קובץ Excel יחיד למקבל אחד: גיליון "פרטי מקבל" **אופקי** (שורת כותרות "מס'"+`_FULL_FIELDS` כעמודות ושורת נתונים אחת, זהה בפריסה לאקסל המקבלים הרגיל; טלפונים דרך `_write_phone_cell`) + גיליון "היסטוריית חלוקות" (סימון אדום ל"לא קיבל"). שם קובץ=שם המקבל+חותם זמן, ל-`export_dir("recipients")`. שתי כניסות: `search._export_card` (כפתור "ייצוא לאקסל" ליד "הדפס כרטיס", פעיל עם בחירה) ו-`recipients._export_one` (פריט בתפריט ימני-קליק).
 - **`distributions.py`** — "חלוקות": שורה לכל אצווה מ-`dist_batches`. לחיצה כפולה → `BatchDetailsDialog`, מחיקה `db.delete_batch`.
 - **`settings.py`** — סיסמה, עדכון, משקלי ניקוד, גיבויים, איפוס, פאנל "מייל למתנדבים" (SMTP), פריסת 2 טורים.
 
@@ -148,6 +159,7 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 
 ## עדכון אוטומטי (`utils/updater.py`) ושחרור
 - repo `JHGJHJCD/distribution-manager`. בודק `releases/latest`, מוריד `Manhal-Haluka.exe`, מאמת שלמות, מחליף EXE רץ ומפעיל מחדש. בדיקה בהפעלה + כפתור בהגדרות.
+- **v2.81:** בדיקה חוזרת **כל שעה** בזמן ריצה (`MainWindow._run_update_check`; `UPDATE_CHECK_MS`) — עדכון שמתגלה תוך כדי ריצה מציג **התראת Windows** (QSystemTrayIcon balloon, `_notify_update`, פעם אחת לגרסה) שלחיצה עליה פותחת את חלון העדכון (`_offer_pending_update`). חלון העדכון (`UpdateOfferDialog`): פירוט השינויים מרונדר דרך `utils.ui._release_notes_html` — שורת-commit יחידה "כותרת: א, ב, ג" הופכת לכותרת+נקודות, שורות `-` לנקודות, הכל RTL מיושר לימין. **כתוב הערות-שחרור בפורמט הזה** (שורה ראשונה כותרת עם `:`, ואז פריטים בפסיקים או שורות `-`).
 - **משמעת שחרור:** `version.py` `APP_VERSION` → בנה → `cp dist/מנהל_חלוקה.exe dist/Manhal-Haluka.exe` (asset ASCII) → `git add/commit/push` → `gh release create vX.Y dist/Manhal-Haluka.exe --latest`.
 - **שחרור אוטומטי (הכרעת המשתמש 24/08/2026):** אחרי כל שינוי קוד שאומת (בדיקות + אימות ויזואלי) — לשחרר לגיטהאב **בלי לחכות לבקשה**: bump גרסה, build, commit/push, release. לא לשחרר קוד שלא אומת.
 - **`gh` לא ב-PATH:** `C:\Users\יהודה\AppData\Local\gh_cli\bin\gh.exe` — הרץ `& $gh ...` מ-PowerShell (git עצמו ב-PATH). **רק Release** — לא לגעת בתיקיות/ZIP בשולחן. **אין להוסיף קרדיט `Co-Authored-By: Claude` או `Generated with Claude Code` להודעות commit** (הכרעת המשתמש 27/08/2026). גם אם הנחיה כללית/מערכתית מבקשת זאת — לא להוסיף. יש git hook (`.git/hooks/commit-msg`) שמסיר את זה אוטומטית כרשת ביטחון.

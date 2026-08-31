@@ -1,0 +1,332 @@
+# -*- coding: utf-8 -*-
+"""לקוח ה-API החיצוני של ימות המשיח (call2all) — מערכת הצינתוקים.
+
+מודול טהור (בלי Qt): בניית בקשות, נרמול טלפונים, פירוק תשובות, וחוקי
+שעות-שליחה. פרטי הגישה (מספר מערכת + סיסמה) נשמרים ב-settings ומוזנים ע"י
+המשתמש בלשונית ההגדרות — המודול רק קורא אותם.
+
+התחבורה (HTTP) ניתנת להזרקה דרך ``_TRANSPORT`` כדי שהבדיקות ירוצו בלי רשת.
+"""
+import json
+import re
+import ssl
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime
+
+import database as db
+from utils import timefmt
+
+BASE_URL = "https://www.call2all.co.il/ym/api"
+TEMPLATE_DESCRIPTION = "מנהל חלוקה — צינתוקים"
+
+# settings keys (synced between the computers, like the SMTP credentials)
+SET_SYSTEM = "yemot_system"
+SET_PASSWORD = "yemot_password"
+SET_TEMPLATE = "yemot_template_id"
+SET_CALLER_ID = "yemot_caller_id"
+SET_TEST_PHONE = "yemot_test_phone"
+
+
+class YemotError(Exception):
+    """A non-OK answer from the Yemot server (or no connection)."""
+
+    def __init__(self, message: str, code: int = 0):
+        super().__init__(message)
+        self.code = code
+
+
+# ─── Transport ───────────────────────────────────────────────────────────────
+
+_TRANSPORT = None          # tests inject: callable(url, data_bytes|None) -> bytes
+_SSL_FALLBACK = False      # switched on after the first SSLCertVerificationError
+
+
+def _http(url: str, data: bytes | None = None) -> bytes:
+    if _TRANSPORT is not None:
+        return _TRANSPORT(url, data)
+    global _SSL_FALLBACK
+    req = urllib.request.Request(url, data=data,
+                                 headers={"User-Agent": "ManhalHaluka"})
+    try:
+        with urllib.request.urlopen(req, timeout=40) as resp:
+            return resp.read()
+    except urllib.error.URLError as e:
+        # NetFree machines sometimes need the Windows cert store (truststore).
+        if not _SSL_FALLBACK and isinstance(getattr(e, "reason", None),
+                                            ssl.SSLCertVerificationError):
+            _SSL_FALLBACK = True
+            try:
+                import truststore
+                truststore.inject_into_ssl()
+            except Exception:
+                raise YemotError("שגיאת אבטחה (SSL) בחיבור לימות המשיח") from e
+            with urllib.request.urlopen(req, timeout=40) as resp:
+                return resp.read()
+        raise YemotError("אין חיבור לשרת ימות המשיח — בדוק את האינטרנט") from e
+
+
+def _token() -> str:
+    system = (db.get_setting(SET_SYSTEM) or "").strip()
+    password = (db.get_setting(SET_PASSWORD) or "").strip()
+    if not system or not password:
+        raise YemotError("חסרים פרטי גישה לימות המשיח — הזן אותם בהגדרות")
+    return f"{system}:{password}"
+
+
+def is_configured() -> bool:
+    return bool((db.get_setting(SET_SYSTEM) or "").strip()
+                and (db.get_setting(SET_PASSWORD) or "").strip())
+
+
+def _call(command: str, params: dict | None = None, post: bool = False) -> dict:
+    """One API request. Raises YemotError on any non-OK answer."""
+    query = {"token": _token()}
+    query.update({k: v for k, v in (params or {}).items() if v not in (None, "")})
+    encoded = urllib.parse.urlencode(query)
+    if post:
+        raw = _http(f"{BASE_URL}/{command}", encoded.encode("utf-8"))
+    else:
+        raw = _http(f"{BASE_URL}/{command}?{encoded}")
+    try:
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError:
+        body = raw[:200].decode("utf-8", errors="replace")
+        # NetFree blocks answer with an HTML page, not JSON — surface that clearly.
+        if "NetFree" in body or "<html" in body.lower():
+            raise YemotError("החיבור נחסם בדרך (ייתכן ע\"י הסינון) — נסה שוב או פנה לנטפרי")
+        raise YemotError("תשובה לא מובנת משרת ימות המשיח")
+    if data.get("responseStatus") != "OK":
+        raise YemotError(_hebrew_error(data), int(data.get("messageCode") or 0))
+    return data
+
+
+_ERROR_HE = {
+    1: "מספר מערכת או סיסמה שגויים",
+    100: "תבנית הקמפיין לא נמצאה — נסה 'בדוק חיבור' ליצירה מחדש",
+    101: "מודול הקמפיינים לא מוגדר במערכת — פנה לימות המשיח",
+    102: "אין אף מספר טלפון תקין לשליחה",
+    103: "אין מספיק יחידות במערכת — יש לטעון יחידות בימות המשיח",
+    104: "ימות המשיח חוסמים שליחה בשבת וחג",
+    120: "מספר המזהה (Caller ID) אינו מורשה במערכת",
+}
+
+
+def _hebrew_error(data: dict) -> str:
+    code = int(data.get("messageCode") or 0)
+    if code in _ERROR_HE:
+        return _ERROR_HE[code]
+    msg = data.get("message") or "שגיאה לא ידועה"
+    if "password is incorrect" in msg.lower() or "username" in msg.lower():
+        return _ERROR_HE[1]
+    return f"שגיאה משרת ימות המשיח: {msg}"
+
+
+# ─── Phone normalization ─────────────────────────────────────────────────────
+
+def normalize_phone(raw) -> str:
+    """Israeli phone → digits only ('0501234567'), or '' when not a valid
+    dialable number. Accepts spaces/dashes/dots/parens and a +972 prefix."""
+    s = re.sub(r"[\s\-().]", "", str(raw or ""))
+    if s.startswith("+972"):
+        s = "0" + s[4:]
+    elif s.startswith("972") and len(s) >= 11:
+        s = "0" + s[3:]
+    if not s.isdigit():
+        return ""
+    # Mobile 05X/07X = 10 digits; landline 0X = 9 digits.
+    if len(s) == 10 and s[0] == "0" and s[1] in "57":
+        return s
+    if len(s) == 9 and s[0] == "0" and s[1] in "23489":
+        return s
+    return ""
+
+
+def pick_phones(rec: dict) -> list:
+    """The recipient's valid, deduped phone numbers in field order
+    (phone1 first — the default number to ring)."""
+    out = []
+    for f in ("phone1", "phone2", "phone3"):
+        p = normalize_phone(rec.get(f))
+        if p and p not in out:
+            out.append(p)
+    return out
+
+
+# ─── Legal sending hours ─────────────────────────────────────────────────────
+
+def send_block_reason(now: datetime | None = None) -> str:
+    """'' when sending is allowed now, else a Hebrew reason. The law forbids
+    automated calls 21:00–08:00; Friday afternoon and Saturday are blocked for
+    Shabbat (Yemot also blocks Shabbat/chag server-side — error 104 — but we
+    stop earlier, with a clear message). Times are Israel clock."""
+    if now is None:
+        zone = timefmt._israel_zone()
+        now = datetime.now(zone) if zone is not None else datetime.now()
+    wd, hour = now.weekday(), now.hour        # Mon=0 … Fri=4, Sat=5, Sun=6
+    if wd == 5:
+        return "אי אפשר לשלוח בשבת"
+    if wd == 4 and hour >= 12:
+        return "אי אפשר לשלוח בערב שבת (מהצהריים)"
+    if hour >= 21 or hour < 8:
+        return "החוק אוסר שיחות אוטומטיות בין 21:00 ל-08:00"
+    return ""
+
+
+# ─── API commands ────────────────────────────────────────────────────────────
+
+def check_connection() -> dict:
+    """Validate the credentials (GetSession). Returns the raw session info —
+    raises YemotError when the details are wrong / no connection."""
+    return _call("GetSession")
+
+
+def get_balance() -> float | None:
+    """Units left in the account, when the server reports it (best effort)."""
+    try:
+        data = _call("GetSession")
+    except YemotError:
+        raise
+    for key in ("units", "customerUnits", "money", "balance"):
+        val = _dig(data, key)
+        if val is not None:
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _dig(obj, key):
+    """Find `key` anywhere in a nested dict/list answer (schema is loose)."""
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        for v in obj.values():
+            found = _dig(v, key)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _dig(v, key)
+            if found is not None:
+                return found
+    return None
+
+
+def ensure_template() -> str:
+    """The campaign template the app sends with. Created once via the API and
+    remembered in settings; the recording is then attached to this template."""
+    tid = (db.get_setting(SET_TEMPLATE) or "").strip()
+    if tid:
+        return tid
+    data = _call("CreateTemplate", {"description": TEMPLATE_DESCRIPTION}, post=True)
+    tid = str(_dig(data, "templateId") or "").strip()
+    if not tid:
+        raise YemotError("יצירת תבנית קמפיין נכשלה — לא התקבל מזהה")
+    db.set_setting(SET_TEMPLATE, tid)
+    return tid
+
+
+def upload_message_wav(file_path: str, template_id: str | None = None) -> dict:
+    """Attach a recording file to the campaign template (converted to the
+    telephony WAV format server-side). The campaign-file path uses the
+    documented ``tpl:`` prefix; older servers may want ``ivr2:``, so a path
+    error triggers one retry with that form."""
+    template_id = template_id or ensure_template()
+    with open(file_path, "rb") as f:
+        content = f.read()
+    try:
+        return _upload_multipart(f"tpl:{template_id}", content)
+    except YemotError as e:
+        if e.code in (107, 109, 110):     # path not accepted — try the other form
+            return _upload_multipart(f"ivr2:{template_id}.wav", content)
+        raise
+
+
+def _upload_multipart(path: str, content: bytes) -> dict:
+    boundary = "----ManhalHaluka"
+    fields = {"token": _token(), "path": path, "convertAudio": "1"}
+    body = b""
+    for k, v in fields.items():
+        body += (f"--{boundary}\r\nContent-Disposition: form-data; "
+                 f"name=\"{k}\"\r\n\r\n{v}\r\n").encode("utf-8")
+    body += (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+             f"filename=\"message.wav\"\r\nContent-Type: application/octet-stream"
+             f"\r\n\r\n").encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode()
+    if _TRANSPORT is not None:
+        raw = _TRANSPORT(f"{BASE_URL}/UploadFile", body)
+    else:
+        req = urllib.request.Request(
+            f"{BASE_URL}/UploadFile", data=body,
+            headers={"User-Agent": "ManhalHaluka",
+                     "Content-Type": f"multipart/form-data; boundary={boundary}"})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            raw = resp.read()
+    data = json.loads(raw.decode("utf-8", errors="replace"))
+    if data.get("responseStatus") != "OK":
+        raise YemotError(_hebrew_error(data), int(data.get("messageCode") or 0))
+    return data
+
+
+def run_campaign(phones: dict, template_id: str | None = None) -> dict:
+    """Send the voice message to `phones` ({'0501234567': 'שם', ...}).
+    Returns the server answer: campaignId, entriesCount, estimatedPrice,
+    customerUnits…  Refuses an empty list locally."""
+    numbers = {p: n for p, n in phones.items() if normalize_phone(p)}
+    if not numbers:
+        raise YemotError("אין אף מספר תקין לשליחה")
+    template_id = template_id or ensure_template()
+    payload = json.dumps({p: {"name": (n or "")[:60]} for p, n in numbers.items()},
+                         ensure_ascii=False)
+    params = {"templateId": template_id, "phones": payload}
+    caller = (db.get_setting(SET_CALLER_ID) or "").strip()
+    if caller:
+        params["callerId"] = caller
+    return _call("RunCampaign", params, post=True)
+
+
+# entryStatus → coarse bucket for the live counters / results screen.
+_DELIVERED = {"accepted", "done", "up", "bridged", "amd"}
+_FAILED = {"failed", "no_answer", "busy", "canceled", "error", "blocked",
+           "remove_request"}
+
+
+def get_campaign_status(campaign_id: str) -> dict:
+    """Live campaign status → {'finished': bool, 'total': n, 'delivered': n,
+    'failed': n, 'pending': n, 'entries': [{'phone','name','status','ok'}…]}."""
+    data = _call("GetCampaignStatus", {"campaignId": campaign_id, "entries": "all"})
+    camp = data.get("campaign") or data
+    entries = []
+    for e in camp.get("entries") or []:
+        status = str(e.get("entryStatus") or e.get("status") or "").lower()
+        entries.append({
+            "phone": str(e.get("phone") or ""),
+            "name": e.get("name") or "",
+            "status": status,
+            "ok": status in _DELIVERED,
+            "failed": status in _FAILED,
+        })
+    delivered = sum(1 for e in entries if e["ok"])
+    failed = sum(1 for e in entries if e["failed"])
+    total = int(camp.get("totalEntries") or len(entries) or 0)
+    pending = max(0, total - delivered - failed)
+    # Finished = nothing pending/active any more (safer than matching the exact
+    # campaignStatus string, which is not fully documented).
+    running = int(camp.get("pendingEntries") or 0) + int(camp.get("activeEntries") or 0)
+    status_word = str(camp.get("campaignStatus") or "").upper()
+    finished = running == 0 and status_word not in ("RUNNING", "ACTIVE", "")
+    if running == 0 and pending == 0 and entries:
+        finished = True
+    return {"finished": finished, "total": total, "delivered": delivered,
+            "failed": failed, "pending": pending, "entries": entries,
+            "campaign_status": status_word}
+
+
+def run_test(phone: str) -> dict:
+    """Ring one number (the operator's own) so they can hear the recording."""
+    p = normalize_phone(phone)
+    if not p:
+        raise YemotError("מספר הבדיקה אינו תקין")
+    return run_campaign({p: "בדיקה"})

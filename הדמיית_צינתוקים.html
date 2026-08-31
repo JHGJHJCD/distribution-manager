@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מערכת צינתוקים — הדמיה והסבר למנהל</title>
+<style>
+  :root{
+    --teal:#0f9d78; --teal-d:#0f766e; --bg:#f4faf7; --card:#ffffff;
+    --amber:#f59e0b; --amber-bg:#fef3e2; --amber-d:#92600a;
+    --green:#e1f5ee; --green-t:#0f6e56; --red:#fcebeb; --red-t:#a32d2d;
+    --ink:#1f2a28; --muted:#5f6d69; --line:#e3ede9; --shadow:0 1px 3px rgba(15,118,110,.08);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Segoe UI",Arial,sans-serif;line-height:1.6;font-size:16px}
+  .wrap{max-width:960px;margin:0 auto;padding:24px 18px 60px}
+  header.top{background:linear-gradient(180deg,var(--teal) 0%,var(--teal-d) 100%);
+    color:#fff;border-radius:16px;padding:26px 28px;box-shadow:var(--shadow)}
+  header.top h1{margin:0 0 6px;font-size:26px;font-weight:600}
+  header.top p{margin:0;opacity:.92;font-size:15px}
+  .pill{display:inline-block;background:rgba(255,255,255,.18);border-radius:999px;
+    padding:3px 12px;font-size:13px;margin-top:12px}
+  h2.sec{font-size:20px;margin:34px 4px 12px;color:var(--teal-d);font-weight:600;
+    border-right:4px solid var(--teal);padding-right:10px}
+  .lead{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px 20px;box-shadow:var(--shadow)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:640px){.grid2,.grid3{grid-template-columns:1fr}}
+  .fcard{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:14px 16px;box-shadow:var(--shadow)}
+  .fcard h4{margin:0 0 4px;font-size:15px;color:var(--teal-d)}
+  .fcard p{margin:0;font-size:13.5px;color:var(--muted)}
+  .fnum{display:inline-flex;width:26px;height:26px;border-radius:50%;background:var(--green);
+    color:var(--green-t);align-items:center;justify-content:center;font-weight:700;font-size:13px;margin-left:8px}
+
+  /* --- simulated app window --- */
+  .app{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    overflow:hidden;box-shadow:0 6px 24px rgba(15,118,110,.12);margin-top:6px}
+  .appbar{background:var(--teal-d);color:#fff;display:flex;align-items:center;gap:10px;
+    padding:10px 16px;font-size:14px}
+  .dot{width:11px;height:11px;border-radius:50%;background:rgba(255,255,255,.45)}
+  .tabs{display:flex;gap:2px;background:#e9f4f0;padding:0 10px}
+  .tab{padding:10px 16px;font-size:14px;color:var(--muted);cursor:default;border-bottom:3px solid transparent}
+  .tab.active{color:var(--teal-d);font-weight:600;border-bottom-color:var(--teal);background:var(--card)}
+  .screen{padding:20px 22px;min-height:360px}
+  .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+  .m{border-radius:12px;padding:12px 14px}
+  .m .lbl{font-size:13px} .m .val{font-size:26px;font-weight:700;margin-top:2px}
+  .m.blue{background:#eaf3f0} .m.blue .lbl{color:var(--teal-d)}
+  .m.green{background:var(--green)} .m.green .lbl,.m.green .val{color:var(--green-t)}
+  .m.amber{background:var(--amber-bg)} .m.amber .lbl,.m.amber .val{color:var(--amber-d)}
+  .m.red{background:var(--red)} .m.red .lbl,.m.red .val{color:var(--red-t)}
+  .msgbar{display:flex;gap:14px;flex-wrap:wrap;border-top:1px solid var(--line);
+    padding-top:12px;margin-bottom:14px;font-size:14px}
+  .msgbar b{color:var(--teal-d)}
+  .rowlist{border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .r{display:flex;align-items:center;gap:10px;padding:11px 13px;border-bottom:1px solid var(--line);font-size:14px}
+  .r:last-child{border-bottom:none}
+  .r.warn{background:var(--amber-bg)}
+  .av{width:34px;height:34px;border-radius:50%;background:#eaf3f0;color:var(--teal-d);
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex:0 0 auto}
+  .r .nm{flex:1}.r .nm .sub{font-size:12px;color:var(--muted)}
+  .r.warn .sub{color:var(--amber-d)}
+  select,input{font-family:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--line);
+    border-radius:8px;background:#fff;color:var(--ink)}
+  .badge{font-size:12px;padding:3px 11px;border-radius:999px;white-space:nowrap}
+  .badge.ok{background:var(--green);color:var(--green-t)}
+  .badge.ex{background:#fff;color:var(--amber-d);border:1px solid var(--amber)}
+  .badge.fail{background:var(--red);color:var(--red-t)}
+  .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;align-items:center}
+  .sp{flex:1}
+  button.b{font-family:inherit;font-size:14px;padding:9px 16px;border-radius:10px;cursor:pointer;
+    border:1px solid var(--line);background:#fff;color:var(--ink);transition:.15s}
+  button.b:hover{background:#f3f8f6}
+  button.b.primary{background:var(--teal);border-color:var(--teal);color:#fff;font-weight:600}
+  button.b.primary:hover{background:var(--teal-d)}
+  button.b.amber{background:var(--amber);border-color:var(--amber);color:#fff;font-weight:600}
+  button.b.amber:hover{filter:brightness(.95)}
+  button.b:disabled{opacity:.5;cursor:not-allowed}
+  .hint{font-size:12.5px;color:var(--muted);margin-top:8px}
+  /* progress */
+  .prog{height:14px;background:#eaf3f0;border-radius:999px;overflow:hidden;margin:14px 0}
+  .prog>span{display:block;height:100%;width:0;background:var(--teal);transition:width .25s}
+  .live{display:flex;gap:12px;flex-wrap:wrap;font-size:14px;margin-top:6px}
+  .live .c{background:#f3f8f6;border-radius:10px;padding:8px 14px}
+  .live .c b{font-size:18px}
+  .callrow{font-size:13px;color:var(--muted);border-top:1px dashed var(--line);
+    padding:6px 2px;display:flex;justify-content:space-between}
+  .callrow .ok2{color:var(--green-t)} .callrow .no2{color:var(--red-t)}
+  /* modal */
+  .ov{position:absolute;inset:0;background:rgba(20,40,36,.42);display:flex;
+    align-items:center;justify-content:center;padding:20px}
+  .modal{background:#fff;border-radius:14px;max-width:420px;width:100%;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+  .modal h3{margin:0 0 8px;color:var(--teal-d)}
+  .simwin{position:relative}
+  .steplabel{font-size:12.5px;color:var(--muted);margin-bottom:8px}
+  .note{background:var(--amber-bg);border:1px solid #f7d9a5;border-radius:12px;
+    padding:14px 16px;font-size:14px;color:#6b4a08}
+  .note b{color:var(--amber-d)}
+  ul.clean{margin:6px 0;padding-right:20px} ul.clean li{margin:4px 0;font-size:14px}
+  .tag{display:inline-block;background:#eef6f3;color:var(--teal-d);border-radius:6px;
+    padding:1px 7px;font-size:12px;font-family:Consolas,monospace}
+  footer{margin-top:34px;font-size:13px;color:var(--muted);text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <h1>📞 מערכת צינתוקים — מנהל חלוקה</h1>
+    <p>הודעה קולית אוטומטית לזכאי החלוקה של השבוע, דרך ימות המשיח — הכל בתוך התוכנה.</p>
+    <span class="pill">מסמך הדמיה והסבר למנהל הקופה · גרסת תכנון</span>
+  </header>
+
+  <h2 class="sec">מה זה עושה — בקצרה</h2>
+  <div class="lead">
+    התוכנה כבר יודעת <b>מי זכאי לחלוקה השבוע</b>. המערכת החדשה לוקחת את הרשימה הזו,
+    מסננת מי שאין לו מספר תקין, מציגה לך אותה לבדיקה, ואחרי אישור אחד — שולחת לכולם
+    <b>הודעה קולית</b> ("יש לך חלוקה ביום רביעי"). אחר כך מציגה תוצאות ושומרת הכל בהיסטוריה.
+    <div class="hint">אין צורך בכלי חיצוני, בקבצים או בהעתקת רשימות. הכל בלחיצות ספורות.</div>
+  </div>
+
+  <h2 class="sec">הדמיה חיה — כך זה ייראה בתוכנה</h2>
+  <div class="steplabel">לחצו על הכפתורים בתוך החלון כדי להתקדם בתהליך האמיתי — כולל שליחה עם מונה בזמן אמת.</div>
+
+  <div class="app simwin">
+    <div class="appbar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      &nbsp; מנהל חלוקה — קופה של צדקה הר יונה</div>
+    <div class="tabs">
+      <div class="tab">חלוקה</div>
+      <div class="tab">אנשים</div>
+      <div class="tab">הודעות</div>
+      <div class="tab active">📞 צינתוקים</div>
+      <div class="tab">הגדרות</div>
+    </div>
+    <div class="screen" id="screen"><!-- injected by JS --></div>
+  </div>
+
+  <h2 class="sec">כל הפונקציות — הסבר למנהל</h2>
+  <div class="grid2">
+    <div class="fcard"><h4><span class="fnum">1</span>זיהוי זכאי השבוע</h4><p>המערכת קוראת אוטומטית את רשימת הזכאים של החלוקה הקרובה — בדיוק כמו במסך החלוקה.</p></div>
+    <div class="fcard"><h4><span class="fnum">2</span>סינון חריגים</h4><p>מי שאין לו מספר, מספר לא תקין, או מספר כפול — מסומן כחריג עם הסבר, ולא נשלח בטעות.</p></div>
+    <div class="fcard"><h4><span class="fnum">3</span>בחירת מספר</h4><p>לאדם עם כמה מספרים (בעל/אישה/בית) — אתה בוחר לאיזה לצלצל.</p></div>
+    <div class="fcard"><h4><span class="fnum">4</span>הוספה והסרה ידנית</h4><p>אפשר להוסיף אדם שלא ברשימה, או להסיר מישהו שלא רוצים לצלצל אליו השבוע.</p></div>
+    <div class="fcard"><h4><span class="fnum">5</span>שליחת בדיקה</h4><p>שולח את ההודעה למספר שלך קודם, כדי לשמוע איך זה נשמע לפני השליחה האמיתית.</p></div>
+    <div class="fcard"><h4><span class="fnum">6</span>מסך אישור</h4><p>סיכום ברור לפני שליחה ("עומד לשלוח ל-48 איש") — כלום לא נשלח בלי אישור.</p></div>
+    <div class="fcard"><h4><span class="fnum">7</span>שליחה עם מעקב חי</h4><p>רואים בזמן אמת כמה הצליחו וכמה נכשלו, בזמן שהמערכת שולחת.</p></div>
+    <div class="fcard"><h4><span class="fnum">8</span>תוצאות ושליחה חוזרת</h4><p>בסוף — מי הצליח ומי נכשל, וכפתור "שלח שוב" רק לאלה שנכשלו.</p></div>
+    <div class="fcard"><h4><span class="fnum">9</span>היסטוריה</h4><p>כל הקמפיינים נשמרים: מתי, כמה, ומה נשלח — גם חודשים אחורה.</p></div>
+    <div class="fcard"><h4><span class="fnum">10</span>הגנות אוטומטיות</h4><p>מונע שליחה כפולה, חוסם בשעות אסורות לפי חוק, ולא מדווח "הצליח" כשהיה כשל.</p></div>
+  </div>
+
+  <h2 class="sec">מה יעבוד לבד ומה תצטרך לעשות</h2>
+  <div class="grid2">
+    <div class="fcard"><h4>🤖 המערכת עושה לבד</h4>
+      <ul class="clean">
+        <li>בונה את רשימת הזכאים</li><li>מסננת חריגים</li>
+        <li>שולחת לימות המשיח</li><li>אוספת תוצאות ושומרת היסטוריה</li>
+        <li>מסנכרנת בין שני המחשבים בלי לשלוח פעמיים</li>
+      </ul></div>
+    <div class="fcard"><h4>👤 אתה עושה</h4>
+      <ul class="clean">
+        <li>בודק את הרשימה ומתקן חריגים</li><li>שולח בדיקה לעצמך</li>
+        <li>לוחץ "אשר ושלח"</li><li>פעם אחת: מזין פרטי גישה + מקליט הודעה בימות</li>
+      </ul></div>
+  </div>
+
+  <h2 class="sec">מה נדרש מימות המשיח</h2>
+  <div class="lead">
+    חשבון פעיל עם יחידות, הקלטת הודעה, ופרטי גישה. החיבור נעשה ישירות ל-API הרשמי
+    (<span class="tag">call2all.co.il/ym/api</span>) עם הפקודות <span class="tag">RunCampaign</span> (שליחת ההודעה)
+    ו-<span class="tag">DownloadCampaignReport</span> (התוצאות). <b>צריך לאמת מולם:</b> מחיר להודעה, יתרת יחידות, ומגבלת קצב.
+  </div>
+
+  <h2 class="sec">החלטות שנשארו לך</h2>
+  <div class="note">
+    <b>לפני שמתחילים לפתח</b>, כדאי להכריע:
+    <ul class="clean">
+      <li>איך לשמור את פרטי הגישה — מוצפן (מומלץ) או פשוט.</li>
+      <li>חלון שעות מותר לשליחה (החוק אוסר 21:00–08:00, שבת וחג).</li>
+      <li>האם להוסיף סימון "לא לצלצל" למי שמבקש.</li>
+      <li>לאמת מול ימות המשיח את פרטי ה-API והתמחור.</li>
+    </ul>
+  </div>
+
+  <h2 class="sec">מה לא כלול בשלב הראשון (ואפשר בעתיד)</h2>
+  <div class="grid3">
+    <div class="fcard"><h4>לא עכשיו</h4><p>תזמון אוטומטי בלי מנהל, SMS/וואטסאפ, הקלטה מתוך התוכנה.</p></div>
+    <div class="fcard"><h4>בעתיד</h4><p>כמה סוגי הודעות לפי סוג חלוקה, שליחה בערוצים נוספים.</p></div>
+    <div class="fcard"><h4>תמיד קיים</h4><p>ייצוא ידני כגיבוי — אם ימות לא זמין, אפשר להעלות רשימה ידנית.</p></div>
+  </div>
+
+  <footer>מסמך הדמיה לתכנון — מנהל חלוקה · אין מאחוריו קוד פעיל · הנתונים בהדמיה הם לדוגמה בלבד</footer>
+</div>
+
+<script>
+(function(){
+  var screen = document.getElementById('screen');
+  var people = [
+    {i:'כה',n:'כהן יוסף',ph:'052-1234567',fld:'נייד בעל',alt:'נייד אישה 053-9876543',st:'ok'},
+    {i:'לו',n:'לוי שרה',ph:'050-7654321',fld:'נייד אישה',alt:null,st:'ok'},
+    {i:'פר',n:'פרידמן משה',ph:'054-3312299',fld:'נייד בעל',alt:'בית 04-6543210',st:'ok'},
+    {i:'אב',n:'אברהם דוד',ph:null,fld:null,alt:null,st:'ex',why:'אין מספר טלפון'},
+    {i:'מז',n:'מזרחי חיים',ph:'05-12',fld:'נייד בעל',alt:null,st:'ex',why:'מספר לא תקין'}
+  ];
+  var state='list'; var sim={ok:0,fail:0,done:0,total:0,timer:null};
+
+  function metrics(a,b,c){
+    return '<div class="metrics">'+
+      '<div class="m blue"><div class="lbl">זכאים השבוע</div><div class="val">'+a+'</div></div>'+
+      '<div class="m green"><div class="lbl">מוכנים לשליחה</div><div class="val">'+b+'</div></div>'+
+      '<div class="m amber"><div class="lbl">חריגים</div><div class="val">'+c+'</div></div></div>';
+  }
+  function rowsHtml(){
+    var h='<div class="rowlist">';
+    people.forEach(function(p,idx){
+      var warn=p.st==='ex'?' warn':'';
+      h+='<div class="r'+warn+'"><div class="av">'+p.i+'</div>'+
+         '<div class="nm">'+p.n+'<div class="sub">'+(p.st==='ex'?('⚠ '+p.why):(p.ph+' · '+p.fld))+'</div></div>';
+      if(p.st==='ex'){
+        h+='<button class="b" onclick="fixEx('+idx+')">תקן / הוסף מספר</button>'+
+           '<span class="badge ex">חריג</span>';
+      }else{
+        if(p.alt){h+='<select><option>'+p.fld+' '+p.ph+'</option><option>'+p.alt+'</option></select>';}
+        h+='<span class="badge ok">מוכן</span>';
+      }
+      h+='</div>';
+    });
+    return h+'</div>';
+  }
+  function count(){var ok=0,ex=0;people.forEach(function(p){p.st==='ok'?ok++:ex++;});return {ok:ok,ex:ex,t:people.length};}
+
+  function render(){
+    var c=count();
+    if(state==='list'){
+      screen.innerHTML=
+        '<div class="steplabel">מסך ראשי · חלוקה שבועית — רביעי 03/09/2026</div>'+
+        metrics(c.t+48,c.ok+45,c.ex)+
+        '<div class="msgbar"><div>הודעה שנבחרה: <b>🎙 "יש לך חלוקה ביום רביעי"</b></div><div>מועד: <b>עכשיו</b></div></div>'+
+        '<div class="steplabel">רשימת נמענים</div>'+rowsHtml()+
+        '<div class="actions">'+
+          '<button class="b" onclick="alert(\'כאן נפתח חלון להוספת אדם ידנית\')">➕ הוסף אדם</button>'+
+          '<button class="b" onclick="state=\'test\';render()">▶ שלח בדיקה למספר שלי</button>'+
+          '<div class="sp"></div>'+
+          '<button class="b amber" onclick="state=\'confirm\';render()">אשר ושלח ל-'+(c.ok+45)+' »</button>'+
+        '</div>'+
+        '<div class="hint">חריגים לא נשלחים. אפשר לתקן אותם עכשיו או לטפל ידנית.</div>';
+    }
+    else if(state==='test'){
+      screen.innerHTML=rowsWrap('מסך בדיקה')+
+        '<div class="ov"><div class="modal"><h3>שליחת בדיקה</h3>'+
+        '<p style="margin:0 0 10px">נשלח צינתוק ניסיון למספר שלך כדי לשמוע את ההקלטה.</p>'+
+        '<input style="width:100%;margin-bottom:12px" value="050-0000000">'+
+        '<div class="actions"><button class="b" onclick="state=\'list\';render()">ביטול</button>'+
+        '<div class="sp"></div><button class="b primary" onclick="alert(\'📞 מצלצל אליך עכשיו... (הדמיה)\');state=\'list\';render()">שלח בדיקה</button></div>'+
+        '</div></div>';
+    }
+    else if(state==='confirm'){
+      var c2=count();
+      screen.innerHTML=rowsWrap('מסך אישור')+
+        '<div class="ov"><div class="modal"><h3>אישור שליחה</h3>'+
+        '<p style="margin:0 0 6px">עומד לשלוח <b>הודעה קולית</b> ל-<b>'+(c2.ok+45)+' נמענים</b>.</p>'+
+        '<ul class="clean"><li>הודעה: "יש לך חלוקה ביום רביעי"</li>'+
+        '<li>חריגים שלא יישלחו: '+c2.ex+'</li>'+
+        '<li>עלות משוערת: '+(c2.ok+45)+' יחידות</li></ul>'+
+        '<div class="actions"><button class="b" onclick="state=\'list\';render()">חזרה</button>'+
+        '<div class="sp"></div><button class="b primary" id="goBtn" onclick="startSend()">🚀 אשר ושלח</button></div>'+
+        '<div class="hint">הכפתור ננעל אחרי לחיצה — כדי למנוע שליחה כפולה.</div>'+
+        '</div></div>';
+    }
+    else if(state==='sending'){
+      var pct=sim.total?Math.round(sim.done/sim.total*100):0;
+      var callrows='';
+      for(var k=sim.log.length-1;k>=0 && k>sim.log.length-6;k--){
+        var L=sim.log[k];
+        callrows+='<div class="callrow"><span>'+L.n+'</span><span class="'+(L.ok?'ok2':'no2')+'">'+(L.ok?'✅ נמסר':'❌ נכשל')+'</span></div>';
+      }
+      screen.innerHTML=
+        '<div class="steplabel">שולח בזמן אמת… אל תסגור את התוכנה</div>'+
+        '<div class="prog"><span style="width:'+pct+'%"></span></div>'+
+        '<div class="live">'+
+          '<div class="c">נשלחו <b>'+sim.done+'</b> / '+sim.total+'</div>'+
+          '<div class="c" style="background:var(--green)">הצליחו <b style="color:var(--green-t)">'+sim.ok+'</b></div>'+
+          '<div class="c" style="background:var(--red)">נכשלו <b style="color:var(--red-t)">'+sim.fail+'</b></div>'+
+        '</div>'+
+        '<div style="margin-top:14px">'+callrows+'</div>';
+    }
+    else if(state==='results'){
+      screen.innerHTML=
+        '<div class="steplabel">מסך תוצאות · הקמפיין הסתיים — 03/09/2026 08:14</div>'+
+        '<div class="metrics">'+
+        '<div class="m green"><div class="lbl">הצליחו</div><div class="val">'+sim.ok+'</div></div>'+
+        '<div class="m amber"><div class="lbl">בתהליך</div><div class="val">0</div></div>'+
+        '<div class="m red"><div class="lbl">נכשלו</div><div class="val">'+sim.fail+'</div></div></div>'+
+        '<div class="actions">'+
+        (sim.fail>0?'<button class="b amber" onclick="resend()">🔄 שלח שוב ל-'+sim.fail+' שנכשלו</button>':'')+
+        '<button class="b" onclick="state=\'history\';render()">📜 צפה בהיסטוריה</button>'+
+        '<div class="sp"></div><button class="b" onclick="reset()">התחל מחדש</button></div>'+
+        '<div class="hint">התוצאות נמשכו מדוח אמיתי של ימות המשיח (DownloadCampaignReport).</div>';
+    }
+    else if(state==='history'){
+      screen.innerHTML=
+        '<div class="steplabel">היסטוריית קמפיינים</div>'+
+        '<div class="rowlist">'+
+          histRow('חלוקה שבועית 03/09/2026',sim.ok,sim.fail)+
+          histRow('חלוקה שבועית 27/08/2026',46,3)+
+          histRow('חלוקת ראש חודש 20/08/2026',51,1)+
+        '</div>'+
+        '<div class="actions"><button class="b" onclick="reset()">חזרה למסך הראשי</button></div>';
+    }
+  }
+  function rowsWrap(label){
+    var c=count();
+    return '<div class="steplabel">'+label+'</div>'+metrics(c.t+48,c.ok+45,c.ex)+
+      '<div style="filter:blur(1px);opacity:.6">'+rowsHtml()+'</div>';
+  }
+  function histRow(name,ok,fail){
+    return '<div class="r"><div class="av">📅</div><div class="nm">'+name+'</div>'+
+      '<span class="badge ok">'+ok+' הצליחו</span>'+
+      (fail>0?'<span class="badge fail">'+fail+' נכשלו</span>':'')+'</div>';
+  }
+
+  window.fixEx=function(idx){
+    var p=people[idx];
+    var v=prompt('הזן מספר טלפון תקין עבור '+p.n+':', p.ph||'05');
+    if(v && /^0\d{1,2}-?\d{6,8}$/.test(v.replace(/\s/g,''))){
+      p.ph=v; p.fld='נייד בעל'; p.st='ok'; p.why=null; p.alt=null; render();
+    } else if(v!==null){ alert('המספר עדיין לא תקין — נשאר כחריג.'); }
+  };
+  window.startSend=function(){
+    var btn=document.getElementById('goBtn'); if(btn){btn.disabled=true;btn.textContent='שולח…';}
+    sim={ok:0,fail:0,done:0,total:count().ok+45,log:[]};
+    var names=['כהן יוסף','לוי שרה','פרידמן משה','ביטון רחל','אזולאי יעקב','דהן מרים','חדד אבי','נחום אורית','גבאי שלמה','אוחיון תמר'];
+    state='sending'; render();
+    sim.timer=setInterval(function(){
+      sim.done++;
+      var fail = Math.random()<0.05;
+      if(fail){sim.fail++;} else {sim.ok++;}
+      sim.log.push({n:names[sim.done%names.length],ok:!fail});
+      render();
+      if(sim.done>=sim.total){clearInterval(sim.timer);setTimeout(function(){state='results';render();},600);}
+    },110);
+  };
+  window.resend=function(){
+    var n=sim.fail; sim.ok+=n; sim.fail=0; render();
+    setTimeout(function(){alert('נשלח שוב ל-'+n+' — כולם הצליחו הפעם (הדמיה)');render();},300);
+  };
+  window.reset=function(){state='list';render();};
+  render();
+})();
+</script>
+</body>
+</html>

@@ -772,10 +772,11 @@ def export_recipients_to_excel(recipients: List[Dict]) -> str:
 
 def export_single_recipient_to_excel(rec: Dict,
                                      history: Optional[List[Dict]] = None) -> str:
-    """Export ONE recipient to its own Excel file. A single person reads best
-    vertically: sheet 'פרטי מקבל' lists every stored field as שדה→ערך rows. If
-    `history` is given, a second sheet 'היסטוריית חלוקות' lists that recipient's
-    distributions. Returns the saved file path."""
+    """Export ONE recipient to its own Excel file. Sheet 'פרטי מקבל' is a WIDE
+    (horizontal) sheet — one header row with every field as a column and a single
+    data row for this recipient — identical in layout to the recipients list
+    export, just for one person. If `history` is given, a second sheet 'היסטוריית
+    חלוקות' lists that recipient's distributions. Returns the saved file path."""
     import openpyxl
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from openpyxl.utils import get_column_letter
@@ -787,50 +788,50 @@ def export_single_recipient_to_excel(rec: Dict,
 
     header_font = Font(bold=True, color="FFFFFF", size=11)
     header_fill = PatternFill("solid", fgColor="2563EB")
-    label_font = Font(bold=True, color="1E3A8A", size=11)
-    label_fill = PatternFill("solid", fgColor="EFF6FF")
-    right = Alignment(horizontal="right", vertical="center", wrap_text=True)
+    header_align = Alignment(horizontal="right", vertical="center")
+    cell_align = Alignment(horizontal="right", vertical="center")
     thin = Side(style="thin", color="CBD5E1")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     _DATE_KEYS = {"last_distribution", "next_distribution", "birth_date", "spouse_birth_date"}
 
-    # Column header (row 1 for now — a title row is inserted above it at the end).
-    ws.append(["שדה", "ערך"])
+    # Header row across the top (מס' + every field), exactly like the list export.
+    headers = ["מס'"] + [h for _, h in _FULL_FIELDS]
+    ws.append(headers)
     for cell in ws[1]:
         cell.font = header_font
         cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="right", vertical="center")
+        cell.alignment = header_align
         cell.border = border
-    ws.row_dimensions[1].height = 20
+    ws.row_dimensions[1].height = 22
 
-    # One row per stored field.
-    for r, (key, label) in enumerate(_FULL_FIELDS, 2):
+    # A single data row — this recipient's values.
+    row = [1]
+    for key, _ in _FULL_FIELDS:
         if key == "priority":
-            val = _priority_text(rec)
+            row.append(_priority_text(rec))
         elif key in _DATE_KEYS:
-            val = _fmt_date(rec.get(key))
+            row.append(_fmt_date(rec.get(key)))
         else:
             v = rec.get(key)
-            val = "" if v is None else v
-        lc = ws.cell(r, 1, label)
-        lc.font = label_font
-        lc.fill = label_fill
-        lc.alignment = right
-        lc.border = border
-        vc = ws.cell(r, 2)
-        if key.startswith("phone"):
-            _write_phone_cell(vc, val)   # phone as real number, no green triangle
-        else:
-            vc.value = val
-        vc.alignment = right
-        vc.border = border
+            row.append("" if v is None else v)
+    ws.append(row)
+    for c, cell in enumerate(ws[2], 1):
+        cell.alignment = cell_align
+        cell.border = border
+    ws.row_dimensions[2].height = 18
+    for c, h in enumerate(headers, 1):   # phones as real numbers (no green triangle)
+        if h.startswith("טלפון"):
+            _write_phone_cell(ws.cell(2, c), rec.get(_FULL_FIELDS[c - 2][0], ""))
 
-    ws.column_dimensions["A"].width = 22
-    ws.column_dimensions["B"].width = 40
+    widths = [6] + [26 if k == "address" else 20 if k in ("full_name", "email", "synagogue")
+                    else 14 for k, _ in _FULL_FIELDS]
+    for col, width in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(col)].width = width
 
-    # Title row (merged) with the recipient's name.
+    # Title row (merged across all columns) with the recipient's name.
+    ncols = len(headers)
     ws.insert_rows(1)
-    ws.merge_cells("A1:B1")
+    ws.merge_cells(f"A1:{get_column_letter(ncols)}1")
     tcell = ws["A1"]
     tcell.value = (rec.get("full_name") or "מקבל").strip()
     tcell.font = Font(bold=True, size=14, color="1D4ED8")
@@ -857,7 +858,7 @@ def export_single_recipient_to_excel(rec: Dict,
                        entry.get("quantity", "") or "", entry.get("distributor", "") or "",
                        entry.get("notes", "") or ""])
             for cell in hs[idx]:
-                cell.alignment = right
+                cell.alignment = cell_align
                 cell.border = border
                 if missed:
                     cell.fill = missed_fill

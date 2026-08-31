@@ -50,3 +50,19 @@ Traps that have cost us time before. Check the relevant one before touching that
 - NetFree can inject **HTTP 418 "Blocked by NetFree"** and break builds/downloads with no obvious
   cause. If something fails on the network for no reason, check whether the error body contains
   "Blocked by NetFree". Full workaround guide is in memory `reference-netfree`.
+
+## Parallel Claude sessions on this repo (learned 30/08/2026, v2.81)
+- The user sometimes opens **several chats working on the repo at once**. Before releasing,
+  check `git status` — if there are modified/untracked files you didn't touch, they belong to
+  another live session. **Do not** use `release.py ship` then (it runs `git add -A` and would
+  sweep foreign WIP into your commit), and do not build from the main tree (the EXE would embed
+  their half-done code).
+- The safe recipe: commit **only your files** (`git add <paths>` + commit + push), then build
+  and release from a clean detached worktree:
+  `git worktree add --detach <scratchpad>/wt HEAD` → run the full test suite there → PyInstaller
+  there → `gh release create v<X> <wt>/dist/Manhal-Haluka.exe --latest` → `git worktree remove`.
+- Do **not** stash the other session's files even briefly — it yanks them out from under the
+  live session. (Tried it; user flagged it.) Leave foreign WIP untouched in the working tree.
+- Shared docs (`CLAUDE.md`, `NEXT_TASK.md`, `דיווח_תקלות.html`) may already hold the other
+  session's uncommitted lines — edit them freely but leave them uncommitted for the next
+  quiet commit, unless you can commit only your own file.

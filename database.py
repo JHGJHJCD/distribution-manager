@@ -337,6 +337,26 @@ def init_db():
             status_ts     TEXT DEFAULT ''
         );
 
+        -- Voice-notification ("tzintuk") campaigns sent through Yemot HaMashiach
+        -- (v2.81). One row per send; synced by guid so both computers see the
+        -- history — and so the double-send guard works across machines.
+        CREATE TABLE IF NOT EXISTS tzintuk_campaigns (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            guid         TEXT DEFAULT '',
+            name         TEXT DEFAULT '',
+            sent_at      TEXT DEFAULT '',
+            dist_date    TEXT DEFAULT '',
+            template_id  TEXT DEFAULT '',
+            campaign_id  TEXT DEFAULT '',
+            device       TEXT DEFAULT '',
+            total        INTEGER DEFAULT 0,
+            delivered    INTEGER DEFAULT 0,
+            failed       INTEGER DEFAULT 0,
+            status       TEXT DEFAULT 'sending',
+            status_ts    TEXT DEFAULT '',
+            report_json  TEXT DEFAULT ''
+        );
+
         -- Journal of changes RECEIVED from another computer, with enough 'before'
         -- state to undo them. Powers the manager's change-log (#5rhe9). Local only
         -- (never synced) — each machine records what IT applied.
@@ -1755,6 +1775,78 @@ def open_feedback_count() -> int:
     with get_connection() as conn:
         row = conn.execute("SELECT COUNT(*) AS n FROM feedback WHERE status='open'").fetchone()
         return int(row["n"] or 0)
+
+
+# ─── Tzintuk campaigns — Yemot HaMashiach voice notifications (v2.81) ─────────
+
+def add_tzintuk_campaign(name: str, dist_date: str, template_id: str,
+                         campaign_id: str, total: int, guid: str = "",
+                         sent_at: str = "", device: str = "") -> str:
+    """Record one voice-notification send. Idempotent by guid (also used when
+    the record arrives from the other computer / seed). Returns the guid."""
+    guid = (guid or "").strip() or uuid.uuid4().hex
+    sent_at = sent_at or _utc_now()
+    with get_connection() as conn:
+        if conn.execute("SELECT 1 FROM tzintuk_campaigns WHERE guid=?",
+                        (guid,)).fetchone():
+            return guid
+        conn.execute(
+            "INSERT INTO tzintuk_campaigns (guid, name, sent_at, dist_date, "
+            "template_id, campaign_id, device, total, status, status_ts) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (guid, name or "", sent_at, dist_date or "", str(template_id or ""),
+             campaign_id or "", device or "", int(total or 0), "sending", sent_at))
+    _sync_log("tz_add", {"guid": guid, "name": name or "", "sent_at": sent_at,
+                         "dist_date": dist_date or "",
+                         "template_id": str(template_id or ""),
+                         "campaign_id": campaign_id or "", "device": device or "",
+                         "total": int(total or 0)})
+    return guid
+
+
+def update_tzintuk_campaign(guid: str, delivered: int, failed: int,
+                            status: str, report_json: str = "") -> bool:
+    """Progress/result update for a campaign (LWW by status_ts when syncing)."""
+    guid = (guid or "").strip()
+    if not guid:
+        return False
+    ts = _utc_now()
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE tzintuk_campaigns SET delivered=?, failed=?, status=?, "
+            "status_ts=?, report_json=? WHERE guid=?",
+            (int(delivered or 0), int(failed or 0), status or "sending", ts,
+             report_json or "", guid))
+        if cur.rowcount == 0:
+            return False
+    _sync_log("tz_update", {"guid": guid, "delivered": int(delivered or 0),
+                            "failed": int(failed or 0),
+                            "status": status or "sending", "ts": ts,
+                            "report_json": report_json or ""})
+    return True
+
+
+def get_tzintuk_campaigns(limit: int | None = None):
+    """Campaign history, newest first (both computers' sends)."""
+    q = "SELECT * FROM tzintuk_campaigns ORDER BY sent_at DESC, id DESC"
+    args = ()
+    if limit:
+        q += " LIMIT ?"
+        args = (int(limit),)
+    with get_connection() as conn:
+        return [dict(r) for r in conn.execute(q, args)]
+
+
+def tzintuk_campaign_for_date(dist_date: str):
+    """The newest campaign already sent for this distribution date — the
+    double-send guard across both computers. None when nothing was sent."""
+    if not dist_date:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM tzintuk_campaigns WHERE dist_date=? "
+            "ORDER BY sent_at DESC LIMIT 1", (dist_date,)).fetchone()
+        return dict(row) if row else None
 
 
 # ─── Manager change-log + undo (#5rhe9) ───────────────────────────────────────

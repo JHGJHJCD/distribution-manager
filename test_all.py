@@ -451,8 +451,8 @@ from main import MainWindow
 _win = MainWindow()
 _win.show()
 
-check("4 top-level areas (v2.76: + הודעות)", _win.tabs.count() == 4)
-check("all 6 content tabs exist as leaves (v2.76)", len(_win._leaf_tabs) == 6)
+check("5 top-level areas (v2.81: + צינתוקים)", _win.tabs.count() == 5)
+check("all 7 content tabs exist as leaves (v2.81)", len(_win._leaf_tabs) == 7)
 # every leaf is reachable through the nested navigation helper
 for _leaf in _win._leaf_tabs:
     _win.navigate_to_tab(_leaf)
