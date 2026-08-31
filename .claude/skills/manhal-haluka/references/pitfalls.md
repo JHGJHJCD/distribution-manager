@@ -66,3 +66,16 @@ Traps that have cost us time before. Check the relevant one before touching that
 - Shared docs (`CLAUDE.md`, `NEXT_TASK.md`, `דיווח_תקלות.html`) may already hold the other
   session's uncommitted lines — edit them freely but leave them uncommitted for the next
   quiet commit, unless you can commit only your own file.
+- When the user says the parallel sessions **finished**, the opposite applies: the next release
+  should sweep in their completed work too (`git add -A`), with their change mentioned in the
+  release notes (happened in v2.82 — the horizontal single-recipient Excel export rode along).
+
+## QComboBox inside a QTableWidget cell (learned 31/08/2026, v2.82)
+- Repopulating a table that uses `setCellWidget` combos **must call `clearContents()` first** —
+  otherwise old combos survive and "float" over the new rows (seen in the tzintukim tab).
+- Don't `setItem` on a cell that got a widget; give the widget `setFixedHeight(40)` and the rows
+  `verticalHeader().setDefaultSectionSize(48)` — the qt-material combo is taller than default rows.
+- A column holding cell widgets needs `ResizeMode.Fixed` + explicit width (`setColumnWidth`) —
+  `ResizeToContents` ignores cell widgets and clips them.
+- Never rebuild the table synchronously from the combo's own signal (`currentTextChanged` →
+  repopulate destroys the emitting combo mid-emit) — defer with `QTimer.singleShot(0, ...)`.
