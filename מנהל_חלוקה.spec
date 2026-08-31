@@ -63,6 +63,9 @@ a = Analysis(
         'utils.sync',
         'utils.timefmt',
         'tabs.messages',
+        'tabs.tzintukim',
+        'utils.yemot',
+        'truststore',   # SSL fallback for NetFree machines (yemot connection)
         'tzdata',   # Asia/Jerusalem for zoneinfo (Israel time), fallback = system tz
         'utils._secret',   # gitignored; bundled only when present on build machine
         # ── networking (in-app updater + volunteer email) ─────────────────────

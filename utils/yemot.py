@@ -10,6 +10,7 @@
 import json
 import re
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -49,22 +50,38 @@ def _http(url: str, data: bytes | None = None) -> bytes:
     global _SSL_FALLBACK
     req = urllib.request.Request(url, data=data,
                                  headers={"User-Agent": "ManhalHaluka"})
-    try:
-        with urllib.request.urlopen(req, timeout=40) as resp:
-            return resp.read()
-    except urllib.error.URLError as e:
-        # NetFree machines sometimes need the Windows cert store (truststore).
-        if not _SSL_FALLBACK and isinstance(getattr(e, "reason", None),
-                                            ssl.SSLCertVerificationError):
-            _SSL_FALLBACK = True
-            try:
-                import truststore
-                truststore.inject_into_ssl()
-            except Exception:
-                raise YemotError("שגיאת אבטחה (SSL) בחיבור לימות המשיח") from e
+    last_err = None
+    retried = False
+    while True:
+        try:
             with urllib.request.urlopen(req, timeout=40) as resp:
                 return resp.read()
-        raise YemotError("אין חיבור לשרת ימות המשיח — בדוק את האינטרנט") from e
+        except urllib.error.URLError as e:
+            reason = getattr(e, "reason", None)
+            # NetFree machines may need the Windows cert store (truststore) —
+            # any SSL trouble gets one retry with it injected (doesn't count
+            # as the transient retry below).
+            if not _SSL_FALLBACK and isinstance(reason, ssl.SSLError):
+                _SSL_FALLBACK = True
+                try:
+                    import truststore
+                    truststore.inject_into_ssl()
+                    continue
+                except ImportError:
+                    pass
+            last_err = reason if reason is not None else e
+        except (TimeoutError, OSError) as e:
+            last_err = e
+        if not retried:          # one automatic retry for transient hiccups
+            retried = True
+            time.sleep(1.5)
+            continue
+        # Surface the real cause — "check the internet" alone hides whether it
+        # was DNS, SSL, a timeout or a filter block (learned in the v2.82 E2E).
+        detail = str(last_err) or type(last_err).__name__
+        raise YemotError("אין חיבור לשרת ימות המשיח — בדוק את האינטרנט.\n"
+                         f"פרטים טכניים: {detail}") from (
+            last_err if isinstance(last_err, BaseException) else None)
 
 
 def _token() -> str:
@@ -118,7 +135,10 @@ def _hebrew_error(data: dict) -> str:
     if code in _ERROR_HE:
         return _ERROR_HE[code]
     msg = data.get("message") or "שגיאה לא ידועה"
-    if "password is incorrect" in msg.lower() or "username" in msg.lower():
+    low = msg.lower()
+    # covers "Username or password is incorrect" AND the login-token variant
+    # "creating login token error(user name or password do not match)"
+    if "password" in low and ("incorrect" in low or "do not match" in low):
         return _ERROR_HE[1]
     return f"שגיאה משרת ימות המשיח: {msg}"
 
