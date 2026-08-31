@@ -10,6 +10,7 @@
 הגנות: חסימת שעות אסורות (21:00–08:00, ערב שבת ושבת), שומר שליחה-כפולה
 לאותה חלוקה (חוצה-מחשבים, דרך הסנכרון), נעילת הכפתור בזמן שליחה."""
 import json
+import os
 import time
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
@@ -18,11 +19,11 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QMessageBox, QProgressBar, QScrollArea, QDialog, QLineEdit,
-    QListWidget, QListWidgetItem, QFileDialog, QInputDialog
+    QListWidget, QListWidgetItem, QFileDialog, QInputDialog, QTextEdit
 )
 
 import database as db
-from utils import timefmt, yemot
+from utils import timefmt, tts, yemot
 from utils.ui import busy_cursor, section_header, enable_touch_scroll
 
 _LBL = "background:transparent; border:none;"
@@ -112,6 +113,279 @@ class _AddPersonDialog(QDialog):
         if it is None:
             return
         self.picked = it.data(Qt.ItemDataRole.UserRole)
+        self.accept()
+
+
+class _TaskWorker(QThread):
+    """Runs one blocking callable off the UI thread (TTS synthesis takes a few
+    seconds — freezing the dialog would look like a hang)."""
+    done = pyqtSignal(object)          # result | Exception
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+
+    def run(self):
+        try:
+            self.done.emit(self._fn())
+        except Exception as e:
+            self.done.emit(e)
+
+
+class TtsDialog(QDialog):
+    """יצירת הקלטת צינתוק מטקסט (#9vy1b) — כותבים את ההודעה, בוחרים קול,
+    מאזינים לדוגמה, וההקלטה נשמרת במאגר ומועלית לימות."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("יצירת הקלטה מטקסט")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.resize(560, 460)
+        self.result_path = ""          # ההקלטה המאושרת (mp3)
+        self.result_text = ""
+        self.result_voice = ""
+        self._worker = None
+        self._preview_key = None       # (text, voice, rate) של הקובץ האחרון שנוצר
+        self._preview_path = os.path.join(tts.recordings_dir(), "_preview.mp3")
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        intro = QLabel("כתוב את נוסח ההודעה, והמחשב יקריא אותה בקול טבעי (חינם, "
+                       "דרך האינטרנט). טיפ: פסיקים ונקודות יוצרים הפסקות טבעיות, "
+                       "ואפשר להוסיף ניקוד למילה שנשמעת לא נכון.")
+        intro.setObjectName("subtitle")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+
+        self.text = QTextEdit()
+        self.text.setAcceptRichText(False)
+        self.text.setPlaceholderText(tts.DEFAULT_TEXT)
+        last = (db.get_setting(tts.SET_LAST_TEXT) or "").strip()
+        self.text.setPlainText(last or tts.DEFAULT_TEXT)
+        lay.addWidget(self.text, 1)
+
+        opts = QHBoxLayout()
+        opts.addWidget(QLabel("קול:"))
+        self.voice = QComboBox()
+        for label, _vid in tts.VOICES:
+            self.voice.addItem(label)
+        last_v = db.get_setting(tts.SET_LAST_VOICE) or ""
+        for i, (_l, vid) in enumerate(tts.VOICES):
+            if vid == last_v:
+                self.voice.setCurrentIndex(i)
+        opts.addWidget(self.voice)
+        opts.addSpacing(12)
+        opts.addWidget(QLabel("מהירות:"))
+        self.rate = QComboBox()
+        for label, _r in tts.RATES:
+            self.rate.addItem(label)
+        opts.addWidget(self.rate)
+        opts.addStretch()
+        lay.addLayout(opts)
+
+        self.status = QLabel("")
+        self.status.setObjectName("subtitle")
+        self.status.setWordWrap(True)
+        lay.addWidget(self.status)
+
+        btns = QHBoxLayout()
+        self.btn_preview = QPushButton("🔊 השמע לי לדוגמה")
+        self.btn_preview.setObjectName("neutral")
+        self.btn_preview.setToolTip("יוצר את ההקלטה ופותח אותה בנגן של המחשב — "
+                                    "לפני שמאשרים")
+        self.btn_preview.clicked.connect(self._preview)
+        btns.addWidget(self.btn_preview)
+        btns.addStretch()
+        self.btn_ok = QPushButton("אשר — שמור במאגר והעלה לצינתוק")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.clicked.connect(self._accept)
+        btns.addWidget(self.btn_ok)
+        cancel = QPushButton("ביטול")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        lay.addLayout(btns)
+
+    # ── generation ────────────────────────────────────────────────────────────
+
+    def _params(self):
+        text = self.text.toPlainText().strip()
+        voice = tts.VOICES[self.voice.currentIndex()][1]
+        rate = tts.RATES[self.rate.currentIndex()][1]
+        return text, voice, rate
+
+    def _generate(self, on_ready):
+        """יוצר (ברקע) את ההקלטה לקובץ ה-preview; on_ready() נקרא בהצלחה."""
+        text, voice, rate = self._params()
+        if not text:
+            QMessageBox.warning(self, "יצירת הקלטה", "כתוב קודם את נוסח ההודעה.")
+            return
+        if self._worker is not None:
+            return
+        key = (text, voice, rate)
+        if key == self._preview_key and os.path.exists(self._preview_path):
+            on_ready()                    # כבר נוצר בדיוק אותו דבר — אין צורך שוב
+            return
+        self._set_busy(True)
+        self._worker = _TaskWorker(
+            lambda: tts.synthesize(text, voice, self._preview_path, rate), self)
+
+        def _done(res):
+            self._worker = None
+            self._set_busy(False)
+            if isinstance(res, Exception):
+                QMessageBox.warning(self, "יצירת הקלטה", str(res))
+                return
+            self._preview_key = key
+            on_ready()
+        self._worker.done.connect(_done)
+        self._worker.start()
+
+    def _set_busy(self, busy: bool):
+        for b in (self.btn_preview, self.btn_ok):
+            b.setEnabled(not busy)
+        self.status.setText("🎙 יוצר את ההקלטה… (כמה שניות)" if busy else "")
+
+    def _preview(self):
+        def _play():
+            try:
+                os.startfile(self._preview_path)
+                self.status.setText("ההקלטה נפתחה בנגן — אם הנוסח טוב, לחץ "
+                                    "\"אשר\" למטה.")
+            except OSError as e:
+                QMessageBox.warning(self, "השמעה", f"פתיחת הנגן נכשלה: {e}")
+        self._generate(_play)
+
+    def _accept(self):
+        def _finish():
+            text, voice, _rate = self._params()
+            self.result_path = self._preview_path
+            self.result_text = text
+            self.result_voice = voice
+            db.set_setting(tts.SET_LAST_TEXT, text)
+            db.set_setting(tts.SET_LAST_VOICE, voice)
+            self.accept()
+        self._generate(_finish)
+
+    def closeEvent(self, ev):
+        if self._worker is not None:
+            self._worker.done.disconnect()
+        super().closeEvent(ev)
+
+
+class LibraryDialog(QDialog):
+    """מאגר ההקלטות (#kgmcw) — כל הקלטה שנוצרה מטקסט או הועלתה נשמרת כאן,
+    ואפשר להשמיע / להעלות שוב לצינתוק בלי להקליט מחדש."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("מאגר הקלטות")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.resize(640, 440)
+        self.picked_path = ""          # ההקלטה שנבחרה להעלאה לצינתוק
+        self.picked_name = ""
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        intro = QLabel("כל הקלטה שיצרת מטקסט או העלית מקובץ נשמרת כאן במחשב, "
+                       "כדי שלא תצטרך להקליט מחדש. לחיצה כפולה = השמעה.")
+        intro.setObjectName("subtitle")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+
+        self.listw = QListWidget()
+        self.listw.itemDoubleClicked.connect(lambda _i: self._play())
+        lay.addWidget(self.listw, 1)
+
+        tools = QHBoxLayout()
+        b_play = QPushButton("🔊 השמע")
+        b_play.setObjectName("neutral")
+        b_play.clicked.connect(self._play)
+        tools.addWidget(b_play)
+        b_rename = QPushButton("שנה שם")
+        b_rename.setObjectName("neutral")
+        b_rename.clicked.connect(self._rename)
+        tools.addWidget(b_rename)
+        b_del = QPushButton("מחק")
+        b_del.setObjectName("danger")
+        b_del.clicked.connect(self._delete)
+        tools.addWidget(b_del)
+        tools.addStretch()
+        lay.addLayout(tools)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        self.b_use = QPushButton("השתמש בהקלטה זו »")
+        self.b_use.setToolTip("מעלה את ההקלטה הנבחרת לימות — היא שתושמע בצינתוק")
+        self.b_use.setObjectName("primary")
+        self.b_use.clicked.connect(self._use)
+        btns.addWidget(self.b_use)
+        close = QPushButton("סגור")
+        close.clicked.connect(self.reject)
+        btns.addWidget(close)
+        lay.addLayout(btns)
+        self._refresh()
+
+    def _refresh(self):
+        self.listw.clear()
+        items = tts.library_list()
+        for it in items:
+            when = (it.get("created") or "")[:16]
+            src = "נוצרה מטקסט" if it.get("source") == "tts" else "קובץ שהועלה"
+            li = QListWidgetItem(f"🎵 {it.get('name')}   ·   {when}   ·   {src}")
+            if it.get("text"):
+                li.setToolTip(it["text"])
+            li.setData(Qt.ItemDataRole.UserRole, it)
+            self.listw.addItem(li)
+        empty = not items
+        self.b_use.setEnabled(not empty)
+        if empty:
+            self.listw.addItem(QListWidgetItem(
+                "המאגר ריק — צור הקלטה מטקסט או העלה קובץ, והיא תישמר כאן."))
+
+    def _current(self):
+        it = self.listw.currentItem()
+        return it.data(Qt.ItemDataRole.UserRole) if it else None
+
+    def _play(self):
+        item = self._current()
+        if not item:
+            return
+        try:
+            os.startfile(tts.library_path(item))
+        except OSError as e:
+            QMessageBox.warning(self, "השמעה", f"פתיחת הנגן נכשלה: {e}")
+
+    def _rename(self):
+        item = self._current()
+        if not item:
+            return
+        name, ok = QInputDialog.getText(self, "שנה שם", "שם ההקלטה:",
+                                        text=item.get("name") or "")
+        if ok and name.strip():
+            tts.library_rename(item["id"], name.strip())
+            self._refresh()
+
+    def _delete(self):
+        item = self._current()
+        if not item:
+            return
+        ans = QMessageBox.question(
+            self, "מחיקת הקלטה",
+            f"למחוק את ההקלטה \"{item.get('name')}\" מהמאגר?\n"
+            "(הקלטה שכבר הועלתה לימות ממשיכה לפעול שם)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ans == QMessageBox.StandardButton.Yes:
+            tts.library_delete(item["id"])
+            self._refresh()
+
+    def _use(self):
+        item = self._current()
+        if not item:
+            QMessageBox.information(self, "מאגר הקלטות", "בחר קודם הקלטה מהרשימה.")
+            return
+        self.picked_path = tts.library_path(item)
+        self.picked_name = item.get("name") or ""
         self.accept()
 
 
@@ -221,17 +495,33 @@ class TzintukimTab(QWidget):
         self.lbl_rec.setObjectName("subtitle")
         self.lbl_rec.setWordWrap(True)
         a_lay.addWidget(self.lbl_rec)
-        row = QHBoxLayout()
-        btn_add = QPushButton("➕ הוסף אדם")
-        btn_add.setObjectName("neutral")
-        btn_add.clicked.connect(self._add_person)
-        row.addWidget(btn_add)
+        rec_row = QHBoxLayout()
+        btn_tts = QPushButton("🎙 צור הקלטה מטקסט…")
+        btn_tts.setObjectName("neutral")
+        btn_tts.setToolTip("כותבים את ההודעה — והמחשב מקריא אותה בקול טבעי "
+                           "(חינם). ההקלטה נשמרת במאגר ומועלית לצינתוק.")
+        btn_tts.clicked.connect(self._create_from_text)
+        rec_row.addWidget(btn_tts)
         btn_upload = QPushButton("העלה קובץ הקלטה…")
         btn_upload.setObjectName("neutral")
         btn_upload.setToolTip("קובץ שמע (WAV/MP3) שיושמע בצינתוק — מומר אוטומטית "
                               "לפורמט הטלפוני בשרת של ימות")
         btn_upload.clicked.connect(self._upload_recording)
-        row.addWidget(btn_upload)
+        rec_row.addWidget(btn_upload)
+        self.btn_library = QPushButton("🎵 מאגר הקלטות")
+        self.btn_library.setObjectName("neutral")
+        self.btn_library.setToolTip("הקלטות קודמות ששמורות במחשב — אפשר להשמיע "
+                                    "או להעלות שוב בלי להקליט מחדש")
+        self.btn_library.clicked.connect(self._open_library)
+        rec_row.addWidget(self.btn_library)
+        rec_row.addStretch()
+        a_lay.addLayout(rec_row)
+
+        row = QHBoxLayout()
+        btn_add = QPushButton("➕ הוסף אדם")
+        btn_add.setObjectName("neutral")
+        btn_add.clicked.connect(self._add_person)
+        row.addWidget(btn_add)
         btn_test = QPushButton("▶ שלח בדיקה למספר שלי")
         btn_test.setObjectName("neutral")
         btn_test.setToolTip("מצלצל רק אליך, כדי לשמוע איך ההודעה נשמעת לפני "
@@ -465,12 +755,12 @@ class TzintukimTab(QWidget):
         elif tid:
             self.lbl_rec.setText(
                 f"ההודעה המושמעת שמורה בימות המשיח (תבנית {tid}). "
-                "להחלפה — העלה קובץ הקלטה, ואז \"שלח בדיקה\" כדי לשמוע אותה."
-                + confirm_tip)
+                "להחלפה — צור הקלטה מטקסט / העלה קובץ / בחר מהמאגר, "
+                "ואז \"שלח בדיקה\" כדי לשמוע אותה." + confirm_tip)
         else:
             self.lbl_rec.setText(
-                "עוד לא הוגדרה הודעה: העלה קובץ הקלטה (או שלח בדיקה — התבנית "
-                "תיווצר אוטומטית ותוכל להקליט דרך ימות)." + confirm_tip)
+                "עוד לא הוגדרה הודעה: צור הקלטה מטקסט (המחשב מקריא בקול טבעי) "
+                "או העלה קובץ הקלטה." + confirm_tip)
 
     def _require_config(self) -> bool:
         if yemot.is_configured():
@@ -482,13 +772,8 @@ class TzintukimTab(QWidget):
         self._goto_settings()
         return False
 
-    def _upload_recording(self):
-        if not self._require_config():
-            return
-        path, _f = QFileDialog.getOpenFileName(
-            self, "בחר קובץ הקלטה", "", "קובצי שמע (*.wav *.mp3);;כל הקבצים (*.*)")
-        if not path:
-            return
+    def _upload_path(self, path: str, title: str) -> bool:
+        """מעלה קובץ שמע לתבנית הקמפיין בימות; מציג הודעה. True = הצליח."""
         with busy_cursor():
             try:
                 yemot.upload_message_wav(path)
@@ -498,8 +783,48 @@ class TzintukimTab(QWidget):
                 ok, msg = False, str(e)
             except Exception as e:
                 ok, msg = False, f"ההעלאה נכשלה: {e}"
-        (QMessageBox.information if ok else QMessageBox.warning)(self, "העלאת הקלטה", msg)
+        (QMessageBox.information if ok else QMessageBox.warning)(self, title, msg)
         self._refresh_recording_label()
+        return ok
+
+    def _upload_recording(self):
+        if not self._require_config():
+            return
+        path, _f = QFileDialog.getOpenFileName(
+            self, "בחר קובץ הקלטה", "", "קובצי שמע (*.wav *.mp3);;כל הקבצים (*.*)")
+        if not path:
+            return
+        if self._upload_path(path, "העלאת הקלטה"):
+            # נשמר גם במאגר (#kgmcw) — שלא יצטרכו לחפש את הקובץ שוב בפעם הבאה.
+            try:
+                name = os.path.splitext(os.path.basename(path))[0]
+                tts.library_add(path, name, source="file")
+            except OSError:
+                pass
+
+    def _create_from_text(self):
+        """#9vy1b — יצירת הקלטה מטקסט בקול AI חינמי, שמירה במאגר והעלאה."""
+        if not self._require_config():
+            return
+        dlg = TtsDialog(self)
+        if not dlg.exec() or not dlg.result_path:
+            return
+        try:
+            item = tts.library_add(dlg.result_path, tts.suggest_name(dlg.result_text),
+                                   text=dlg.result_text, voice=dlg.result_voice,
+                                   source="tts")
+            path = tts.library_path(item)
+        except OSError as e:
+            QMessageBox.warning(self, "יצירת הקלטה", f"שמירת ההקלטה במאגר נכשלה: {e}")
+            path = dlg.result_path
+        self._upload_path(path, "יצירת הקלטה")
+
+    def _open_library(self):
+        dlg = LibraryDialog(self)
+        if dlg.exec() and dlg.picked_path:
+            if not self._require_config():
+                return
+            self._upload_path(dlg.picked_path, "מאגר הקלטות")
 
     def _send_test(self):
         if not self._require_config():

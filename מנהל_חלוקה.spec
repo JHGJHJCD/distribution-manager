@@ -65,6 +65,9 @@ a = Analysis(
         'tabs.messages',
         'tabs.tzintukim',
         'utils.yemot',
+        'utils.tts',
+        'edge_tts',   # free neural Hebrew TTS (tzintuk recording from text)
+        'aiohttp',
         'truststore',   # SSL fallback for NetFree machines (yemot connection)
         'tzdata',   # Asia/Jerusalem for zoneinfo (Israel time), fallback = system tz
         'utils._secret',   # gitignored; bundled only when present on build machine

@@ -98,3 +98,13 @@ Traps that have cost us time before. Check the relevant one before touching that
   אם `isNull()` מציגים הודעת שגיאה למשתמש — ולצייר ב-`paintEvent` עם
   `KeepAspectRatioByExpanding` (מילוי מרכזי כמו וואטסאפ). לבדוק את ה-pixmap **לפני**
   שמירת הקובץ/ההגדרה, כדי שכישלון לא ייראה כ"לא קרה כלום".
+
+## דיאלוגים: שורת כפתורים צפופה מקצצת טקסט (v2.86)
+חמישה כפתורים ב-QHBoxLayout אחד בדיאלוג צר — כפתור ה-primary מכווץ מתחת ל-sizeHint
+והטקסט נחתך משני הצדדים (גם setMinimumWidth לא עוזר כשהשורה כולה over-constrained).
+הפתרון: לפצל לשתי שורות (כלי-עזר למעלה, primary+סגור למטה) או להרחיב את הדיאלוג.
+
+## רשימת ה-TESTS ב-release.py לא מתעדכנת לבד
+כשמוסיפים קובץ test_*.py חדש — להוסיף אותו גם ל-TESTS ב-
+`.claude/skills/manhal-haluka/scripts/release.py`, אחרת ship לא מריץ אותו
+(test_tzintuk.py היה חסר שם עד v2.86).
