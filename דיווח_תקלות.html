@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
 <title>כלי דיווח תקלות ובקשות שיפור — מנהל חלוקה</title>
 <style>
 /* ============================================================================
@@ -11,12 +12,23 @@
    העיצוב תואם את התוכנה: "ירוק רגוע" — ירוק #0f9d78/#0f766e, כתום #f59e0b לפעולה
    משנית, כרטיסים לבנים על רקע ירקרק בהיר.
    ---------------------------------------------------------------------------
+   יכולות עיקריות:
+     · דיווח תקלה 🐞 / בקשת שיפור 💡 לכל פריט בתוכנה, עם חומרה/סטטוס/שדות מובנים
+     · צילומי מסך: גרירה, בחירה, או הדבקה ישירה (Ctrl+V) לתוך דיווח;
+       תמונות גדולות מוקטנות אוטומטית כדי לא למלא את האחסון המקומי
+     · חותמת זמן וגרסה לכל דיווח, שם מדווח, כיווץ/הרחבת דיווחים
+     · מחיקה עם "בטל" (Undo), סטטיסטיקות לחיצות (מסננות), חיפוש וסינון
+     · ⬇ דוח HTML מלא עם התמונות (לשליחה למפתח) + העתקת דוח טקסט ללוח
+     · 💾 גיבוי JSON + 📂 ייבוא/מיזוג — להעברת הדיווחים בין מחשבים
+   ---------------------------------------------------------------------------
    מבנה הנתונים:
      APP_STRUCTURE = [{ key, name, icon, items:[{key,name,type,desc}] }]
      state.bugs    = { "<tabKey>::<itemKey>": [ {id, kind, severity, status,
-                        desc, steps, actual, expected, notes, shots:[{name,data}]} ] }
+                        desc, steps, actual, expected, notes, shots:[{name,data}],
+                        created, updated, ver, collapsed} ] }
      kind = "bug" (תקלה) | "improvement" (בקשת שיפור)
    כדי להרחיב — הוסף לשונית/פריט ל-APP_STRUCTURE; שאר הכלי מתעדכן אוטומטית.
+   עדכון גרסה: לשנות את APP_VERSION (מוזרק לכותרת ולדוחות) + את APP_STRUCTURE.
 ============================================================================ */
 :root{
   --bg:#f4faf7; --card:#ffffff; --line:#dcece5; --ink:#0f2e28; --muted:#5d7d74;
@@ -32,27 +44,40 @@ body{
 }
 button{font-family:inherit; cursor:pointer;}
 textarea,input,select{font-family:inherit;}
+textarea:focus,select:focus,input[type=search]:focus{
+  outline:none;border-color:var(--blue2)!important;box-shadow:0 0 0 3px rgba(15,157,120,.13);
+}
 
 /* ── Top app-bar (mirrors the program) ─────────────────────────────────── */
 .appbar{
   background:linear-gradient(180deg,#12b088,#0f766e); color:#fff;
-  padding:14px 22px; display:flex; align-items:center; gap:16px;
-  box-shadow:0 2px 10px rgba(15,80,60,.25); position:sticky; top:0; z-index:50;
+  padding:14px 22px; display:flex; align-items:center; gap:14px;
+  box-shadow:0 2px 10px rgba(15,80,60,.25); position:sticky; top:0; z-index:50; flex-wrap:wrap;
 }
 .appbar .logo{
   width:46px;height:46px;border-radius:10px;background:#fff;color:var(--blue);
-  display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:900;
+  display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:900;flex:none;
 }
 .appbar h1{font-size:20px;margin:0;font-weight:800;}
 .appbar .sub{font-size:12.5px;opacity:.9;}
 .appbar .spacer{flex:1;}
+.appbar .reporter{
+  border:none;border-radius:8px;padding:8px 12px;font-size:13px;width:180px;
+  background:rgba(255,255,255,.16);color:#fff;
+}
+.appbar .reporter::placeholder{color:rgba(255,255,255,.75);}
+.appbar .reporter:focus{outline:2px solid rgba(255,255,255,.5);background:rgba(255,255,255,.24);}
+.saved{font-size:12px;color:#eafff6;font-weight:700;opacity:0;transition:opacity .4s;}
+.saved.show{opacity:.95;}
 
 /* ── Statistics strip ──────────────────────────────────────────────────── */
 .stats{display:flex;gap:10px;flex-wrap:wrap;padding:14px 22px 4px;}
 .stat{
   background:var(--card);border:1px solid var(--line);border-radius:14px;
   padding:8px 16px;min-width:92px;text-align:center;box-shadow:var(--shadow);
+  cursor:pointer;transition:transform .12s,box-shadow .12s;
 }
+.stat:hover{transform:translateY(-1px);box-shadow:0 3px 12px rgba(15,80,60,.14);}
 .stat b{display:block;font-size:22px;font-weight:900;line-height:1.1;}
 .stat span{font-size:12px;color:var(--muted);}
 .stat.total b{color:var(--blue);}
@@ -90,18 +115,26 @@ textarea,input,select{font-family:inherit;}
 .tab-btn{
   display:flex;align-items:center;gap:10px;width:100%;text-align:right;
   background:none;border:none;padding:12px 16px;font-size:15px;font-weight:700;color:var(--ink);
-  border-bottom:1px solid #eef6f2;
+  border-bottom:1px solid #eef6f2;transition:background .12s;
 }
 .tab-btn .ic{font-size:18px;}
 .tab-btn .cnt{margin-inline-start:auto;background:var(--blue-soft);color:var(--blue);
   border-radius:20px;padding:1px 9px;font-size:12px;font-weight:800;min-width:22px;text-align:center;}
 .tab-btn:hover{background:#f2f9f5;}
-.tab-btn.active{background:var(--blue-soft);color:var(--blue);box-shadow:inset 3px 0 0 var(--blue);}
+.tab-btn.active{background:var(--blue-soft);color:var(--blue);box-shadow:inset 3px 0 0 var(--blue);font-weight:800;}
 
 .content{flex:1;min-width:0;}
-.content-head{display:flex;align-items:baseline;gap:12px;margin:4px 0 14px;}
+.content-head{display:flex;align-items:baseline;gap:12px;margin:4px 0 14px;flex-wrap:wrap;}
 .content-head h2{margin:0;font-size:22px;font-weight:800;}
 .content-head .desc{color:var(--muted);font-size:13px;}
+
+/* first-run hero */
+.hero{
+  background:linear-gradient(135deg,#e6f6f0,#f4feff);border:1px solid var(--line);
+  border-radius:var(--radius);padding:18px 20px;margin-bottom:16px;box-shadow:var(--shadow);
+}
+.hero b{font-size:16px;}
+.hero p{margin:6px 0 0;color:#33544b;font-size:13.5px;}
 
 /* ── Item cards ────────────────────────────────────────────────────────── */
 .item{
@@ -110,13 +143,18 @@ textarea,input,select{font-family:inherit;}
 }
 .item-head{display:flex;align-items:center;gap:10px;padding:12px 16px;background:#f2f9f5;
   border-bottom:1px solid var(--line);flex-wrap:wrap;}
+.item.slim .item-head{border-bottom:none;background:#fff;padding:9px 16px;}
+.item.slim{box-shadow:0 1px 2px rgba(15,80,60,.05);}
 .item-head .name{font-weight:800;font-size:15.5px;}
-.type-badge{font-size:11.5px;font-weight:800;border-radius:20px;padding:2px 10px;color:#fff;}
+.type-badge{font-size:11.5px;font-weight:800;border-radius:20px;padding:2px 10px;color:#fff;flex:none;}
 .type-field{background:#0891b2;} .type-button{background:var(--blue);}
 .type-action{background:var(--purple);} .type-table{background:#475569;}
 .item-head .idesc{color:var(--muted);font-size:12.5px;}
 .item-head .grow{flex:1;}
-.no-bugs{color:#94a3b8;font-size:13px;padding:2px 2px 10px;}
+.item-head .cnt2{background:var(--blue-soft);color:var(--blue);border-radius:20px;
+  padding:1px 9px;font-size:12px;font-weight:800;flex:none;}
+.item-body{padding:0 12px;}
+.item-body .bug:first-child{margin-top:12px;}
 
 /* ── Report cards ──────────────────────────────────────────────────────── */
 .bug{border:1px solid #e2ede9;border-radius:10px;padding:12px;margin-bottom:12px;background:#fcfefd;}
@@ -125,11 +163,19 @@ textarea,input,select{font-family:inherit;}
 .bug.sev-medium{border-inline-start:5px solid var(--amber);}
 .bug.sev-low{border-inline-start:5px solid #16a34a;}
 .bug.kind-improvement{background:var(--teal-soft);border-inline-start:5px solid var(--teal);}
+.bug.collapsed{padding:9px 12px;}
+.bug-sum{display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0;}
+.bug-sum .snip{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:0 1 auto;}
+.bug-sum .meta{color:var(--muted);font-size:12px;flex:none;}
+.bug-sum .bug-id{flex:none;}
 .bug-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;}
 .bug-top select{border:1px solid #cfe2da;border-radius:8px;padding:5px 8px;font-size:12.5px;font-weight:700;background:#fff;}
 .bug-top select.sel-kind[data-k="improvement"]{color:var(--teal);border-color:#a5e8f2;background:#f4feff;}
 .bug-top select.sel-kind[data-k="bug"]{color:var(--red);}
 .bug-top .bug-id{color:#94a3b8;font-size:12px;margin-inline-start:auto;}
+.fold{background:#fff;border:1px solid #cfe2da;border-radius:8px;width:26px;height:26px;
+  font-size:12px;color:var(--muted);padding:0;line-height:1;flex:none;}
+.fold:hover{background:var(--blue-soft);color:var(--blue);}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 .fieldbox label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:3px;}
 .fieldbox textarea{
@@ -170,6 +216,9 @@ textarea,input,select{font-family:inherit;}
   border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,.3);opacity:0;transform:translateY(10px);
   transition:.2s;z-index:120;font-weight:700;}
 .toast.show{opacity:1;transform:none;}
+.toast button{background:#12b088;color:#fff;border:none;border-radius:7px;padding:4px 12px;
+  font-weight:800;margin-inline-start:10px;font-size:13px;}
+.toast button:hover{filter:brightness(1.1);}
 </style>
 </head>
 <body>
@@ -178,11 +227,14 @@ textarea,input,select{font-family:inherit;}
   <div class="logo">🐞</div>
   <div>
     <h1>כלי דיווח תקלות ובקשות שיפור</h1>
-    <div class="sub">מנהל חלוקה · גרסה 2.96 · קופה של צדקה הר יונה · נוף הגליל</div>
+    <div class="sub" id="subline"></div>
   </div>
   <div class="spacer"></div>
-  <button class="btn ghost" onclick="exportReport()">⬇ ייצוא דוח</button>
-  <button class="btn" onclick="copyReport()">📋 העתק ללוח</button>
+  <span class="saved" id="savedInd">✓ נשמר</span>
+  <input class="reporter" id="reporter" placeholder="שם המדווח (לא חובה)"
+         oninput="state.reporter=this.value;save()">
+  <button class="btn ghost" onclick="copyReport()">📋 העתק ללוח</button>
+  <button class="btn" onclick="exportHtmlReport()" title="דוח מעוצב אחד עם כל הדיווחים והתמונות — מוכן לשליחה">⬇ הורד דוח מלא</button>
 </div>
 
 <div class="stats" id="stats"></div>
@@ -203,11 +255,18 @@ textarea,input,select{font-family:inherit;}
   </select>
   <select id="fStatus" onchange="render()">
     <option value="">כל הסטטוסים</option>
+    <option value="open">◌ פתוחים (חדש + בטיפול)</option>
     <option value="new">חדש</option>
     <option value="in-progress">בטיפול</option>
+    <option value="closed">● סגורים (טופל + נבדק)</option>
     <option value="fixed">טופל / בוצע</option>
     <option value="verified">נבדק / אושר</option>
   </select>
+  <button class="btn ghost small" onclick="exportMdReport()" title="הורדת הדוח כקובץ טקסט (Markdown), בלי תמונות">⬇ דוח טקסט</button>
+  <button class="btn ghost small" onclick="exportBackup()" title="שמירת כל הדיווחים (כולל תמונות) לקובץ — להעברה למחשב אחר">💾 שמור גיבוי</button>
+  <button class="btn ghost small" onclick="document.getElementById('importFile').click()" title="טעינת קובץ גיבוי — הדיווחים מתמזגים עם הקיימים">📂 ייבוא גיבוי</button>
+  <input type="file" id="importFile" accept=".json,application/json" hidden
+         onchange="importBackup(this.files[0]);this.value=''">
   <button class="btn ghost small" onclick="clearAll()">🗑 נקה הכל</button>
 </div>
 
@@ -222,8 +281,10 @@ textarea,input,select{font-family:inherit;}
 <div class="toast" id="toast"></div>
 
 <script>
+const APP_VERSION = "2.96";   /* ← מקור אמת יחיד למספר הגרסה בכלי הזה */
+
 /* ======================= מבנה התוכנה (לשוניות ופריטים) =======================
-   מעודכן לגרסה 2.96 — 5 אזורים בתוכנה (חלוקה · אנשים · הודעות · צינתוקים · הגדרות). כולל:
+   מעודכן לגרסת APP_VERSION — 5 אזורים בתוכנה (חלוקה · אנשים · הודעות · צינתוקים · הגדרות). כולל:
    ברירת מחדל "כל המקבלים" (קבועים + חד-פעמיים יחד לפי ניקוד),
    שני שלבים (הכנה → רישום מי קיבל / מי לא הגיע), התראות אי-הגעה,
    בחירת חד-פעמיים בחלון, מצב "סינון מותאם" + איזון בין קהילות,
@@ -318,6 +379,8 @@ const APP_STRUCTURE = [
     {key:"other",  name:"תקלה כללית / משהו אחר", type:"action", desc:"כל דבר שלא מצאת לו מקום בלשוניות"},
   ]},
 ];
+const VALID_KEYS = new Set();
+APP_STRUCTURE.forEach(t=>t.items.forEach(i=>VALID_KEYS.add(t.key+"::"+i.key)));
 
 const KINDS = {
   bug:         {label:"תקלה", icon:"🐞"},
@@ -347,17 +410,30 @@ const FIELD_LABELS = {
 
 function kindOf(b){ return b.kind === "improvement" ? "improvement" : "bug"; }
 function statusText(kind,key){ return (STATUS_TEXT[kind]||STATUS_TEXT.bug)[key] || key; }
+function fmtDate(iso){
+  if(!iso) return "";
+  const d = new Date(iso); if(isNaN(d)) return "";
+  return d.toLocaleDateString("he-IL",{day:"2-digit",month:"2-digit",year:"numeric"})
+       + " " + d.toLocaleTimeString("he-IL",{hour:"2-digit",minute:"2-digit"});
+}
 
 /* ============================== מצב + אחסון ============================== */
 const LS_KEY = "manhal_bug_reports_v1";
-let state = { bugs:{}, activeTab: APP_STRUCTURE[0].key };
+let state = { bugs:{}, activeTab: APP_STRUCTURE[0].key, reporter:"" };
 function load(){
   try{
     const raw = localStorage.getItem(LS_KEY);
-    if(raw){ const p = JSON.parse(raw); state.bugs = p.bugs||{}; state.activeTab = p.activeTab||state.activeTab; }
+    if(raw){
+      const p = JSON.parse(raw);
+      state.bugs = p.bugs||{}; state.activeTab = p.activeTab||state.activeTab;
+      state.reporter = p.reporter||"";
+    }
   }catch(e){ console.warn("load failed", e); }
-  // migrate old records that predate the bug/improvement split
-  for(const k in state.bugs) for(const b of state.bugs[k]) if(!b.kind) b.kind = "bug";
+  // migrate old records that predate newer fields
+  for(const k in state.bugs) for(const b of state.bugs[k]){
+    if(!b.kind) b.kind = "bug";
+    if(!b.shots) b.shots = [];
+  }
   // if the saved active tab no longer exists (e.g. removed "חד פעמי"), fall back
   if(!APP_STRUCTURE.some(t=>t.key===state.activeTab)) state.activeTab = APP_STRUCTURE[0].key;
 }
@@ -365,63 +441,145 @@ let saveTimer=null;
 function save(){
   clearTimeout(saveTimer);
   saveTimer = setTimeout(()=>{
-    try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
-    catch(e){ toast("⚠ שמירה נכשלה (אולי אין מקום ל-LocalStorage)"); }
+    try{
+      localStorage.setItem(LS_KEY, JSON.stringify(state));
+      const ind=document.getElementById("savedInd");
+      ind.classList.add("show");
+      clearTimeout(ind._t); ind._t=setTimeout(()=>ind.classList.remove("show"),1500);
+    }
+    catch(e){ toast("⚠ שמירה נכשלה — אולי אין מקום. שמור גיבוי (💾) ומחק דיווחים ישנים"); }
   }, 250);
 }
 function itemKey(tab,item){ return tab+"::"+item; }
 function bugsFor(tab,item){ return state.bugs[itemKey(tab,item)] || []; }
+function findBug(tab,item,id){ return (state.bugs[itemKey(tab,item)]||[]).find(b=>b.id===id); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
 
 /* ============================== פעולות דיווח ============================== */
 function newReport(tab,item,kind){
   kind = kind==="improvement" ? "improvement" : "bug";
   const k = itemKey(tab,item);
+  const id = uid();
   (state.bugs[k] = state.bugs[k]||[]).push({
-    id:uid(), kind, severity:"medium", status:"new",
-    desc:"", steps:"", actual:"", expected:"", notes:"", shots:[]
+    id, kind, severity:"medium", status:"new",
+    desc:"", steps:"", actual:"", expected:"", notes:"", shots:[],
+    created:new Date().toISOString(), ver:APP_VERSION
   });
   save(); render();
+  const el = document.querySelector(`.bug[data-id="${id}"]`);
+  if(el){
+    const ta = el.querySelector("textarea.desc");
+    if(ta) ta.focus({preventScroll:true});
+    el.scrollIntoView({behavior:"smooth", block:"center"});
+    lastBugRef = {tab, item, id};
+  }
 }
+let lastDeleted=null;
 function delBug(tab,item,id){
   const k = itemKey(tab,item);
-  if(!confirm("למחוק את הדיווח?")) return;
-  state.bugs[k] = (state.bugs[k]||[]).filter(b=>b.id!==id);
-  if(!state.bugs[k].length) delete state.bugs[k];
+  const arr = state.bugs[k]||[];
+  const idx = arr.findIndex(b=>b.id===id);
+  if(idx<0) return;
+  lastDeleted = {k, bug:arr[idx], idx};
+  arr.splice(idx,1);
+  if(!arr.length) delete state.bugs[k];
+  save(); render();
+  toast("הדיווח נמחק", "בטל", undoDelete);
+}
+function undoDelete(){
+  if(!lastDeleted) return;
+  const arr = state.bugs[lastDeleted.k] = state.bugs[lastDeleted.k]||[];
+  arr.splice(Math.min(lastDeleted.idx, arr.length), 0, lastDeleted.bug);
+  lastDeleted=null;
   save(); render();
 }
 function dupBug(tab,item,id){
   const k = itemKey(tab,item);
-  const src = (state.bugs[k]||[]).find(b=>b.id===id);
+  const src = findBug(tab,item,id);
   if(!src) return;
-  const copy = JSON.parse(JSON.stringify(src)); copy.id = uid();
+  const copy = JSON.parse(JSON.stringify(src));
+  copy.id = uid(); copy.created = new Date().toISOString();
+  delete copy.updated; copy.ver = APP_VERSION;
   const idx = state.bugs[k].findIndex(b=>b.id===id);
   state.bugs[k].splice(idx+1,0,copy);
   save(); render();
 }
 function updBug(tab,item,id,field,val){
-  const b = (state.bugs[itemKey(tab,item)]||[]).find(x=>x.id===id);
-  if(b){ b[field]=val; save(); if(field==="severity"||field==="status"||field==="kind") render(); else updateStats(); }
+  const b = findBug(tab,item,id);
+  if(!b) return;
+  b[field]=val; b.updated=new Date().toISOString();
+  save();
+  if(field==="severity"||field==="status"||field==="kind") render(); else updateStats();
+}
+function toggleBug(tab,item,id){
+  const b = findBug(tab,item,id);
+  if(b){ b.collapsed = !b.collapsed; save(); render(); }
 }
 
 /* ============================== צילומי מסך ============================== */
+const MAX_IMG_DIM = 1600;          // תמונות גדולות מוקטנות כדי לא למלא את LocalStorage
+function fileToShot(f, cb){
+  const r = new FileReader();
+  r.onload = e=>{
+    const raw = e.target.result;
+    const img = new Image();
+    img.onload = ()=>{
+      const big = Math.max(img.width, img.height);
+      if(big<=MAX_IMG_DIM && raw.length<=500000){ cb({name:f.name||"צילום מהלוח", data:raw}); return; }
+      let w=img.width, h=img.height;
+      if(big>MAX_IMG_DIM){ const s=MAX_IMG_DIM/big; w=Math.round(w*s); h=Math.round(h*s); }
+      const c=document.createElement("canvas"); c.width=w; c.height=h;
+      c.getContext("2d").drawImage(img,0,0,w,h);
+      let out;
+      try{
+        const png=c.toDataURL("image/png"), jpg=c.toDataURL("image/jpeg",.85);
+        out = jpg.length<png.length ? jpg : png;
+      }catch(_){ out = raw; }
+      cb({name:f.name||"צילום מהלוח", data:out});
+    };
+    img.onerror = ()=>cb({name:f.name||"תמונה", data:raw});
+    img.src = raw;
+  };
+  r.readAsDataURL(f);
+}
 function addShots(tab,item,id,files){
-  const b = (state.bugs[itemKey(tab,item)]||[]).find(x=>x.id===id);
+  const b = findBug(tab,item,id);
   if(!b) return;
-  let pending = 0;
-  [...files].forEach(f=>{
-    if(!f.type.startsWith("image/")) return;
-    pending++;
-    const r = new FileReader();
-    r.onload = e=>{ b.shots.push({name:f.name, data:e.target.result}); if(--pending===0){ save(); render(); } };
-    r.readAsDataURL(f);
-  });
+  const imgs = [...files].filter(f=>f.type && f.type.startsWith("image/"));
+  if(!imgs.length) return;
+  let pending = imgs.length;
+  imgs.forEach(f=>fileToShot(f, shot=>{
+    b.shots.push(shot);
+    if(--pending===0){
+      b.updated=new Date().toISOString(); save(); render();
+      toast(imgs.length===1 ? "📎 התמונה צורפה" : `📎 צורפו ${imgs.length} תמונות`);
+    }
+  }));
 }
 function delShot(tab,item,id,idx){
-  const b = (state.bugs[itemKey(tab,item)]||[]).find(x=>x.id===id);
-  if(b){ b.shots.splice(idx,1); save(); render(); }
+  const b = findBug(tab,item,id);
+  if(b){ b.shots.splice(idx,1); b.updated=new Date().toISOString(); save(); render(); }
 }
 function lightbox(src){ const lb=document.getElementById("lightbox"); document.getElementById("lbImg").src=src; lb.classList.add("show"); }
+
+/* הדבקת צילום מסך (Ctrl+V) לתוך הדיווח האחרון שנלחץ */
+let lastBugRef=null;
+function refFromEl(el){
+  const card = el && el.closest ? el.closest(".bug") : null;
+  if(card && card.dataset.id) lastBugRef = {tab:card.dataset.tab, item:card.dataset.item, id:card.dataset.id};
+}
+document.addEventListener("focusin", e=>refFromEl(e.target));
+document.addEventListener("click",   e=>refFromEl(e.target));
+document.addEventListener("paste", e=>{
+  const items = [...((e.clipboardData&&e.clipboardData.items)||[])].filter(i=>i.type&&i.type.startsWith("image/"));
+  if(!items.length) return;
+  const files = items.map(i=>i.getAsFile()).filter(Boolean);
+  if(!files.length) return;
+  const b = lastBugRef && findBug(lastBugRef.tab,lastBugRef.item,lastBugRef.id);
+  if(!b){ toast("כדי להדביק צילום — לחץ קודם בתוך דיווח, ואז Ctrl+V"); return; }
+  e.preventDefault();
+  addShots(lastBugRef.tab, lastBugRef.item, lastBugRef.id, files);
+});
 
 /* ============================== סינון ============================== */
 function activeFilters(){
@@ -435,14 +593,27 @@ function activeFilters(){
 function bugMatches(b,item,f){
   if(f.kind && kindOf(b)!==f.kind) return false;
   if(f.sev && b.severity!==f.sev) return false;
-  if(f.st && b.status!==f.st) return false;
+  if(f.st){
+    const open = (b.status==="new" || b.status==="in-progress");
+    if(f.st==="open"){ if(!open) return false; }
+    else if(f.st==="closed"){ if(open) return false; }
+    else if(b.status!==f.st) return false;
+  }
   if(f.q){
-    const hay = [b.desc,b.steps,b.actual,b.expected,b.notes,item.name].join(" ").toLowerCase();
+    const hay = [b.desc,b.steps,b.actual,b.expected,b.notes,item.name,b.id].join(" ").toLowerCase();
     if(!hay.includes(f.q)) return false;
   }
   return true;
 }
 function filtering(f){ return !!(f.q||f.kind||f.sev||f.st); }
+function setFilters(o){
+  o = o||{};
+  document.getElementById("search").value = o.q||"";
+  document.getElementById("fKind").value = o.kind||"";
+  document.getElementById("fSeverity").value = o.sev||"";
+  document.getElementById("fStatus").value = o.st||"";
+  render();
+}
 
 /* ============================== רינדור ============================== */
 function esc(s){ return (s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
@@ -458,12 +629,12 @@ function countAll(){
 function updateStats(){
   const c = countAll();
   document.getElementById("stats").innerHTML = `
-    <div class="stat total"><b>${c.total}</b><span>סה״כ דיווחים</span></div>
-    <div class="stat bugs"><b>${c.bug}</b><span>🐞 תקלות</span></div>
-    <div class="stat imp"><b>${c.improvement}</b><span>💡 שיפורים</span></div>
-    <div class="stat open"><b>${(c.new||0)+(c["in-progress"]||0)}</b><span>פתוחים</span></div>
-    <div class="stat done"><b>${(c.fixed||0)+(c.verified||0)}</b><span>טופלו</span></div>
-    <div class="stat crit"><b>${c.critical||0}</b><span>תקלות קריטיות</span></div>`;
+    <div class="stat total" title="הצג הכל (ניקוי סינון)" onclick="setFilters()"><b>${c.total}</b><span>סה״כ דיווחים</span></div>
+    <div class="stat bugs" title="לחץ לסינון תקלות" onclick="setFilters({kind:'bug'})"><b>${c.bug}</b><span>🐞 תקלות</span></div>
+    <div class="stat imp" title="לחץ לסינון שיפורים" onclick="setFilters({kind:'improvement'})"><b>${c.improvement}</b><span>💡 שיפורים</span></div>
+    <div class="stat open" title="לחץ לסינון הפתוחים" onclick="setFilters({st:'open'})"><b>${(c.new||0)+(c["in-progress"]||0)}</b><span>פתוחים</span></div>
+    <div class="stat done" title="לחץ לסינון מה שטופל" onclick="setFilters({st:'closed'})"><b>${(c.fixed||0)+(c.verified||0)}</b><span>טופלו</span></div>
+    <div class="stat crit" title="לחץ לסינון תקלות קריטיות" onclick="setFilters({kind:'bug',sev:'critical'})"><b>${c.critical||0}</b><span>תקלות קריטיות</span></div>`;
 }
 
 function renderSidebar(){
@@ -480,38 +651,50 @@ function renderSidebar(){
 
 function bugCard(tab,item,b){
   const kind = kindOf(b);
+  const U = `'${tab}','${item.key}','${b.id}'`;
+  const dataAttrs = `data-tab="${tab}" data-item="${item.key}" data-id="${b.id}"`;
+  if(b.collapsed){
+    const snip = (b.desc||"").split("\n")[0].trim().slice(0,90) || "(ללא תיאור)";
+    return `<div class="bug kind-${kind} sev-${b.severity} collapsed" ${dataAttrs}>
+      <div class="bug-sum" onclick="toggleBug(${U})" title="לחץ להרחבה">
+        <span>${KINDS[kind].icon}</span>
+        <span class="snip">${esc(snip)}</span>
+        <span class="meta">${SEVERITIES[b.severity]} · ${statusText(kind,b.status)}${b.shots.length?` · 📎${b.shots.length}`:""}</span>
+        <span class="bug-id"><bdi dir="ltr">#${b.id.slice(-5)}</bdi></span>
+      </div></div>`;
+  }
   const L = FIELD_LABELS[kind];
   const shots = b.shots.map((s,i)=>`
-    <div class="shot"><img src="${s.data}" title="${esc(s.name)}" onclick="lightbox('${s.data}')">
-      <button class="del" title="מחק תמונה" onclick="delShot('${tab}','${item.key}','${b.id}',${i})">×</button></div>`).join("");
+    <div class="shot"><img src="${s.data}" title="${esc(s.name)}" onclick="lightbox(this.src)">
+      <button class="del" title="מחק תמונה" onclick="delShot(${U},${i})">×</button></div>`).join("");
   const kindOpts = Object.entries(KINDS).map(([v,o])=>`<option value="${v}" ${kind===v?"selected":""}>${o.icon} ${o.label}</option>`).join("");
   const sevOpts  = Object.entries(SEVERITIES).map(([v,t])=>`<option value="${v}" ${b.severity===v?"selected":""}>${t}</option>`).join("");
   const stOpts   = Object.keys(STATUS_TEXT[kind]).map(v=>`<option value="${v}" ${b.status===v?"selected":""}>${statusText(kind,v)}</option>`).join("");
-  const U = `'${tab}','${item.key}','${b.id}'`;
-  return `<div class="bug kind-${kind} sev-${b.severity}">
+  return `<div class="bug kind-${kind} sev-${b.severity}" ${dataAttrs}>
     <div class="bug-top">
+      <button class="fold" title="כווץ את הדיווח" onclick="toggleBug(${U})">▾</button>
       <select class="sel-kind" data-k="${kind}" title="סוג הדיווח" onchange="updBug(${U},'kind',this.value)">${kindOpts}</select>
       <select title="${SEV_TITLE[kind]}" onchange="updBug(${U},'severity',this.value)">${sevOpts}</select>
       <select class="sel-status" data-v="${b.status}" title="סטטוס" onchange="updBug(${U},'status',this.value)">${stOpts}</select>
-      <span class="bug-id">#${b.id.slice(-5)}</span>
+      <span class="bug-id">${b.created?fmtDate(b.created)+" · ":""}<bdi dir="ltr">#${b.id.slice(-5)}</bdi></span>
     </div>
     <div class="fieldbox"><label>${L.desc}</label>
-      <textarea class="desc" oninput="updBug(${U},'desc',this.value)" placeholder="${L.descPh}">${esc(b.desc)}</textarea></div>
+      <textarea class="desc" oninput="updBug(${U},'desc',this.value)" placeholder="${esc(L.descPh)}">${esc(b.desc)}</textarea></div>
     <div class="fieldbox"><label>${L.steps}</label>
       <textarea oninput="updBug(${U},'steps',this.value)" placeholder="${esc(L.stepsPh)}">${esc(b.steps)}</textarea></div>
     <div class="grid2">
       <div class="fieldbox"><label>${L.actual}</label>
-        <textarea oninput="updBug(${U},'actual',this.value)" placeholder="${L.actualPh}">${esc(b.actual)}</textarea></div>
+        <textarea oninput="updBug(${U},'actual',this.value)" placeholder="${esc(L.actualPh)}">${esc(b.actual)}</textarea></div>
       <div class="fieldbox"><label>${L.expected}</label>
-        <textarea oninput="updBug(${U},'expected',this.value)" placeholder="${L.expectedPh}">${esc(b.expected)}</textarea></div>
+        <textarea oninput="updBug(${U},'expected',this.value)" placeholder="${esc(L.expectedPh)}">${esc(b.expected)}</textarea></div>
     </div>
     <div class="fieldbox"><label>${L.notes}</label>
       <textarea oninput="updBug(${U},'notes',this.value)">${esc(b.notes)}</textarea></div>
     <div class="dropzone" ondragover="event.preventDefault();this.classList.add('over')"
          ondragleave="this.classList.remove('over')"
          ondrop="event.preventDefault();this.classList.remove('over');addShots(${U},event.dataTransfer.files)"
-         onclick="this.querySelector('input').click()">
-      📎 גרור לכאן תמונות מסך, או לחץ לבחירה
+         onclick="if(event.target.tagName!=='INPUT')this.querySelector('input').click()">
+      📎 גרור לכאן תמונות מסך, הדבק (Ctrl+V) או לחץ לבחירה
       <input type="file" accept="image/*" multiple hidden onchange="addShots(${U},this.files)">
     </div>
     ${shots?`<div class="shots">${shots}</div>`:""}
@@ -526,26 +709,32 @@ function renderContent(){
   const tab = APP_STRUCTURE.find(t=>t.key===state.activeTab);
   const f = activeFilters();
   const filt = filtering(f);
+  const c = countAll();
   let html = `<div class="content-head"><h2>${tab.icon} ${tab.name}</h2>
-     <span class="desc">${filt?"מוצגים דיווחים מסוננים בלבד":"לחץ על פריט כדי לדווח תקלה 🐞 או לבקש שיפור 💡"}</span></div>`;
+     <span class="desc">${filt?"מוצגים דיווחים מסוננים בלבד":"לחץ ＋ תקלה או ＋ שיפור ליד הפריט המתאים · צילומי מסך אפשר גם להדביק (Ctrl+V)"}</span></div>`;
+  if(!c.total && !filt){
+    html += `<div class="hero"><b>👋 ברוכים הבאים לכלי הדיווח</b>
+      <p>מצאתם תקלה בתוכנה או שיש רעיון לשיפור? בחרו ברשימה מימין את הלשונית המתאימה, אתרו את הפריט ולחצו <b>＋ תקלה</b> או <b>＋ שיפור</b>. הכל נשמר אוטומטית במחשב הזה.</p>
+      <p>אפשר לצרף צילומי מסך בגרירה, בבחירה או בהדבקה (Ctrl+V). בסיום — <b>⬇ הורד דוח מלא</b> למעלה, ושלחו את הקובץ למפתח.</p></div>`;
+  }
   let shownItems = 0;
   tab.items.forEach(item=>{
     let bugs = bugsFor(tab.key,item.key);
     if(filt){ bugs = bugs.filter(b=>bugMatches(b,item,f)); if(!bugs.length) return; }
     shownItems++;
-    html += `<div class="item">
+    const slim = !bugs.length;
+    html += `<div class="item${slim?' slim':''}">
       <div class="item-head">
         <span class="type-badge type-${item.type}">${({field:"שדה",button:"כפתור",action:"פעולה",table:"טבלה"})[item.type]}</span>
         <span class="name">${item.name}</span>
+        ${bugs.length?`<span class="cnt2">${bugs.length}</span>`:""}
         <span class="grow"></span>
         <span class="idesc">${esc(item.desc||"")}</span>
         <button class="btn small" onclick="newReport('${tab.key}','${item.key}','bug')">＋ תקלה</button>
         <button class="btn teal small" onclick="newReport('${tab.key}','${item.key}','improvement')">＋ שיפור</button>
       </div>
-      <div class="item-body">
-        ${bugs.length? bugs.map(b=>bugCard(tab.key,item,b)).join("")
-                     : '<div class="no-bugs">אין דיווחים לפריט זה. הוסף תקלה או בקשת שיפור בכפתורים למעלה.</div>'}
-      </div></div>`;
+      ${bugs.length?`<div class="item-body">${bugs.map(b=>bugCard(tab.key,item,b)).join("")}</div>`:""}
+    </div>`;
   });
   if(filt && !shownItems) html += `<div class="empty-note">אין דיווחים שתואמים את הסינון בלשונית זו.</div>`;
   document.getElementById("content").innerHTML = html;
@@ -555,10 +744,15 @@ function render(){ updateStats(); renderSidebar(); renderContent(); }
 function selectTab(k){ state.activeTab=k; save(); render(); window.scrollTo({top:0,behavior:"smooth"}); }
 
 /* ============================== ייצוא / העתקה ============================== */
+function reportMeta(){
+  return `נוצר: ${new Date().toLocaleString("he-IL")}`
+       + (state.reporter?` · מדווח: ${state.reporter}`:"")
+       + ` · מנהל חלוקה גרסה ${APP_VERSION}`;
+}
 function buildReport(){
   const c = countAll();
-  let md = `# דוח תקלות ובקשות שיפור — מנהל חלוקה (גרסה 2.96)\n\n`;
-  md += `נוצר: ${new Date().toLocaleString("he-IL")}\n\n`;
+  let md = `# דוח תקלות ובקשות שיפור — מנהל חלוקה (גרסה ${APP_VERSION})\n\n`;
+  md += reportMeta()+`\n\n`;
   md += `**סיכום:** סה״כ ${c.total} · 🐞 תקלות ${c.bug} · 💡 שיפורים ${c.improvement} · `;
   md += `פתוחים ${(c.new||0)+(c["in-progress"]||0)} · טופלו ${(c.fixed||0)+(c.verified||0)} · תקלות קריטיות ${c.critical||0}\n`;
   let any=false;
@@ -572,7 +766,10 @@ function buildReport(){
         any=true;
         const kind = kindOf(b);
         const K = KINDS[kind];
-        md += `\n**${K.icon} ${K.label} ${i+1}** (#${b.id.slice(-5)}) — ${SEV_TITLE[kind]}: ${SEVERITIES[b.severity]} · סטטוס: ${statusText(kind,b.status)}\n`;
+        md += `\n**${K.icon} ${K.label} ${i+1}** (#${b.id.slice(-5)}) — ${SEV_TITLE[kind]}: ${SEVERITIES[b.severity]} · סטטוס: ${statusText(kind,b.status)}`;
+        if(b.created) md += ` · דווח ב-${fmtDate(b.created)}`;
+        if(b.ver && b.ver!==APP_VERSION) md += ` (בגרסה ${b.ver})`;
+        md += `\n`;
         const L = FIELD_LABELS[kind];
         if(b.desc)     md += `- ${L.desc}: ${b.desc.replace(/\n/g," ")}\n`;
         if(b.steps)    md += `- ${L.steps}: ${b.steps.replace(/\n/g," / ")}\n`;
@@ -586,17 +783,81 @@ function buildReport(){
   if(!any) md += `\n_לא נרשמו דיווחים._\n`;
   return md;
 }
-function download(name,text){
-  const blob = new Blob([text],{type:"text/markdown;charset=utf-8"});
+
+/* דוח HTML מלא — כולל התמונות, מוכן לשליחה למפתח */
+function buildHtmlReport(){
+  const c = countAll();
+  const SEVC = {critical:"#dc2626", high:"#ea580c", medium:"#b45309", low:"#16a34a"};
+  let secs="", any=false;
+  APP_STRUCTURE.forEach(tab=>{
+    const withB = tab.items.filter(it=>bugsFor(tab.key,it.key).length);
+    if(!withB.length) return;
+    secs += `<h2>${tab.icon} ${esc(tab.name)}</h2>`;
+    withB.forEach(it=>{
+      secs += `<h3>${esc(it.name)}</h3>`;
+      bugsFor(tab.key,it.key).forEach(b=>{
+        any=true;
+        const kind = kindOf(b), K = KINDS[kind], L = FIELD_LABELS[kind];
+        const border = kind==="improvement" ? "#0891b2" : (SEVC[b.severity]||"#b45309");
+        const bg = kind==="improvement" ? "#ecfeff" : "#fcfefd";
+        let rows="";
+        ["desc","steps","actual","expected","notes"].forEach(fk=>{
+          const v=b[fk]; if(v) rows += `<div class="f"><b>${L[fk]}:</b><div class="v">${esc(v)}</div></div>`;
+        });
+        const shots = b.shots.length
+          ? `<div class="shots">${b.shots.map(s=>`<figure><img src="${s.data}" alt=""><figcaption>${esc(s.name)}</figcaption></figure>`).join("")}</div>`
+          : "";
+        secs += `<div class="report" style="border-inline-start-color:${border};background:${bg}">
+          <div class="rt">${K.icon} <b>${K.label}</b> · ${SEV_TITLE[kind]}: ${SEVERITIES[b.severity]} · סטטוס: ${statusText(kind,b.status)}
+            <span class="rid">${b.created?fmtDate(b.created)+" · ":""}${b.ver?"גרסה "+b.ver+" · ":""}<bdi dir="ltr">#${b.id.slice(-5)}</bdi></span></div>
+          ${rows}${shots}</div>`;
+      });
+    });
+  });
+  if(!any) secs = `<p>לא נרשמו דיווחים.</p>`;
+  return `<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="UTF-8">
+<title>דוח תקלות ושיפורים — מנהל חלוקה (גרסה ${APP_VERSION})</title>
+<style>
+body{font-family:'Segoe UI',Arial,sans-serif;direction:rtl;background:#f4faf7;color:#0f2e28;
+  margin:0 auto;max-width:900px;padding:28px 22px;line-height:1.55;}
+h1{font-size:24px;margin:0 0 4px;} h2{font-size:19px;margin:26px 0 4px;color:#0f766e;
+  border-bottom:2px solid #dcece5;padding-bottom:4px;}
+h3{font-size:15px;margin:14px 0 6px;}
+.sum,.meta{color:#5d7d74;font-size:13px;margin:2px 0;}
+.report{border:1px solid #dcece5;border-inline-start:5px solid;border-radius:10px;
+  padding:12px 14px;margin:10px 0;}
+.rt{display:flex;gap:6px;flex-wrap:wrap;align-items:baseline;font-size:14px;margin-bottom:6px;}
+.rid{margin-inline-start:auto;color:#94a3b8;font-size:12px;}
+.f{margin:6px 0;font-size:13.5px;}
+.v{white-space:pre-wrap;background:#fff;border:1px solid #e2ede9;border-radius:6px;padding:6px 9px;margin-top:2px;}
+.shots{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;}
+figure{margin:0;} figcaption{font-size:11px;color:#5d7d74;text-align:center;}
+.shots img{max-width:340px;max-height:260px;border:1px solid #cbd5e1;border-radius:6px;display:block;}
+@media print{.report{break-inside:avoid;}}
+</style></head><body>
+<h1>🐞 דוח תקלות ובקשות שיפור — מנהל חלוקה</h1>
+<div class="meta">${esc(reportMeta())}</div>
+<div class="sum"><b>סיכום:</b> סה״כ ${c.total} · 🐞 תקלות ${c.bug} · 💡 שיפורים ${c.improvement} ·
+  פתוחים ${(c.new||0)+(c["in-progress"]||0)} · טופלו ${(c.fixed||0)+(c.verified||0)} · תקלות קריטיות ${c.critical||0}</div>
+${secs}
+</body></html>`;
+}
+
+function download(name,text,mime){
+  const blob = new Blob([text],{type:(mime||"text/plain")+";charset=utf-8"});
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = name;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(()=>URL.revokeObjectURL(a.href),1000);
 }
-function exportReport(){
-  const d = new Date(), pad=n=>String(n).padStart(2,"0");
-  download(`דוח_תקלות_ושיפורים_${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}.md`, buildReport());
-  toast("📄 הדוח יוצא");
+function stamp(){ const d=new Date(),p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`; }
+function exportHtmlReport(){
+  download(`דוח_תקלות_מנהל_חלוקה_${stamp()}.html`, buildHtmlReport(), "text/html");
+  toast("⬇ הדוח המלא ירד — שלחו את הקובץ למפתח");
+}
+function exportMdReport(){
+  download(`דוח_תקלות_ושיפורים_${stamp()}.md`, buildReport(), "text/markdown");
+  toast("📄 דוח הטקסט ירד");
 }
 async function copyReport(){
   const txt = buildReport();
@@ -607,17 +868,74 @@ async function copyReport(){
     ta.remove();
   }
 }
-function clearAll(){
-  if(!confirm("לנקות את כל הדיווחים שנרשמו? פעולה זו אינה הפיכה.")) return;
-  state.bugs={}; save(); render(); toast("נוקו כל הדיווחים");
+
+/* ============================== גיבוי / ייבוא ============================== */
+function exportBackup(){
+  download(`גיבוי_דיווחים_מנהל_חלוקה_${stamp()}.json`,
+    JSON.stringify({app:"manhal-bug-reports", format:1, exported:new Date().toISOString(),
+                    reporter:state.reporter||"", bugs:state.bugs}),
+    "application/json");
+  toast("💾 קובץ הגיבוי ירד — אפשר להעבירו למחשב אחר ולייבא שם");
 }
-function toast(msg){
-  const t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show");
-  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),2200);
+function importBackup(file){
+  if(!file) return;
+  const r = new FileReader();
+  r.onload = e=>{
+    try{
+      const data = JSON.parse(e.target.result);
+      const src = data && data.bugs && typeof data.bugs==="object" ? data.bugs : null;
+      if(!src) throw new Error("bad format");
+      let added=0, upd=0, skipped=0;
+      for(const k in src){
+        if(!Array.isArray(src[k])) continue;
+        if(!VALID_KEYS.has(k)){ skipped += src[k].length; continue; }
+        const arr = state.bugs[k] = state.bugs[k]||[];
+        for(const nb of src[k]){
+          if(!nb || !nb.id) continue;
+          if(!nb.kind) nb.kind="bug";
+          if(!nb.shots) nb.shots=[];
+          const ex = arr.find(x=>x.id===nb.id);
+          if(!ex){ arr.push(nb); added++; }
+          else{
+            const a=Date.parse(ex.updated||ex.created)||0, bts=Date.parse(nb.updated||nb.created)||0;
+            if(bts>a){ Object.assign(ex,nb); upd++; }
+          }
+        }
+        if(!arr.length) delete state.bugs[k];
+      }
+      save(); render();
+      toast(`📂 ייבוא הושלם: נוספו ${added}, עודכנו ${upd}`+(skipped?`, דולגו ${skipped} (פריטים שאינם קיימים)`:""));
+    }catch(_){ toast("⚠ הקובץ אינו קובץ גיבוי תקין של הכלי"); }
+  };
+  r.readAsText(file);
+}
+
+function clearAll(){
+  if(!confirm("לנקות את כל הדיווחים שנרשמו?\nמומלץ לשמור קודם גיבוי (💾 שמור גיבוי).")) return;
+  const backup = state.bugs;
+  state.bugs = {}; save(); render();
+  toast("נוקו כל הדיווחים", "בטל", ()=>{ state.bugs = backup; save(); render(); });
+}
+
+function toast(msg, btnLabel, fn){
+  const t=document.getElementById("toast");
+  t.innerHTML = esc(msg) + (btnLabel?` <button onclick="toastAct()">${esc(btnLabel)}</button>`:"");
+  toast._fn = fn||null;
+  t.classList.add("show");
+  clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"), btnLabel?6000:2200);
+}
+function toastAct(){
+  const t=document.getElementById("toast");
+  t.classList.remove("show");
+  if(toast._fn){ const fn=toast._fn; toast._fn=null; fn(); }
 }
 
 /* ============================== אתחול ============================== */
-load(); render();
+document.getElementById("subline").textContent =
+  `מנהל חלוקה · גרסה ${APP_VERSION} · קופה של צדקה הר יונה · נוף הגליל`;
+load();
+document.getElementById("reporter").value = state.reporter||"";
+render();
 </script>
 </body>
 </html>
