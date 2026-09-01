@@ -696,15 +696,20 @@ def _apply_tz_add(conn, rec: dict):
     if conn.execute("SELECT 1 FROM tzintuk_campaigns WHERE guid=?",
                     (guid,)).fetchone():
         return
+    # A seed snapshot carries the final results inside tz_add itself (its
+    # tz_update has the same stamp and would be rejected as "not newer").
     conn.execute(
         "INSERT INTO tzintuk_campaigns (guid, name, sent_at, dist_date, "
-        "template_id, campaign_id, device, total, status, status_ts) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "template_id, campaign_id, device, total, status, status_ts, "
+        "delivered, failed, report_json) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (guid, rec.get("name", ""), rec.get("sent_at", ""),
          rec.get("dist_date", ""), str(rec.get("template_id", "")),
          rec.get("campaign_id", ""), rec.get("device", ""),
          int(rec.get("total") or 0), rec.get("status") or "sending",
-         rec.get("sent_at", "")))
+         rec.get("status_ts") or rec.get("sent_at", ""),
+         int(rec.get("delivered") or 0), int(rec.get("failed") or 0),
+         rec.get("report_json") or ""))
 
 
 def _apply_tz_update(conn, rec: dict):
@@ -716,7 +721,15 @@ def _apply_tz_update(conn, rec: dict):
         return
     row = conn.execute("SELECT status_ts FROM tzintuk_campaigns WHERE guid=?",
                        (guid,)).fetchone()
-    if not row or (row["status_ts"] or "") >= ts:
+    if not row:
+        return
+    local_ts = row["status_ts"] or ""
+    # Records written before v2.97 stamped a scheduled campaign with its
+    # planned (future) time — no genuine update can be "older" than that, so a
+    # future local stamp is treated as stale instead of blocking forever.
+    if local_ts > db._utc_now():
+        local_ts = ""
+    if local_ts >= ts:
         return
     sets = "delivered=?, failed=?, status=?, status_ts=?, report_json=?"
     args = [int(rec.get("delivered") or 0), int(rec.get("failed") or 0),
@@ -940,7 +953,8 @@ def _snapshot_body() -> int:
         log_change("tz_add", {k: c.get(k, "") for k in
                               ("guid", "name", "sent_at", "dist_date",
                                "template_id", "campaign_id", "device", "total",
-                               "status")})
+                               "status", "status_ts", "delivered", "failed",
+                               "report_json")})
         n += 1
         if c.get("status_ts"):
             log_change("tz_update", {"guid": c.get("guid") or "",

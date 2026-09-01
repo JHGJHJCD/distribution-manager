@@ -20,7 +20,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDateTime
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDateTime, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
@@ -233,19 +233,12 @@ class _FreeListDialog(QDialog):
             line = line.strip()
             if not line:
                 continue
-            parts = [p.strip() for p in
-                     line.replace(";", "\t").replace(",", "\t").split("\t")]
-            parts = [p for p in parts if p]
-            phones, words = [], []
-            for part in parts:
-                for tok in (part.split() if " " in part else [part]):
-                    if yemot.normalize_phone(tok):
-                        phones.append(yemot.normalize_phone(tok))
-                    elif any(ch.isdigit() for ch in tok):
-                        bad.append(tok)   # digits but not a valid phone
-                    else:
-                        words.append(tok)
-            name = " ".join(words)
+            # Numbers may contain spaces ("050 123 4567") and Excel-style
+            # numbers may lack the leading zero — yemot.find_phones handles
+            # both; the words left over are the name.
+            phones, name, bad_toks = yemot.find_phones(
+                line.replace(";", " ").replace(",", " ").replace("\t", " "))
+            bad.extend(bad_toks)
             for p in phones:
                 entries.append((p, name))
         return entries, bad
@@ -280,11 +273,16 @@ class _FreeListDialog(QDialog):
                     for cell in row:
                         if cell is None:
                             continue
+                        # A number-typed cell lost its leading zero / gained
+                        # ".0" — normalize_phone_loose restores both.
+                        if isinstance(cell, float) and cell.is_integer():
+                            cell = int(cell)
                         val = str(cell).strip()
                         if not val:
                             continue
-                        if yemot.normalize_phone(val):
-                            phones.append(yemot.normalize_phone(val))
+                        p = yemot.normalize_phone_loose(val)
+                        if p:
+                            phones.append(p)
                         elif not any(ch.isdigit() for ch in val):
                             words.append(val)
                     for p in phones:
@@ -778,6 +776,7 @@ class TzintukimTab(QWidget):
         self._cb_last_persist = 0.0
         self._active_guid = ""    # DB guid of the campaign being tracked
         self._last_failed = []    # [{'phone','name'}] from the last finished run
+        self._last_entries = []   # per-number results shown in the table (survive refresh)
         self._sched_checker = None   # worker probing the server for due schedules
         self._batch = None        # #9hgvi: past-distribution batch loaded as list
         self._free = None         # #1/9: standalone list [(phone, name), …]
@@ -786,6 +785,10 @@ class TzintukimTab(QWidget):
         # it with an explicit button (a past batch via #9hgvi counts as loaded).
         self._list_loaded = False
         self._build_ui()
+        # Due schedules / an interrupted campaign are picked up shortly after
+        # launch even if nobody opens this tab (the message promised "results
+        # on the next start").
+        QTimer.singleShot(6000, self._maybe_resume_tracking)
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -1176,6 +1179,7 @@ class TzintukimTab(QWidget):
         self._batch = dict(batch or {})
         self._free = None
         self._rows = []                # drop week-list rows and manual picks
+        self._last_entries = []
         self.refresh()
 
     def _load_week_list(self):
@@ -1192,12 +1196,14 @@ class TzintukimTab(QWidget):
         self._free = list(dlg.entries)
         self._batch = None
         self._rows = []
+        self._last_entries = []
         self.refresh()
 
     def _clear_batch(self):
         self._batch = None
         self._free = None
         self._rows = []
+        self._last_entries = []
         self._list_loaded = False    # back to the explicit-load state (#ifc70)
         self.refresh()
 
@@ -1314,6 +1320,10 @@ class TzintukimTab(QWidget):
                 status.setForeground(Qt.GlobalColor.darkYellow)
             self.table.setItem(i, 3, status)
         self.table.blockSignals(False)
+        if self._last_entries:
+            # A refresh (tab switch / sync) rebuilt the rows — restore the
+            # per-row results of the campaign still being tracked / just done.
+            self._apply_results_to_table(self._last_entries)
         self._fit_table_height()
         self._update_metrics()
 
@@ -1509,6 +1519,20 @@ class TzintukimTab(QWidget):
         phones = self._phones_map(rows)
         if not phones:
             QMessageBox.warning(self, "צינתוקים", "אין אף נמען מסומן עם מספר תקין.")
+            return
+        # A pending schedule dials the list STORED in the template — and an
+        # immediate send replaces that list. Refuse instead of silently
+        # re-targeting the scheduled campaign at these people.
+        pending = self._pending_sched()
+        if pending:
+            when = timefmt.datetime_str(pending.get("sent_at") or "")
+            QMessageBox.information(
+                self, "צינתוקים",
+                f"קיים צינתוק מתוזמן ({when}).\n"
+                "שליחה עכשיו הייתה מחליפה את רשימת הנמענים של התזמון — "
+                "והצינתוק המתוזמן היה יוצא לאנשים האלה במקום לרשימה המקורית.\n\n"
+                "בטל קודם את התזמון (כפתור \"בטל תזמון\"), שלח, "
+                "ואז תזמן מחדש אם צריך.")
             return
         dist_date = self._dist_date_iso()
         prev = db.tzintuk_campaign_for_date(dist_date)
@@ -1831,14 +1855,23 @@ class TzintukimTab(QWidget):
             if state == "pending":
                 continue                 # the server is a little behind — wait
             if state == "successful":
-                cid = str(yemot._dig(rec, "campaignId") or "").strip()
-                db.update_tzintuk_campaign(
-                    camp["guid"], 0, 0, "sending",
-                    campaign_id=cid or str(camp.get("campaign_id") or ""),
-                    sent_at=db._utc_now())
-                changed = True
+                cid = ""
+                for key in ("campaignId", "campaign_id", "runId"):
+                    cid = str(yemot._dig(rec, key) or "").strip()
+                    if cid:
+                        break
+                # sent_at stays the PLANNED time — that is when the server
+                # dialed, not the moment this app happened to notice.
                 if cid:
+                    db.update_tzintuk_campaign(camp["guid"], 0, 0, "sending",
+                                               campaign_id=cid)
                     track = (camp["guid"], cid, int(camp.get("total") or 0))
+                else:
+                    # No campaign id to poll → close it as done (unknown
+                    # results) rather than leaving a 'sending' record that
+                    # polls a schedId forever.
+                    db.update_tzintuk_campaign(camp["guid"], 0, 0, "done")
+                changed = True
             elif state == "failed":
                 db.update_tzintuk_campaign(camp["guid"], 0, 0, "sched_failed")
                 changed = True
@@ -1899,7 +1932,8 @@ class TzintukimTab(QWidget):
                 f"{st['failed']} נכשלו.")
             self.btn_resend.setText(f"🔄 שלח שוב ל-{len(self._last_failed)} שנכשלו")
             self.btn_resend.setVisible(bool(self._last_failed))
-            self._apply_results_to_table(st.get("entries") or [])
+            self._last_entries = list(st.get("entries") or [])
+            self._apply_results_to_table(self._last_entries)
             self._refresh_history()
             # The confirmation badges on the "חלוקה ורישום" list come from the
             # stored report — repaint it so they appear without a tab switch.
@@ -2004,6 +2038,7 @@ class TzintukimTab(QWidget):
                 "(מי שיחזור מאוחר יותר עדיין ישמע את ההודעה — "
                 "אבל בלי רישום בתוכנה.)")
             self._persist_callback(st, final=True)
+            self._last_entries = list(entries)
             self._apply_results_to_table(entries)
             self._refresh_history()
             gt = getattr(self.main, "group_tab", None)
@@ -2022,7 +2057,8 @@ class TzintukimTab(QWidget):
         self.lbl_prog.setText(base)
         if st.get("changed"):
             # in-window: repaint only who RETURNED (the rest stay "מוכן")
-            self._apply_results_to_table([e for e in entries if e.get("ok")])
+            self._last_entries = [e for e in entries if e.get("ok")]
+            self._apply_results_to_table(self._last_entries)
             if time.time() - self._cb_last_persist > 120:
                 self._persist_callback(st, final=False)
 

@@ -1803,8 +1803,12 @@ def add_tzintuk_campaign(name: str, dist_date: str, template_id: str,
     status 'scheduled' (#xi85i) = server-side scheduled campaign: campaign_id
     holds the Yemot schedId and sent_at holds the planned run time."""
     guid = (guid or "").strip() or uuid.uuid4().hex
-    sent_at = sent_at or _utc_now()
+    now = _utc_now()
+    sent_at = sent_at or now
     status = status or "sending"
+    # status_ts = NOW, never sent_at: a scheduled record's sent_at is the
+    # planned FUTURE time, and a future status_ts made the peer reject every
+    # later update (cancel / sending / done) as "older" under LWW.
     with get_connection() as conn:
         if conn.execute("SELECT 1 FROM tzintuk_campaigns WHERE guid=?",
                         (guid,)).fetchone():
@@ -1814,12 +1818,13 @@ def add_tzintuk_campaign(name: str, dist_date: str, template_id: str,
             "template_id, campaign_id, device, total, status, status_ts) "
             "VALUES (?,?,?,?,?,?,?,?,?,?)",
             (guid, name or "", sent_at, dist_date or "", str(template_id or ""),
-             campaign_id or "", device or "", int(total or 0), status, sent_at))
+             campaign_id or "", device or "", int(total or 0), status, now))
     _sync_log("tz_add", {"guid": guid, "name": name or "", "sent_at": sent_at,
                          "dist_date": dist_date or "",
                          "template_id": str(template_id or ""),
                          "campaign_id": campaign_id or "", "device": device or "",
-                         "total": int(total or 0), "status": status})
+                         "total": int(total or 0), "status": status,
+                         "status_ts": now})
     return guid
 
 

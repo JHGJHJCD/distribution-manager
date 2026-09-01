@@ -202,6 +202,47 @@ def normalize_phone(raw) -> str:
     return ""
 
 
+def normalize_phone_loose(raw) -> str:
+    """normalize_phone for text that came out of Excel/pasting: a cell stored
+    as a NUMBER loses its leading zero (501234567) or gains '.0'
+    (501234567.0) — both are restored here. Only for free-text lists, not
+    for the recipients' cards."""
+    p = normalize_phone(raw)
+    if p:
+        return p
+    s = re.sub(r"\.0+$", "", str(raw or "").strip())
+    s = re.sub(r"[\s\-().]", "", s)
+    if s.isdigit() and s[:1] != "0" and len(s) in (8, 9):
+        return normalize_phone("0" + s)
+    return normalize_phone(s)
+
+
+_PHONE_RX = re.compile(r"\+?\d[\d\s\-().]{6,}\d")
+
+
+def find_phones(line: str) -> tuple:
+    """Pull every phone number out of a free-text line ('050 123 4567 כהן',
+    '+972 52-111-2222, 03 9876543') → (phones, rest_of_line, bad_tokens).
+    Numbers may contain spaces; the remaining words are the name."""
+    phones, bad = [], []
+    rest = line
+    for m in reversed(list(_PHONE_RX.finditer(line))):
+        raw = m.group(0)
+        p = normalize_phone_loose(raw)
+        if p:
+            phones.insert(0, p)
+        else:
+            bad.insert(0, raw.strip())
+        rest = rest[:m.start()] + " " + rest[m.end():]
+    words = []
+    for tok in rest.split():
+        if any(ch.isdigit() for ch in tok):
+            bad.append(tok)
+        else:
+            words.append(tok)
+    return phones, " ".join(words), bad
+
+
 def pick_phones(rec: dict) -> list:
     """The recipient's valid, deduped phone numbers in field order
     (phone1 first — the default number to ring)."""
@@ -727,8 +768,11 @@ def get_campaign_status(campaign_id: str) -> dict:
     entries = []
     for e in camp.get("entries") or []:
         status = str(e.get("entryStatus") or e.get("status") or "").lower()
+        raw_phone = str(e.get("phone") or "")
         entries.append({
-            "phone": str(e.get("phone") or ""),
+            # normalized so the results match the rows we dialed even when the
+            # server echoes the number as 972…/+972…
+            "phone": normalize_phone(raw_phone) or raw_phone,
             "name": e.get("name") or "",
             "status": status,
             "ok": status in _DELIVERED,

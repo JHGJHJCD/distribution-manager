@@ -63,7 +63,12 @@ other side by a handler in `utils/sync.py`. Two cases:
   add an `_apply_my_op` handler registered in `_APPLIERS` in `utils/sync.py`. Conflicts
   resolve **last-write-wins by UTC `updated_at`** — set `updated_at` on writes so LWW
   has something to compare (a status-flag change gets its own ts field, e.g.
-  `status_ts`, compared in the applier).
+  `status_ts`, compared in the applier). **The LWW stamp must be "now" at write
+  time — never a business date.** v2.97 bug: scheduled tzintuk rows stamped
+  `status_ts = sent_at` (the planned FUTURE time), so the peer rejected every later
+  cancel/done as "older" until the planned time passed. Also: a seed snapshot that
+  emits `x_add` + `x_update` with the SAME stamp gets its update rejected — carry
+  the final fields inside the add op (see `_apply_tz_add`).
 - **Don't forget `snapshot()`:** a new synced record kind must also be seeded there,
   or a computer that joins later never receives the existing rows (messages, reads
   and feedback all do this).

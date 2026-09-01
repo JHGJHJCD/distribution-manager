@@ -622,6 +622,55 @@ ok("נתיב 7/תת-שלוחה נחשב אישור; 70 לא",
    yemot.CallbackTracker._is_confirm_path("/7/1")
    and not yemot.CallbackTracker._is_confirm_path("/70"))
 
+# ── 9. v2.97 — תיקוני סקירה ────────────────────────────────────────────────
+print("— v2.97: רשימה עצמאית, תוצאות מנורמלות, ביטול תזמון מסונכרן —")
+ok("מספר עם רווחים מזוהה בטקסט חופשי",
+   yemot.find_phones("050 123 4567 משפחת כהן")[:2] == (["0501234567"], "משפחת כהן"))
+ok("+972 עם רווחים + שני מספרים בשורה",
+   yemot.find_phones("+972 52 111 2222, 03-9876543 לוי")[0]
+   == ["0521112222", "039876543"])
+ok("אקסל: בלי אפס מוביל / עם .0 (loose בלבד)",
+   yemot.normalize_phone_loose("501234567") == "0501234567"
+   and yemot.normalize_phone_loose("521112222.0") == "0521112222"
+   and yemot.normalize_phone("501234567") == "")
+ok("קטע מספרי שאינו טלפון מדווח כפסול",
+   "12345" in yemot.find_phones("12345 אבג")[2])
+from tabs.tzintukim import _FreeListDialog
+ents, bad = _FreeListDialog._parse_text(
+    "050 123 4567\tכהן\n501234567;לוי\nabc 99")
+ok("_parse_text: רווחים + בלי אפס מוביל + פסול",
+   ents == [("0501234567", "כהן"), ("0501234567", "לוי")] and bad == ["99"], str((ents, bad)))
+
+use_machine(dir_a)
+canned["GetCampaignStatus"] = {"responseStatus": "OK", "campaign": {
+    "campaignStatus": "DONE", "totalEntries": 1, "pendingEntries": 0,
+    "activeEntries": 0, "entries": [{"phone": "972521111111", "entryStatus": "accepted"}]}}
+st = yemot.get_campaign_status("x")
+ok("תוצאות מהשרת בפורמט 972 מנורמלות ל-05",
+   st["entries"][0]["phone"] == "0521111111" and st["confirmed"] == 1)
+
+# ביטול תזמון חייב להגיע למחשב השני גם כשהמועד המתוכנן עדיין בעתיד
+g_s = db.add_tzintuk_campaign("מתוזמן", "2031-01-01", "1", "S9", 3,
+                              sent_at="2031-01-01T09:00:00+00:00", status="scheduled")
+row = db.get_tzintuk_campaigns()[0]
+ok("status_ts של תזמון = עכשיו, לא המועד המתוכנן", row["status_ts"] < "2031")
+sync.run_sync()
+db.update_tzintuk_campaign(g_s, 0, 0, "canceled")
+sync.run_sync()
+use_machine(dir_b)
+sync.run_sync()
+rb = [c for c in db.get_tzintuk_campaigns() if c["guid"] == g_s]
+ok("B רואה את התזמון כמבוטל", rb and rb[0]["status"] == "canceled", str(rb[:1]))
+# רשומה ישנה (לפני 2.97) עם חותמת עתידית — עדכון עדיין מתקבל
+with db.get_connection() as conn:
+    conn.execute("UPDATE tzintuk_campaigns SET status='scheduled', "
+                 "status_ts='2031-01-01T09:00:00+00:00' WHERE guid=?", (g_s,))
+    sync._apply_tz_update(conn, {"guid": g_s, "delivered": 0, "failed": 0,
+                                 "status": "canceled", "ts": db._utc_now(),
+                                 "report_json": ""})
+ok("רשומה ישנה עם חותמת עתידית מקבלת עדכון",
+   [c for c in db.get_tzintuk_campaigns() if c["guid"] == g_s][0]["status"] == "canceled")
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")
