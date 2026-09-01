@@ -171,12 +171,27 @@ def self_heal_db():
         #     one and bring deleted recipients back.
         #   • The non-empty floor still guards against restoring an empty/partial
         #     backup over what little structure remains (never "restore nothing").
+        # Search the local backup folder AND, when Drive-sync is configured, the
+        # off-site daily folder — so a DB that was deleted/corrupted can still be
+        # recovered from the cloud copy even if the local backups are gone too.
+        search_dirs = [BACKUP_DIR]
+        try:
+            import utils.sync as _sync
+            if _sync.folder_available():
+                cloud = os.path.join(_sync.get_folder(), "גיבויים-יומי")
+                if os.path.isdir(cloud):
+                    search_dirs.append(cloud)
+        except Exception:
+            pass
+
         best, best_mtime = None, -1.0
-        if os.path.isdir(BACKUP_DIR):
-            for name in os.listdir(BACKUP_DIR):
+        for folder in search_dirs:
+            if not os.path.isdir(folder):
+                continue
+            for name in os.listdir(folder):
                 if not name.lower().endswith(".db"):
                     continue
-                p = os.path.join(BACKUP_DIR, name)
+                p = os.path.join(folder, name)
                 if not _db_integrity_ok(p):
                     continue
                 if _db_recipient_count(p) <= 0:

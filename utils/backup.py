@@ -46,6 +46,15 @@ _KEEP_DAILY = 30     # 'daily_*'   — one per calendar day (≈ a month of hist
 _KEEP_SAFETY = 10    # 'safety_*'  — taken before reset/restore
 # Total bounded at ~60 files — durable in TIME, never unbounded in volume.
 
+# ─── off-site (cloud) daily copy ──────────────────────────────────────────────
+# The three buckets above all live in %APPDATA% on THIS machine — great against a
+# bad update or an accidental reset, useless if the disk dies or the PC is stolen.
+# When Google-Drive sync is set up we already have a shared folder that Drive
+# mirrors to the cloud AND to the second computer, so one full daily snapshot
+# dropped there gives a true off-site backup for almost no extra work.
+_CLOUD_SUBFOLDER = "גיבויים-יומי"   # created inside the shared Drive folder
+_KEEP_CLOUD = 60                    # ~a month of dailies across two computers
+
 
 def _prune_backups(folder, prefix, keep):
     """Keep only the newest `keep` files named '<prefix>*.db' in `folder`.
@@ -61,6 +70,40 @@ def _prune_backups(folder, prefix, keep):
             os.remove(os.path.join(folder, old))
         except OSError:
             pass
+
+
+def _safe_device_tag() -> str:
+    """A short filesystem-safe id for this computer, so the two computers write
+    distinct daily files into the shared folder instead of colliding on one name
+    (which would trigger Drive '(1)' conflict copies)."""
+    try:
+        import utils.sync as sync
+        tag = (sync.device_name() or sync.device_id() or "pc").strip()
+    except Exception:
+        tag = "pc"
+    keep = [c for c in tag if c.isalnum() or c in "-_"]
+    return ("".join(keep) or "pc")[:24]
+
+
+def _cloud_daily_backup(src_db, now):
+    """Copy today's snapshot into the shared Drive folder — an off-site daily
+    backup that survives a dead/stolen machine and reaches the second computer.
+    Fully best-effort: any problem (sync off, folder missing, IO error) is
+    swallowed so the local backup is never affected."""
+    try:
+        import utils.sync as sync
+        if not (sync.is_enabled() and sync.folder_available()):
+            return
+        cloud_dir = os.path.join(sync.get_folder(), _CLOUD_SUBFOLDER)
+        os.makedirs(cloud_dir, exist_ok=True)
+        # One file per calendar day PER computer.
+        dest = os.path.join(
+            cloud_dir, f"daily_{now.strftime('%Y%m%d')}_{_safe_device_tag()}.db")
+        if not os.path.exists(dest):
+            shutil.copy2(src_db, dest)
+        _prune_backups(cloud_dir, "daily_", _KEEP_CLOUD)
+    except Exception:
+        pass
 
 
 def auto_backup(kind: str = "routine"):
@@ -122,6 +165,10 @@ def auto_backup(kind: str = "routine"):
                     shutil.copy2(dest, daily)
                 except OSError:
                     pass
+            # Off-site copy: one daily snapshot into the shared Drive folder, so a
+            # broken/stolen machine never loses everything. Best-effort only — a
+            # missing/uninitialised sync setup must never fail the local backup.
+            _cloud_daily_backup(dest, now)
 
         # Prune each bucket independently — one bucket's churn never touches another.
         _prune_backups(backup_folder, "backup_", _KEEP_ROUTINE)
