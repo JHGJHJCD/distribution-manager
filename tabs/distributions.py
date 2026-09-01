@@ -214,7 +214,9 @@ class DistributionsTab(QWidget):
     def _context_menu(self, pos):
         row = self.table.rowAt(pos.y())
         if row >= 0:
-            self.table.selectRow(row)
+            # selectRow() can silently no-op (known pitfall) → the menu never
+            # opened (#9hgvi "לא עובד"). setCurrentCell selects reliably.
+            self.table.setCurrentCell(row, 0)
         b = self._selected_batch()
         if not b:
             return

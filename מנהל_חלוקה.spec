@@ -66,6 +66,8 @@ a = Analysis(
         'tabs.tzintukim',
         'utils.yemot',
         'utils.tts',
+        'utils.hebdate',
+        'pyluach',   # Hebrew date + weekly parsha for the auto distribution name
         'edge_tts',   # free neural Hebrew TTS (tzintuk recording from text)
         'aiohttp',
         'truststore',   # SSL fallback for NetFree machines (yemot connection)

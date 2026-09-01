@@ -24,6 +24,7 @@ from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state, ALIG
                       enable_touch_scroll, search_icon, line_icon, reveal_in_folder,
                       apply_header_icons, show_score_breakdown, show_filter_breakdown)
 from utils import email_utils
+from utils import hebdate
 
 
 class _StageToggle(QWidget):
@@ -1097,6 +1098,7 @@ class GroupUpdateTab(QWidget):
         self._stage = "prep"
         self._record_visited = False     # has the record stage been opened this cycle? (#13)
         self._checked_ids: set = set()   # who is currently ticked (survives search)
+        self._leader_ids: set = set()    # #z7xq1: auto top-N by need (scored mode)
         self._seen_ids: set = set()      # ids already shown (for pre-checking new picks)
         self._search_text = ""           # quick-search filter over the list
         self._extra_ids: set = set()     # one-time picks added from the one-time tab
@@ -1439,14 +1441,14 @@ class GroupUpdateTab(QWidget):
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         adv_row.addLayout(_field("מצב חלוקה לקבועים", self.mode_combo, maxw=280))
 
-        # Scored-mode only: mark the top-N leaders by the available-products count
-        # (the same 'מוצרים זמינים' field in the details card above).
-        self.btn_mark_leaders = QPushButton("סמן מובילים")
-        self.btn_mark_leaders.setStyleSheet(_BTN_SUCCESS)
-        self.btn_mark_leaders.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_mark_leaders.setToolTip("מסמן את בעלי הניקוד הגבוה ביותר עד למספר 'מוצרים זמינים'")
-        self.btn_mark_leaders.clicked.connect(self._mark_leaders)
-        adv_row.addWidget(self.btn_mark_leaders, 0, Qt.AlignmentFlag.AlignBottom)
+        # Scored-mode: the top-N leaders by need (N = 'מוצרים זמינים') are now
+        # tagged AUTOMATICALLY in the list and follow the products count live
+        # (#z7xq1 — the old 'סמן מובילים' button was unclear and static).
+        self.lbl_leaders_hint = QLabel(
+            "⭐ המובילים בצורך מסומנים אוטומטית לפי מספר המוצרים הזמינים")
+        self.lbl_leaders_hint.setStyleSheet(
+            "color:#166534; font-weight:600; font-size:12px;")
+        adv_row.addWidget(self.lbl_leaders_hint, 0, Qt.AlignmentFlag.AlignBottom)
 
         # Broad-filter mode: a button to open the criteria editor (children/income/
         # per-soul thresholds). Shown only while the 'filter' mode is selected.
@@ -1736,11 +1738,17 @@ class GroupUpdateTab(QWidget):
         # Reset everything for a fresh distribution (#c8m83): clears the products/
         # reserve counts, name, note, ticks and one-time picks so the operator can
         # start recording a new round from scratch.
-        btn_reset = QPushButton("  חלוקה חדשה")
-        btn_reset.setObjectName("ghost")
-        btn_reset.setStyleSheet(_BTN_GHOST)
+        # #hwnwz — bright yellow + a clear reset glyph so the button pops out.
+        btn_reset = QPushButton("  ⟳ חלוקה חדשה")
+        btn_reset.setObjectName("warning")
+        btn_reset.setStyleSheet(
+            "QPushButton{background:#facc15; color:#713f12; font-weight:800;"
+            " border:1.5px solid #eab308; border-radius:10px; padding:8px 18px;"
+            " font-size:14px;}"
+            "QPushButton:hover{background:#fde047;}"
+            "QPushButton:pressed{background:#eab308;}")
         btn_reset.setMinimumHeight(46)
-        btn_reset.setIcon(QIcon(line_icon("update", 18, "#475569")))
+        btn_reset.setIcon(QIcon(line_icon("update", 20, "#713f12")))
         btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_reset.setToolTip("מאפס את המסך לחלוקה חדשה — מנקה מוצרים, רזרבה, שם, "
                              "הערה, סימונים ובחירות חד-פעמי")
@@ -1830,7 +1838,7 @@ class GroupUpdateTab(QWidget):
     def _on_mode_changed(self, *_):
         db.set_setting("dist_regulars_mode", self._current_mode())
         # Start each mode with a clean selection so ticks don't bleed across modes
-        # (schedule re-ticks everyone; scored starts empty for 'סמן מובילים').
+        # (the scored-mode leaders are auto-tagged in refresh, #z7xq1).
         self._checked_ids.clear()
         self._seen_ids.clear()
         self._record_visited = False     # mode change starts a fresh selection (#13)
@@ -1844,15 +1852,19 @@ class GroupUpdateTab(QWidget):
         self.refresh()
 
     def _update_mode_controls(self):
-        """Show the 'mark leaders' button only in the scored mode, and the 'edit
+        """Show the auto-leaders hint only in the scored mode, and the 'edit
         filter' button only in the filter mode."""
         mode = self._current_mode()
-        self.btn_mark_leaders.setVisible(mode in ("scored", "all"))
+        self.lbl_leaders_hint.setVisible(mode in ("scored", "all"))
         self.btn_edit_filter.setVisible(mode == "filter")
 
     def _on_products_changed(self, *_):
         db.set_setting("available_products", str(self.products_spin.value()))
         self._update_leftover_hint()
+        # #z7xq1: in scored mode the auto leader tags follow the count live.
+        if self._current_mode() in ("scored", "all"):
+            self._recompute_leaders()
+            self._populate()
 
     def _on_reserve_changed(self, *_):
         db.set_setting("reserve_count", str(self.reserve_spin.value()))
@@ -1909,14 +1921,24 @@ class GroupUpdateTab(QWidget):
             _show("#334155" if done else "#b45309", 700,
                   f"נשאר לחד-פעמיים: {n}  ·  נבחרו: {picks}  ({state})")
 
-    def _mark_leaders(self):
-        """Check the top-N recipients by need-score, N = 'מוצרים זמינים'."""
+    def _recompute_leaders(self):
+        """#z7xq1 — the top-N by need score (N = 'מוצרים זמינים') are tagged
+        automatically in scored mode; _rows_data is already need-ordered with
+        the SAME tie-break as the display, so the top-N matches what's shown.
+        Reserve rows never take a leader slot."""
+        self._leader_ids = set()
+        if self._current_mode() not in ("scored", "all"):
+            return
         n = self.products_spin.value()
-        # _rows_data is already need-ordered (scored mode) with the SAME name
-        # tie-break as the display, so the top-N here matches exactly what's shown.
-        ranked = self._rows_data
-        self._checked_ids = {r.get("id") for r in ranked[:n] if r.get("id") is not None}
-        self._populate()
+        if n <= 0:
+            return
+        for rec in self._rows_data:
+            rid = rec.get("id")
+            if rid is None or rec.get("_reserve") or rid in self._reserve_ids:
+                continue
+            self._leader_ids.add(rid)
+            if len(self._leader_ids) >= n:
+                break
 
     def _open_one_time_picker(self):
         """Open the in-screen one-time picker dialog; accepted picks flow through
@@ -1940,11 +1962,20 @@ class GroupUpdateTab(QWidget):
                 or selection.criteria_is_active(db.get_filter_criteria()))
 
     _AUTO_NAME_PREFIX = "חלוקה שבועית "
+    # Every auto-generated name starts with one of these (#o2eft added the
+    # Hebrew parsha/date formats; the old Gregorian prefix stays recognized so
+    # names saved by previous versions are still treated as auto).
+    _AUTO_NAME_PREFIXES = ("חלוקה שבועית", "חלוקת פרשת")
+
+    @classmethod
+    def _is_auto_name(cls, name: str) -> bool:
+        return bool(name) and name.startswith(cls._AUTO_NAME_PREFIXES)
 
     def _effective_dist_name(self):
         """The distribution name to use for printing / PDF / email / saving.
         Typed name → returned as-is. Empty name in the plain weekly state →
-        auto-filled as 'חלוקה שבועית DD/MM/YYYY' (written into the field so the
+        auto-filled with the weekly parsha + Hebrew date (#o2eft), e.g.
+        'חלוקת פרשת נצבים — כ׳ אלול תשפ״ו' (written into the field so the
         operator sees it) and returned. Empty name in a special state (mode /
         filter) → None: a meaningful name is still required there."""
         name = self.name_input.currentText().strip()
@@ -1952,7 +1983,13 @@ class GroupUpdateTab(QWidget):
             return name
         if self._special_active():
             return None
-        name = self._AUTO_NAME_PREFIX + _fdate(self.date_edit.get_iso())
+        try:
+            iso = self.date_edit.get_iso()
+            name = hebdate.auto_weekly_name(date.fromisoformat(iso))
+        except (ValueError, TypeError):
+            name = ""
+        if not name:      # pyluach unavailable / bad date → old Gregorian format
+            name = self._AUTO_NAME_PREFIX + _fdate(self.date_edit.get_iso())
         self.name_input.setCurrentText(name)
         return name
 
@@ -1960,7 +1997,7 @@ class GroupUpdateTab(QWidget):
         """Remember a distribution name for the suggestions — but never the
         auto-generated weekly names, which would flood the dropdown with a new
         dated entry every week."""
-        if name and not name.startswith(self._AUTO_NAME_PREFIX):
+        if name and not self._is_auto_name(name):
             self._push_history("dist_names_history", name)
 
     def _one_time_gate_ok(self, action: str) -> bool:
@@ -2050,6 +2087,7 @@ class GroupUpdateTab(QWidget):
         # reported-received people via _mark_received_in_table.)
         self._seen_ids = set(live)
         self._checked_ids &= live      # forget ticks for people no longer listed
+        self._recompute_leaders()      # #z7xq1: auto-tag the top-N by need
         self._populate()
         self._update_leftover_hint()
 
@@ -2088,8 +2126,13 @@ class GroupUpdateTab(QWidget):
                     return QColor("#fcd34d"), QColor("#7c2d12"), comm_txt + " · השלמה · קבוע", score_txt
                 return QColor("#fef3c7"), QColor("#92400e"), comm_txt + " · השלמה", score_txt
             return QColor("#f1f5f9"), QColor("#334155"), comm_txt, score_txt
-        # scored regular — neutral tint, ranked by need-score not by date
+        # scored regular — the auto top-N leaders (by products count, #z7xq1)
+        # get a green tint + ⭐ tag; the rest stay neutral.
         if rec.get("_scored_regular"):
+            if rid in self._leader_ids:
+                return (QColor("#dcfce7"), QColor("#14532d"),
+                        ("⭐ מוביל בצורך · " + freq) if freq else "⭐ מוביל בצורך",
+                        score_txt)
             return QColor("#f1f5f9"), QColor("#334155"), freq, score_txt
         # regular — colour by urgency
         nd = rec.get("next_distribution") or ""
@@ -2379,7 +2422,7 @@ class GroupUpdateTab(QWidget):
         # An auto-generated weekly name is date-stamped — clear it after saving
         # so next week's round regenerates with the right date instead of
         # silently reusing a stale one.
-        if dist_name.startswith(self._AUTO_NAME_PREFIX):
+        if self._is_auto_name(dist_name):
             self.name_input.setCurrentText("")
 
         if export_path:

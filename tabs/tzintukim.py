@@ -476,6 +476,9 @@ class TzintukimTab(QWidget):
         self._sched_checker = None   # worker probing the server for due schedules
         self._batch = None        # #9hgvi: past-distribution batch loaded as list
         self._stats = {}          # #y7jr0: per-phone answer history (tooltips)
+        # #ifc70 — the week list is NOT loaded automatically; the operator loads
+        # it with an explicit button (a past batch via #9hgvi counts as loaded).
+        self._list_loaded = False
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -497,9 +500,9 @@ class TzintukimTab(QWidget):
         title = QLabel("צינתוקים — הודעה קולית לזכאי החלוקה")
         title.setObjectName("title")
         lay.addWidget(title)
-        sub = QLabel("המערכת לוקחת את רשימת החלוקה הנוכחית ממסך \"חלוקה ורישום\", "
-                     "מסננת מי שאין לו מספר תקין, ואחרי אישור שולחת לכולם הודעה "
-                     "קולית דרך ימות המשיח. חריגים לא נשלחים.")
+        sub = QLabel("טוענים רשימה (ממסך \"חלוקה ורישום\" או מחלוקה קודמת), "
+                     "המערכת מסננת מי שאין לו מספר תקין, ואחרי חלון אישור שולחת "
+                     "לכולם הודעה קולית דרך ימות המשיח. חריגים לא נשלחים.")
         sub.setObjectName("subtitle")
         sub.setWordWrap(True)
         lay.addWidget(sub)
@@ -537,6 +540,28 @@ class TzintukimTab(QWidget):
         self.batch_frame.setVisible(False)
         lay.addWidget(self.batch_frame)
 
+        # #ifc70 — shown until the operator explicitly loads a list.
+        self.load_frame = QFrame()
+        self.load_frame.setObjectName("panel")
+        ld_lay = QVBoxLayout(self.load_frame)
+        ld_lay.setContentsMargins(14, 18, 14, 18)
+        ld_lay.setSpacing(10)
+        ld_txt = QLabel("הרשימה עוד לא נטענה. אפשר לטעון את רשימת החלוקה "
+                        "הנוכחית ממסך \"חלוקה ורישום\", או לטעון חלוקה קודמת "
+                        "בקליק ימני בלשונית \"חלוקות קודמות\".")
+        ld_txt.setObjectName("subtitle")
+        ld_txt.setWordWrap(True)
+        ld_txt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ld_lay.addWidget(ld_txt)
+        self.btn_load = QPushButton("📥 הצג את רשימת החלוקה הנוכחית")
+        self.btn_load.setObjectName("primary")
+        self.btn_load.setMinimumHeight(46)
+        self.btn_load.setToolTip("טוען לכאן את רשימת הזכאים ממסך \"חלוקה ורישום\" "
+                                 "(בלי הרזרבות)")
+        self.btn_load.clicked.connect(self._load_week_list)
+        ld_lay.addWidget(self.btn_load, 0, Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.load_frame)
+
         # Metric chips: eligible / ready / exceptions.
         metrics = QHBoxLayout()
         metrics.setSpacing(8)
@@ -549,6 +574,7 @@ class TzintukimTab(QWidget):
 
         # Recipients table.
         list_frame = QFrame()
+        self.list_frame = list_frame
         list_frame.setObjectName("panel")
         lf_lay = QVBoxLayout(list_frame)
         lf_lay.setContentsMargins(10, 7, 10, 7)
@@ -702,7 +728,16 @@ class TzintukimTab(QWidget):
         h_lay = QVBoxLayout(hist_frame)
         h_lay.setContentsMargins(10, 7, 10, 7)
         h_lay.setSpacing(6)
-        h_lay.addWidget(section_header("היסטוריית צינתוקים", "calendar", "#0f766e"))
+        hist_top = QHBoxLayout()
+        hist_top.addWidget(section_header("היסטוריית צינתוקים", "calendar", "#0f766e"), 1)
+        btn_hist_xls = QPushButton("📊 ייצוא לאקסל")
+        btn_hist_xls.setObjectName("neutral")
+        btn_hist_xls.setToolTip("שומר קובץ אקסל עם כל הצינתוקים: סיכום לכל שליחה "
+                                "+ פירוט לכל מספר — מי קיבל, מי אישר הגעה (הקיש 7) "
+                                "ומי לא נענה")
+        btn_hist_xls.clicked.connect(self._export_history)
+        hist_top.addWidget(btn_hist_xls)
+        h_lay.addLayout(hist_top)
         self.hist = QTableWidget(0, 6)
         self.hist.setHorizontalHeaderLabels(
             ["מתי", "שם", "נשלחו", "הצליחו", "אישרו הגעה", "נכשלו"])
@@ -741,7 +776,13 @@ class TzintukimTab(QWidget):
         when a past distribution was loaded (#9hgvi), from that batch."""
         self.banner.setVisible(not yemot.is_configured())
         self._refresh_batch_banner()
-        base = self._distribution_rows()
+        # #ifc70 — nothing is loaded until the operator asks for a list.
+        loaded = self._batch is not None or self._list_loaded
+        self.load_frame.setVisible(not loaded)
+        self.list_frame.setVisible(loaded)
+        for m in (self.m_total, self.m_ready, self.m_bad):
+            m["frame"].setVisible(loaded)
+        base = self._distribution_rows() if loaded else []
         manual = [r for r in self._rows if r.get("manual")]
         manual_ids = {r["rec"].get("id") for r in manual}
         self._rows = []
@@ -787,9 +828,15 @@ class TzintukimTab(QWidget):
         self._rows = []                # drop week-list rows and manual picks
         self.refresh()
 
+    def _load_week_list(self):
+        """#ifc70 — explicit load of the current distribution list."""
+        self._list_loaded = True
+        self.refresh()
+
     def _clear_batch(self):
         self._batch = None
         self._rows = []
+        self._list_loaded = False    # back to the explicit-load state (#ifc70)
         self.refresh()
 
     def _refresh_batch_banner(self):
@@ -1068,6 +1115,7 @@ class TzintukimTab(QWidget):
         bad = sum(1 for r in self._rows if r["why"])
         ans = QMessageBox.question(
             self, "אישור שליחה",
+            f"{self._campaign_name()}\n\n"
             f"עומד לשלוח הודעה קולית ל-{len(rows)} משפחות "
             f"({len(phones)} מספרי טלפון — כל המספרים של כל משפחה).\n"
             f"חריגים שלא יישלחו: {bad}.\n"
@@ -1495,6 +1543,33 @@ class TzintukimTab(QWidget):
             conf.setForeground(QColor("#166534"))
             self.hist.setItem(i, 4, conf)
             self.hist.setItem(i, 5, QTableWidgetItem(str(c.get("failed") or 0)))
+
+    def _export_history(self):
+        """#67rdi — ייצוא כל היסטוריית הצינתוקים לאקסל, כולל סטטוס פר-מספר
+        (מי אישר הגעה בהקשת 7, מי רק קיבל ומי לא נענה)."""
+        from utils.ui import reveal_in_folder
+        from utils.excel_utils import export_tzintuk_history_to_excel
+        camps = db.get_tzintuk_campaigns()
+        if not camps:
+            QMessageBox.information(self, "צינתוקים", "עדיין אין צינתוקים בהיסטוריה.")
+            return
+        # שם לכל מספר — לדוחות ישנים שבהם ימות לא החזיר את השם.
+        name_by_phone = {}
+        try:
+            for rec in db.get_all_recipients():
+                nm = rec.get("full_name") or ""
+                for p in yemot.pick_phones(rec):
+                    name_by_phone.setdefault(p, nm)
+        except Exception:
+            pass
+        try:
+            with busy_cursor():
+                path = export_tzintuk_history_to_excel(camps, name_by_phone)
+            reveal_in_folder(path)
+            QMessageBox.information(self, "ייצוא הושלם",
+                                    f"הקובץ נשמר ונפתחה התיקייה:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "שגיאה", str(e))
 
     @staticmethod
     def _confirmed_count(camp: dict) -> int:

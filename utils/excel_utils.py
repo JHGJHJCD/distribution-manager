@@ -966,6 +966,110 @@ def export_history_to_excel(rows: List[Dict], title: str,
     return path
 
 
+def export_tzintuk_history_to_excel(campaigns: List[Dict],
+                                    name_by_phone: Dict[str, str] | None = None) -> str:
+    """#67rdi — ייצוא היסטוריית הצינתוקים: גיליון 'סיכום' (שורה לקמפיין) +
+    גיליון 'פירוט' — שורה לכל מספר שחויג, עם הסטטוס שלו כולל 'אישר הגעה'
+    (הקשת 7). campaigns = רשומות tzintuk_campaigns (עם report_json);
+    name_by_phone משלים שם למספרים שהדוח של ימות החזיר בלי שם."""
+    import json as _json
+    import openpyxl
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    name_by_phone = name_by_phone or {}
+    wb = openpyxl.Workbook()
+
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill("solid", fgColor="0F766E")
+    header_align = Alignment(horizontal="right", vertical="center")
+    thin = Side(style="thin", color="CBD5E1")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    cell_align = Alignment(horizontal="right", vertical="center")
+    conf_fill = PatternFill("solid", fgColor="DCFCE7")    # ירוק — אישר הגעה
+    fail_fill = PatternFill("solid", fgColor="FEE2E2")    # אדום — נכשל
+
+    status_he = {"sending": "בתהליך", "done": "הסתיים", "scheduled": "מתוזמן",
+                 "canceled": "בוטל", "sched_failed": "התזמון נכשל"}
+
+    def _style_header(ws, headers):
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_align
+            cell.border = border
+        ws.row_dimensions[1].height = 22
+        ws.sheet_view.rightToLeft = True
+        ws.freeze_panes = "A2"
+
+    def _entries(camp):
+        try:
+            ents = _json.loads(camp.get("report_json") or "[]")
+        except ValueError:
+            return []
+        return [e for e in ents or [] if isinstance(e, dict)]
+
+    def _entry_state(e):
+        st = str(e.get("status") or "").lower()
+        if e.get("confirmed") or st == "accepted":
+            return "אישר הגעה"
+        if e.get("ok"):
+            return "קיבל את ההודעה"
+        if e.get("failed"):
+            return "לא נענה / נכשל"
+        return st or "לא ידוע"
+
+    # ── גיליון סיכום ──────────────────────────────────────────────────────────
+    ws = wb.active
+    ws.title = "סיכום"
+    _style_header(ws, ["מתי", "שם הצינתוק", "מצב", "נשלחו", "הצליחו",
+                       "אישרו הגעה", "נכשלו", "מחשב"])
+    for i, c in enumerate(campaigns, 1):
+        ents = _entries(c)
+        confirmed = sum(1 for e in ents if _entry_state(e) == "אישר הגעה")
+        ws.append([_fmt_date(str(c.get("sent_at") or "")[:10]) or (c.get("sent_at") or ""),
+                   c.get("name") or "",
+                   status_he.get(c.get("status") or "", c.get("status") or ""),
+                   int(c.get("total") or 0), int(c.get("delivered") or 0),
+                   confirmed, int(c.get("failed") or 0), c.get("device") or ""])
+        for cell in ws[i + 1]:
+            cell.alignment = cell_align
+            cell.border = border
+    for col, w in enumerate([14, 34, 12, 9, 9, 12, 9, 14], 1):
+        ws.column_dimensions[get_column_letter(col)].width = w
+
+    # ── גיליון פירוט — מי ענה ומי אישר ───────────────────────────────────────
+    wd = wb.create_sheet("פירוט")
+    _style_header(wd, ["תאריך", "שם הצינתוק", "שם המקבל", "טלפון", "סטטוס"])
+    r = 1
+    for c in campaigns:
+        cdate = _fmt_date(str(c.get("sent_at") or "")[:10]) or (c.get("sent_at") or "")
+        cname = c.get("name") or ""
+        for e in _entries(c):
+            phone = str(e.get("phone") or "")
+            state = _entry_state(e)
+            r += 1
+            wd.append([cdate, cname,
+                       e.get("name") or name_by_phone.get(phone, ""), phone, state])
+            for cell in wd[r]:
+                cell.alignment = cell_align
+                cell.border = border
+            if state == "אישר הגעה":
+                wd.cell(r, 5).fill = conf_fill
+            elif state == "לא נענה / נכשל":
+                wd.cell(r, 5).fill = fail_fill
+            _write_phone_cell(wd.cell(r, 4), phone)
+    for col, w in enumerate([14, 30, 24, 16, 18], 1):
+        wd.column_dimensions[get_column_letter(col)].width = w
+
+    exports_dir = export_dir("dist")
+    filename = f"היסטוריית_צינתוקים_{datetime.now().strftime('%Y-%m-%d_%H%M%S')}.xlsx"
+    path = str(exports_dir / filename)
+    wb.save(path)
+    return path
+
+
 # ─── Volunteer checklist (send-out / read-back round trip) ────────────────────
 # A minimal, privacy-conscious checklist a volunteer fills WITHOUT touching the
 # app: mark who came, a note per recipient, and one general note for the whole

@@ -22,9 +22,10 @@ Traps that have cost us time before. Check the relevant one before touching that
   almost nothing. The ONLY way to change text size is `styles.apply_app_theme(app, percent)`
   (rebuilds qt-material + EXTRA_QSS with every `font-size: Npx` scaled, then sets the font).
   Setting key: `ui_font_scale` (percent, per-machine, excluded from sync).
-- **`QTableWidget.selectRow()` can silently no-op** in dialog tables — use
-  `setCurrentCell(row, 0)`; with SelectRows behavior it selects the row AND fires
-  `itemSelectionChanged` reliably.
+- **`QTableWidget.selectRow()` can silently no-op** — in dialog tables AND in main-tab
+  tables (v2.93: it broke the right-click menu on 'חלוקות קודמות' — `_selected_batch`
+  saw currentRow=-1 and the menu never opened). Always use `setCurrentCell(row, 0)`;
+  with SelectRows behavior it selects the row AND fires `itemSelectionChanged` reliably.
 
 - **QDateEdit/QDateTimeEdit in RTL:** the app-wide RTL direction reverses the date/time
   SECTION order (dd/MM/yyyy renders as yyyy/MM/dd, time and date swap). Fix: set the field
