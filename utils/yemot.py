@@ -481,6 +481,110 @@ def run_campaign(phones: dict, template_id: str | None = None,
     return _call("RunCampaign", params, post=True)
 
 
+# ─── Classic-tzintuk callback tracking (v2.96) ───────────────────────────────
+# Yemot has NO call-history API (probed 1/9/2026: GetCallHistory/GetCalls/
+# HistoryFile all unknown commands) — GetIncomingCalls returns only the calls
+# LIVE right now. So "who called back" can only be caught while the app polls
+# during a tracking window after the send; there is nothing to fetch later.
+
+CLASSIC_TRACK_SECONDS = 30 * 60      # default watch window after a classic send
+CONFIRM_EXT = "7"                    # pressing 7 routes the caller to /7
+
+
+def get_incoming_calls() -> list:
+    """The calls connected to the line RIGHT NOW:
+    [{'phone', 'did', 'duration', 'path'}] (phone normalized, '' when hidden)."""
+    data = _call("GetIncomingCalls")
+    out = []
+    for c in data.get("calls") or []:
+        if not isinstance(c, dict):
+            continue
+        out.append({
+            "phone": normalize_phone(c.get("callerIdNum") or c.get("callerId")
+                                     or c.get("phone")),
+            "did": str(c.get("did") or ""),
+            "duration": float(c.get("duration") or 0),
+            "path": str(c.get("path") or c.get("folder") or ""),
+        })
+    return out
+
+
+class CallbackTracker:
+    """Pure accumulator (no Qt/HTTP): feed it get_incoming_calls() snapshots
+    and it remembers, per target number, whether the person called the line
+    back after the classic tzintuk, how long the call lasted, and whether they
+    reached extension 7 (arrival confirmation)."""
+
+    def __init__(self, targets: dict):
+        # {'0501234567': 'שם', …} — the numbers the classic tzintuk rang.
+        self.targets = {p: (n or "") for p, n in (targets or {}).items() if p}
+        self.state = {}    # phone → {'returned_at', 'duration', 'confirmed'}
+
+    @staticmethod
+    def _is_confirm_path(path: str) -> bool:
+        p = (path or "").strip("/")
+        return p == CONFIRM_EXT or p.startswith(CONFIRM_EXT + "/")
+
+    def seed(self, entries: list):
+        """Restore previous results (resume after the app was closed
+        mid-window) from a stored report_json entries list."""
+        for e in entries or []:
+            if not isinstance(e, dict):
+                continue
+            p = normalize_phone(e.get("phone"))
+            status = str(e.get("status") or "").lower()
+            if p in self.targets and (e.get("ok") or e.get("confirmed")
+                                      or status in ("callback", "accepted")):
+                self.state[p] = {
+                    "returned_at": e.get("returned_at") or "",
+                    "duration": float(e.get("duration") or 0),
+                    "confirmed": bool(e.get("confirmed") or status == "accepted"),
+                }
+
+    def update(self, live_calls: list, now_iso: str = "") -> bool:
+        """One live snapshot in → True when something MEANINGFUL changed
+        (a new caller-back, or a first key-7 confirmation)."""
+        changed = False
+        for c in live_calls or []:
+            p = (c or {}).get("phone") or ""
+            if p not in self.targets:
+                continue
+            s = self.state.get(p)
+            if s is None:
+                s = self.state[p] = {"returned_at": now_iso, "duration": 0.0,
+                                     "confirmed": False}
+                changed = True
+            dur = float(c.get("duration") or 0)
+            if dur > s["duration"]:
+                s["duration"] = dur
+            if self._is_confirm_path(c.get("path")) and not s["confirmed"]:
+                s["confirmed"] = True
+                changed = True
+        return changed
+
+    def counts(self) -> tuple:
+        returned = len(self.state)
+        confirmed = sum(1 for s in self.state.values() if s["confirmed"])
+        return returned, confirmed
+
+    def entries(self) -> list:
+        """report_json-shaped rows — same keys the regular campaign report
+        uses, so history / Excel export / confirmed_phones all work as-is.
+        'callback' = returned and heard; 'accepted' = also pressed 7;
+        'no_callback' has ok=failed=False so answer_stats ignores it."""
+        out = []
+        for p, name in self.targets.items():
+            s = self.state.get(p)
+            status = ("accepted" if s and s["confirmed"]
+                      else "callback" if s else "no_callback")
+            out.append({"phone": p, "name": name, "status": status,
+                        "ok": bool(s), "confirmed": bool(s and s["confirmed"]),
+                        "failed": False,
+                        "duration": round(s["duration"], 1) if s else 0,
+                        "returned_at": (s or {}).get("returned_at") or ""})
+        return out
+
+
 # ─── Publishing the message on the line itself ───────────────────────────────
 
 MESSAGES_EXT = "1"          # שלוחת ההודעות המרכזית בקו (הכרעת המשתמש, #kx6wd)

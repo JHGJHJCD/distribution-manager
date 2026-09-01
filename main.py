@@ -540,6 +540,7 @@ class MainWindow(QMainWindow):
         self._build_tabs()
         self._build_statusbar()
         self._setup_auto_sync()
+        self._setup_download_watch()   # v2.96 — התראות הורדה, רק במחשב המסומן
 
     def show_smart(self):
         """Open remembering last size/position; otherwise maximized (fills big
@@ -932,6 +933,17 @@ class MainWindow(QMainWindow):
         # changed while this one was closed.
         QTimer.singleShot(2500, self._tick_sync)
         self._refresh_sync_led()
+        # v2.96: announce this computer's app version to the other computer
+        # (synced setting) — the machine with the notify flag pops a balloon
+        # when a peer updates ("המחשב 'X' עודכן לגרסה").
+        try:
+            if sync.is_enabled():
+                key = "app_version_" + sync.device_id()
+                val = f"{APP_VERSION}|{sync.device_name() or ''}"
+                if (db.get_setting(key) or "") != val:
+                    db.set_setting(key, val)
+        except Exception:
+            pass
 
     def _tick_sync(self):
         if not self._sync.is_enabled():
@@ -951,6 +963,7 @@ class MainWindow(QMainWindow):
         if applied > 0:
             self.refresh_all()
             self.status_msg(f"סונכרנו {applied} עדכונים מהמחשב השני")
+            self._check_peer_updates()     # v2.96 — "המחשב השני עודכן לגרסה"
         # Always refresh the chat badge — new messages may have arrived even when
         # the visible screen didn't need a redraw. If the chat is open, catch it up.
         if self._current_leaf() is getattr(self, "messages_tab", None):
@@ -1048,27 +1061,120 @@ class MainWindow(QMainWindow):
         if getattr(self, "_notified_update_ver", "") == ver:
             return
         self._notified_update_ver = ver
+        if not self._notify_info(
+                "עדכון חדש למנהל חלוקה 🎁",
+                f"גרסה v{ver} מוכנה להתקנה — לחץ כאן לפרטים ולעדכון"):
+            self._offer_pending_update()          # no tray → fall back to dialog
+
+    def _notify_info(self, title: str, body: str) -> bool:
+        """Show a Windows tray balloon. Returns False when no tray exists
+        (caller may fall back to a dialog). Clicking the balloon opens the
+        pending-update dialog when there is one, else does nothing."""
         from PyQt6.QtWidgets import QSystemTrayIcon
         if not QSystemTrayIcon.isSystemTrayAvailable():
-            self._offer_pending_update()          # no tray → fall back to dialog
-            return
+            return False
         tray = getattr(self, "_upd_tray", None)
         if tray is None:
             tray = QSystemTrayIcon(self.windowIcon(), self)
-            tray.setToolTip("מנהל חלוקה — גרסה חדשה זמינה, לחץ לעדכון")
+            tray.setToolTip("מנהל חלוקה")
             tray.activated.connect(lambda *_: self._offer_pending_update())
             tray.messageClicked.connect(self._offer_pending_update)
             self._upd_tray = tray
         tray.show()
         icon = self.windowIcon()
         if icon.isNull():
-            tray.showMessage("עדכון חדש למנהל חלוקה 🎁",
-                             f"גרסה v{ver} מוכנה להתקנה — לחץ כאן לפרטים ולעדכון",
+            tray.showMessage(title, body,
                              QSystemTrayIcon.MessageIcon.Information, 15000)
         else:
-            tray.showMessage("עדכון חדש למנהל חלוקה 🎁",
-                             f"גרסה v{ver} מוכנה להתקנה — לחץ כאן לפרטים ולעדכון",
-                             icon, 15000)
+            tray.showMessage(title, body, icon, 15000)
+        return True
+
+    # ── v2.96: download / peer-update notifications (this machine only) ──────
+    DL_CHECK_MS = 10 * 60 * 1000   # GitHub rate limit is 60/h — stay light
+
+    def _setup_download_watch(self):
+        """Every 10 minutes (plus once at startup) compare the GitHub
+        download counters of the release EXE with the last-seen counts; any
+        increase means SOMEONE downloaded a version → tray balloon. Runs only
+        on the machine where the notify flag is on ('רק אני')."""
+        self._dl_worker = None
+        self._dl_timer = QTimer(self)
+        self._dl_timer.setInterval(self.DL_CHECK_MS)
+        self._dl_timer.timeout.connect(self._tick_download_watch)
+        self._dl_timer.start()
+        QTimer.singleShot(4000, self._tick_download_watch)
+
+    def _tick_download_watch(self):
+        from utils import sync
+        if not sync.notify_downloads():
+            return
+        w = getattr(self, "_dl_worker", None)
+        if w is not None and w.isRunning():
+            return
+
+        class _W(QThread):
+            got = pyqtSignal(object)
+
+            def run(self):
+                try:
+                    self.got.emit(updater.fetch_download_stats())
+                except Exception as e:      # silent — network is best-effort
+                    self.got.emit(e)
+
+        self._dl_worker = _W(self)
+        self._dl_worker.got.connect(self._on_download_stats)
+        self._dl_worker.start()
+
+    def _on_download_stats(self, stats):
+        self._dl_worker = None
+        if isinstance(stats, Exception) or not isinstance(stats, dict):
+            return
+        from utils import sync
+        known = sync.local_get("dl_counts", None)
+        sync.local_set("dl_counts", stats)
+        if not isinstance(known, dict):
+            return                       # first run — baseline only, no noise
+        grown = [(tag, n - int(known.get(tag) or 0)) for tag, n in stats.items()
+                 if n > int(known.get(tag) or 0)]
+        if not grown:
+            return
+        added = sum(d for _t, d in grown)
+        tags = ", ".join(t for t, _d in grown)
+        total = sum(stats.values())
+        self._notify_info(
+            "מנהל חלוקה — הורדה חדשה 📥",
+            f"מישהו הוריד את התוכנה ({added} הורדות חדשות, גרסה {tags}). "
+            f"סה\"כ הורדות מגיטהאב: {total}.")
+
+    def _check_peer_updates(self):
+        """After a sync pull: did the OTHER computer report a new app version?
+        (It announces itself via the synced 'app_version_<device>' setting.)"""
+        from utils import sync
+        if not sync.notify_downloads():
+            return
+        try:
+            with db.get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT key, value FROM settings "
+                    "WHERE key LIKE 'app_version_%'").fetchall()
+            current = {r["key"][len("app_version_"):]: r["value"] or ""
+                       for r in rows}
+            current.pop(sync.device_id(), None)
+        except Exception:
+            return
+        known = sync.local_get("peer_versions", None)
+        if current != (known if isinstance(known, dict) else None):
+            sync.local_set("peer_versions", current)
+        if not isinstance(known, dict):
+            return                       # first sight — baseline only
+        for dev, val in current.items():
+            if known.get(dev) == val or not val:
+                continue
+            ver, _, name = str(val).partition("|")
+            who = name.strip() or "המחשב השני"
+            self._notify_info(
+                "מנהל חלוקה — עדכון גרסה במחשב השני 🔄",
+                f"המחשב \"{who}\" הוריד והתקין את גרסה v{ver}.")
 
     def _offer_pending_update(self):
         result = getattr(self, "_pending_update", None)

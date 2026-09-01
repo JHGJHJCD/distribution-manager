@@ -74,6 +74,31 @@ def check_latest(timeout: int = 10):
     }
 
 
+API_RELEASES = f"https://api.github.com/repos/{REPO}/releases?per_page=20"
+
+
+def fetch_download_stats(timeout: int = 10) -> dict:
+    """{tag: exe-download-count} for the recent releases — GitHub counts every
+    download of the release asset (auto-updates by the app included). Used by
+    the manager machine to notice 'someone downloaded a version' (v2.96).
+    Raises on network error (caller stays silent)."""
+    req = urllib.request.Request(
+        API_RELEASES,
+        headers={"User-Agent": _UA, "Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    out = {}
+    for rel in data or []:
+        tag = str(rel.get("tag_name") or "")
+        if not tag:
+            continue
+        out[tag] = sum(int(a.get("download_count") or 0)
+                       for a in rel.get("assets") or []
+                       if str(a.get("name", "")).lower().endswith(".exe"))
+    return out
+
+
 # ─── download ─────────────────────────────────────────────────────────────────
 
 def download(url: str, dest: str, progress_cb=None, cancel_cb=None, timeout: int = 30) -> str:

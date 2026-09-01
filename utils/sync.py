@@ -133,6 +133,29 @@ def set_messages_read_ts(ts: str):
             _save_state(state)
 
 
+def local_get(key: str, default=None):
+    """Read one per-machine value from sync_state.json (never synced)."""
+    return _load_state().get(key, default)
+
+
+def local_set(key: str, value):
+    """Write one per-machine value to sync_state.json (never synced)."""
+    with _LOCK:
+        state = _load_state()
+        state[key] = value
+        _save_state(state)
+
+
+def notify_downloads() -> bool:
+    """True when THIS computer shows the download/peer-update notifications
+    (v2.96) — a per-machine flag ('רק אני'), toggled in the settings screen."""
+    return bool(_load_state().get("notify_downloads"))
+
+
+def set_notify_downloads(on: bool):
+    local_set("notify_downloads", bool(on))
+
+
 def is_manager_device() -> bool:
     """True if THIS computer was designated the manager (#5rhe9). Local flag — the
     manager's change-log + undo controls only appear here."""

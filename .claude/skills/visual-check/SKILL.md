@@ -39,6 +39,16 @@ Images land in `dev/_shots/<objectName>.png`. Leaves are addressed by `objectNam
 so a reordered UI doesn't break the shot. After capture, **actually open the PNG** with the
 Read tool and look at it — that's the verification; a file existing is not proof.
 
+⚠ **NetFree can kill the whole chat on a specific PNG (learned 1/9/2026, 3 chats lost).**
+NetFree content-scans requests to `api.anthropic.com` *including images*; Reading a
+particular screenshot can trigger a 418 "badwords" block — and from that moment the chat
+is dead forever (the image is resent on every request; "continue chat" inherits it and
+dies instantly). It is file-specific (most screenshots pass; `dev/shots_classic_track/*.png`
+does not). **Rule:** if a chat gets 418-blocked right after Reading a screenshot — never
+Read that file again in any chat. Verify such shots through Gemini vision instead:
+`"...\Python313\python.exe" "C:\Users\יהודה\Desktop\תיקיות שונות למיון\חוסך טוקנים\gemini_task.py" -f <png> "תאר מה בצילום..."`
+— only clean text comes back. After a block, open a **fresh** chat from `NEXT_TASK.md`.
+
 ## Capturing a specific dialog or widget
 
 The script covers tabs. For a dialog or a single widget, reuse the same idiom — copy

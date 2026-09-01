@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QFrame, QMessageBox, QFileDialog, QInputDialog, QLineEdit,
     QProgressDialog, QApplication, QSpinBox, QScrollArea, QDoubleSpinBox,
     QDialog, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QAbstractSpinBox
+    QAbstractSpinBox, QCheckBox
 )
 
 import database as db
@@ -190,6 +190,17 @@ class SettingsTab(QWidget):
         self.lbl_update_status.setObjectName("subtitle")
         self.lbl_update_status.setWordWrap(True)
         upd_lay.addWidget(self.lbl_update_status)
+
+        # v2.96 — per-machine flag: only the checked computer gets the
+        # "someone downloaded a version" / "the other computer updated" balloons.
+        self.chk_dl_notify = QCheckBox(
+            "קבל התראות במחשב זה על הורדות גרסה ועדכוני המחשב השני")
+        self.chk_dl_notify.setToolTip(
+            "כשמסומן: המחשב הזה (ורק הוא) יציג התראת Windows כשמישהו מוריד "
+            "את התוכנה מגיטהאב, וכשהמחשב השני מתעדכן לגרסה חדשה.")
+        self.chk_dl_notify.setChecked(sync.notify_downloads())
+        self.chk_dl_notify.toggled.connect(sync.set_notify_downloads)
+        upd_lay.addWidget(self.chk_dl_notify)
         left_col.addWidget(upd_frame)
 
         # ── Need-score weights section ────────────────────

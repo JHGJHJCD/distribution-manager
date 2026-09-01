@@ -1014,8 +1014,12 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
         st = str(e.get("status") or "").lower()
         if e.get("confirmed") or st == "accepted":
             return "אישר הגעה"
+        if st == "callback":               # v2.96 — צינתוק קלאסי: חזר לשיחה
+            return "חזר לשיחה ושמע"
         if e.get("ok"):
             return "קיבל את ההודעה"
+        if st == "no_callback":
+            return "לא חזר לשיחה"
         if e.get("failed"):
             return "לא נענה / נכשל"
         return st or "לא ידוע"

@@ -74,6 +74,61 @@ class _PollWorker(QThread):
                 time.sleep(0.5)
 
 
+class _CallbackWorker(QThread):
+    """v2.96 — live watch after a CLASSIC tzintuk: Yemot keeps no call
+    history, so while the window is open we poll the line's LIVE calls
+    (GetIncomingCalls) and mark every target number that calls back — and
+    whether it reached extension 7 (arrival confirmation)."""
+    tick = pyqtSignal(object)          # snapshot dict | Exception
+
+    def __init__(self, targets: dict, deadline: float,
+                 seed_entries=None, parent=None):
+        super().__init__(parent)
+        self.tracker = yemot.CallbackTracker(targets)
+        if seed_entries:
+            self.tracker.seed(seed_entries)
+        self.deadline = float(deadline)
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def extend(self, seconds: int):
+        self.deadline += seconds
+
+    def _snapshot(self, done: bool, changed: bool = False, error: str = ""):
+        returned, confirmed = self.tracker.counts()
+        return {"returned": returned, "confirmed": confirmed,
+                "entries": self.tracker.entries(), "changed": changed,
+                "remaining": max(0.0, self.deadline - time.time()),
+                "done": done, "error": error}
+
+    def run(self):
+        errors = 0
+        self.tick.emit(self._snapshot(False))
+        while not self._stop and time.time() < self.deadline:
+            try:
+                calls = yemot.get_incoming_calls()
+                changed = self.tracker.update(
+                    calls, datetime.now(timezone.utc).isoformat())
+                errors = 0
+                self.tick.emit(self._snapshot(False, changed))
+            except Exception as e:
+                errors += 1
+                if errors in (3, 20):    # tell the UI, but keep trying
+                    self.tick.emit(self._snapshot(False, error=str(e)))
+                for _ in range(20):
+                    if self._stop:
+                        break
+                    time.sleep(0.5)
+                continue
+            for _ in range(10):          # ~5s in slices → stop() is snappy
+                if self._stop:
+                    break
+                time.sleep(0.5)
+        self.tick.emit(self._snapshot(True))
+
+
 class _AddPersonDialog(QDialog):
     """Pick an active recipient who is not already on the call list."""
 
@@ -275,7 +330,8 @@ class _SendModeDialog(QDialog):
         lay.addWidget(self.rb_classic)
         note = QLabel("בצינתוק קלאסי הטלפון מצלצל ומתנתק — אי אפשר לענות "
                       "לשיחה. מי שרואה שיחה שלא נענתה ומתקשר חזרה לקו — "
-                      "שומע את ההודעה.")
+                      "שומע את ההודעה. אחרי השליחה התוכנה עוקבת כחצי שעה "
+                      "בזמן אמת מי חזר לשיחה ומי אישר הגעה בהקשת 7.")
         note.setObjectName("subtitle")
         note.setWordWrap(True)
         lay.addWidget(note)
@@ -718,6 +774,8 @@ class TzintukimTab(QWidget):
         self.main = parent
         self._rows = []           # [{'rec', 'phones', 'send', 'checked', 'why'}]
         self._worker = None
+        self._cb_worker = None    # v2.96: classic-tzintuk callback watcher
+        self._cb_last_persist = 0.0
         self._active_guid = ""    # DB guid of the campaign being tracked
         self._last_failed = []    # [{'phone','name'}] from the last finished run
         self._sched_checker = None   # worker probing the server for due schedules
@@ -986,6 +1044,19 @@ class TzintukimTab(QWidget):
         for w in (self.lbl_conf, self.lbl_done, self.lbl_fail, self.lbl_wait):
             counters.addWidget(w)
         counters.addStretch()
+        # v2.96 — controls of the classic-tzintuk callback watch window.
+        self.btn_extend_track = QPushButton("⏱ הארך מעקב ב-30 דק'")
+        self.btn_extend_track.setObjectName("neutral")
+        self.btn_extend_track.clicked.connect(self._extend_tracking)
+        self.btn_extend_track.setVisible(False)
+        counters.addWidget(self.btn_extend_track)
+        self.btn_stop_track = QPushButton("סיים מעקב")
+        self.btn_stop_track.setObjectName("neutral")
+        self.btn_stop_track.setToolTip("סוגר את חלון המעקב עכשיו ושומר את מה "
+                                       "שנאסף עד כה בהיסטוריה")
+        self.btn_stop_track.clicked.connect(self._stop_tracking_now)
+        self.btn_stop_track.setVisible(False)
+        counters.addWidget(self.btn_stop_track)
         self.btn_resend = QPushButton("🔄 שלח שוב לנכשלים")
         self.btn_resend.setObjectName("neutral")
         self.btn_resend.clicked.connect(self._resend_failed)
@@ -1282,9 +1353,10 @@ class TzintukimTab(QWidget):
         self.m_total["val"].setText(str(total))
         self.m_ready["val"].setText(str(ready))
         self.m_bad["val"].setText(str(bad))
+        busy = self._worker is not None or self._cb_worker is not None
         self.btn_send.setText(f"אשר ושלח ל-{ready} »" if ready else "אין למי לשלוח")
-        self.btn_send.setEnabled(ready > 0 and self._worker is None)
-        self.btn_sched.setEnabled(ready > 0 and self._worker is None)
+        self.btn_send.setEnabled(ready > 0 and not busy)
+        self.btn_sched.setEnabled(ready > 0 and not busy)
 
     def _ready_rows(self):
         return [r for r in self._rows if r["checked"] and r["send"]]
@@ -1480,20 +1552,28 @@ class TzintukimTab(QWidget):
         from utils import sync
         name = self._campaign_name()
         if classic:
-            # קלאסי: אין מעקב-מענה (אף אחד לא אמור לענות) — נרשם כהסתיים.
-            db.add_tzintuk_campaign(
+            # v2.96 — קלאסי: אין מענה לצלצול עצמו, אבל עוקבים חי אחרי מי
+            # שמתקשר חזרה לקו (ומי שמקיש 7 שם = אישר הגעה). לימות אין יומן
+            # שיחות עבר, לכן המעקב חי בלבד — כל עוד חלון המעקב פתוח בתוכנה.
+            tracker = yemot.CallbackTracker(phones)
+            guid = db.add_tzintuk_campaign(
                 "צינתוק קלאסי — " + name, dist_date, template_id,
                 str(res.get("campaignId") or ""),
                 int(res.get("entriesCount") or len(phones)),
-                device=sync.device_name() or "", status="done")
+                device=sync.device_name() or "", status="sending")
+            db.update_tzintuk_campaign(
+                guid, 0, 0, "sending",
+                json.dumps(tracker.entries(), ensure_ascii=False))
+            self._active_guid = guid
             self._refresh_history()
-            self._update_metrics()
             QMessageBox.information(
                 self, "צינתוק קלאסי",
                 f"📞 הצלצולים יצאו ל-{len(phones)} מספרים.\n"
-                "הטלפונים יצלצלו ויתנתקו — אי אפשר לענות לצלצול. "
-                "מי שמתקשר חזרה לקו ישמע את ההודעה.\n"
-                "אין מעקב מענה בצינתוק קלאסי.")
+                "הטלפונים יצלצלו ויתנתקו — אי אפשר לענות לצלצול.\n"
+                "מי שמתקשר חזרה לקו ישמע את ההודעה — ובחצי השעה הקרובה "
+                "תראה כאן בזמן אמת מי חזר לשיחה ומי אישר הגעה בהקשת 7.")
+            self._start_callback_tracking(
+                guid, phones, time.time() + yemot.CLASSIC_TRACK_SECONDS)
             return
         self._active_guid = db.add_tzintuk_campaign(
             name, dist_date, template_id,
@@ -1841,12 +1921,17 @@ class TzintukimTab(QWidget):
             mine = [by_phone[p] for p in row.get("send") or [] if p in by_phone]
             if not mine or i >= self.table.rowCount():
                 continue
+            statuses = {str(e.get("status") or "") for e in mine}
             if any(e.get("confirmed") for e in mine):
                 txt, color = "✓ אישר הגעה", QColor("#166534")
+            elif "callback" in statuses:     # v2.96 — classic: called back
+                txt, color = "📞 חזר לשיחה ושמע", QColor("#0f6e56")
             elif any(e.get("ok") for e in mine):
                 txt, color = "קיבל את ההודעה", QColor("#0f6e56")
             elif all(e.get("failed") for e in mine):
                 txt, color = "⚠ לא נענה / נכשל", QColor("#a32d2d")
+            elif statuses and statuses <= {"no_callback"}:
+                txt, color = "לא חזר לשיחה", QColor("#6b7280")
             else:
                 continue
             it = QTableWidgetItem(txt)
@@ -1858,20 +1943,140 @@ class TzintukimTab(QWidget):
         self._worker = None
         self._update_metrics()
 
+    # ── Classic-tzintuk callback watch (v2.96) ────────────────────────────────
+
+    def _start_callback_tracking(self, guid: str, targets: dict,
+                                 deadline: float, seed_entries=None):
+        """Open the live watch window after a classic tzintuk: who calls the
+        line back (and presses 7) is caught in real time — Yemot keeps no call
+        log, so this works only while the window is open in the app."""
+        if self._cb_worker is not None:
+            return
+        self._active_guid = guid
+        self.prog_frame.setVisible(True)
+        self.btn_resend.setVisible(False)
+        self.btn_extend_track.setVisible(True)
+        self.btn_stop_track.setVisible(True)
+        self.progress.setRange(0, 0)          # time window — busy stripe
+        self.lbl_fail.setText("")
+        self.lbl_conf.setText("✓ אישרו הגעה 0")
+        self.lbl_done.setText("📞 חזרו לשיחה 0")
+        self.lbl_wait.setText(f"טרם חזרו {len(targets)}")
+        self._cb_last_persist = time.time()
+        self._cb_worker = _CallbackWorker(targets, deadline, seed_entries, self)
+        self._cb_worker.tick.connect(self._on_cb_tick)
+        self._cb_worker.finished.connect(self._on_cb_worker_done)
+        self._cb_worker.start()
+        self._update_metrics()
+
+    def _extend_tracking(self):
+        if self._cb_worker is not None:
+            self._cb_worker.extend(30 * 60)
+
+    def _stop_tracking_now(self):
+        if self._cb_worker is not None:
+            self._cb_worker.stop()     # the worker emits a final snapshot
+
+    def _persist_callback(self, st, final: bool):
+        if not self._active_guid:
+            return
+        db.update_tzintuk_campaign(
+            self._active_guid, int(st.get("returned") or 0), 0,
+            "done" if final else "sending",
+            json.dumps(st.get("entries") or [], ensure_ascii=False))
+        self._cb_last_persist = time.time()
+
+    def _on_cb_tick(self, st):
+        if not isinstance(st, dict):
+            return
+        entries = st.get("entries") or []
+        returned = int(st.get("returned") or 0)
+        confirmed = int(st.get("confirmed") or 0)
+        self.lbl_conf.setText(f"✓ אישרו הגעה {confirmed}")
+        self.lbl_done.setText(f"📞 חזרו לשיחה {returned}")
+        self.lbl_wait.setText(f"טרם חזרו {max(0, len(entries) - returned)}")
+        if st.get("done"):
+            self.progress.setRange(0, 1)
+            self.progress.setValue(1)
+            self.lbl_prog.setText(
+                f"המעקב הסתיים ✓ — {returned} חזרו לשיחה ושמעו את ההודעה, "
+                f"מתוכם {confirmed} אישרו הגעה בהקשת 7. "
+                "(מי שיחזור מאוחר יותר עדיין ישמע את ההודעה — "
+                "אבל בלי רישום בתוכנה.)")
+            self._persist_callback(st, final=True)
+            self._apply_results_to_table(entries)
+            self._refresh_history()
+            gt = getattr(self.main, "group_tab", None)
+            if gt is not None:
+                try:
+                    gt._populate()   # תגי "אישר הגעה" ברשימת החלוקה
+                except Exception:
+                    pass
+            return
+        mins = int(st.get("remaining") or 0) // 60
+        base = ("📞 צינתוק קלאסי — עוקב אחרי מי שמתקשר חזרה לקו "
+                f"(עוד ~{max(1, mins)} דק'). אפשר להמשיך לעבוד, "
+                "אל תסגור את התוכנה.")
+        if st.get("error"):
+            base += "  ⚠ תקלת תקשורת זמנית במעקב — ממשיך לנסות."
+        self.lbl_prog.setText(base)
+        if st.get("changed"):
+            # in-window: repaint only who RETURNED (the rest stay "מוכן")
+            self._apply_results_to_table([e for e in entries if e.get("ok")])
+            if time.time() - self._cb_last_persist > 120:
+                self._persist_callback(st, final=False)
+
+    def _on_cb_worker_done(self):
+        self._cb_worker = None
+        self.btn_extend_track.setVisible(False)
+        self.btn_stop_track.setVisible(False)
+        self._update_metrics()
+
+    def _resume_classic(self, camp: dict):
+        """A classic tzintuk is still 'sending' (the app closed mid-window, or
+        the other computer sent it): reopen the watch if the window is still
+        open; otherwise freeze what was collected as the final result."""
+        try:
+            entries = json.loads(camp.get("report_json") or "[]")
+        except ValueError:
+            entries = []
+        entries = [e for e in entries if isinstance(e, dict)]
+        targets = {e.get("phone"): e.get("name") or ""
+                   for e in entries if e.get("phone")}
+        sent = timefmt.to_israel(camp.get("sent_at") or "")
+        deadline = (sent.timestamp() + yemot.CLASSIC_TRACK_SECONDS
+                    if sent is not None else 0.0)
+        if targets and deadline > time.time() + 5:
+            self._start_callback_tracking(camp["guid"], targets, deadline,
+                                          seed_entries=entries)
+        elif deadline and time.time() - deadline > 600:
+            # long past (10-min grace for the sender's own finalize) — close it
+            returned = sum(1 for e in entries if e.get("ok"))
+            db.update_tzintuk_campaign(
+                camp["guid"], returned, 0, "done",
+                json.dumps(entries, ensure_ascii=False))
+            self._refresh_history()
+
     def _maybe_resume_tracking(self):
         """The app (or the tab) was closed mid-campaign: the newest record is
         still 'sending'. Pick its tracking back up so the results get written —
         works also for a campaign the OTHER computer started (same account)."""
         self._check_scheduled()          # #xi85i — due schedules first
-        if self._worker is not None or not yemot.is_configured():
+        if (self._worker is not None or self._cb_worker is not None
+                or not yemot.is_configured()):
             return
         camps = [c for c in db.get_tzintuk_campaigns(limit=5)
                  if c.get("status") != "scheduled"][:1]
-        if (camps and camps[0].get("status") == "sending"
-                and camps[0].get("campaign_id")):
-            self._active_guid = camps[0]["guid"]
-            self._start_tracking(camps[0]["campaign_id"],
-                                 int(camps[0].get("total") or 0))
+        if not camps or camps[0].get("status") != "sending":
+            return
+        camp = camps[0]
+        if (camp.get("name") or "").startswith("צינתוק קלאסי"):
+            self._resume_classic(camp)   # v2.96 — callback watch, not polling
+            return
+        if camp.get("campaign_id"):
+            self._active_guid = camp["guid"]
+            self._start_tracking(camp["campaign_id"],
+                                 int(camp.get("total") or 0))
 
     # ── History ───────────────────────────────────────────────────────────────
 

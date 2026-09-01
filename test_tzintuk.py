@@ -570,6 +570,58 @@ ok(f"מתחת ל-{yemot.MIN_SMART_HISTORY} שליחות אין המלצה",
    new.get("attempts") == 3 and new.get("best_hour") is None)
 ok("מי שלא הופיע בדוחות — אין רשומה", "0520000000" not in stats)
 
+# ── 8. מעקב חזרה-לשיחה אחרי צינתוק קלאסי (v2.96) ────────────────────────────
+print("— מעקב צינתוק קלאסי —")
+
+
+def calls_transport(url, data):
+    if "GetIncomingCalls" in url:
+        return json.dumps({"responseStatus": "OK", "did": "0795378810",
+                           "calls": [
+                               {"callerIdNum": "052-1111222", "did": "048691834",
+                                "duration": 4.2, "path": "/"},
+                               {"callerIdNum": "0500000000", "did": "0795378810",
+                                "duration": 9.0, "path": "/2"},
+                           ], "callsCount": 2}).encode("utf-8")
+    return fake_transport(url, data)
+
+
+yemot._TRANSPORT = calls_transport
+live = yemot.get_incoming_calls()
+ok("GetIncomingCalls מפורק ומנורמל",
+   live and live[0]["phone"] == "0521111222" and live[0]["path"] == "/"
+   and live[0]["duration"] == 4.2, str(live))
+yemot._TRANSPORT = fake_transport
+
+tr = yemot.CallbackTracker({"0521111222": "משפחת בדיקה", "0533334444": "שנייה"})
+ok("לפני עדכון — אף אחד לא חזר", tr.counts() == (0, 0))
+ch1 = tr.update([{"phone": "0521111222", "duration": 3.0, "path": "/"}],
+                "2026-09-01T10:00:00+00:00")
+ok("מתקשר-חוזר חדש = שינוי", ch1 and tr.counts() == (1, 0))
+ch2 = tr.update([{"phone": "0521111222", "duration": 11.0, "path": "/"}])
+ok("רק גדילת משך שיחה ≠ שינוי מהותי", not ch2
+   and tr.state["0521111222"]["duration"] == 11.0)
+ch3 = tr.update([{"phone": "0521111222", "duration": 14.0, "path": "/7"}])
+ok("מעבר לשלוחה 7 = אישור הגעה", ch3 and tr.counts() == (1, 1))
+tr.update([{"phone": "0509999999", "duration": 5.0, "path": "/"}])
+ok("מספר שאינו ברשימה לא נספר", tr.counts() == (1, 1))
+ents = {e["phone"]: e for e in tr.entries()}
+ok("סטטוסים בדוח: accepted / no_callback",
+   ents["0521111222"]["status"] == "accepted"
+   and ents["0521111222"]["confirmed"] and ents["0521111222"]["ok"]
+   and ents["0533334444"]["status"] == "no_callback"
+   and not ents["0533334444"]["failed"], str(ents))
+
+tr2 = yemot.CallbackTracker({"0521111222": "א", "0533334444": "ב"})
+tr2.seed(tr.entries())
+ok("seed משחזר מצב אחרי סגירת התוכנה", tr2.counts() == (1, 1))
+tr2.update([{"phone": "0533334444", "duration": 2.0, "path": "/"}])
+ok("אחרי seed ממשיכים לצבור", tr2.counts() == (2, 1)
+   and {e["phone"]: e["status"] for e in tr2.entries()}["0533334444"] == "callback")
+ok("נתיב 7/תת-שלוחה נחשב אישור; 70 לא",
+   yemot.CallbackTracker._is_confirm_path("/7/1")
+   and not yemot.CallbackTracker._is_confirm_path("/70"))
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")
