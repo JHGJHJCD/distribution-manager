@@ -291,6 +291,48 @@ except yemot.YemotError as e:
     ok("publish בלי הקלטה — שגיאה ברורה", "הקלטה" in str(e))
 yemot._TRANSPORT = fake_transport
 
+# ── 3ג. צינתוק קלאסי + שמירת מספר-הבדיקה (דוח 1/9) ──────────────────────────
+print("— צינתוק קלאסי ובדיקה —")
+canned["GetTemplates"] = {"responseStatus": "OK", "templates": [
+    {"templateId": 1117319, "description": yemot.TEMPLATE_DESCRIPTION},
+    {"templateId": 1117320, "description": yemot.TEMPLATE_DESCRIPTION}]}
+canned["UpdateTemplate"] = {"responseStatus": "OK"}
+cid = yemot.ensure_classic_template()
+ok("תבנית קלאסית מאמצת את התבנית היתומה", cid == "1117320"
+   and db.get_setting(yemot.SET_CLASSIC_TEMPLATE) == "1117320")
+cfg = [c for c in calls if c[0] == "UpdateTemplate"
+       and c[1].get("templateId") == "1117320"][-1]
+ok("התבנית הקלאסית הוגדרה לצלצול קצר",
+   cfg[1].get("originateTimeout") == str(yemot.CLASSIC_RING_SECONDS)
+   and cfg[1].get("maxDialAttempts") == "1")
+n0 = len(calls)
+ok("ensure_classic_template לא פונה שוב לשרת",
+   yemot.ensure_classic_template() == "1117320" and len(calls) == n0)
+
+yemot._TRANSPORT = media_transport      # DownloadFile מחזיר WAV
+n0 = len(calls)
+yemot.run_campaign({"0521234567": "כהן"}, classic=True)
+seq = [c[0] for c in calls[n0:]]
+ok("קלאסי: ההקלטה מועתקת לתבנית הקלאסית",
+   "DownloadFile" in seq and "UploadFile" in seq, str(seq))
+ok("קלאסי: הרשימה נשמרת בתבנית הראשית (להתקשרות חוזרת)",
+   "UploadPhoneList" in seq, str(seq))
+run = [c for c in calls[n0:] if c[0] == "RunCampaign"][-1]
+ok("קלאסי: החיוג יוצא מהתבנית הקלאסית",
+   run[1].get("templateId") == "1117320")
+stored = [c for c in calls[n0:] if c[0] == "UploadPhoneList"][-1]
+ok("קלאסי: הרשימה נשמרה בתבנית הראשית", stored[1].get("templateId") == "1117319")
+yemot._TRANSPORT = fake_transport
+
+n0 = len(calls)
+yemot.run_test("0501234567")
+seq = [c[0] for c in calls[n0:]]
+ok("בדיקה: המספר נוסף לרשימה בלי ניקוי (התקשרות חוזרת עובדת)",
+   seq == ["UploadPhoneList", "RunCampaign"], str(seq))
+upl = [c for c in calls[n0:] if c[0] == "UploadPhoneList"][0]
+ok("בדיקה: עדכון בלי מחיקת הרשימה (UPDATE)",
+   upl[1].get("updateType") == "UPDATE")
+
 # ── 4. היסטוריה ב-DB + שומר שליחה-כפולה ─────────────────────────────────────
 print("— היסטוריה ושומר כפילות —")
 g1 = db.add_tzintuk_campaign("חלוקה שבועית 02/09/2026", "2026-09-02",

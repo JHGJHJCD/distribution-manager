@@ -33,6 +33,12 @@ SET_CALLER_ID = "yemot_caller_id"
 SET_TEST_PHONE = "yemot_test_phone"
 # Which template already got the REPEAT campaign type (arrival-confirm keys).
 SET_CONFIRM_CTX = "yemot_confirm_ctx"
+# Classic-tzintuk (ring-only) support: a second template configured for a short
+# unanswered ring; callers hear the message only when they dial back.
+SET_CLASSIC_TEMPLATE = "yemot_classic_template_id"
+SET_CLASSIC_READY = "yemot_classic_ready"
+CLASSIC_DESCRIPTION = "מנהל חלוקה — צינתוק קלאסי"
+CLASSIC_RING_SECONDS = 8          # ~2 rings, then give up (no answer = no cost)
 
 
 class YemotError(Exception):
@@ -305,6 +311,55 @@ def _ensure_confirm_context(template_id: str):
             db.set_setting(SET_CONFIRM_CTX, f"na:{template_id}")
 
 
+def ensure_classic_template() -> str:
+    """The second template used for a classic tzintuk (short unanswered ring —
+    the recipient sees a missed call, dials back, and hears the message).
+    Adopts an existing spare template when one exists (an orphan created by the
+    other computer before the settings synced), otherwise creates one, and
+    configures it once for the short ring."""
+    tid = (db.get_setting(SET_CLASSIC_TEMPLATE) or "").strip()
+    if not tid:
+        main = (db.get_setting(SET_TEMPLATE) or "").strip()
+        data = _call("GetTemplates")
+        for t in (data.get("templates") or []):
+            desc = str(t.get("description") or "")
+            cand = str(t.get("templateId") or "").strip()
+            if not cand or cand == main:
+                continue
+            if desc in (CLASSIC_DESCRIPTION, TEMPLATE_DESCRIPTION):
+                tid = cand
+                break
+        if not tid:
+            created = _call("CreateTemplate",
+                            {"description": CLASSIC_DESCRIPTION}, post=True)
+            tid = str(_dig(created, "templateId") or "").strip()
+            if not tid:
+                raise YemotError("יצירת תבנית לצינתוק קלאסי נכשלה — לא התקבל מזהה")
+        db.set_setting(SET_CLASSIC_TEMPLATE, tid)
+    if (db.get_setting(SET_CLASSIC_READY) or "").strip() != tid:
+        _call("UpdateTemplate",
+              {"templateId": tid, "description": CLASSIC_DESCRIPTION,
+               "originateTimeout": str(CLASSIC_RING_SECONDS),
+               "maxDialAttempts": "1"}, post=True)
+        db.set_setting(SET_CLASSIC_READY, tid)
+    return tid
+
+
+def add_template_entry(phone: str, name: str = "",
+                       template_id: str | None = None) -> None:
+    """Add ONE number to the template's stored list without clearing it —
+    so a caller-back hears the campaign message (campaign_message_to_play).
+    Used by the test send; a real send stores the whole list instead."""
+    p = normalize_phone(phone)
+    if not p:
+        raise YemotError("המספר אינו תקין")
+    template_id = template_id or ensure_template()
+    _call("UploadPhoneList", {"templateId": template_id,
+                              "data": f"{p}\t{(name or '')[:60]}",
+                              "delimiter": "TAB", "nameColumns": "1",
+                              "updateType": "UPDATE"}, post=True)
+
+
 def upload_message_wav(file_path: str, template_id: str | None = None) -> dict:
     """Attach a recording file to the campaign template (converted to the
     telephony WAV format server-side). The campaign-file path uses the
@@ -357,7 +412,7 @@ def _upload_multipart(path: str, content: bytes, convert: str = "1") -> dict:
 
 
 def run_campaign(phones: dict, template_id: str | None = None,
-                 store_list: bool = False) -> dict:
+                 store_list: bool = False, classic: bool = False) -> dict:
     """Send the voice message to `phones` ({'0501234567': 'שם', ...}).
     Returns the server answer: campaignId, entriesCount, estimatedPrice,
     customerUnits…  Refuses an empty list locally.
@@ -367,19 +422,36 @@ def run_campaign(phones: dict, template_id: str | None = None,
     message to callers whose number is ACTIVE in that list
     (campaign_message_to_play) — so someone who missed the call can dial the
     line and hear the message. Best-effort: a storing failure never blocks
-    the actual send."""
+    the actual send.
+
+    classic=True: a classic tzintuk — a short unanswered ring from the second
+    template (missed call, almost no cost); the list is still stored on the
+    MAIN template so calling back plays the message. The current recording is
+    copied to the classic template first (so an answered-in-time call still
+    hears the right message)."""
     numbers = {p: n for p, n in phones.items() if normalize_phone(p)}
     if not numbers:
         raise YemotError("אין אף מספר תקין לשליחה")
-    template_id = template_id or ensure_template()
-    if store_list:
+    main_id = template_id or ensure_template()
+    dial_id = main_id
+    if classic:
+        dial_id = ensure_classic_template()
+        content = _download_template_message(main_id)
         try:
-            set_template_entries(numbers, template_id)
+            _upload_multipart(f"tpl:{dial_id}", content, convert="0")
+        except YemotError as e:
+            if e.code in (107, 109, 110):   # same path fallback as the upload
+                _upload_multipart(f"ivr2:{dial_id}.wav", content, convert="0")
+            else:
+                raise
+    if store_list or classic:
+        try:
+            set_template_entries(numbers, main_id)
         except YemotError:
             pass
     payload = json.dumps({p: {"name": (n or "")[:60]} for p, n in numbers.items()},
                          ensure_ascii=False)
-    params = {"templateId": template_id, "phones": payload}
+    params = {"templateId": dial_id, "phones": payload}
     caller = (db.get_setting(SET_CALLER_ID) or "").strip()
     if caller:
         params["callerId"] = caller
@@ -391,14 +463,8 @@ def run_campaign(phones: dict, template_id: str | None = None,
 MESSAGES_EXT = "1"          # שלוחת ההודעות המרכזית בקו (הכרעת המשתמש, #kx6wd)
 
 
-def publish_to_extension(ext: str = MESSAGES_EXT,
-                         template_id: str | None = None) -> str:
-    """Copy the campaign's recording into the line's central messages
-    extension as an ADDITIONAL file (#kx6wd) — server-side copy, so it works
-    from either computer: DownloadFile tpl:<id> → next free number in the
-    extension (GetIVR2Dir) → UploadFile ivr2:/<ext>/<n>.wav.
-    Returns the uploaded file name."""
-    template_id = template_id or ensure_template()
+def _download_template_message(template_id: str) -> bytes:
+    """The template's current recording, as bytes (telephony WAV)."""
     query = urllib.parse.urlencode({"token": _token(),
                                     "path": f"tpl:{template_id}"})
     try:
@@ -409,6 +475,18 @@ def publish_to_extension(ext: str = MESSAGES_EXT,
         content = _http(f"{ALT_URL}/DownloadFile?{query}")
     if not content or content[:1] == b"{":
         raise YemotError("להודעת הצינתוק אין הקלטה בשרת — העלה קודם הקלטה")
+    return content
+
+
+def publish_to_extension(ext: str = MESSAGES_EXT,
+                         template_id: str | None = None) -> str:
+    """Copy the campaign's recording into the line's central messages
+    extension as an ADDITIONAL file (#kx6wd) — server-side copy, so it works
+    from either computer: DownloadFile tpl:<id> → next free number in the
+    extension (GetIVR2Dir) → UploadFile ivr2:/<ext>/<n>.wav.
+    Returns the uploaded file name."""
+    template_id = template_id or ensure_template()
+    content = _download_template_message(template_id)
     listing = _call("GetIVR2Dir", {"path": f"ivr2:/{ext}"})
     highest = 0
     for f in _dig(listing, "files") or []:
@@ -626,8 +704,16 @@ def answer_stats() -> dict:
 
 
 def run_test(phone: str) -> dict:
-    """Ring one number (the operator's own) so they can hear the recording."""
+    """Ring one number (the operator's own) so they can hear the recording.
+    The number is also added to the template's stored list (without clearing
+    it) so calling the line back plays the message — the field test of 1/9
+    found a callback after a test heard nothing because tests never stored
+    the number."""
     p = normalize_phone(phone)
     if not p:
         raise YemotError("מספר הבדיקה אינו תקין")
+    try:
+        add_template_entry(p, "בדיקה")
+    except YemotError:
+        pass                      # best-effort — never blocks the test ring
     return run_campaign({p: "בדיקה"})

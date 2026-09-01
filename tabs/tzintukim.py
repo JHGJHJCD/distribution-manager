@@ -124,6 +124,177 @@ class _AddPersonDialog(QDialog):
         self.accept()
 
 
+class _FreeListDialog(QDialog):
+    """רשימה עצמאית (#1/9) — הדבקת מספרי טלפון או טעינת קובץ אקסל, בלי שום
+    קשר לרשימות החלוקה. מציג בזמן-אמת כמה מספרים תקינים זוהו, כדי שהמפעיל
+    יידע ב-100% מה עומד להישלח."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("רשימה עצמאית לצינתוק")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.resize(520, 520)
+        self.entries = []              # [(phone, name), …] — the parsed result
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        info = QLabel("הדבק כאן מספרי טלפון (מספר בכל שורה, אפשר גם שם ליד "
+                      "המספר) — או טען קובץ אקסל. הרשימה הזו נפרדת לגמרי "
+                      "מרשימות החלוקה.")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+        self.text = QTextEdit()
+        self.text.setPlaceholderText("לדוגמה:\n0501234567\tמשפחת כהן\n0521111222")
+        self.text.setAcceptRichText(False)
+        self.text.textChanged.connect(self._reparse)
+        lay.addWidget(self.text, 1)
+        btn_xls = QPushButton("📊 טען מקובץ אקסל…")
+        btn_xls.setObjectName("neutral")
+        btn_xls.setToolTip("קורא את כל המספרים מהקובץ ומציג אותם כאן — "
+                           "מה שרואים זה מה שנשלח")
+        btn_xls.clicked.connect(self._load_excel)
+        lay.addWidget(btn_xls)
+        self.lbl_count = QLabel("")
+        self.lbl_count.setObjectName("subtitle")
+        self.lbl_count.setWordWrap(True)
+        lay.addWidget(self.lbl_count)
+        btns = QHBoxLayout()
+        self.btn_ok = QPushButton("הצג את הרשימה »")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.clicked.connect(self._accept)
+        cancel = QPushButton("ביטול")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(self.btn_ok)
+        btns.addWidget(cancel)
+        btns.addStretch()
+        lay.addLayout(btns)
+        self._reparse()
+
+    @staticmethod
+    def _parse_text(raw: str):
+        """[(phone, name)], bad_tokens — a token is a phone when it normalizes;
+        the rest of its line becomes the name."""
+        entries, bad = [], []
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in
+                     line.replace(";", "\t").replace(",", "\t").split("\t")]
+            parts = [p for p in parts if p]
+            phones, words = [], []
+            for part in parts:
+                for tok in (part.split() if " " in part else [part]):
+                    if yemot.normalize_phone(tok):
+                        phones.append(yemot.normalize_phone(tok))
+                    elif any(ch.isdigit() for ch in tok):
+                        bad.append(tok)   # digits but not a valid phone
+                    else:
+                        words.append(tok)
+            name = " ".join(words)
+            for p in phones:
+                entries.append((p, name))
+        return entries, bad
+
+    def _reparse(self):
+        self.entries, bad = self._parse_text(self.text.toPlainText())
+        seen, unique = set(), []
+        for p, n in self.entries:
+            if p not in seen:
+                seen.add(p)
+                unique.append((p, n))
+        self.entries = unique
+        msg = f"זוהו {len(self.entries)} מספרים תקינים."
+        if bad:
+            msg += f"  ⚠ {len(bad)} קטעים נראים כמו מספר אבל אינם תקינים: " \
+                   + ", ".join(bad[:5]) + ("…" if len(bad) > 5 else "")
+        self.lbl_count.setText(msg)
+        self.btn_ok.setEnabled(bool(self.entries))
+
+    def _load_excel(self):
+        path, _f = QFileDialog.getOpenFileName(
+            self, "בחר קובץ אקסל", "", "קובצי אקסל (*.xlsx *.xlsm);;כל הקבצים (*.*)")
+        if not path:
+            return
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(path, read_only=True, data_only=True)
+            lines = []
+            for ws in wb.worksheets:
+                for row in ws.iter_rows(values_only=True):
+                    phones, words = [], []
+                    for cell in row:
+                        if cell is None:
+                            continue
+                        val = str(cell).strip()
+                        if not val:
+                            continue
+                        if yemot.normalize_phone(val):
+                            phones.append(yemot.normalize_phone(val))
+                        elif not any(ch.isdigit() for ch in val):
+                            words.append(val)
+                    for p in phones:
+                        lines.append(f"{p}\t{' '.join(words)}".rstrip())
+            wb.close()
+        except Exception as e:
+            QMessageBox.warning(self, "טעינת אקסל", f"קריאת הקובץ נכשלה:\n{e}")
+            return
+        if not lines:
+            QMessageBox.information(self, "טעינת אקסל",
+                                    "לא נמצאו מספרי טלפון תקינים בקובץ.")
+            return
+        # ההדבקה לתיבה — כך המפעיל רואה בעיניים בדיוק מה נטען מהאקסל.
+        self.text.setPlainText("\n".join(lines))
+
+    def _accept(self):
+        if not self.entries:
+            return
+        self.accept()
+
+
+class _SendModeDialog(QDialog):
+    """אישור שליחה + בחירת סוג הצינתוק (#1/9): רגיל (משמיע הודעה למי שעונה)
+    או קלאסי (צלצול קצר בלי מענה — מי שמתקשר חזרה שומע את ההודעה)."""
+
+    def __init__(self, summary: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("אישור שליחה")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.mode = None               # 'voice' | 'classic'
+        from PyQt6.QtWidgets import QRadioButton
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        lbl = QLabel(summary)
+        lbl.setWordWrap(True)
+        lay.addWidget(lbl)
+        self.rb_voice = QRadioButton("צינתוק עם הודעה (רגיל) — מי שעונה שומע "
+                                     "את ההודעה מיד")
+        self.rb_voice.setChecked(True)
+        lay.addWidget(self.rb_voice)
+        self.rb_classic = QRadioButton("צינתוק קלאסי — צלצול קצר בלי מענה "
+                                       "(כמעט בלי עלות)")
+        lay.addWidget(self.rb_classic)
+        note = QLabel("בצינתוק קלאסי הטלפון מצלצל פעם-פעמיים ומתנתק. מי שרואה "
+                      "שיחה שלא נענתה ומתקשר חזרה לקו — שומע את ההודעה. "
+                      "מי שבכל זאת יספיק לענות בזמן הצלצול ישמע אותה מיד.")
+        note.setObjectName("subtitle")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        btns = QHBoxLayout()
+        ok = QPushButton("שלח עכשיו »")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self._accept)
+        cancel = QPushButton("ביטול")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(ok)
+        btns.addWidget(cancel)
+        btns.addStretch()
+        lay.addLayout(btns)
+
+    def _accept(self):
+        self.mode = "classic" if self.rb_classic.isChecked() else "voice"
+        self.accept()
+
+
 class _ScheduleDialog(QDialog):
     """בחירת תאריך ושעה לצינתוק מתוזמן (#xi85i) — התזמון נשמר בשרת של ימות
     ורץ גם כשהמחשב כבוי."""
@@ -475,6 +646,7 @@ class TzintukimTab(QWidget):
         self._last_failed = []    # [{'phone','name'}] from the last finished run
         self._sched_checker = None   # worker probing the server for due schedules
         self._batch = None        # #9hgvi: past-distribution batch loaded as list
+        self._free = None         # #1/9: standalone list [(phone, name), …]
         self._stats = {}          # #y7jr0: per-phone answer history (tooltips)
         # #ifc70 — the week list is NOT loaded automatically; the operator loads
         # it with an explicit button (a past batch via #9hgvi counts as loaded).
@@ -533,10 +705,10 @@ class TzintukimTab(QWidget):
         self.lbl_batch.setStyleSheet("color:#3730a3; font-weight:600; " + _LBL)
         self.lbl_batch.setWordWrap(True)
         bt_lay.addWidget(self.lbl_batch, 1)
-        b_back = QPushButton("חזור לרשימת השבוע")
-        b_back.setObjectName("neutral")
-        b_back.clicked.connect(self._clear_batch)
-        bt_lay.addWidget(b_back)
+        self.btn_back = QPushButton("חזור לרשימת השבוע")
+        self.btn_back.setObjectName("neutral")
+        self.btn_back.clicked.connect(self._clear_batch)
+        bt_lay.addWidget(self.btn_back)
         self.batch_frame.setVisible(False)
         lay.addWidget(self.batch_frame)
 
@@ -547,8 +719,9 @@ class TzintukimTab(QWidget):
         ld_lay.setContentsMargins(14, 18, 14, 18)
         ld_lay.setSpacing(10)
         ld_txt = QLabel("הרשימה עוד לא נטענה. אפשר לטעון את רשימת החלוקה "
-                        "הנוכחית ממסך \"חלוקה ורישום\", או לטעון חלוקה קודמת "
-                        "בקליק ימני בלשונית \"חלוקות קודמות\".")
+                        "הנוכחית ממסך \"חלוקה ורישום\", לטעון חלוקה קודמת "
+                        "בקליק ימני בלשונית \"חלוקות קודמות\", או להדביק "
+                        "רשימת מספרים עצמאית — בלי קשר לחלוקות.")
         ld_txt.setObjectName("subtitle")
         ld_txt.setWordWrap(True)
         ld_txt.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -560,6 +733,16 @@ class TzintukimTab(QWidget):
                                  "(בלי הרזרבות)")
         self.btn_load.clicked.connect(self._load_week_list)
         ld_lay.addWidget(self.btn_load, 0, Qt.AlignmentFlag.AlignCenter)
+        # #1/9: a fully independent list — pasted numbers / an Excel file,
+        # with zero connection to the distribution lists.
+        self.btn_free = QPushButton("📋 רשימה עצמאית — הדבק מספרים או טען אקסל…")
+        self.btn_free.setObjectName("neutral")
+        self.btn_free.setMinimumHeight(40)
+        self.btn_free.setToolTip("שדה נקי לגמרי: מדביקים מספרי טלפון או בוחרים "
+                                 "קובץ אקסל, רואים בדיוק מה עומד להישלח — "
+                                 "בלי שום קשר לרשימות החלוקה")
+        self.btn_free.clicked.connect(self._load_free_list)
+        ld_lay.addWidget(self.btn_free, 0, Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.load_frame)
 
         # Metric chips: eligible / ready / exceptions.
@@ -579,7 +762,18 @@ class TzintukimTab(QWidget):
         lf_lay = QVBoxLayout(list_frame)
         lf_lay.setContentsMargins(10, 7, 10, 7)
         lf_lay.setSpacing(6)
-        lf_lay.addWidget(section_header("רשימת נמענים", "phone", "#0f766e"))
+        list_top = QHBoxLayout()
+        list_top.addWidget(section_header("רשימת נמענים", "phone", "#0f766e"), 1)
+        # #1/9: bulk check/uncheck — no more clearing V one by one.
+        btn_check_all = QPushButton("☑ סמן את כולם")
+        btn_check_all.setObjectName("neutral")
+        btn_check_all.clicked.connect(lambda: self._set_all_checked(True))
+        list_top.addWidget(btn_check_all)
+        btn_uncheck_all = QPushButton("☐ נקה סימון מכולם")
+        btn_uncheck_all.setObjectName("neutral")
+        btn_uncheck_all.clicked.connect(lambda: self._set_all_checked(False))
+        list_top.addWidget(btn_uncheck_all)
+        lf_lay.addLayout(list_top)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["", "שם", "טלפון", "סטטוס"])
         self.table.verticalHeader().setVisible(False)
@@ -593,7 +787,11 @@ class TzintukimTab(QWidget):
         self.table.setColumnWidth(2, 340)
         hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setDefaultSectionSize(40)
-        self.table.setMinimumHeight(260)
+        # #1/9: the table grows to show ALL rows (the page scrolls, not a tiny
+        # inner window of ~4 rows) — see _fit_table_height in _populate.
+        self.table.setMinimumHeight(120)
+        self.table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.itemChanged.connect(self._on_item_changed)
         lf_lay.addWidget(self.table)
         hint = QLabel("☑ = יקבל צינתוק. מי שיש לו כמה מספרים — כולם מצולצלים, "
@@ -777,7 +975,8 @@ class TzintukimTab(QWidget):
         self.banner.setVisible(not yemot.is_configured())
         self._refresh_batch_banner()
         # #ifc70 — nothing is loaded until the operator asks for a list.
-        loaded = self._batch is not None or self._list_loaded
+        loaded = (self._batch is not None or self._free is not None
+                  or self._list_loaded)
         self.load_frame.setVisible(not loaded)
         self.list_frame.setVisible(loaded)
         for m in (self.m_total, self.m_ready, self.m_bad):
@@ -802,6 +1001,9 @@ class TzintukimTab(QWidget):
         self._maybe_resume_tracking()
 
     def _distribution_rows(self):
+        if self._free is not None:             # standalone list (#1/9)
+            return [{"id": None, "full_name": name or "", "phone1": phone}
+                    for phone, name in self._free]
         if self._batch is not None:            # past distribution (#9hgvi)
             try:
                 return db.get_batch_export_rows(self._batch.get("id"))
@@ -825,21 +1027,41 @@ class TzintukimTab(QWidget):
         """Show a PAST distribution's recipients as the call list — entry point
         of the right-click 'שלח צינתוק' action in 'חלוקות קודמות'."""
         self._batch = dict(batch or {})
+        self._free = None
         self._rows = []                # drop week-list rows and manual picks
         self.refresh()
 
     def _load_week_list(self):
         """#ifc70 — explicit load of the current distribution list."""
         self._list_loaded = True
+        self._free = None
+        self.refresh()
+
+    def _load_free_list(self):
+        """#1/9 — a standalone pasted/Excel list, unrelated to distributions."""
+        dlg = _FreeListDialog(self)
+        if not dlg.exec() or not dlg.entries:
+            return
+        self._free = list(dlg.entries)
+        self._batch = None
+        self._rows = []
         self.refresh()
 
     def _clear_batch(self):
         self._batch = None
+        self._free = None
         self._rows = []
         self._list_loaded = False    # back to the explicit-load state (#ifc70)
         self.refresh()
 
     def _refresh_batch_banner(self):
+        if self._free is not None:
+            self.lbl_batch.setText(f"📋 רשימה עצמאית — {len(self._free)} "
+                                   "מספרים (בלי קשר לרשימות החלוקה)")
+            self.btn_back.setText("נקה את הרשימה")
+            self.batch_frame.setVisible(True)
+            return
+        self.btn_back.setText("חזור לרשימת השבוע")
         if self._batch is None:
             self.batch_frame.setVisible(False)
             return
@@ -852,12 +1074,18 @@ class TzintukimTab(QWidget):
         self.batch_frame.setVisible(True)
 
     def _dist_date_iso(self) -> str:
-        """The distribution date the campaign belongs to (double-send guard)."""
+        """The distribution date the campaign belongs to (double-send guard).
+        A standalone list is not tied to any distribution — it gets an empty
+        date, so the guard never blocks it (and it never blocks the week)."""
+        if self._free is not None:
+            return ""
         if self._batch is not None and (self._batch.get("dist_date") or ""):
             return self._batch["dist_date"]
         return db.next_wednesday().isoformat()
 
     def _campaign_name(self) -> str:
+        if self._free is not None:
+            return f"רשימה עצמאית — {len(self._free)} מספרים"
         if self._batch is not None:
             label = self._batch.get("dist_name") or self._dist_date_iso()
             return f"צינתוק לחלוקה — {label}"
@@ -938,6 +1166,28 @@ class TzintukimTab(QWidget):
             if row["why"]:
                 status.setForeground(Qt.GlobalColor.darkYellow)
             self.table.setItem(i, 3, status)
+        self.table.blockSignals(False)
+        self._fit_table_height()
+        self._update_metrics()
+
+    def _fit_table_height(self):
+        """#1/9: size the table to show ALL rows — the page scrolls instead of
+        a tiny inner window (Ron saw only ~4 families at a time)."""
+        h = self.table.horizontalHeader().height() + 6
+        for r in range(self.table.rowCount()):
+            h += self.table.rowHeight(r)
+        self.table.setMinimumHeight(max(120, h))
+
+    def _set_all_checked(self, state: bool):
+        """#1/9: one click instead of un/checking V row by row. Checking marks
+        only rows that actually have a number to ring."""
+        self.table.blockSignals(True)
+        for i, row in enumerate(self._rows):
+            row["checked"] = bool(state and row["send"])
+            it = self.table.item(i, 0)
+            if it is not None and it.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                it.setCheckState(Qt.CheckState.Checked if row["checked"]
+                                 else Qt.CheckState.Unchecked)
         self.table.blockSignals(False)
         self._update_metrics()
 
@@ -1087,7 +1337,9 @@ class TzintukimTab(QWidget):
         with busy_cursor():
             try:
                 yemot.run_test(phone)
-                ok, msg = True, f"📞 מצלצל אליך עכשיו ({phone}) — ענה ותשמע את ההודעה."
+                ok, msg = True, (f"📞 מצלצל אליך עכשיו ({phone}) — ענה ותשמע "
+                                 "את ההודעה.\nאפשר גם לא לענות ולהתקשר חזרה "
+                                 "לקו — ההודעה תושמע לך בכניסה.")
             except yemot.YemotError as e:
                 ok, msg = False, str(e)
             except Exception as e:
@@ -1113,20 +1365,17 @@ class TzintukimTab(QWidget):
             extra = (f"\n\n⚠ שים לב: {verb} לחלוקה של תאריך זה "
                      f"({when}, מ{src}). שליחה נוספת תצלצל לאנשים פעם שנייה!")
         bad = sum(1 for r in self._rows if r["why"])
-        ans = QMessageBox.question(
-            self, "אישור שליחה",
-            f"{self._campaign_name()}\n\n"
-            f"עומד לשלוח הודעה קולית ל-{len(rows)} משפחות "
-            f"({len(phones)} מספרי טלפון — כל המספרים של כל משפחה).\n"
-            f"חריגים שלא יישלחו: {bad}.\n"
-            f"עלות משוערת: כ-{len(phones)} יחידות.\n"
-            "מי שיקיש 7 בשיחה יסומן בתוכנה כ\"אישר הגעה\".\n"
-            "מי שלא ענה ישמע את ההודעה כשיתקשר חזרה לקו "
-            f"(מושמעת רק למי שברשימה הזו).{extra}\n\nלשלוח עכשיו?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if ans != QMessageBox.StandardButton.Yes:
+        summary = (f"{self._campaign_name()}\n\n"
+                   f"עומד לשלוח צינתוק ל-{len(rows)} משפחות "
+                   f"({len(phones)} מספרי טלפון — כל המספרים של כל משפחה).\n"
+                   f"חריגים שלא יישלחו: {bad}.\n"
+                   "מי שיקיש 7 בשיחה יסומן בתוכנה כ\"אישר הגעה\".\n"
+                   "מי שלא ענה ישמע את ההודעה כשיתקשר חזרה לקו "
+                   f"(מושמעת רק למי שברשימה הזו).{extra}")
+        dlg = _SendModeDialog(summary, self)
+        if not dlg.exec() or not dlg.mode:
             return
+        classic = dlg.mode == "classic"
         self.btn_send.setEnabled(False)      # locked until the campaign ends
         self.btn_send.setText("שולח…")
         with busy_cursor():
@@ -1134,7 +1383,8 @@ class TzintukimTab(QWidget):
                 template_id = yemot.ensure_template()
                 # store_list=True — הרשימה נשמרת בתבנית כדי שהקו ישמיע את
                 # ההודעה למי שמתקשר חזרה (#z4xy9, campaign_message_to_play).
-                res = yemot.run_campaign(phones, template_id, store_list=True)
+                res = yemot.run_campaign(phones, template_id, store_list=True,
+                                         classic=classic)
             except yemot.YemotError as e:
                 QMessageBox.warning(self, "צינתוקים", str(e))
                 self._update_metrics()
@@ -1144,8 +1394,24 @@ class TzintukimTab(QWidget):
                 self._update_metrics()
                 return
         from utils import sync
+        name = self._campaign_name()
+        if classic:
+            # קלאסי: אין מעקב-מענה (אף אחד לא אמור לענות) — נרשם כהסתיים.
+            db.add_tzintuk_campaign(
+                "צינתוק קלאסי — " + name, dist_date, template_id,
+                str(res.get("campaignId") or ""),
+                int(res.get("entriesCount") or len(phones)),
+                device=sync.device_name() or "", status="done")
+            self._refresh_history()
+            self._update_metrics()
+            QMessageBox.information(
+                self, "צינתוק קלאסי",
+                f"📞 הצלצולים יצאו ל-{len(phones)} מספרים.\n"
+                "הטלפונים יצלצלו קצר ויתנתקו — מי שמתקשר חזרה לקו ישמע את "
+                "ההודעה. אין מעקב מענה בצינתוק קלאסי (אף אחד לא אמור לענות).")
+            return
         self._active_guid = db.add_tzintuk_campaign(
-            self._campaign_name(), dist_date, template_id,
+            name, dist_date, template_id,
             str(res.get("campaignId") or ""),
             int(res.get("entriesCount") or len(phones)),
             device=sync.device_name() or "")
