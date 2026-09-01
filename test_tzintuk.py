@@ -309,19 +309,35 @@ n0 = len(calls)
 ok("ensure_classic_template לא פונה שוב לשרת",
    yemot.ensure_classic_template() == "1117320" and len(calls) == n0)
 
+# קלאסי דרך RunTzintuk — צינתוק אמיתי שאי אפשר לענות לו
+canned["RunTzintuk"] = {"responseStatus": "OK"}
+n0 = len(calls)
+yemot.run_campaign({"0521234567": "כהן"}, classic=True)
+seq = [c[0] for c in calls[n0:]]
+ok("קלאסי: יוצא דרך RunTzintuk ולא RunCampaign",
+   seq[-1] == "RunTzintuk" and "RunCampaign" not in seq, str(seq))
+tz = calls[-1]
+ok("קלאסי: מספרים + זמן צלצול, בלי sayInfoOnAnswer (שלא יהיה מענה)",
+   tz[1].get("phones") == "0521234567"
+   and tz[1].get("TzintukTimeOut") == str(yemot.TZINTUK_RING_SECONDS)
+   and "sayInfoOnAnswer" not in tz[1])
+stored = [c for c in calls[n0:] if c[0] == "UploadPhoneList"][-1]
+ok("קלאסי: הרשימה נשמרה בתבנית הראשית (להתקשרות חוזרת)",
+   stored[1].get("templateId") == "1117319")
+
+# הקו בלי שירות צינתוקים → נפילה חזרה לצלצול-קצר מהתבנית הקלאסית
+canned["RunTzintuk"] = {"responseStatus": "ERROR", "messageCode": 3,
+                        "message": "no tzintuk service"}
 yemot._TRANSPORT = media_transport      # DownloadFile מחזיר WAV
 n0 = len(calls)
 yemot.run_campaign({"0521234567": "כהן"}, classic=True)
 seq = [c[0] for c in calls[n0:]]
-ok("קלאסי: ההקלטה מועתקת לתבנית הקלאסית",
+ok("נפילה: ההקלטה מועתקת לתבנית הקלאסית",
    "DownloadFile" in seq and "UploadFile" in seq, str(seq))
-ok("קלאסי: הרשימה נשמרת בתבנית הראשית (להתקשרות חוזרת)",
-   "UploadPhoneList" in seq, str(seq))
 run = [c for c in calls[n0:] if c[0] == "RunCampaign"][-1]
-ok("קלאסי: החיוג יוצא מהתבנית הקלאסית",
+ok("נפילה: החיוג יוצא מהתבנית הקלאסית",
    run[1].get("templateId") == "1117320")
-stored = [c for c in calls[n0:] if c[0] == "UploadPhoneList"][-1]
-ok("קלאסי: הרשימה נשמרה בתבנית הראשית", stored[1].get("templateId") == "1117319")
+canned["RunTzintuk"] = {"responseStatus": "OK"}
 yemot._TRANSPORT = fake_transport
 
 n0 = len(calls)

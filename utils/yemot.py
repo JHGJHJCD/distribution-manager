@@ -39,6 +39,7 @@ SET_CLASSIC_TEMPLATE = "yemot_classic_template_id"
 SET_CLASSIC_READY = "yemot_classic_ready"
 CLASSIC_DESCRIPTION = "מנהל חלוקה — צינתוק קלאסי"
 CLASSIC_RING_SECONDS = 8          # ~2 rings, then give up (no answer = no cost)
+TZINTUK_RING_SECONDS = 16         # RunTzintuk ring length — unanswerable anyway
 
 
 class YemotError(Exception):
@@ -411,6 +412,23 @@ def _upload_multipart(path: str, content: bytes, convert: str = "1") -> dict:
     return data
 
 
+def run_tzintuk(phones_list: list, timeout: int | None = None) -> dict:
+    """A TRUE tzintuk via the dedicated RunTzintuk API — the phone rings and
+    the call is never connected, so answering is impossible (the user's
+    requirement for 'רק צינתוק'). sayInfoOnAnswer is deliberately NOT sent —
+    passing it true is what would make the call answerable. ~0.1 unit per
+    number. Raises YemotError when the line has no tzintuk service — the
+    caller falls back to the short-ring campaign."""
+    if not phones_list:
+        raise YemotError("אין אף מספר תקין לשליחה")
+    params = {"phones": ",".join(phones_list),
+              "TzintukTimeOut": str(timeout or TZINTUK_RING_SECONDS)}
+    caller = (db.get_setting(SET_CALLER_ID) or "").strip()
+    if caller:
+        params["callerId"] = caller
+    return _call("RunTzintuk", params, post=True)
+
+
 def run_campaign(phones: dict, template_id: str | None = None,
                  store_list: bool = False, classic: bool = False) -> dict:
     """Send the voice message to `phones` ({'0501234567': 'שם', ...}).
@@ -424,17 +442,27 @@ def run_campaign(phones: dict, template_id: str | None = None,
     line and hear the message. Best-effort: a storing failure never blocks
     the actual send.
 
-    classic=True: a classic tzintuk — a short unanswered ring from the second
-    template (missed call, almost no cost); the list is still stored on the
-    MAIN template so calling back plays the message. The current recording is
-    copied to the classic template first (so an answered-in-time call still
-    hears the right message)."""
+    classic=True: a classic tzintuk — a ring that CANNOT be answered. First
+    choice is the dedicated RunTzintuk API (the server never connects the
+    call, ~0.1 unit per number); if the server refuses it (not every line
+    has the tzintuk service enabled) we fall back to the old short-ring
+    campaign from the second template. Either way the list is stored on the
+    MAIN template so calling back plays the message."""
     numbers = {p: n for p, n in phones.items() if normalize_phone(p)}
     if not numbers:
         raise YemotError("אין אף מספר תקין לשליחה")
     main_id = template_id or ensure_template()
     dial_id = main_id
+    if store_list or classic:
+        try:
+            set_template_entries(numbers, main_id)
+        except YemotError:
+            pass
     if classic:
+        try:
+            return run_tzintuk(list(numbers))
+        except YemotError:
+            pass                      # tzintuk service unavailable → fallback
         dial_id = ensure_classic_template()
         content = _download_template_message(main_id)
         try:
@@ -444,11 +472,6 @@ def run_campaign(phones: dict, template_id: str | None = None,
                 _upload_multipart(f"ivr2:{dial_id}.wav", content, convert="0")
             else:
                 raise
-    if store_list or classic:
-        try:
-            set_template_entries(numbers, main_id)
-        except YemotError:
-            pass
     payload = json.dumps({p: {"name": (n or "")[:60]} for p, n in numbers.items()},
                          ensure_ascii=False)
     params = {"templateId": dial_id, "phones": payload}

@@ -273,9 +273,9 @@ class _SendModeDialog(QDialog):
         self.rb_classic = QRadioButton("צינתוק קלאסי — צלצול קצר בלי מענה "
                                        "(כמעט בלי עלות)")
         lay.addWidget(self.rb_classic)
-        note = QLabel("בצינתוק קלאסי הטלפון מצלצל פעם-פעמיים ומתנתק. מי שרואה "
-                      "שיחה שלא נענתה ומתקשר חזרה לקו — שומע את ההודעה. "
-                      "מי שבכל זאת יספיק לענות בזמן הצלצול ישמע אותה מיד.")
+        note = QLabel("בצינתוק קלאסי הטלפון מצלצל ומתנתק — אי אפשר לענות "
+                      "לשיחה. מי שרואה שיחה שלא נענתה ומתקשר חזרה לקו — "
+                      "שומע את ההודעה.")
         note.setObjectName("subtitle")
         note.setWordWrap(True)
         lay.addWidget(note)
@@ -293,6 +293,82 @@ class _SendModeDialog(QDialog):
     def _accept(self):
         self.mode = "classic" if self.rb_classic.isChecked() else "voice"
         self.accept()
+
+
+class _TestStatusDialog(QDialog):
+    """מעקב חי אחרי שיחת הבדיקה — כשמספר הבדיקה אינו הטלפון שביד המפעיל
+    רואים כאן אם השיחה נענתה, נכשלה או שהוקש 7, בלי לנחש."""
+
+    def __init__(self, campaign_id: str, phone: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("שליחת בדיקה — מעקב")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumWidth(400)
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        head = QLabel(f"📞 מצלצל אל {phone}")
+        head.setStyleSheet(_LBL + " font-weight:bold;")
+        lay.addWidget(head)
+        self.lbl_status = QLabel("⏳ ממתין לעדכון מהשרת…")
+        self.lbl_status.setWordWrap(True)
+        self.lbl_status.setStyleSheet(_LBL + " font-size:15px;")
+        lay.addWidget(self.lbl_status)
+        note = QLabel("הסטטוס מתעדכן כאן אוטומטית כל כמה שניות. "
+                      "אפשר לסגור את החלון — השיחה תמשיך כרגיל.")
+        note.setObjectName("subtitle")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        btns = QHBoxLayout()
+        self.btn_close = QPushButton("סגור")
+        self.btn_close.clicked.connect(self.accept)
+        btns.addWidget(self.btn_close)
+        btns.addStretch()
+        lay.addLayout(btns)
+        self._worker = _PollWorker(campaign_id, self)
+        self._worker.tick.connect(self._on_tick)
+        self._worker.start()
+
+    def _on_tick(self, st):
+        if isinstance(st, Exception):
+            self.lbl_status.setText(
+                "⚠ המעקב נכשל (בעיית תקשורת) — השיחה עצמה יוצאת כרגיל מהשרת "
+                "של ימות.")
+            self.lbl_status.setStyleSheet(_LBL + " font-size:15px; color:#a35b00;")
+            return
+        entries = st.get("entries") or []
+        e = entries[0] if entries else {}
+        status = e.get("status") or ""
+        if e.get("confirmed"):
+            txt, color = "✓ השיחה נענתה — וההודעה אושרה בהקשת 7", "#166534"
+        elif e.get("ok"):
+            txt = ("✓ השיחה נענתה ע\"י תא קולי — ההודעה הושארה בו"
+                   if status == "amd" else "✓ השיחה נענתה — ההודעה הושמעה")
+            color = "#0f6e56"
+        elif e.get("failed"):
+            txt = {"no_answer": "לא היה מענה לשיחה",
+                   "busy": "הקו תפוס"}.get(status, f"השיחה נכשלה ({status})")
+            txt, color = "✗ " + txt, "#a32d2d"
+        else:
+            txt, color = "📞 מצלצל עכשיו…", "#0f4c81"
+        # עוצרים רק כשהקמפיין באמת הסתיים — הקשת 7 נרשמת בסוף השיחה, ואם
+        # נעצור כבר על "נענתה" נפספס את האישור.
+        if st.get("finished"):
+            self._worker.stop()
+        else:
+            txt += "\n(ממשיך לעקוב…)"
+        self.lbl_status.setText(txt)
+        self.lbl_status.setStyleSheet(
+            _LBL + f" font-size:15px; font-weight:bold; color:{color};")
+
+    def closeEvent(self, ev):
+        if self._worker is not None:
+            self._worker.stop()
+        super().closeEvent(ev)
+
+    def accept(self):
+        if self._worker is not None:
+            self._worker.stop()
+        super().accept()
 
 
 class _ScheduleDialog(QDialog):
@@ -1336,15 +1412,23 @@ class TzintukimTab(QWidget):
         db.set_setting(yemot.SET_TEST_PHONE, phone)
         with busy_cursor():
             try:
-                yemot.run_test(phone)
-                ok, msg = True, (f"📞 מצלצל אליך עכשיו ({phone}) — ענה ותשמע "
-                                 "את ההודעה.\nאפשר גם לא לענות ולהתקשר חזרה "
-                                 "לקו — ההודעה תושמע לך בכניסה.")
+                res = yemot.run_test(phone)
             except yemot.YemotError as e:
-                ok, msg = False, str(e)
+                QMessageBox.warning(self, "שליחת בדיקה", str(e))
+                return
             except Exception as e:
-                ok, msg = False, f"השליחה נכשלה: {e}"
-        (QMessageBox.information if ok else QMessageBox.warning)(self, "שליחת בדיקה", msg)
+                QMessageBox.warning(self, "שליחת בדיקה", f"השליחה נכשלה: {e}")
+                return
+        cid = str(res.get("campaignId") or "")
+        if cid:
+            # מעקב חי — מספר הבדיקה לא תמיד ביד המפעיל, אז מראים כאן אם
+            # השיחה נענתה / נכשלה / הוקש 7.
+            _TestStatusDialog(cid, phone, self).exec()
+        else:
+            QMessageBox.information(
+                self, "שליחת בדיקה",
+                f"📞 מצלצל עכשיו ({phone}) — מי שעונה ישמע את ההודעה.\n"
+                "אפשר גם לא לענות ולהתקשר חזרה לקו — ההודעה תושמע בכניסה.")
 
     def _send(self):
         if not self._require_config():
@@ -1407,8 +1491,9 @@ class TzintukimTab(QWidget):
             QMessageBox.information(
                 self, "צינתוק קלאסי",
                 f"📞 הצלצולים יצאו ל-{len(phones)} מספרים.\n"
-                "הטלפונים יצלצלו קצר ויתנתקו — מי שמתקשר חזרה לקו ישמע את "
-                "ההודעה. אין מעקב מענה בצינתוק קלאסי (אף אחד לא אמור לענות).")
+                "הטלפונים יצלצלו ויתנתקו — אי אפשר לענות לצלצול. "
+                "מי שמתקשר חזרה לקו ישמע את ההודעה.\n"
+                "אין מעקב מענה בצינתוק קלאסי.")
             return
         self._active_guid = db.add_tzintuk_campaign(
             name, dist_date, template_id,
