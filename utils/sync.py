@@ -868,6 +868,21 @@ def restart_from_peer() -> int:
         state = _load_state()
         state["applied"] = {}
         state["offsets"] = {}
+        # #rliqc: replaying the peer's journal from the start would also replay
+        # its ORIGINAL seed, whose settings (e.g. an empty Yemot password from
+        # before it was ever set) predate ours but were never stamped locally.
+        # Stamp every current local setting as 'known now' so only settings the
+        # peer changes AFTER this moment can overwrite them.
+        now = _utc_now()
+        known = state.setdefault("setting_ts", {})
+        try:
+            with db.get_connection() as conn:
+                keys = [r[0] for r in conn.execute("SELECT key FROM settings")]
+        except Exception:
+            keys = []
+        for key in keys:
+            if _setting_syncable(key) and (known.get(key) or "") < now:
+                known[key] = now
         _save_state(state)
         try:
             os.remove(_outbox_path())

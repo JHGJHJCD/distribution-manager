@@ -32,8 +32,8 @@ def _css(fs: int = 11) -> str:
     return f"""
     body {{ font-family: 'Segoe UI', Arial; direction: rtl; font-size: {fs}pt; }}
     .logo {{ text-align: center; margin-bottom: 2px; }}
-    .org {{ text-align: center; font-size: {fs + 5}pt; font-weight: bold; color: #1a4a7a; }}
-    h2 {{ text-align: center; color: #1a4a7a; margin-top: 2px; font-size: {fs + 3}pt; }}
+    .org {{ text-align: center; font-size: {fs + 1}pt; font-weight: bold; color: #1a4a7a; }}
+    h2 {{ text-align: center; color: #1a4a7a; margin-top: 2px; font-size: {fs + 1}pt; }}
     .notice {{ text-align: center; font-size: {small}pt; color: #b45309;
               border: 1px solid #f0c890; background-color: #fff8ec;
               padding: 4px; margin: 6px 0; }}
@@ -61,10 +61,20 @@ _PRINT_CSS = _css(11)   # default (kept for any external caller)
 # Column order is written left-to-right in SOURCE, which lands right-to-left on
 # the printed page. So the checkmark column, written LAST, prints as the first
 # (right-most) column — where the distributor marks כן/לא by hand.
+# Header text colour is set INLINE (#nne2s): QTextDocument applied the th
+# background from the stylesheet but not its `color`, so the captions printed
+# dark-on-dark. The <font> wrapper is the belt-and-braces for the PDF path.
+_TH = "<th style='color:#ffffff;'{attrs}><font color='#ffffff'>{txt}</font></th>"
+
+
+def _th(txt: str, cls: str = "") -> str:
+    return _TH.format(attrs=f" class='{cls}'" if cls else "", txt=txt)
+
+
 _THEAD = ("<thead><tr>"
-          "<th>אזור</th><th>טלפון / ים</th><th>שם מלא</th>"
-          "<th class='num'>מס'</th><th class='chk'>✓ סימון</th>"
-          "</tr></thead>")
+          + _th("אזור") + _th("טלפון / ים") + _th("אישר הגעה", "chk") + _th("שם מלא")
+          + _th("מס'", "num") + _th("✓ סימון", "chk")
+          + "</tr></thead>")
 
 
 def _esc(v) -> str:
@@ -87,6 +97,7 @@ def _table_rows(rows: List[Dict]) -> str:
             f"<tr>"
             f"<td>{_esc(rec.get('area', ''))}</td>"
             f"<td>{_esc(phones)}</td>"
+            f"<td class='chk'>{'✓' if rec.get('_confirmed') else ''}</td>"
             f"<td><b>{_esc(rec.get('full_name', ''))}</b></td>"
             f"<td class='num'>{i}</td>"
             f"<td class='chk'>☐</td>"
@@ -133,7 +144,8 @@ def _build_html(recipients: List[Dict], dist_date: str, has_logo: bool = False,
             + _reserve_grid(reserves)
         )
 
-    logo_html = "<div class='logo'><img src='orglogo' width='150'></div>" if has_logo else ""
+    # Logo at half its old size (#dyunn) — the list, not the letterhead, is the point.
+    logo_html = "<div class='logo'><img src='orglogo' width='75'></div>" if has_logo else ""
     heading = f"{_esc(dist_name)} — {_esc(dist_date)}" if dist_name else f"רשימת חלוקה — {_esc(dist_date)}"
     return f"""
     <html><body>

@@ -110,6 +110,32 @@ def assign_roles(ordered: list, portions, reserve_count: int = 0) -> list:
     return ordered
 
 
+def limit_to_products(ordered: list, portions, reserve_count: int = 0,
+                      keep_ids=(), reserve_ids=()) -> list:
+    """#c9k0m (user decision 2/9/2026): in the score-ranked modes the list IS
+    the distribution — show (and print) only as many people as there are
+    products, then `reserve_count` more as the reserve, and drop the rest.
+    `portions` <= 0 / None → no limit (everyone stays, unchanged).
+    `keep_ids` (manual adds / one-time picks) are always kept as MAIN and do
+    not take a scored slot from anyone; `reserve_ids` (explicit reserve picks)
+    are always kept as RESERVE. Source order is preserved."""
+    if not portions or portions <= 0:
+        return ordered
+    keep = set(keep_ids or ())
+    res_keep = set(reserve_ids or ())
+    forced_main = [r for r in ordered if r.get("id") in keep and r.get("id") not in res_keep]
+    rest = [r for r in ordered if r.get("id") not in keep and r.get("id") not in res_keep]
+    assign_roles(rest, max(0, portions - len(forced_main)), reserve_count)
+    for r in forced_main:
+        r["_role"] = ROLE_MAIN
+        r["_reserve"] = False
+    for r in ordered:
+        if r.get("id") in res_keep:
+            r["_role"] = ROLE_RESERVE
+            r["_reserve"] = True
+    return [r for r in ordered if r.get("_role") != ROLE_OUT]
+
+
 def recorded_by_default(rec: dict) -> bool:
     """RULE 3: whether this row should be ticked-for-recording by default when a
     distribution is saved. Main picks yes; reserve (standby) no — a reserve is

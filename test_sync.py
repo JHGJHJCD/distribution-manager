@@ -243,6 +243,23 @@ sync.run_sync()
 ok("B applied the line once it finished downloading",
    db.get_recipient(b_id1)["address"] == "חצי שורה", db.get_recipient(b_id1)["address"])
 
+# ── #rliqc: a local reset + restart-from-peer keeps LOCAL settings ────────────
+# A logs an EMPTY yemot password (as its original seed would have); B set its
+# password BEFORE sync existed (written straight to the table, never stamped).
+use_machine(dir_a)
+db.set_setting("yemot_password", "")
+sync.run_sync()
+use_machine(dir_b)
+with db.get_connection() as conn:
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)",
+                 ("yemot_password", "B-SECRET"))
+n_before = len(db.get_all_recipients())
+db.reset_all_data()
+sync.restart_from_peer()
+ok("B got its data back after reset", len(db.get_all_recipients()) >= 1, str(len(db.get_all_recipients())))
+ok("B kept its Yemot password through the reset (#rliqc)",
+   db.get_setting("yemot_password") == "B-SECRET", repr(db.get_setting("yemot_password")))
+
 print()
 if fails:
     print(f"✗ {len(fails)} FAILED: {fails}")

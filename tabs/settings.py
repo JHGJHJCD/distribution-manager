@@ -308,9 +308,15 @@ class SettingsTab(QWidget):
         self.btn_backup_now.clicked.connect(self._backup_now)
         bk_btns.addWidget(self.btn_backup_now)
 
-        btn_restore = QPushButton("שחזר נתונים מגיבוי")
+        btn_restore_list = QPushButton("שחזר מגיבוי קודם…")
+        btn_restore_list.setObjectName("neutral")
+        btn_restore_list.setToolTip("רשימת כל הגיבויים השמורים — שחזור בלחיצה אחת (#69pen)")
+        btn_restore_list.clicked.connect(self._open_backup_list)
+        bk_btns.addWidget(btn_restore_list)
+
+        btn_restore = QPushButton("שחזר מקובץ…")
         btn_restore.setObjectName("neutral")
-        btn_restore.setToolTip("החזר את כל הנתונים ממצב גיבוי קודם (בחר קובץ גיבוי .db)")
+        btn_restore.setToolTip("החזר את כל הנתונים מקובץ גיבוי .db שתבחר ידנית")
         btn_restore.clicked.connect(self._restore_backup)
         bk_btns.addWidget(btn_restore)
 
@@ -918,13 +924,21 @@ class SettingsTab(QWidget):
         )
         return False
 
+    def _open_backup_list(self):
+        """#69pen: every saved backup in one list with a 'שחזר' button per row."""
+        dlg = BackupListDialog(self)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.chosen_path:
+            self._restore_path(dlg.chosen_path)
+
     def _restore_backup(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "בחר קובץ גיבוי", "", "קבצי גיבוי (*.db);;הכל (*.*)"
         )
         if not path:
             return
+        self._restore_path(path)
 
+    def _restore_path(self, path: str):
         reply = QMessageBox.warning(
             self, "שחזור מגיבוי",
             f"הנתונים הנוכחיים יוחלפו לחלוטין בתוכן הגיבוי:\n{path}\n\n"
@@ -1972,4 +1986,117 @@ class SyncSetupDialog(QDialog):
         sync.disable_sync()
         QMessageBox.information(self, "סנכרון כבוי",
                                 "הסנכרון כובה במחשב זה. הנתונים נשארים כפי שהם.")
+        self.accept()
+
+
+class BackupListDialog(QDialog):
+    """All saved backups (default %APPDATA% folder + the operator's chosen
+    folder) in one table, newest first, with a 'שחזר' button on every row —
+    restore in one click instead of hunting for a .db file (#69pen).
+    The dialog only PICKS the file (chosen_path); the caller runs the usual
+    confirm → safety backup → restore flow."""
+
+    _KINDS = (("safety_", "לפני פעולה מסוכנת"), ("daily_", "יומי"),
+              ("backup_", "אוטומטי"))
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("שחזור מגיבוי קודם")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumSize(720, 520)
+        self.chosen_path = ""
+        lay = QVBoxLayout(self)
+        intro = QLabel("כל הגיבויים השמורים, מהחדש לישן. לחץ 'שחזר' ליד הגיבוי הרצוי — "
+                       "לפני השחזור נשמר גיבוי-ביטחון של המצב הנוכחי.")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:#475569; font-size:12.5px;")
+        lay.addWidget(intro)
+        self._table = QTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(["תאריך ושעה", "סוג", "גודל", "תיקייה", ""])
+        self._table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        hdr = self._table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(4, 120)
+        self._table.verticalHeader().setDefaultSectionSize(44)
+        lay.addWidget(self._table, 1)
+        btn_close = QPushButton("סגור")
+        btn_close.setObjectName("neutral")
+        btn_close.clicked.connect(self.reject)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(btn_close)
+        lay.addLayout(row)
+        self._fill()
+
+    @classmethod
+    def list_backups(cls) -> list:
+        """[(mtime, path, kind_label)] newest first, from every backup folder."""
+        folders = [db.BACKUP_DIR]
+        custom = db.get_setting("backup_folder") or ""
+        if custom and os.path.isdir(custom) and os.path.normcase(
+                os.path.abspath(custom)) != os.path.normcase(os.path.abspath(db.BACKUP_DIR)):
+            folders.append(custom)
+        out = []
+        for folder in folders:
+            try:
+                names = os.listdir(folder)
+            except OSError:
+                continue
+            for name in names:
+                if not name.lower().endswith(".db"):
+                    continue
+                path = os.path.join(folder, name)
+                kind = "ידני"
+                for prefix, label in cls._KINDS:
+                    if name.startswith(prefix):
+                        kind = label
+                        break
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    continue
+                out.append((st.st_mtime, path, kind, st.st_size))
+        out.sort(key=lambda t: t[0], reverse=True)
+        return out
+
+    def _fill(self):
+        from datetime import datetime as _dt
+        rows = self.list_backups()
+        self._table.setRowCount(len(rows))
+        for r, (mtime, path, kind, size) in enumerate(rows):
+            when = _dt.fromtimestamp(mtime).strftime("%d/%m/%Y %H:%M")
+            size_txt = f"{size / 1024 / 1024:.1f} MB" if size >= 1024 * 1024 else f"{size // 1024} KB"
+            folder = os.path.dirname(path)
+            is_default = os.path.normcase(os.path.abspath(folder)) == os.path.normcase(
+                os.path.abspath(db.BACKUP_DIR))
+            folder_txt = "תיקיית התוכנה (ברירת מחדל)" if is_default else "התיקייה שנבחרה"
+            for c, txt in enumerate((when, kind, size_txt, folder_txt)):
+                it = QTableWidgetItem(txt)
+                it.setTextAlignment(int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter))
+                it.setToolTip(path)
+                self._table.setItem(r, c, it)
+            btn = QPushButton("שחזר")
+            btn.setStyleSheet(
+                "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #55e2c8,"
+                "stop:0.49 #16b599,stop:0.51 #109a80,stop:1 #085047); color:#fff; border:none;"
+                " border-radius:8px; font-weight:800; font-size:13px; min-height:30px;"
+                " max-height:30px; padding:0 18px; margin:4px 8px;}"
+                "QPushButton:hover{background:#0c8a69;}")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, p=path: self._pick(p))
+            self._table.setCellWidget(r, 4, btn)
+        if not rows:
+            self._table.setRowCount(1)
+            it = QTableWidgetItem("לא נמצאו גיבויים שמורים")
+            it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(0, 0, it)
+            self._table.setSpan(0, 0, 1, 5)
+
+    def _pick(self, path: str):
+        self.chosen_path = path
         self.accept()

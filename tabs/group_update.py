@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QObject, QRect,
                           QRectF, QPropertyAnimation, QEasingCurve, pyqtProperty)
-from PyQt6.QtGui import QColor, QFont, QIcon, QPalette, QPainter
+from PyQt6.QtGui import QColor, QFont, QIcon, QPalette, QPainter, QLinearGradient
 from datetime import date
 from widgets import DateEdit
 import database as db
@@ -95,21 +95,36 @@ class _StageToggle(QWidget):
         r = QRectF(self.rect())
         pad, half = self._geom()
         h = r.height()
-        # Track.
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor("#e2e8f2"))
-        p.drawRoundedRect(r, h / 2, h / 2)
-        # Sliding knob: teal in prep, amber (action colour) in record.
+        # Track — glossy (#t4m5t): the same top-lit two-tone gradient as the
+        # app's buttons, so the switch matches the rest of the design.
+        p.setPen(QColor("#c7d0de"))
+        track = QLinearGradient(0, r.top(), 0, r.bottom())
+        track.setColorAt(0.0, QColor("#f8fafc"))
+        track.setColorAt(0.49, QColor("#e2e8f2"))
+        track.setColorAt(0.51, QColor("#d3dae6"))
+        track.setColorAt(1.0, QColor("#c3ccdb"))
+        p.setBrush(track)
+        p.drawRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), h / 2, h / 2)
+        # Sliding knob: teal in prep, amber (action colour) in record — both
+        # with the glossy highlight of _BTN_PRIMARY / _BTN_ACCENT.
         kx = pad + half * (1 - self._pos)              # pos 0 → right, 1 → left
         kr = QRectF(kx, pad, half, h - 2 * pad)
-        p.setBrush(QColor("#f59e0b") if self._stage == "record" else QColor("#0f9d78"))
+        if self._stage == "record":
+            stops = ("#ffdb6e", "#fcb521", "#f59e0b", "#cf7005")
+        else:
+            stops = ("#55e2c8", "#16b599", "#109a80", "#085047")
+        knob = QLinearGradient(0, kr.top(), 0, kr.bottom())
+        for pos, col in zip((0.0, 0.49, 0.51, 1.0), stops):
+            knob.setColorAt(pos, QColor(col))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(knob)
         p.drawRoundedRect(kr, (h - 2 * pad) / 2, (h - 2 * pad) / 2)
         # Labels.
         right_rect = QRectF(pad + half, pad, half, h - 2 * pad)   # prep
         left_rect = QRectF(pad, pad, half, h - 2 * pad)           # record
-        p.setPen(QColor("#ffffff") if self._stage == "prep" else QColor("#5b6b82"))
+        p.setPen(QColor("#ffffff") if self._stage == "prep" else QColor("#475569"))
         p.drawText(right_rect, Qt.AlignmentFlag.AlignCenter, self._labels[0])
-        p.setPen(QColor("#ffffff") if self._stage == "record" else QColor("#5b6b82"))
+        p.setPen(QColor("#7c2d12") if self._stage == "record" else QColor("#475569"))
         p.drawText(left_rect, Qt.AlignmentFlag.AlignCenter, self._labels[1])
         p.end()
 
@@ -314,7 +329,9 @@ class CommunityAssignDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("שיוך מקבלים לקהילות")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.setMinimumSize(560, 520)
+        # Wide enough for full names + a readable rep combo (#npk5n).
+        self.setMinimumSize(820, 600)
+        self.resize(900, 640)
         self._combos = {}   # rec_id -> QComboBox
         outer = QVBoxLayout(self)
 
@@ -338,10 +355,13 @@ class CommunityAssignDialog(QDialog):
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         hdr = self._table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(2, 300)
+        self._table.setStyleSheet("QTableWidget{font-size:13.5px;}")
         # Give each row enough height for the assignment combo — otherwise the
         # default ~30px row is shorter than the combo, so the combos overflow and
         # pile up on top of each other (#5lpgl).
-        self._table.verticalHeader().setDefaultSectionSize(46)
+        self._table.verticalHeader().setDefaultSectionSize(50)
         enable_touch_scroll(self._table)
         outer.addWidget(self._table, 1)
 
@@ -374,8 +394,13 @@ class CommunityAssignDialog(QDialog):
             combo = QComboBox()
             combo.setEditable(True)
             combo.setView(_light_popup_view())
-            combo.setFixedHeight(32)
-            combo.setStyleSheet("QComboBox{margin:3px 6px;}")
+            combo.setFixedHeight(38)
+            combo.setMinimumContentsLength(18)
+            combo.setStyleSheet(
+                "QComboBox{margin:3px 6px; padding:2px 10px; font-size:14px;"
+                " border:1px solid #b6d8cd; border-radius:8px; background:#ffffff;}"
+                "QComboBox QAbstractItemView{font-size:14px; padding:4px;}")
+            combo.view().setMinimumWidth(280)
             combo.addItem("")           # keep unassigned
             for rep in reps:
                 combo.addItem(rep)
@@ -468,13 +493,18 @@ class _ManualAddDialog(QDialog):
         for label in ("כל העדיפויות", "קבוע", "ראשונה", "שנייה", "ללא עדיפות"):
             self._prio_filter.addItem(label)
         self._prio_filter.currentIndexChanged.connect(self._refill)
+        self._prio_filter.currentIndexChanged.connect(self._sync_freq_filter)
         top.addWidget(self._prio_filter)
 
+        # Frequency is a REGULARS-only notion (#dy39u): the combo is enabled
+        # only while the priority filter is 'קבוע'; otherwise it resets and greys out.
         self._freq_filter = QComboBox()
-        for label in ("כל התדירויות", "שבועי", "דו-שבועי", "חודשי", "חד-פעמי", "ללא תדירות"):
+        for label in ("כל התדירויות", "שבועי", "דו-שבועי", "חודשי"):
             self._freq_filter.addItem(label)
         self._freq_filter.currentIndexChanged.connect(self._refill)
+        self._freq_filter.setToolTip("סינון לפי תדירות — רלוונטי רק לקבועים")
         top.addWidget(self._freq_filter)
+        self._sync_freq_filter()
         outer.addLayout(top)
 
         self._table = QTableWidget()
@@ -539,6 +569,14 @@ class _ManualAddDialog(QDialog):
             elif freq != f:
                 return False
         return True
+
+    def _sync_freq_filter(self, *_):
+        is_regular = self._prio_filter.currentText() == "קבוע"
+        if not is_regular:
+            self._freq_filter.blockSignals(True)
+            self._freq_filter.setCurrentIndex(0)
+            self._freq_filter.blockSignals(False)
+        self._freq_filter.setEnabled(is_regular)
 
     def _refill(self, *_):
         txt = self._search.text().strip()
@@ -1098,7 +1136,6 @@ class GroupUpdateTab(QWidget):
         self._stage = "prep"
         self._record_visited = False     # has the record stage been opened this cycle? (#13)
         self._checked_ids: set = set()   # who is currently ticked (survives search)
-        self._leader_ids: set = set()    # #z7xq1: auto top-N by need (scored mode)
         self._seen_ids: set = set()      # ids already shown (for pre-checking new picks)
         self._search_text = ""           # quick-search filter over the list
         self._extra_ids: set = set()     # one-time picks added from the one-time tab
@@ -1410,7 +1447,7 @@ class GroupUpdateTab(QWidget):
         # automatically when a non-default mode / active filter would otherwise
         # be hidden (state must never be invisible).
         self.adv_section = _CollapsibleCard(
-            "מצבי חלוקה מתקדמים", "מצב קבועים · סימון מובילים · סינון מותאם")
+            "מצבי חלוקה מתקדמים", "מצב קבועים · לפי ניקוד · סינון מותאם")
         adv_row = QHBoxLayout()
         adv_row.setSpacing(12)
 
@@ -1452,7 +1489,8 @@ class GroupUpdateTab(QWidget):
         # tagged AUTOMATICALLY in the list and follow the products count live
         # (#z7xq1 — the old 'סמן מובילים' button was unclear and static).
         self.lbl_leaders_hint = QLabel(
-            "⭐ המובילים בצורך מסומנים אוטומטית לפי מספר המוצרים הזמינים")
+            "הרשימה מוגבלת אוטומטית למספר המוצרים הזמינים (הגבוהים בניקוד), "
+            "ואחריהם הרזרבה")
         self.lbl_leaders_hint.setStyleSheet(
             "color:#166534; font-weight:600; font-size:12px;")
         adv_row.addWidget(self.lbl_leaders_hint, 0, Qt.AlignmentFlag.AlignBottom)
@@ -1656,8 +1694,11 @@ class GroupUpdateTab(QWidget):
             "QTableWidget::item:selected{background:#e3f6ef; color:#064e3b;}")
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hdr.setResizeContentsPrecision(20)  # constant-cost column sizing on big lists
+        # The name column sizes to its content (never squeezed by the phone/date
+        # columns, #2mx6a); the notes column absorbs the leftover width.
+        hdr.setSectionResizeMode(_COL_NOTES, QHeaderView.ResizeMode.Stretch)
+        hdr.setMinimumSectionSize(60)
+        hdr.setResizeContentsPrecision(100)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(34)  # uniform row height
         # The table has NO vertical scrollbar of its own — it is sized to fit all
@@ -1748,14 +1789,17 @@ class GroupUpdateTab(QWidget):
         # #hwnwz — bright yellow + a clear reset glyph so the button pops out.
         btn_reset = QPushButton("  ⟳ חלוקה חדשה")
         btn_reset.setObjectName("warning")
+        # #kdld2: a single glyph (the ⟳ in the text — no extra QIcon) and the
+        # same glossy top-lit gradient as the rest of the app's buttons.
         btn_reset.setStyleSheet(
-            "QPushButton{background:#facc15; color:#713f12; font-weight:800;"
-            " border:1.5px solid #eab308; border-radius:10px; padding:8px 18px;"
-            " font-size:14px;}"
-            "QPushButton:hover{background:#fde047;}"
+            "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            " stop:0 #fff08a,stop:0.49 #fcd34d,stop:0.51 #facc15,stop:1 #ca9a04);"
+            " color:#713f12; font-weight:800; border:none; border-radius:10px;"
+            " padding:8px 18px; font-size:14px;}"
+            "QPushButton:hover{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            " stop:0 #fff5a8,stop:0.49 #fde047,stop:0.51 #fcd34d,stop:1 #d6a305);}"
             "QPushButton:pressed{background:#eab308;}")
         btn_reset.setMinimumHeight(46)
-        btn_reset.setIcon(QIcon(line_icon("update", 20, "#713f12")))
         btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_reset.setToolTip("מאפס את המסך לחלוקה חדשה — מנקה מוצרים, רזרבה, שם, "
                              "הערה, סימונים ובחירות חד-פעמי")
@@ -1868,14 +1912,15 @@ class GroupUpdateTab(QWidget):
     def _on_products_changed(self, *_):
         db.set_setting("available_products", str(self.products_spin.value()))
         self._update_leftover_hint()
-        # #z7xq1: in scored mode the auto leader tags follow the count live.
+        # #c9k0m: in the scored modes the list length follows the count live.
         if self._current_mode() in ("scored", "all"):
-            self._recompute_leaders()
-            self._populate()
+            self.refresh()
 
     def _on_reserve_changed(self, *_):
         db.set_setting("reserve_count", str(self.reserve_spin.value()))
         self._update_leftover_hint()
+        if self._current_mode() in ("scored", "all"):
+            self.refresh()
 
     def _one_time_remainder(self) -> int:
         """How many products are left for one-timers after the regulars due this
@@ -1928,25 +1973,6 @@ class GroupUpdateTab(QWidget):
             _show("#334155" if done else "#b45309", 700,
                   f"נשאר לחד-פעמיים: {n}  ·  נבחרו: {picks}  ({state})")
 
-    def _recompute_leaders(self):
-        """#z7xq1 — the top-N by need score (N = 'מוצרים זמינים') are tagged
-        automatically in scored mode; _rows_data is already need-ordered with
-        the SAME tie-break as the display, so the top-N matches what's shown.
-        Reserve rows never take a leader slot."""
-        self._leader_ids = set()
-        if self._current_mode() not in ("scored", "all"):
-            return
-        n = self.products_spin.value()
-        if n <= 0:
-            return
-        for rec in self._rows_data:
-            rid = rec.get("id")
-            if rid is None or rec.get("_reserve") or rid in self._reserve_ids:
-                continue
-            self._leader_ids.add(rid)
-            if len(self._leader_ids) >= n:
-                break
-
     def _open_one_time_picker(self):
         """Open the in-screen one-time picker dialog; accepted picks flow through
         the same add_one_time_picks() path the 'חד פעמי' tab uses."""
@@ -1983,13 +2009,11 @@ class GroupUpdateTab(QWidget):
         Typed name → returned as-is. Empty name in the plain weekly state →
         auto-filled with the weekly parsha + Hebrew date (#o2eft), e.g.
         'חלוקת פרשת נצבים — כ׳ אלול תשפ״ו' (written into the field so the
-        operator sees it) and returned. Empty name in a special state (mode /
-        filter) → None: a meaningful name is still required there."""
+        operator sees it) and returned — in EVERY mode (#doluy/#8vztv: the
+        special modes used to demand a typed name)."""
         name = self.name_input.currentText().strip()
         if name:
             return name
-        if self._special_active():
-            return None
         try:
             iso = self.date_edit.get_iso()
             name = hebdate.auto_weekly_name(date.fromisoformat(iso))
@@ -2087,6 +2111,16 @@ class GroupUpdateTab(QWidget):
             # by need (highest first), ties by name. Scoring the picks separately
             # would rank them on a different 0–100 scale and mis-order the merge.
             self._rows_data = selection.rank_by_need(self._rows_data, db.get_need_weights())
+            # #c9k0m: the list IS the distribution — only as many as there are
+            # products (highest need first), then the reserve; the rest are out.
+            # Manual adds / picks stay main, explicit reserve picks stay reserve.
+            shown_before = len(self._rows_data)
+            self._rows_data = selection.limit_to_products(
+                self._rows_data, self.products_spin.value(), self.reserve_spin.value(),
+                keep_ids=self._extra_ids, reserve_ids=self._reserve_ids)
+            if len(self._rows_data) < shown_before:
+                self.lbl_regulars_count.setText(
+                    f"{reg_word}  ·  מוצגים {len(self._rows_data)} (מוצרים + רזרבה)")
         live = {r.get("id") for r in self._rows_data}
         # EVERYONE starts UNticked (bugs #ebnr2, #p5vv0): the operator ticks who
         # actually received — nobody is pre-marked as 'received'. One-time picks
@@ -2097,7 +2131,6 @@ class GroupUpdateTab(QWidget):
         # round straight to history and resets the cycle — no ticks drawn.)
         self._seen_ids = set(live)
         self._checked_ids &= live      # forget ticks for people no longer listed
-        self._recompute_leaders()      # #z7xq1: auto-tag the top-N by need
         self._populate()
         self._update_leftover_hint()
 
@@ -2136,13 +2169,11 @@ class GroupUpdateTab(QWidget):
                     return QColor("#fcd34d"), QColor("#7c2d12"), comm_txt + " · השלמה · קבוע", score_txt
                 return QColor("#fef3c7"), QColor("#92400e"), comm_txt + " · השלמה", score_txt
             return QColor("#f1f5f9"), QColor("#334155"), comm_txt, score_txt
-        # scored regular — the auto top-N leaders (by products count, #z7xq1)
-        # get a green tint + ⭐ tag; the rest stay neutral.
+        # Reserve slot in the scored modes (#c9k0m) — waiting list tint.
+        if rec.get("_reserve") or rid in self._reserve_ids:
+            return (QColor(_RESERVE_BG), QColor(_RESERVE_FG),
+                    ("רזרבה · " + freq) if freq else "רזרבה", score_txt)
         if rec.get("_scored_regular"):
-            if rid in self._leader_ids:
-                return (QColor("#dcfce7"), QColor("#14532d"),
-                        ("⭐ מוביל בצורך · " + freq) if freq else "⭐ מוביל בצורך",
-                        score_txt)
             return QColor("#f1f5f9"), QColor("#334155"), freq, score_txt
         # regular — colour by urgency
         nd = rec.get("next_distribution") or ""
@@ -2308,12 +2339,21 @@ class GroupUpdateTab(QWidget):
         total = len(self._rows_data)
         checked = len(self._checked_ids)
         souls = 0
+        # #xjzw9: while preparing the list nobody is ticked yet, so count the
+        # souls of everyone on the list (main rows); in the record stage count
+        # only those ticked as received.
+        prep = getattr(self, "_stage", "prep") != "record"
         for rec in self._rows_data:
-            if rec.get("id") in self._checked_ids:
-                try:
-                    souls += int(rec.get("souls", 0) or 0)
-                except (ValueError, TypeError):
-                    pass
+            rid = rec.get("id")
+            if prep:
+                if rec.get("_reserve") or rid in self._reserve_ids:
+                    continue
+            elif rid not in self._checked_ids:
+                continue
+            try:
+                souls += int(rec.get("souls", 0) or 0)
+            except (ValueError, TypeError):
+                pass
         self.lbl_total.setText(f"סה\"כ ברשימה: {total}")
         self.lbl_checked.setText(f"סומנו: {checked}")
         self.lbl_souls.setText(f"נפשות: {souls}")
@@ -2487,12 +2527,22 @@ class GroupUpdateTab(QWidget):
         'רזרבה' section (RULE 3: standby, printed but not recorded)."""
         # Notes = what the operator typed in the table for this round
         # (_row_notes), for visible and search-hidden rows alike.
+        # Arrival confirmations from this distribution's tzintuk (#82rfd) —
+        # printed as a ✓ column so the distributor sees who confirmed.
+        try:
+            from utils import yemot
+            confirmed_ph = yemot.confirmed_phones(self.date_edit.get_iso())
+        except Exception:
+            yemot, confirmed_ph = None, set()
         rows = []
         for rec in self._rows_data:
             rid = rec.get("id")
             r = dict(rec)
             r["_reserve"] = bool(rec.get("_reserve") or rid in self._reserve_ids)
             r["notes"] = self._row_notes.get(rid, "")
+            r["_confirmed"] = bool(confirmed_ph and any(
+                yemot.normalize_phone(rec.get(f)) in confirmed_ph
+                for f in ("phone1", "phone2", "phone3")))
             rows.append(r)
         return rows if rows else list(self._rows_data)
 

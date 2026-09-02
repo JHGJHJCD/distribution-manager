@@ -324,6 +324,22 @@ _thin = selection.infer_communities([
     {"id": 2, "representative": "", "synagogue": "קטן"}])
 ok("C10c a lone rep in a synagogue is too thin to infer from", 2 not in _thin)
 
+# ── #c9k0m: scored modes show only products + reserve ─────────────────────────
+_lim = [{"id": i, "full_name": f"מ{i}", "need_score": 100 - i} for i in range(1, 11)]
+_out = selection.limit_to_products(_lim, 3, 2)
+ok("L1 products=3 + reserve=2 → 5 rows shown, rest dropped",
+   [r["id"] for r in _out] == [1, 2, 3, 4, 5], str([r["id"] for r in _out]))
+ok("L1b first 3 main, next 2 reserve",
+   [r["_reserve"] for r in _out] == [False, False, False, True, True])
+_lim2 = [{"id": i, "full_name": f"מ{i}", "need_score": 100 - i} for i in range(1, 11)]
+_out2 = selection.limit_to_products(_lim2, 3, 1, keep_ids={9}, reserve_ids={10})
+ok("L2 manual add (9) kept as MAIN and takes a slot; reserve pick (10) kept as reserve",
+   [r["id"] for r in _out2] == [1, 2, 3, 9, 10]
+   and not _out2[3]["_reserve"] and _out2[4]["_reserve"], str([r["id"] for r in _out2]))
+_lim3 = [{"id": i, "full_name": f"מ{i}"} for i in range(1, 6)]
+ok("L3 products=0 → no limit (everyone stays)",
+   len(selection.limit_to_products(_lim3, 0, 5)) == 5)
+
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

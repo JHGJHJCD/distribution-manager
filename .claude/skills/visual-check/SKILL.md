@@ -90,6 +90,11 @@ to exercise the thing you changed.
   a probe that calls `apply_stylesheet` + `EXTRA_QSS` manually still works, but the
   one-liner is now the canonical boot idiom.
 
+- **QTextDocument print shots (v2.99):** the PNG preview shown in chat may render a
+  table header WITHOUT its dark background (text looks dark-on-white) while the file's
+  pixels are correct. Before "fixing" print CSS, count the pixels of the header colour
+  in the saved PNG (`QImage.pixelColor`) — a full-width band of `#1a4a7a` = it's fine.
+
 ## When you're done
 
 Confirm the change visually in the PNG, then give the user a one-line plain-Hebrew note
