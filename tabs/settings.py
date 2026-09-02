@@ -19,6 +19,145 @@ from utils import email_utils
 from utils import sync
 from version import APP_VERSION
 
+# ── v3.01 design language — shared with "חלוקה ורישום" / "צינתוקים" ──────────
+from PyQt6.QtWidgets import QSizePolicy
+from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _BTN_PRIMARY,
+                               _BTN_GHOST, _BTN_DANGER, _BTN_ACCENT)
+
+_LBL = "background:transparent; border:none;"
+_CHIP_AMBER = ("QLabel{background:#fdf0d5; color:#92600a; border:none; border-radius:16px;"
+               " padding:5px 13px; font-size:12.5px; font-weight:700;}")
+_CHIP_RED = ("QLabel{background:#fee2e2; color:#b91c1c; border:none; border-radius:16px;"
+             " padding:5px 13px; font-size:12.5px; font-weight:700;}")
+_DESC = "color:#64748b; font-size:12.5px; " + _LBL
+_FLABEL = "color:#475569; font-size:12.5px; font-weight:700; " + _LBL
+_NOTE_AMBER = ("QLabel{color:#92400e; font-size:12px; font-weight:600; background:#fffbeb;"
+               " border:1px solid #fde68a; border-radius:8px; padding:7px 10px;}")
+_CARD_DANGER_QSS = ("QFrame#ui-card{background:#fffafa; border:1.5px solid #fca5a5;"
+                    " border-radius:12px;}")
+_BTN_SMALL = ("QPushButton{min-height:30px; font-size:12.5px; padding:0 12px;}")
+_INPUT_H = 36
+
+
+def _section(text: str) -> QHBoxLayout:
+    """A short muted heading with a hairline that runs to the far edge —
+    groups two related cards under one label."""
+    h = QHBoxLayout()
+    h.setSpacing(10)
+    h.setContentsMargins(4, 8, 4, 0)
+    lbl = QLabel(text)
+    lbl.setStyleSheet("color:#0f766e; font-size:12.5px; font-weight:800; letter-spacing:0.5px; " + _LBL)
+    h.addWidget(lbl)
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setFixedHeight(1)
+    line.setStyleSheet("background:#d9e2ec; border:none;")
+    h.addWidget(line, 1)
+    return h
+
+
+def _row() -> QHBoxLayout:
+    h = QHBoxLayout()
+    h.setSpacing(12)
+    return h
+
+
+def _card(title: str, icon_name: str = None, hint: str = "", danger: bool = False):
+    """A white rounded card with icon + title + muted hint. Returns
+    (frame, body_layout, header_layout)."""
+    frame = QFrame()
+    frame.setObjectName("ui-card")
+    frame.setStyleSheet(_CARD_DANGER_QSS if danger else _CARD_QSS)
+    frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+    outer = QVBoxLayout(frame)
+    outer.setContentsMargins(18, 12, 18, 12)
+    outer.setSpacing(9)
+    head = QHBoxLayout()
+    head.setSpacing(9)
+    color = "#dc2626" if danger else "#0f9d78"
+    if icon_name:
+        ic = QLabel()
+        ic.setPixmap(line_icon(icon_name, 20, color))
+        ic.setStyleSheet(_LBL)
+        head.addWidget(ic)
+    tl = QLabel(title)
+    tl.setStyleSheet(f"color:{'#b91c1c' if danger else '#064e3b'}; font-size:15px; font-weight:800; " + _LBL)
+    head.addWidget(tl)
+    if hint:
+        hl = QLabel(hint)
+        hl.setStyleSheet("color:#94a3b8; font-size:12px; " + _LBL)
+        head.addWidget(hl)
+    head.addStretch()
+    outer.addLayout(head)
+    return frame, outer, head
+
+
+def _place(row: QHBoxLayout, card: QFrame, body: QVBoxLayout):
+    """Put a card into a two-card row. Both cards of a row share the row's
+    height (equal, tidy edges); each card's content packs to its top."""
+    body.addStretch()
+    row.addWidget(card, 1)
+
+
+def _desc(text: str) -> QLabel:
+    l = QLabel(text)
+    l.setWordWrap(True)
+    l.setStyleSheet(_DESC)
+    return l
+
+
+def _hint(text: str, color: str = "#94a3b8") -> QLabel:
+    l = QLabel(text)
+    l.setWordWrap(True)
+    l.setStyleSheet(f"color:{color}; font-size:11.5px; " + _LBL)
+    return l
+
+
+def _flabel(text: str) -> QLabel:
+    l = QLabel(text)
+    l.setStyleSheet(_FLABEL)
+    return l
+
+
+def _btn(text: str, style: str, slot, tip: str = None, small: bool = False) -> QPushButton:
+    b = QPushButton(text)
+    b.setStyleSheet(style + (_BTN_SMALL if small else ""))
+    b.setCursor(Qt.CursorShape.PointingHandCursor)
+    if tip:
+        b.setToolTip(tip)
+    b.clicked.connect(slot)
+    return b
+
+
+def _btn_row(*widgets) -> QHBoxLayout:
+    """Buttons (and an optional trailing status label) in one line, packed to the
+    start side of the card."""
+    h = QHBoxLayout()
+    h.setSpacing(8)
+    h.setContentsMargins(0, 4, 0, 0)
+    for w in widgets:
+        if isinstance(w, QLabel):
+            h.addWidget(w, 1)
+        else:
+            h.addWidget(w)
+    h.addStretch()
+    return h
+
+
+def _form() -> QFormLayout:
+    f = QFormLayout()
+    f.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    f.setHorizontalSpacing(12)
+    f.setVerticalSpacing(7)
+    f.setContentsMargins(0, 0, 0, 0)
+    return f
+
+
+def _form_row(form: QFormLayout, label: str, widget):
+    widget.setMinimumHeight(_INPUT_H)
+    form.addRow(_flabel(label), widget)
+
+
 
 class _UpdateWorker(QThread):
     """Runs the network check / download off the UI thread."""
@@ -56,100 +195,93 @@ class SettingsTab(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        # The settings page has many sections — wrap it in a scroll area so every
-        # section stays fully visible (and reachable) on shorter windows instead
-        # of being squeezed/clipped.
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        """v3.01 — the settings screen rebuilt in the design language of the
+        'חלוקה ורישום' / 'צינתוקים' screens: a soft page surface, a title row
+        with live status chips, and white rounded cards grouped under short
+        section headings (two cards per row). Every attribute the logic uses
+        (spins, labels, buttons) keeps its name."""
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        surface = QWidget()
+        surface.setObjectName("st-surface")
+        surface.setStyleSheet(f"QWidget#st-surface{{background:{_BG};}}"
+                              "QWidget#st-surface QLabel{background:transparent; border:none;}")
+        root.addWidget(surface, 1)
+        s_lay = QVBoxLayout(surface)
+        s_lay.setContentsMargins(0, 0, 0, 0)
+        s_lay.setSpacing(0)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        outer.addWidget(scroll)
+        scroll.setStyleSheet("QScrollArea{background:transparent;}"
+                             "QScrollArea>QWidget>QWidget{background:transparent;}")
         enable_touch_scroll(scroll)   # finger-drag scrolling on a touch screen
         content = QWidget()
         scroll.setWidget(content)
-
         lay = QVBoxLayout(content)
-        lay.setSpacing(6)
-        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(10)
+        lay.setContentsMargins(20, 12, 20, 16)
+        s_lay.addWidget(scroll, 1)
 
-        title = QLabel("הגדרות מערכת")
+        from PyQt6.QtCore import QTimer
+
+        # ── Header: title · subtitle · live status chips ──────────────────────
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        title = QLabel("הגדרות")
         title.setObjectName("title")
-        lay.addWidget(title)
+        title.setStyleSheet("color:#064e3b; font-size:22px; font-weight:800; " + _LBL)
+        head.addWidget(title)
+        sub = QLabel("התאמה אישית, גיבויים, חיבורים ועבודה משני מחשבים")
+        sub.setStyleSheet("color:#64748b; font-size:13px; " + _LBL)
+        head.addWidget(sub)
+        head.addStretch()
+        self.chip_version = QLabel(f"גרסה {APP_VERSION}")
+        self.chip_version.setStyleSheet(_CHIP_QSS)
+        head.addWidget(self.chip_version)
+        self.chip_sync = QLabel("")
+        head.addWidget(self.chip_sync)
+        self.chip_yemot = QLabel("")
+        head.addWidget(self.chip_yemot)
+        self.chip_mail = QLabel("")
+        head.addWidget(self.chip_mail)
+        lay.addLayout(head)
 
-        # Two INDEPENDENT columns (not a shared-row grid): each column packs its
-        # panels top-to-bottom with no gaps. A grid tied both columns' rows to the
-        # same height, so the short 'גיבויים' panel left a big void beneath it next
-        # to the tall weights panel, pushing 'מייל למתנדבים' way down (bug #nfp9i).
-        # The 'אזור מסוכן' strip stays full-width below both columns.
-        cols = QHBoxLayout()
-        cols.setSpacing(8)
-        right_col = QVBoxLayout(); right_col.setSpacing(8)
-        left_col = QVBoxLayout(); left_col.setSpacing(8)
-        cols.addLayout(right_col, 1)
-        cols.addLayout(left_col, 1)
-        lay.addLayout(cols)
-        _AT = Qt.AlignmentFlag.AlignTop   # (retained for compatibility)
+        # ═════════════════════════ כללי ומראה ═════════════════════════
+        lay.addLayout(_section("כללי ומראה"))
+        row = _row(); lay.addLayout(row)
 
-        # ── Security section ──────────────────────────────
-        sec_frame = QFrame()
-        sec_frame.setObjectName("panel")
-        sec_lay = QVBoxLayout(sec_frame)
-        sec_lay.setContentsMargins(10, 7, 10, 7)
-        sec_lay.setSpacing(6)
+        # ── כללי: text size · no-show alerts · password ──
+        card, body, _h = _card("כללי", "sliders", "גודל טקסט, התראות וסיסמה")
+        g = QGridLayout()
+        g.setHorizontalSpacing(12); g.setVerticalSpacing(8)
+        g.setColumnStretch(2, 1)
 
-        sec_lay.addWidget(section_header("אבטחה", "security", "#0f766e"))
-
-        pwd_row = QHBoxLayout()
-        self.lbl_password = QLabel("••••")
-        self.lbl_password.setStyleSheet("color:#6b7280; letter-spacing:2px; font-size:15px;")
-        pwd_row.addWidget(QLabel("סיסמה נוכחית:"))
-        pwd_row.addWidget(self.lbl_password)
-        pwd_row.addStretch()
-        btn_pwd = QPushButton("שנה סיסמה")
-        btn_pwd.setObjectName("neutral")
-        btn_pwd.setToolTip("שנה את סיסמת הכניסה לאפליקציה")
-        btn_pwd.clicked.connect(self._change_password)
-        pwd_row.addWidget(btn_pwd)
-        sec_lay.addLayout(pwd_row)
-        right_col.addWidget(sec_frame)
-
-        # ── General (v2.60): UI font size + no-show alert threshold ────────────
-        gen_frame = QFrame()
-        gen_frame.setObjectName("panel")
-        gen_lay = QVBoxLayout(gen_frame)
-        gen_lay.setContentsMargins(10, 7, 10, 7)
-        gen_lay.setSpacing(6)
-        gen_lay.addWidget(section_header("כללי", "doc", "#0f766e"))
-
-        font_row = QHBoxLayout()
-        font_row.addWidget(QLabel("גודל הטקסט בתוכנה:"))
-        # v2.80 (#x2yn5): percent-based, applied INSTANTLY to the whole app.
         self.font_spin = QSpinBox()
         self.font_spin.setRange(80, 150)
         self.font_spin.setSingleStep(5)
         self.font_spin.setSuffix(" %")
-        self.font_spin.setMinimumWidth(90)
+        self.font_spin.setFixedWidth(110)
+        self.font_spin.setMinimumHeight(_INPUT_H)
         self.font_spin.setValue(db.get_ui_font_percent())
         self.font_spin.setToolTip("מגדיל או מקטין את הטקסט בכל התוכנה מיידית "
                                   "(100% = הגודל הרגיל)")
-        from PyQt6.QtCore import QTimer
         self._font_apply_timer = QTimer(self)
         self._font_apply_timer.setSingleShot(True)
         self._font_apply_timer.setInterval(250)
         self._font_apply_timer.timeout.connect(self._apply_font_percent)
-        self.font_spin.valueChanged.connect(
-            lambda *_: self._font_apply_timer.start())
-        font_row.addWidget(self.font_spin)
-        font_row.addStretch()
-        gen_lay.addLayout(font_row)
+        self.font_spin.valueChanged.connect(lambda *_: self._font_apply_timer.start())
+        g.addWidget(_flabel("גודל הטקסט בתוכנה"), 0, 0)
+        g.addWidget(self.font_spin, 0, 1)
+        g.addWidget(_hint("משתנה מיד בכל המסכים"), 0, 2)
 
-        ns_row = QHBoxLayout()
-        ns_row.addWidget(QLabel("התראה על מי שלא הגיע — אחרי:"))
         self.no_show_spin = QSpinBox()
         self.no_show_spin.setRange(0, 20)
         self.no_show_spin.setSuffix(" פעמים ברצף")
-        self.no_show_spin.setMinimumWidth(140)
+        self.no_show_spin.setFixedWidth(160)
+        self.no_show_spin.setMinimumHeight(_INPUT_H)
         try:
             self.no_show_spin.setValue(db.get_no_show_threshold())
         except Exception:
@@ -159,296 +291,137 @@ class SettingsTab(QWidget):
             "ובכרטיס המקבל. 0 = בלי התראות.")
         self.no_show_spin.valueChanged.connect(
             lambda v: db.set_setting("no_show_alert_threshold", str(v)))
-        ns_row.addWidget(self.no_show_spin)
-        ns_row.addStretch()
-        gen_lay.addLayout(ns_row)
-        right_col.addWidget(gen_frame)
+        g.addWidget(_flabel("התראה על מי שלא הגיע"), 1, 0)
+        g.addWidget(self.no_show_spin, 1, 1)
+        g.addWidget(_hint("0 = בלי התראות"), 1, 2)
 
-        # ── Software update section ───────────────────────
-        upd_frame = QFrame()
-        upd_frame.setObjectName("panel")
-        upd_lay = QVBoxLayout(upd_frame)
-        upd_lay.setContentsMargins(10, 7, 10, 7)
-        upd_lay.setSpacing(6)
+        self.lbl_password = QLabel("••••")
+        self.lbl_password.setStyleSheet("color:#475569; letter-spacing:2px; font-size:15px; " + _LBL)
+        g.addWidget(_flabel("סיסמת כניסה"), 2, 0)
+        g.addWidget(self.lbl_password, 2, 1)
+        btn_pwd = _btn("שנה סיסמה…", _BTN_GHOST, self._change_password,
+                       "שנה את סיסמת הכניסה לאפליקציה", small=True)
+        g.addWidget(btn_pwd, 2, 2, alignment=Qt.AlignmentFlag.AlignLeft)
+        body.addLayout(g)
+        _place(row, card, body)
 
-        upd_lay.addWidget(section_header("עדכון תוכנה", "update", "#0f766e"))
+        # ── שם הארגון ולוגו ──
+        card, body, _h = _card("שם הארגון ולוגו", "building", "הכיתוב והלוגו שבראש התוכנה")
+        body.addWidget(_desc("מתאים את התוכנה לכל קופת צדקה — הכותרת מופיעה בסרגל העליון, "
+                             "הלוגו גם בהדפסות."))
+        form = _form()
+        self.org_title = QLineEdit()
+        self.org_title.setPlaceholderText("מנהל חלוקה")
+        self.org_title.setAlignment(ALIGN_RIGHT)
+        self.org_subtitle = QLineEdit()
+        self.org_subtitle.setPlaceholderText("שם הקופה · יישוב")
+        self.org_subtitle.setAlignment(ALIGN_RIGHT)
+        _form_row(form, "כותרת", self.org_title)
+        _form_row(form, "כותרת משנה", self.org_subtitle)
+        body.addLayout(form)
 
-        ver_row = QHBoxLayout()
-        ver_row.addWidget(QLabel("גרסה נוכחית:"))
-        self.lbl_version = QLabel(f"v{APP_VERSION}")
-        self.lbl_version.setStyleSheet("font-weight:700; color:#334155;")
-        ver_row.addWidget(self.lbl_version)
-        ver_row.addStretch()
-        self.btn_check_update = QPushButton("בדוק עדכונים")
-        self.btn_check_update.setObjectName("neutral")
-        self.btn_check_update.setToolTip("בדוק אם קיימת גרסה חדשה יותר ב-GitHub")
-        self.btn_check_update.clicked.connect(self._check_updates)
-        ver_row.addWidget(self.btn_check_update)
-        upd_lay.addLayout(ver_row)
+        logo_row = QHBoxLayout()
+        logo_row.setSpacing(8)
+        logo_row.addWidget(_flabel("לוגו"))
+        self.lbl_logo_status = QLabel("")
+        self.lbl_logo_status.setStyleSheet(_CHIP_QSS)
+        logo_row.addWidget(self.lbl_logo_status)
+        logo_row.addStretch()
+        logo_row.addWidget(_btn("החלף לוגו…", _BTN_GHOST, self._choose_logo, small=True))
+        self.btn_logo_reset = _btn("אפס", _BTN_GHOST, self._reset_logo, small=True)
+        logo_row.addWidget(self.btn_logo_reset)
+        body.addLayout(logo_row)
+        body.addLayout(_btn_row(_btn("שמור", _BTN_PRIMARY, self._save_branding)))
+        _place(row, card, body)
 
-        self.lbl_update_status = QLabel("")
-        self.lbl_update_status.setObjectName("subtitle")
-        self.lbl_update_status.setWordWrap(True)
-        upd_lay.addWidget(self.lbl_update_status)
+        # ═════════════════════════ נתונים וגיבוי ═════════════════════════
+        lay.addLayout(_section("נתונים וגיבוי"))
+        row = _row(); lay.addLayout(row)
 
-        # v2.96 — per-machine flag: only the checked computer gets the
-        # "someone downloaded a version" / "the other computer updated" balloons.
-        self.chk_dl_notify = QCheckBox(
-            "קבל התראות במחשב זה על הורדות גרסה ועדכוני המחשב השני")
-        self.chk_dl_notify.setToolTip(
-            "כשמסומן: המחשב הזה (ורק הוא) יציג התראת Windows כשמישהו מוריד "
-            "את התוכנה מגיטהאב, וכשהמחשב השני מתעדכן לגרסה חדשה.")
-        self.chk_dl_notify.setChecked(sync.notify_downloads())
-        self.chk_dl_notify.toggled.connect(sync.set_notify_downloads)
-        upd_lay.addWidget(self.chk_dl_notify)
-        left_col.addWidget(upd_frame)
-
-        # ── Need-score weights section ────────────────────
-        w_frame = QFrame()
-        w_frame.setObjectName("panel")
-        w_lay = QVBoxLayout(w_frame)
-        w_lay.setContentsMargins(10, 7, 10, 7)
-        w_lay.setSpacing(6)
-
-        w_lay.addWidget(section_header("משקלי ניקוד עדיפות", "weights", "#0f766e"))
-
-        w_desc = QLabel(
-            "קביעת המשקל של כל נתון בחישוב 'ניקוד הצורך' שלפיו מדורגים המקבלים "
-            "בלשונית \"חד פעמי\". המשקלים הם אחוזים שמסתכמים תמיד ל-100% — "
-            "הגדלת אחד מקטינה אוטומטית את האחרים. 0% = להתעלם מהנתון.")
-        w_desc.setObjectName("subtitle")
-        w_desc.setWordWrap(True)
-        w_lay.addWidget(w_desc)
-
-        w_form = QFormLayout()
-        w_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        w_form.setSpacing(6)
-        self._balancing = False
-        self._weight_spins = {}
-        for f in db.NEED_FACTORS:
-            spin = QSpinBox()
-            spin.setRange(0, 100)
-            spin.setSuffix("%")
-            spin.setFixedWidth(90)
-            spin.valueChanged.connect(lambda _v, k=f["key"]: self._rebalance(k))
-            self._weight_spins[f["key"]] = spin
-            w_form.addRow(f["label"] + ":", spin)
-        w_lay.addLayout(w_form)
-
-        self.lbl_weight_preview = QLabel("")
-        self.lbl_weight_preview.setObjectName("subtitle")
-        self.lbl_weight_preview.setWordWrap(True)
-        w_lay.addWidget(self.lbl_weight_preview)
-
-        w_btns = QHBoxLayout()
-        btn_save_w = QPushButton("שמור משקלים")
-        btn_save_w.setObjectName("primary")
-        btn_save_w.setToolTip("שמור את המשקלים וחשב מחדש את ניקוד העדיפות")
-        btn_save_w.clicked.connect(self._save_weights)
-        w_btns.addWidget(btn_save_w)
-        btn_reset_w = QPushButton("אפס לברירת מחדל")
-        btn_reset_w.setObjectName("neutral")
-        btn_reset_w.clicked.connect(self._reset_weights)
-        w_btns.addWidget(btn_reset_w)
-        w_btns.addStretch()
-        w_lay.addLayout(w_btns)
-        left_col.addWidget(w_frame)
-
-        # ── Backup section ────────────────────────────────
-        bk_frame = QFrame()
-        bk_frame.setObjectName("panel")
-        bk_lay = QVBoxLayout(bk_frame)
-        bk_lay.setContentsMargins(10, 7, 10, 7)
-        bk_lay.setSpacing(6)
-
-        bk_lay.addWidget(section_header("גיבויים", "backup", "#0f766e"))
-
-        bk_desc = QLabel(
-            "<b>מה זה?</b> גיבוי הוא צילום מלא של כל הנתונים שלך — כל המקבלים, כל "
-            "החלוקות שנרשמו, וכל ההגדרות — בקובץ אחד.<br>"
-            "<b>מתי זה מציל אותך?</b> אם המחשב נשבר או נגנב, אם הנתונים נמחקו או "
-            "השתבשו בטעות, או כשעוברים למחשב חדש — אפשר לשחזר הכול חזרה מגיבוי.<br>"
-            "<b>אוטומטי:</b> התוכנה מגבה לבד בכל פתיחה ולפני כל פעולה מסוכנת. "
-            "כאן אפשר גם לשמור עותק לתיקייה שתבחר (למשל כונן חיצוני / דיסק-און-קי), "
-            "לגבות ידנית עכשיו, או לשחזר מקובץ גיבוי.")
-        bk_desc.setObjectName("subtitle")
-        bk_desc.setTextFormat(Qt.TextFormat.RichText)
-        bk_desc.setWordWrap(True)
-        bk_lay.addWidget(bk_desc)
-
-        form_bk = QFormLayout()
-        form_bk.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        form_bk.setSpacing(6)
-        form_bk.setContentsMargins(0, 0, 0, 0)
-
+        # ── גיבויים ──
+        card, body, _h = _card("גיבויים", "backup", "צילום מלא של כל הנתונים בקובץ אחד")
+        body.addWidget(_desc(
+            "התוכנה מגבה לבד בכל פתיחה ולפני כל פעולה מסוכנת. אם המחשב נשבר, הנתונים "
+            "נמחקו בטעות או עוברים למחשב חדש — משחזרים הכול מגיבוי. אפשר גם לשמור עותק "
+            "לתיקייה שתבחר (כונן חיצוני / דיסק-און-קי)."))
+        g = QGridLayout()
+        g.setHorizontalSpacing(12); g.setVerticalSpacing(6)
+        g.setColumnStretch(1, 1)
         self.lbl_backup_folder = QLabel("")
         self.lbl_backup_folder.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.lbl_backup_folder.setStyleSheet("color:#374151;")
         self.lbl_backup_folder.setWordWrap(True)
-
         self.lbl_last_backup = QLabel("")
-        self.lbl_last_backup.setStyleSheet("color:#374151;")
+        g.addWidget(_flabel("תיקיית גיבוי"), 0, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        g.addWidget(self.lbl_backup_folder, 0, 1)
+        g.addWidget(_flabel("גיבוי אחרון"), 1, 0)
+        g.addWidget(self.lbl_last_backup, 1, 1)
+        body.addLayout(g)
+        self.btn_backup_now = _btn("גבה עכשיו", _BTN_PRIMARY, self._backup_now,
+                                   "שמור עכשיו צילום מלא של כל הנתונים לתיקייה שנבחרה")
+        body.addLayout(_btn_row(
+            self.btn_backup_now,
+            _btn("שחזר מגיבוי קודם…", _BTN_GHOST, self._open_backup_list,
+                 "רשימת כל הגיבויים השמורים — שחזור בלחיצה אחת"),
+            _btn("שחזר מקובץ…", _BTN_GHOST, self._restore_backup,
+                 "החזר את כל הנתונים מקובץ גיבוי .db שתבחר ידנית"),
+            _btn("בחר תיקיית גיבוי…", _BTN_GHOST, self._choose_backup_folder,
+                 "בחר לאן לשמור עותק גיבוי נוסף (למשל כונן חיצוני)")))
+        _place(row, card, body)
 
-        form_bk.addRow("תיקיית גיבוי:", self.lbl_backup_folder)
-        form_bk.addRow("גיבוי אחרון:", self.lbl_last_backup)
-        bk_lay.addLayout(form_bk)
-
-        bk_btns = QHBoxLayout()
-        bk_btns.setSpacing(6)
-        btn_folder = QPushButton("בחר תיקיית גיבוי")
-        btn_folder.setObjectName("neutral")
-        btn_folder.setToolTip("בחר לאן לשמור עותק גיבוי נוסף (למשל כונן חיצוני)")
-        btn_folder.clicked.connect(self._choose_backup_folder)
-        bk_btns.addWidget(btn_folder)
-
-        self.btn_backup_now = QPushButton("גבה עכשיו")
-        self.btn_backup_now.setObjectName("primary")
-        self.btn_backup_now.setToolTip("שמור עכשיו צילום מלא של כל הנתונים לתיקייה שנבחרה")
-        self.btn_backup_now.clicked.connect(self._backup_now)
-        bk_btns.addWidget(self.btn_backup_now)
-
-        btn_restore_list = QPushButton("שחזר מגיבוי קודם…")
-        btn_restore_list.setObjectName("neutral")
-        btn_restore_list.setToolTip("רשימת כל הגיבויים השמורים — שחזור בלחיצה אחת (#69pen)")
-        btn_restore_list.clicked.connect(self._open_backup_list)
-        bk_btns.addWidget(btn_restore_list)
-
-        btn_restore = QPushButton("שחזר מקובץ…")
-        btn_restore.setObjectName("neutral")
-        btn_restore.setToolTip("החזר את כל הנתונים מקובץ גיבוי .db שתבחר ידנית")
-        btn_restore.clicked.connect(self._restore_backup)
-        bk_btns.addWidget(btn_restore)
-
-        bk_btns.addStretch()
-        bk_lay.addLayout(bk_btns)
-        right_col.addWidget(bk_frame)
-
-        # ── Export folders section (#5e1jc) ───────────────────────────────────
+        # ── תיקיות ייצוא (#5e1jc) ──
         from utils.excel_utils import EXPORT_KINDS
-        exp_frame = QFrame()
-        exp_frame.setObjectName("panel")
-        exp_lay = QVBoxLayout(exp_frame)
-        exp_lay.setContentsMargins(10, 7, 10, 7)
-        exp_lay.setSpacing(6)
-        exp_lay.addWidget(section_header("תיקיות ייצוא", "download", "#0f766e"))
-        exp_desc = QLabel("לאן יישמרו הקבצים שהתוכנה מייצאת. אפשר לבחור תיקייה נפרדת "
-                          "לכל סוג — למשל תיקייה קבועה לכל החלוקות. ברירת המחדל: תיקיית ההורדות.")
-        exp_desc.setObjectName("subtitle")
-        exp_desc.setWordWrap(True)
-        exp_lay.addWidget(exp_desc)
-
+        card, body, _h = _card("תיקיות ייצוא", "download", "לאן נשמרים קבצי האקסל וה-PDF")
+        body.addWidget(_desc("אפשר לבחור תיקייה נפרדת לכל סוג — למשל תיקייה קבועה לכל "
+                             "החלוקות. ברירת המחדל: תיקיית ההורדות."))
         self._export_path_lbls = {}
-        for kind, label in EXPORT_KINDS:
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            name_lbl = QLabel(label + ":")
-            name_lbl.setMinimumWidth(150)
-            name_lbl.setStyleSheet("font-weight:600; color:#334155;")
-            row.addWidget(name_lbl)
+        g = QGridLayout()
+        g.setHorizontalSpacing(10); g.setVerticalSpacing(6)
+        g.setColumnStretch(1, 1)
+        for i, (kind, label) in enumerate(EXPORT_KINDS):
+            g.addWidget(_flabel(label), i, 0)
             path_lbl = QLabel("")
-            path_lbl.setStyleSheet("color:#475569;")
             path_lbl.setWordWrap(True)
             self._export_path_lbls[kind] = path_lbl
-            row.addWidget(path_lbl, 1)
-            btn_pick = QPushButton("בחר")
-            btn_pick.setObjectName("neutral")
-            btn_pick.clicked.connect(lambda _=False, k=kind: self._choose_export_dir(k))
-            row.addWidget(btn_pick)
-            btn_reset = QPushButton("ברירת מחדל")
-            btn_reset.setObjectName("neutral")
-            btn_reset.setToolTip("החזר לתיקיית ההורדות")
-            btn_reset.clicked.connect(lambda _=False, k=kind: self._reset_export_dir(k))
-            row.addWidget(btn_reset)
-            exp_lay.addLayout(row)
-        right_col.addWidget(exp_frame)
+            g.addWidget(path_lbl, i, 1)
+            g.addWidget(_btn("בחר…", _BTN_GHOST,
+                             lambda _=False, k=kind: self._choose_export_dir(k), small=True), i, 2)
+            g.addWidget(_btn("ברירת מחדל", _BTN_GHOST,
+                             lambda _=False, k=kind: self._reset_export_dir(k),
+                             "החזר לתיקיית ההורדות", small=True), i, 3)
+        body.addLayout(g)
+        _place(row, card, body)
         self._refresh_export_labels()
 
-        # ── Danger zone section ───────────────────────────
-        danger_frame = QFrame()
-        danger_frame.setObjectName("panel")
-        danger_frame.setStyleSheet(
-            "QFrame#panel { border: 1.5px solid #fca5a5; }"
-        )
-        danger_lay = QVBoxLayout(danger_frame)
-        danger_lay.setContentsMargins(10, 7, 10, 7)
-        danger_lay.setSpacing(6)
+        # ═════════════════════════ חיבורים ═════════════════════════
+        lay.addLayout(_section("חיבורים"))
+        row = _row(); lay.addLayout(row)
 
-        danger_lay.addWidget(section_header(
-            "אזור מסוכן", "danger", "#dc2626",
-            text_color="#dc2626", line_color="#fca5a5"))
-
-        danger_desc = QLabel("מחיקת כל הנתונים — פעולה בלתי הפיכה. הגדרות המערכת (סיסמה, תיקיית גיבוי) נשמרות.")
-        danger_desc.setObjectName("subtitle")
-        danger_desc.setWordWrap(True)
-        danger_lay.addWidget(danger_desc)
-
-        danger_btns = QHBoxLayout()
-        btn_reset = QPushButton("אפס את כל הנתונים")
-        btn_reset.setObjectName("danger")
-        btn_reset.setToolTip("מוחק את כל המקבלים, ההיסטוריה ויומן השינויים")
-        btn_reset.clicked.connect(self._reset_data)
-        danger_btns.addWidget(btn_reset)
-        danger_btns.addStretch()
-        danger_lay.addLayout(danger_btns)
-        # Placed in the right column, under 'מייל למתנדבים' (#nbbwj) — half-width and
-        # compact instead of a full-width strip. The actual addWidget happens after
-        # mail_frame is built, below.
-
-        # ── Volunteer email section ────────────────────────
-        mail_frame = QFrame()
-        mail_frame.setObjectName("panel")
-        mail_lay = QVBoxLayout(mail_frame)
-        mail_lay.setContentsMargins(10, 7, 10, 7)
-        mail_lay.setSpacing(6)
-
-        mail_lay.addWidget(section_header("מייל למתנדבים", "mail", "#0f766e"))
-
-        mail_desc = QLabel(
-            "משמש לשליחת רשימת חלוקה למתנדב, ולקליטה אוטומטית של התוצאות שהוא שולח "
-            "בחזרה במייל (לשונית \"חלוקה ורישום\"). "
-            "ב-Gmail: הגדרות חשבון Google ← אבטחה ← אימות דו-שלבי ← סיסמאות אפליקציה.")
-        mail_desc.setObjectName("subtitle")
-        mail_desc.setWordWrap(True)
-        mail_lay.addWidget(mail_desc)
-
-        # Helpful links for the one-time Gmail setup (2FA → authenticator → app
-        # password). External links open in the browser.
+        # ── מייל למתנדבים ──
+        card, body, _h = _card("מייל למתנדבים", "mail", "שליחת רשימה למתנדב וקליטת התוצאות")
+        body.addWidget(_desc(
+            "משמש לשליחת רשימת חלוקה למתנדב ולקליטה אוטומטית של התוצאות שהוא מחזיר "
+            "במייל (מסך \"חלוקה ורישום\"). דורש סיסמת אפליקציה של Gmail."))
         mail_links = QLabel(
             "הגדרה חד-פעמית ב-Gmail (לפי הסדר):<br>"
             "1. <a href=\"https://authenticator.cc/\">התקנת אפליקציית מאמת (Authenticator)</a><br>"
             "2. <a href=\"https://myaccount.google.com/signinoptions/two-step-verification?hl=he\">"
             "הפעלת אימות דו-שלבי</a> "
-            "<span style=\"color:#b45309;\">— חשוב! בעת ההפעלה הורידו את קודי הגיבוי "
-            "ושמרו אותם במקום בטוח</span><br>"
+            "<span style=\"color:#b45309;\">— בעת ההפעלה הורידו את קודי הגיבוי ושמרו במקום בטוח</span><br>"
             "3. <a href=\"https://myaccount.google.com/apppasswords\">הפקת סיסמת אפליקציה</a>")
         mail_links.setTextFormat(Qt.TextFormat.RichText)
         mail_links.setOpenExternalLinks(True)
         mail_links.setWordWrap(True)
-        mail_links.setStyleSheet("font-size:12px;")
-        mail_lay.addWidget(mail_links)
-
-        mail_warn_row = QHBoxLayout()
-        mail_warn_row.setContentsMargins(0, 0, 0, 0)
-        mail_warn_row.setSpacing(6)
-        warn_ic = QLabel()
-        warn_ic.setPixmap(line_icon("danger", 16, "#b45309"))
-        warn_ic.setStyleSheet("background:transparent; border:none;")
-        warn_ic.setFixedWidth(18)
-        mail_warn_row.addWidget(warn_ic, 0, Qt.AlignmentFlag.AlignTop)
+        mail_links.setStyleSheet("color:#334155; font-size:12px; " + _LBL)
+        body.addWidget(mail_links)
         mail_warn = QLabel(
-            "אזהרה: אל תשנה הגדרות אבטחה בחשבון Google (אימות דו-שלבי / סיסמאות אפליקציה) "
-            "בלי להתייעץ עם מישהו שמבין בכך. שינוי שגוי עלול לחסום את הכניסה לחשבון.")
+            "⚠ אל תשנה הגדרות אבטחה בחשבון Google (אימות דו-שלבי / סיסמאות אפליקציה) "
+            "בלי להתייעץ עם מישהו שמבין בכך — שינוי שגוי עלול לחסום את הכניסה לחשבון.")
         mail_warn.setWordWrap(True)
-        mail_warn.setStyleSheet("color:#b45309; font-size:12px; font-weight:600; "
-                                "background:#fffbeb; border:1px solid #fde68a; "
-                                "border-radius:6px; padding:6px 8px;")
-        mail_warn_row.addWidget(mail_warn, 1)
-        mail_lay.addLayout(mail_warn_row)
+        mail_warn.setStyleSheet(_NOTE_AMBER)
+        body.addWidget(mail_warn)
 
-        mail_form = QFormLayout()
-        mail_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        mail_form.setSpacing(6)
+        form = _form()
         self.mail_email = QLineEdit()
         self.mail_email.setPlaceholderText("your@gmail.com")
         self.mail_email.setAlignment(ALIGN_RIGHT)
@@ -460,209 +433,29 @@ class SettingsTab(QWidget):
         self.mail_file_pw.setEchoMode(QLineEdit.EchoMode.Password)
         self.mail_file_pw.setPlaceholderText("ריק = הקובץ לא מוגן")
         self.mail_file_pw.setAlignment(ALIGN_RIGHT)
-        mail_form.addRow("כתובת שולח:", self.mail_email)
-        mail_form.addRow("סיסמת אפליקציה:", self.mail_password)
-        mail_form.addRow("סיסמה לקובץ המתנדב:", self.mail_file_pw)
-        mail_lay.addLayout(mail_form)
-
-        mail_file_pw_hint = QLabel(
+        self.mail_file_pw.setToolTip(
             "הקובץ המצורף למתנדב יינעל בסיסמה זו (צריך אותה כדי לפתוח ב-Excel). "
-            "הסיסמה לא נכתבת במייל — מסרו אותה למתנדב פעם אחת בעל-פה / בווטסאפ. "
-            "השאר ריק כדי לא להגן על הקובץ.")
-        mail_file_pw_hint.setObjectName("subtitle")
-        mail_file_pw_hint.setWordWrap(True)
-        mail_file_pw_hint.setStyleSheet("font-size:11px;")
-        mail_lay.addWidget(mail_file_pw_hint)
-
-        mail_btns = QHBoxLayout()
-        btn_mail_save = QPushButton("שמור")
-        btn_mail_save.setObjectName("primary")
-        btn_mail_save.clicked.connect(self._save_mail_settings)
-        mail_btns.addWidget(btn_mail_save)
-        btn_mail_test = QPushButton("שלח מייל בדיקה")
-        btn_mail_test.setObjectName("neutral")
-        btn_mail_test.clicked.connect(self._test_mail_settings)
-        mail_btns.addWidget(btn_mail_test)
-        mail_btns.addStretch()
-        mail_lay.addLayout(mail_btns)
-
+            "הסיסמה לא נכתבת במייל — מסרו אותה למתנדב פעם אחת בעל-פה / בווטסאפ.")
+        _form_row(form, "כתובת שולח", self.mail_email)
+        _form_row(form, "סיסמת אפליקציה", self.mail_password)
+        _form_row(form, "סיסמה לקובץ המתנדב", self.mail_file_pw)
+        body.addLayout(form)
+        body.addWidget(_hint("סיסמת הקובץ נמסרת למתנדב פעם אחת בעל-פה; השאר ריק כדי לא להגן על הקובץ."))
         self.lbl_mail_status = QLabel("")
-        self.lbl_mail_status.setObjectName("subtitle")
         self.lbl_mail_status.setWordWrap(True)
-        mail_lay.addWidget(self.lbl_mail_status)
-        right_col.addWidget(mail_frame)
-        right_col.addWidget(danger_frame)   # 'אזור מסוכן' — half-width, under the mail panel (#nbbwj)
+        body.addLayout(_btn_row(
+            _btn("שמור", _BTN_PRIMARY, self._save_mail_settings),
+            _btn("שלח מייל בדיקה", _BTN_GHOST, self._test_mail_settings),
+            self.lbl_mail_status))
+        _place(row, card, body)
 
-        # ── Organization / branding section ───────────────────
-        # Makes the app charity-agnostic: the name shown on the top bar is data,
-        # not a hardcoded string, so the same program fits any tzedaka fund.
-        org_frame = QFrame()
-        org_frame.setObjectName("panel")
-        org_lay = QVBoxLayout(org_frame)
-        org_lay.setContentsMargins(10, 7, 10, 7)
-        org_lay.setSpacing(6)
-        org_lay.addWidget(section_header("שם הארגון (סרגל עליון)", "org", "#0f766e"))
-        org_desc = QLabel("הכיתוב שמופיע בראש התוכנה. שנה אותו כדי להתאים לכל קופת צדקה.")
-        org_desc.setObjectName("subtitle")
-        org_desc.setWordWrap(True)
-        org_lay.addWidget(org_desc)
-
-        org_form = QFormLayout()
-        org_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        org_form.setSpacing(6)
-        self.org_title = QLineEdit()
-        self.org_title.setPlaceholderText("מנהל חלוקה")
-        self.org_title.setAlignment(ALIGN_RIGHT)
-        self.org_subtitle = QLineEdit()
-        self.org_subtitle.setPlaceholderText("שם הקופה · יישוב")
-        self.org_subtitle.setAlignment(ALIGN_RIGHT)
-        org_form.addRow("כותרת:", self.org_title)
-        org_form.addRow("כותרת משנה:", self.org_subtitle)
-        org_lay.addLayout(org_form)
-
-        # Logo row: pick an image file → copied into the data dir and shown live.
-        logo_row = QHBoxLayout()
-        logo_row.setSpacing(6)
-        logo_lbl = QLabel("לוגו:")
-        logo_row.addWidget(logo_lbl)
-        self.lbl_logo_status = QLabel("")
-        self.lbl_logo_status.setObjectName("subtitle")
-        logo_row.addWidget(self.lbl_logo_status, 1)
-        btn_logo = QPushButton("החלף לוגו…")
-        btn_logo.setObjectName("neutral")
-        btn_logo.clicked.connect(self._choose_logo)
-        logo_row.addWidget(btn_logo)
-        self.btn_logo_reset = QPushButton("אפס")
-        self.btn_logo_reset.setObjectName("neutral")
-        self.btn_logo_reset.clicked.connect(self._reset_logo)
-        logo_row.addWidget(self.btn_logo_reset)
-        org_lay.addLayout(logo_row)
-
-        org_btns = QHBoxLayout()
-        btn_org_save = QPushButton("שמור")
-        btn_org_save.setObjectName("primary")
-        btn_org_save.clicked.connect(self._save_branding)
-        org_btns.addWidget(btn_org_save)
-        org_btns.addStretch()
-        org_lay.addLayout(org_btns)
-        left_col.addWidget(org_frame)
-
-        # ── Community balance percentages (#lejmr) ────────────────────────────
-        comm_frame = QFrame()
-        comm_frame.setObjectName("panel")
-        comm_lay = QVBoxLayout(comm_frame)
-        comm_lay.setContentsMargins(10, 7, 10, 7)
-        comm_lay.setSpacing(6)
-        comm_lay.addWidget(section_header("איזון קהילות", "users", "#0f766e"))
-        comm_info = QLabel(
-            "כשמחלקים לפי סינון מותאם עם 'איזון בין קהילות', כל קהילה מקבלת "
-            "חלק יחסי לגודלה. כאן אפשר לקבוע ידנית אחוז קבוע לקהילה מסוימת "
-            "(השאר יחולק יחסית בין הקהילות הנותרות).")
-        comm_info.setWordWrap(True)
-        comm_info.setStyleSheet("color:#475569; font-size:12px;")
-        comm_lay.addWidget(comm_info)
-        btn_comm = QPushButton("כוונון אחוזים לקהילות…")
-        btn_comm.setObjectName("neutral")
-        btn_comm.clicked.connect(self._open_community_quotas)
-        comm_lay.addWidget(btn_comm, alignment=Qt.AlignmentFlag.AlignRight)
-        right_col.addWidget(comm_frame)
-
-        # ── Two-computer sync (Google Drive) — v2.61 ──────────────────────────
-        sync_frame = QFrame()
-        sync_frame.setObjectName("panel")
-        sync_lay = QVBoxLayout(sync_frame)
-        sync_lay.setContentsMargins(10, 7, 10, 7)
-        sync_lay.setSpacing(6)
-        sync_lay.addWidget(section_header("סנכרון בין שני מחשבים", "update", "#0f766e"))
-        # Visual status card (v2.80, #n02fc): colored dot + headline + stat chips
-        # instead of a static block of text lines.
-        head_row = QHBoxLayout()
-        head_row.setSpacing(8)
-        self.sync_dot = QLabel("")
-        self.sync_dot.setFixedSize(14, 14)
-        head_row.addWidget(self.sync_dot)
-        self.sync_headline = QLabel("")
-        self.sync_headline.setStyleSheet("font-size:13.5px; font-weight:700;")
-        head_row.addWidget(self.sync_headline)
-        head_row.addStretch()
-        sync_lay.addLayout(head_row)
-        self.sync_chips_lay = QHBoxLayout()
-        self.sync_chips_lay.setSpacing(6)
-        self.sync_chips_lay.addStretch()
-        sync_lay.addLayout(self.sync_chips_lay)
-        self.lbl_sync_folder = QLabel("")
-        self.lbl_sync_folder.setWordWrap(True)
-        self.lbl_sync_folder.setStyleSheet("color:#64748b; font-size:11.5px;")
-        sync_lay.addWidget(self.lbl_sync_folder)
-        # Sync runs continuously in the background (every 10s) — no manual
-        # 'sync now' button is needed any more (#hd4as).
-        sync_note = QLabel("הסנכרון פועל אוטומטית ברקע כל הזמן — אין צורך ללחוץ על כלום.")
-        sync_note.setWordWrap(True)
-        sync_note.setStyleSheet("color:#0f766e; font-size:12px;")
-        sync_lay.addWidget(sync_note)
-        sync_btns = QHBoxLayout()
-        self.btn_sync_setup = QPushButton("הגדרת סנכרון…")
-        self.btn_sync_setup.setObjectName("primary")
-        self.btn_sync_setup.clicked.connect(self._open_sync_setup)
-        sync_btns.addWidget(self.btn_sync_setup)
-        sync_btns.addStretch()
-        sync_lay.addLayout(sync_btns)
-        left_col.addWidget(sync_frame)
-        self._refresh_sync_status()
-
-        # ── Manager computer + change control (#5rhe9) ────────────────────────
-        mgr_frame = QFrame()
-        mgr_frame.setObjectName("panel")
-        mgr_lay = QVBoxLayout(mgr_frame)
-        mgr_lay.setContentsMargins(10, 7, 10, 7)
-        mgr_lay.setSpacing(6)
-        mgr_lay.addWidget(section_header("מחשב מנהל ובקרת שינויים", "security", "#0f766e"))
-        mgr_desc = QLabel(
-            "אפשר להגדיר מחשב אחד כ<b>מחשב המנהל</b>. במחשב המנהל מופיע <b>יומן "
-            "שינויים</b> שמראה כל שינוי שנקלט מהמחשב השני (מי/מה/מתי), עם אפשרות "
-            "<b>לבטל</b> שינוי ולהחזיר את המצב הקודם — כך המנהל שולט בנתוני האמת. "
-            "הגדרת מחשב כמנהל מוגנת בקוד.")
-        mgr_desc.setObjectName("subtitle")
-        mgr_desc.setTextFormat(Qt.TextFormat.RichText)
-        mgr_desc.setWordWrap(True)
-        mgr_lay.addWidget(mgr_desc)
-        self.lbl_mgr_status = QLabel("")
-        self.lbl_mgr_status.setWordWrap(True)
-        self.lbl_mgr_status.setStyleSheet("font-size:12.5px;")
-        mgr_lay.addWidget(self.lbl_mgr_status)
-        mgr_btns = QHBoxLayout()
-        self.btn_mgr_toggle = QPushButton("")
-        self.btn_mgr_toggle.setObjectName("primary")
-        self.btn_mgr_toggle.clicked.connect(self._toggle_manager)
-        mgr_btns.addWidget(self.btn_mgr_toggle)
-        self.btn_mgr_log = QPushButton("יומן שינויים…")
-        self.btn_mgr_log.setObjectName("neutral")
-        self.btn_mgr_log.clicked.connect(self._open_manager_log)
-        mgr_btns.addWidget(self.btn_mgr_log)
-        mgr_btns.addStretch()
-        mgr_lay.addLayout(mgr_btns)
-        left_col.addWidget(mgr_frame)
-        self._refresh_manager_status()
-
-        # ── Tzintukim — Yemot HaMashiach credentials (v2.81) ──────────────────
-        ym_frame = QFrame()
-        ym_frame.setObjectName("panel")
-        ym_lay = QVBoxLayout(ym_frame)
-        ym_lay.setContentsMargins(10, 7, 10, 7)
-        ym_lay.setSpacing(6)
-        ym_lay.addWidget(section_header("צינתוקים (ימות המשיח)", "phone", "#0f766e"))
-        ym_desc = QLabel(
-            "חיבור למערכת הטלפונית של ימות המשיח — לשליחת הודעה קולית לזכאי "
-            "החלוקה מתוך לשונית \"צינתוקים\". הזן את מספר המערכת (077…) ואת "
-            "הסיסמה של ימות, ולחץ \"בדוק חיבור\". אם במערכת שלך מופעל אימות "
-            "דו-שלבי — צור \"מפתח API\" בממשק ימות (חומת אש) והדבק אותו בשדה "
-            "הסיסמה במקום הסיסמה הרגילה.")
-        ym_desc.setObjectName("subtitle")
-        ym_desc.setWordWrap(True)
-        ym_lay.addWidget(ym_desc)
-        ym_form = QFormLayout()
-        ym_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        ym_form.setSpacing(6)
+        # ── צינתוקים — ימות המשיח (v2.81) ──
+        card, body, _h = _card("צינתוקים (ימות המשיח)", "phone", "החיבור למערכת הטלפונית")
+        body.addWidget(_desc(
+            "לשליחת הודעה קולית לזכאי החלוקה ממסך \"צינתוקים\". הזן את מספר המערכת "
+            "(077…) ואת הסיסמה של ימות ולחץ \"בדוק חיבור\". אם מופעל אימות דו-שלבי — "
+            "צור \"מפתח API\" בממשק ימות (חומת אש) והדבק אותו בשדה הסיסמה."))
+        form = _form()
         self.ym_system = QLineEdit()
         self.ym_system.setPlaceholderText("למשל 0773137770")
         self.ym_system.setAlignment(ALIGN_RIGHT)
@@ -672,69 +465,200 @@ class SettingsTab(QWidget):
         self.ym_password.setPlaceholderText("הסיסמה של המערכת בימות")
         self.ym_password.setAlignment(ALIGN_RIGHT)
         self.ym_password.setText(db.get_setting("yemot_password") or "")
-        # (שדה "מספר לבדיקות" הוסר ב-#dx28e — המספר מוזן ונשמר ישירות
-        #  בכפתור "שלח בדיקה למספר שלי" שבלשונית הצינתוקים.)
         self.ym_gemini_key = QLineEdit()
         self.ym_gemini_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.ym_gemini_key.setPlaceholderText("לקול המשופר ב\"צור הקלטה מטקסט\" "
-                                              "(לא חובה)")
+        self.ym_gemini_key.setPlaceholderText("לקול המשופר ב\"צור הקלטה מטקסט\" (לא חובה)")
         self.ym_gemini_key.setToolTip(
             "מפתח API חינמי של Google Gemini — משמש רק ליצירת הקלטה מטקסט "
             "בקול המשופר. בלעדיו עדיין עובדים הקולות הרגילים (אברי/הילה).")
         self.ym_gemini_key.setAlignment(ALIGN_RIGHT)
         self.ym_gemini_key.setText(db.get_setting("gemini_api_key") or "")
-        ym_form.addRow("מספר מערכת:", self.ym_system)
-        ym_form.addRow("סיסמה:", self.ym_password)
-        ym_form.addRow("מפתח Gemini:", self.ym_gemini_key)
-        ym_lay.addLayout(ym_form)
-        ym_btns = QHBoxLayout()
-        btn_ym_save = QPushButton("שמור")
-        btn_ym_save.setObjectName("primary")
-        btn_ym_save.clicked.connect(self._save_yemot_settings)
-        ym_btns.addWidget(btn_ym_save)
-        btn_ym_test = QPushButton("בדוק חיבור")
-        btn_ym_test.setObjectName("neutral")
-        btn_ym_test.setToolTip("מתחבר לימות המשיח ומוודא שהפרטים נכונים")
-        btn_ym_test.clicked.connect(self._test_yemot_connection)
-        ym_btns.addWidget(btn_ym_test)
-        ym_btns.addStretch()
-        ym_lay.addLayout(ym_btns)
+        _form_row(form, "מספר מערכת", self.ym_system)
+        _form_row(form, "סיסמה", self.ym_password)
+        _form_row(form, "מפתח Gemini", self.ym_gemini_key)
+        body.addLayout(form)
         self.lbl_ym_status = QLabel("")
-        self.lbl_ym_status.setObjectName("subtitle")
         self.lbl_ym_status.setWordWrap(True)
-        ym_lay.addWidget(self.lbl_ym_status)
-        left_col.addWidget(ym_frame)
+        self.lbl_ym_status.setStyleSheet("color:#334155; font-size:12.5px; " + _LBL)
+        body.addLayout(_btn_row(
+            _btn("שמור", _BTN_PRIMARY, self._save_yemot_settings),
+            _btn("בדוק חיבור", _BTN_GHOST, self._test_yemot_connection,
+                 "מתחבר לימות המשיח ומוודא שהפרטים נכונים"),
+            self.lbl_ym_status))
+        _place(row, card, body)
 
-        # Trailing stretch keeps each column's panels packed to the top so the
-        # shorter column doesn't stretch its panels to fill the taller one.
-        right_col.addStretch()
-        left_col.addStretch()
+        # ═════════════════════════ עבודה משני מחשבים ═════════════════════════
+        lay.addLayout(_section("עבודה משני מחשבים"))
+        row = _row(); lay.addLayout(row)
 
-        # ── Bottom row: feedback ──────────────────────────────────────────────
-        bottom_row = QHBoxLayout()
-        # A second, easy-to-find entry point to the feedback dialog (the small
-        # one lives in the status bar; users look for it here in Settings).
-        self.btn_feedback = QPushButton("✉ השאר הודעה למפתח")
-        self.btn_feedback.setObjectName("primary")
-        self.btn_feedback.setToolTip("דווח על בעיה או השאר בקשה — נשלח למפתח")
-        self.btn_feedback.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_feedback.clicked.connect(self._open_feedback)
-        bottom_row.addWidget(self.btn_feedback)
-        # v2.80 (#ce6a0): the operator can review every message INSIDE the app —
-        # from both computers — copy it, and mark it handled. No GitHub needed.
-        self.btn_feedback_inbox = QPushButton("📥 הודעות שנשלחו")
-        self.btn_feedback_inbox.setObjectName("neutral")
-        self.btn_feedback_inbox.setToolTip(
-            "כל ההודעות שנשלחו למפתח משני המחשבים — צפייה, העתקה וסימון כטופל")
-        self.btn_feedback_inbox.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_feedback_inbox.clicked.connect(self._open_feedback_inbox)
-        bottom_row.addWidget(self.btn_feedback_inbox)
+        # ── סנכרון (v2.61) ──
+        card, body, _h = _card("סנכרון בין שני מחשבים", "update", "אותם נתונים בשני מקומות, דרך Google Drive")
+        head_row = QHBoxLayout()
+        head_row.setSpacing(8)
+        self.sync_dot = QLabel("")
+        self.sync_dot.setFixedSize(14, 14)
+        head_row.addWidget(self.sync_dot)
+        self.sync_headline = QLabel("")
+        head_row.addWidget(self.sync_headline)
+        head_row.addStretch()
+        body.addLayout(head_row)
+        self.sync_chips_lay = QHBoxLayout()
+        self.sync_chips_lay.setSpacing(6)
+        self.sync_chips_lay.addStretch()
+        body.addLayout(self.sync_chips_lay)
+        self.lbl_sync_folder = QLabel("")
+        self.lbl_sync_folder.setWordWrap(True)
+        self.lbl_sync_folder.setStyleSheet("color:#64748b; font-size:11.5px; " + _LBL)
+        body.addWidget(self.lbl_sync_folder)
+        body.addWidget(_hint("הסנכרון פועל אוטומטית ברקע כל הזמן — אין צורך ללחוץ על כלום.",
+                             color="#0f766e"))
+        self.btn_sync_setup = _btn("הגדרת סנכרון…", _BTN_PRIMARY, self._open_sync_setup)
+        body.addLayout(_btn_row(self.btn_sync_setup))
+        _place(row, card, body)
+        self._refresh_sync_status()
+
+        # ── מחשב מנהל (#5rhe9) ──
+        card, body, _h = _card("מחשב מנהל ובקרת שינויים", "security", "מי שולט בנתוני האמת")
+        mgr_desc = QLabel(
+            "אפשר להגדיר מחשב אחד כ<b>מחשב המנהל</b>. במחשב המנהל מופיע <b>יומן "
+            "שינויים</b> עם כל שינוי שנקלט מהמחשב השני (מי/מה/מתי) ואפשרות <b>לבטל</b> "
+            "אותו ולהחזיר את המצב הקודם. ההגדרה מוגנת בקוד.")
+        mgr_desc.setTextFormat(Qt.TextFormat.RichText)
+        mgr_desc.setWordWrap(True)
+        mgr_desc.setStyleSheet(_DESC)
+        body.addWidget(mgr_desc)
+        self.lbl_mgr_status = QLabel("")
+        self.lbl_mgr_status.setWordWrap(True)
+        body.addWidget(self.lbl_mgr_status)
+        self.btn_mgr_toggle = _btn("", _BTN_PRIMARY, self._toggle_manager)
+        self.btn_mgr_log = _btn("יומן שינויים…", _BTN_GHOST, self._open_manager_log)
+        body.addLayout(_btn_row(self.btn_mgr_toggle, self.btn_mgr_log))
+        _place(row, card, body)
+        self._refresh_manager_status()
+
+        # ═════════════════════════ חישוב החלוקה ═════════════════════════
+        lay.addLayout(_section("חישוב החלוקה"))
+        row = _row(); lay.addLayout(row)
+
+        # ── משקלי ניקוד ──
+        card, body, _h = _card("משקלי ניקוד הצורך", "weights", "מה משפיע על דירוג המקבלים")
+        body.addWidget(_desc(
+            "המשקל של כל נתון בחישוב 'ניקוד הצורך' שלפיו מדורגים המקבלים. המשקלים הם "
+            "אחוזים שמסתכמים תמיד ל-100% — הגדלת אחד מקטינה אוטומטית את האחרים. "
+            "0% = להתעלם מהנתון."))
+        self._balancing = False
+        self._weight_spins = {}
+        g = QGridLayout()
+        g.setHorizontalSpacing(14); g.setVerticalSpacing(6)
+        # Two columns of (label, spin) pairs — compact instead of a tall list.
+        for i, f in enumerate(db.NEED_FACTORS):
+            spin = QSpinBox()
+            spin.setRange(0, 100)
+            spin.setSuffix("%")
+            spin.setFixedWidth(90)
+            spin.setMinimumHeight(_INPUT_H)
+            spin.valueChanged.connect(lambda _v, k=f["key"]: self._rebalance(k))
+            self._weight_spins[f["key"]] = spin
+            r, c = i % 3, (i // 3) * 2
+            g.addWidget(_flabel(f["label"]), r, c)
+            g.addWidget(spin, r, c + 1, alignment=Qt.AlignmentFlag.AlignRight)
+        g.setColumnStretch(4, 1)
+        g.setColumnMinimumWidth(4, 0)
+        body.addLayout(g)
+        self.lbl_weight_preview = QLabel("")
+        self.lbl_weight_preview.setWordWrap(True)
+        self.lbl_weight_preview.setStyleSheet(_DESC)
+        body.addWidget(self.lbl_weight_preview)
+        body.addLayout(_btn_row(
+            _btn("שמור משקלים", _BTN_PRIMARY, self._save_weights,
+                 "שמור את המשקלים וחשב מחדש את ניקוד העדיפות"),
+            _btn("אפס לברירת מחדל", _BTN_GHOST, self._reset_weights)))
+        _place(row, card, body)
+
+        # ── איזון קהילות (#lejmr) ──
+        card, body, _h = _card("איזון קהילות", "users", "חלוקה הוגנת בין הקהילות")
+        body.addWidget(_desc(
+            "כשמחלקים לפי סינון מותאם עם 'איזון בין קהילות', כל קהילה מקבלת חלק יחסי "
+            "לגודלה. כאן אפשר לקבוע ידנית אחוז קבוע לקהילה מסוימת — השאר יחולק יחסית "
+            "בין הקהילות הנותרות."))
+        body.addLayout(_btn_row(
+            _btn("כוונון אחוזים לקהילות…", _BTN_GHOST, self._open_community_quotas)))
+        _place(row, card, body)
+
+        # ═════════════════════════ התוכנה ═════════════════════════
+        lay.addLayout(_section("התוכנה"))
+        row = _row(); lay.addLayout(row)
+
+        # ── עדכון תוכנה ──
+        card, body, _h = _card("עדכון תוכנה", "update", "גרסאות חדשות מגיעות לבד")
+        ver_row = QHBoxLayout()
+        ver_row.setSpacing(10)
+        ver_row.addWidget(_flabel("גרסה נוכחית"))
+        self.lbl_version = QLabel(f"v{APP_VERSION}")
+        self.lbl_version.setStyleSheet(_CHIP_GREEN)
+        ver_row.addWidget(self.lbl_version)
+        ver_row.addStretch()
+        self.btn_check_update = _btn("בדוק עדכונים", _BTN_GHOST, self._check_updates,
+                                     "בדוק אם קיימת גרסה חדשה יותר", small=True)
+        ver_row.addWidget(self.btn_check_update)
+        body.addLayout(ver_row)
+        self.lbl_update_status = QLabel("")
+        self.lbl_update_status.setWordWrap(True)
+        self.lbl_update_status.setStyleSheet(_DESC)
+        body.addWidget(self.lbl_update_status)
+        # v2.96 — per-machine flag for download / peer-update balloons.
+        self.chk_dl_notify = QCheckBox(
+            "קבל התראות במחשב זה על הורדות גרסה ועדכוני המחשב השני")
+        self.chk_dl_notify.setToolTip(
+            "כשמסומן: המחשב הזה (ורק הוא) יציג התראת Windows כשמישהו מוריד "
+            "את התוכנה מגיטהאב, וכשהמחשב השני מתעדכן לגרסה חדשה.")
+        self.chk_dl_notify.setChecked(sync.notify_downloads())
+        self.chk_dl_notify.toggled.connect(sync.set_notify_downloads)
+        body.addWidget(self.chk_dl_notify)
+        _place(row, card, body)
+
+        # ── הודעות למפתח ──
+        card, body, _h = _card("הודעות למפתח", "send", "דיווח על תקלה או בקשה")
+        body.addWidget(_desc("נתקלת בבעיה או יש רעיון? כתוב למפתח מכאן. כל ההודעות "
+                             "שנשלחו משני המחשבים נשמרות ואפשר לסמן אותן כטופלו."))
+        self.btn_feedback = _btn("✉ השאר הודעה למפתח", _BTN_ACCENT, self._open_feedback,
+                                 "דווח על בעיה או השאר בקשה — נשלח למפתח")
+        self.btn_feedback_inbox = _btn("📥 הודעות שנשלחו", _BTN_GHOST, self._open_feedback_inbox,
+                                       "כל ההודעות שנשלחו למפתח משני המחשבים — צפייה, העתקה וסימון כטופל")
+        body.addLayout(_btn_row(self.btn_feedback, self.btn_feedback_inbox))
         self._refresh_feedback_inbox_btn()
-        bottom_row.addStretch()
-        # (The manual "רענן" button was removed — the settings screen reloads
-        # itself every time the tab is opened, so it served no purpose.)
-        lay.addLayout(bottom_row)
+        _place(row, card, body)
+
+        # ═════════════════════════ אזור מסוכן ═════════════════════════
+        card, body, _h = _card("אזור מסוכן", "danger", "פעולות בלתי הפיכות", danger=True)
+        d_row = QHBoxLayout()
+        d_row.setSpacing(12)
+        d_row.addWidget(_desc("מחיקת כל הנתונים — המקבלים, ההיסטוריה ויומן השינויים. "
+                              "ההגדרות (סיסמה, תיקיית גיבוי, חיבורים) נשמרות. "
+                              "כשהסנכרון פעיל, הנתונים נמשכים מחדש מהמחשב השני."), 1)
+        d_row.addWidget(_btn("אפס את כל הנתונים", _BTN_DANGER, self._reset_data,
+                             "מוחק את כל המקבלים, ההיסטוריה ויומן השינויים"))
+        body.addLayout(d_row)
+        lay.addWidget(card)
         lay.addStretch()
+        self._refresh_header_chips()
+
+    def _refresh_header_chips(self):
+        """The title-row chips: sync / yemot / mail state at a glance."""
+        from utils import yemot
+        if sync.is_enabled():
+            ok = sync.folder_available()
+            self.chip_sync.setText("●  סנכרון פעיל" if ok else "●  סנכרון — התיקייה לא נמצאה")
+            self.chip_sync.setStyleSheet(_CHIP_GREEN if ok else _CHIP_RED)
+        else:
+            self.chip_sync.setText("●  סנכרון כבוי")
+            self.chip_sync.setStyleSheet(_CHIP_QSS)
+        ym = yemot.is_configured()
+        self.chip_yemot.setText("●  ימות המשיח מחובר" if ym else "●  ימות המשיח לא חובר")
+        self.chip_yemot.setStyleSheet(_CHIP_GREEN if ym else _CHIP_AMBER)
+        ml = email_utils.is_configured()
+        self.chip_mail.setText("●  מייל מוגדר" if ml else "●  מייל לא הוגדר")
+        self.chip_mail.setStyleSheet(_CHIP_GREEN if ml else _CHIP_AMBER)
 
     def refresh(self):
         # Show the password masked with the RIGHT number of dots (matches the
@@ -788,6 +712,7 @@ class SettingsTab(QWidget):
         self._refresh_sync_status()
         self._refresh_manager_status()
         self._refresh_feedback_inbox_btn()
+        self._refresh_header_chips()
 
     def _refresh_feedback_inbox_btn(self):
         try:
@@ -1024,8 +949,8 @@ class SettingsTab(QWidget):
     def _add_sync_chip(self, text: str, fg: str = "#334155", bg: str = "#eef4f1"):
         chip = QLabel(text)
         chip.setStyleSheet(
-            f"background-color:{bg}; color:{fg}; border-radius:10px; "
-            "padding:3px 10px; font-size:12px; font-weight:600;")
+            f"QLabel{{background:{bg}; color:{fg}; border:none; border-radius:14px; "
+            "padding:4px 12px; font-size:12px; font-weight:700;}}")
         self.sync_chips_lay.insertWidget(self.sync_chips_lay.count() - 1, chip)
 
     def _refresh_sync_status(self):
@@ -1083,6 +1008,7 @@ class SettingsTab(QWidget):
     def _open_sync_setup(self):
         SyncSetupDialog(self).exec()
         self._refresh_sync_status()
+        self._refresh_header_chips()
         if self.main_win and hasattr(self.main_win, "_refresh_sync_led"):
             self.main_win._refresh_sync_led()
 
@@ -1301,6 +1227,7 @@ class SettingsTab(QWidget):
         db.set_setting(yemot.SET_SYSTEM, system)
         db.set_setting(yemot.SET_PASSWORD, password)
         db.set_setting("gemini_api_key", self.ym_gemini_key.text().strip())
+        self._refresh_header_chips()
         if not silent:
             self.lbl_ym_status.setText("הפרטים נשמרו ✓ — עכשיו לחץ \"בדוק חיבור\"")
 
