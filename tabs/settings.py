@@ -951,10 +951,16 @@ class SettingsTab(QWidget):
             QMessageBox.critical(self, "שגיאה", "שחזור נכשל — ודא שהקובץ תקין ונגיש.")
 
     def _reset_data(self):
+        synced = sync.is_enabled()
+        text = "פעולה זו תמחק את כל המקבלים וההיסטוריה לצמיתות.\n\n"
+        if synced:
+            # Reset = "start over from the other computer" (user decision 2/9/2026):
+            # the wipe is local only, and everything is pulled again from the peer.
+            text = ("פעולה זו תמחק את כל המקבלים וההיסטוריה במחשב הזה,\n"
+                    "ואחר כך תמשוך מחדש את כל הנתונים מהמחשב השני.\n"
+                    "(המחיקה אינה משפיעה על המחשב השני.)\n\n")
         confirm, ok = QInputDialog.getText(
-            self, "אפוס נתונים",
-            "פעולה זו תמחק את כל המקבלים וההיסטוריה לצמיתות.\n\n"
-            "הקלד   אפס   לאישור:",
+            self, "אפוס נתונים", text + "הקלד   אפס   לאישור:",
             QLineEdit.EchoMode.Normal
         )
         if not ok or confirm.strip() != "אפס":
@@ -964,11 +970,18 @@ class SettingsTab(QWidget):
         if not self._ensure_safety_backup():
             return
 
+        pulled = 0
         with busy_cursor():
             db.reset_all_data()
+            if synced:
+                pulled = sync.restart_from_peer()
             if self.main_win:
                 self.main_win.refresh_all()
-        QMessageBox.information(self, "אופס הושלם", "כל הנתונים נמחקו. הגדרות המערכת נשמרו.")
+        msg = "כל הנתונים נמחקו. הגדרות המערכת נשמרו."
+        if synced:
+            msg += (f"\n\nנקלטו מחדש {pulled} רשומות מהמחשב השני. "
+                    "אם המחשב השני כבוי, שאר הנתונים יגיעו אוטומטית כשיופעל.")
+        QMessageBox.information(self, "אופס הושלם", msg)
 
     def _change_password(self):
         if self.main_win and hasattr(self.main_win, "change_password"):

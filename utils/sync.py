@@ -782,6 +782,7 @@ def pull_changes() -> int:
     if not is_enabled() or not folder_available():
         return 0
     applied = 0
+    want_snapshot = False
     with _LOCK:
         state = _load_state()
         my_dev = device_id()
@@ -813,7 +814,14 @@ def pull_changes() -> int:
                             continue   # already applied (offset reset / overlap)
                         op = rec.get("op")
                         try:
-                            if op == "setting":
+                            if op == "snap_req":
+                                # The other computer wiped itself and asks for
+                                # everything again. Only fresh requests count —
+                                # a stale one re-read after our own reset must
+                                # not trigger a pointless full snapshot.
+                                if (rec.get("ts") or "") >= _hours_ago(SNAP_REQ_MAX_AGE_H):
+                                    want_snapshot = True
+                            elif op == "setting":
                                 _apply_setting(conn, rec, state)
                                 applied += 1
                             elif op in _APPLIERS:
@@ -829,7 +837,51 @@ def pull_changes() -> int:
             _RECORD_INCOMING = False
         state["last_run"] = _utc_now()
         _save_state(state)
+    if want_snapshot:
+        # Outside the lock: snapshot() journals through log_change (re-entrant
+        # lock, but keep the pull transaction short).
+        try:
+            snapshot(include_settings=False)
+        except Exception:
+            pass
     return applied
+
+
+SNAP_REQ_MAX_AGE_H = 48
+
+
+def _hours_ago(hours: int) -> str:
+    from datetime import timedelta
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+
+def restart_from_peer() -> int:
+    """After a local data reset: forget what was already read from the other
+    computers so their journals are replayed from the beginning, drop any unsent
+    local changes (they described the wiped data), and ask the other computer
+    for a fresh full snapshot (data only — local settings are kept). Returns how
+    many records were applied right away; the rest arrives on later runs once
+    the other computer answers the request."""
+    if not is_enabled():
+        return 0
+    with _LOCK:
+        state = _load_state()
+        state["applied"] = {}
+        state["offsets"] = {}
+        _save_state(state)
+        try:
+            os.remove(_outbox_path())
+        except OSError:
+            pass
+    log_change("snap_req", {})
+    try:
+        flush()
+    except Exception:
+        pass
+    try:
+        return pull_changes()
+    except Exception:
+        return 0
 
 
 def run_sync() -> dict:
@@ -850,15 +902,17 @@ def run_sync() -> dict:
 
 # ─── Enable / seed ───────────────────────────────────────────────────────────
 
-def snapshot() -> int:
+def snapshot(include_settings: bool = True) -> int:
     """Write the ENTIRE current dataset into the journal, so a second computer
     joining the folder receives everything. Idempotent on the receiving side
-    (guids dedupe). Returns the number of records written."""
+    (guids dedupe). Returns the number of records written. include_settings=False
+    sends data only — used to answer a re-pull request after a reset, where the
+    requesting computer keeps its own settings."""
     global _DEFER_FLUSH
     n = 0
     _DEFER_FLUSH = True   # buffer every record, then flush the whole seed at once
     try:
-        return _snapshot_body()
+        return _snapshot_body(include_settings)
     finally:
         _DEFER_FLUSH = False
         try:
@@ -867,7 +921,7 @@ def snapshot() -> int:
             pass   # stays in the outbox for the next run
 
 
-def _snapshot_body() -> int:
+def _snapshot_body(include_settings: bool = True) -> int:
     n = 0
     with db.get_connection() as conn:
         recs = [dict(r) for r in conn.execute("SELECT * FROM recipients")]
@@ -906,7 +960,7 @@ def _snapshot_body() -> int:
                                                    "souls", "what_dist", "quantity",
                                                    "distributor", "notes", "received")}})
             n += 1
-    for key, value in settings.items():
+    for key, value in (settings.items() if include_settings else ()):
         if _setting_syncable(key):
             log_change("setting", {"key": key, "value": value})
             n += 1

@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (QWidget, QDialog, QVBoxLayout, QHBoxLayout,
 from PyQt6.QtPrintSupport import QPrinter, QPrintPreviewWidget, QPrintDialog
 from PyQt6.QtGui import QTextDocument, QImage, QPageLayout
 from PyQt6.QtCore import QUrl, QSizeF, QMarginsF, Qt
-from datetime import date
+from datetime import date, datetime
 from typing import List, Dict
 
 
@@ -328,7 +328,10 @@ def export_distribution_pdf(recipients: List[Dict], dist_date: str,
     printer.setPageMargins(QMarginsF(10, 10, 10, 10), QPageLayout.Unit.Millimeter)
 
     stem = _safe_filename(dist_name or "רשימת_חלוקה")
-    fname = f"{stem}_{date.today().strftime('%Y-%m-%d')}.pdf"
+    # Date AND time (like the Excel exports): a second export the same day must
+    # not overwrite the first — especially while the first is still open in a
+    # PDF viewer, where the overwrite silently produced a 0-byte file.
+    fname = f"{stem}_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.pdf"
     out_path = os.path.join(str(export_dir("dist")), fname)
     printer.setOutputFileName(out_path)
 
@@ -338,6 +341,20 @@ def export_distribution_pdf(recipients: List[Dict], dist_date: str,
 
     render = _make_dist_renderer(recipients, html, has_logo, logo_path)
     render(printer)   # writes the PDF file
+    # QPrinter reports nothing when the file could not be written (locked,
+    # folder unwritable) — verify the result instead of opening an empty file.
+    try:
+        size = os.path.getsize(out_path)
+    except OSError:
+        size = 0
+    if size <= 0:
+        try:
+            os.remove(out_path)
+        except OSError:
+            pass
+        raise RuntimeError(
+            "קובץ ה-PDF לא נכתב (יצא ריק).\n"
+            "בדוק שתיקיית הייצוא זמינה ושאין קובץ PDF פתוח באותו שם, ונסה שוב.")
 
     # Open the finished PDF automatically (best-effort — never fail the export).
     try:

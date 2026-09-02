@@ -217,29 +217,53 @@ def normalize_phone_loose(raw) -> str:
     return normalize_phone(s)
 
 
-_PHONE_RX = re.compile(r"\+?\d[\d\s\-().]{6,}\d")
+_NUMERIC_TOK = re.compile(r"[+\d][\d\-().]*")
+_MAX_PHONE_TOKENS = 4      # "+972 52 111 2222" — the longest sensible split
 
 
 def find_phones(line: str) -> tuple:
     """Pull every phone number out of a free-text line ('050 123 4567 כהן',
-    '+972 52-111-2222, 03 9876543') → (phones, rest_of_line, bad_tokens).
-    Numbers may contain spaces; the remaining words are the name."""
-    phones, bad = [], []
-    rest = line
-    for m in reversed(list(_PHONE_RX.finditer(line))):
-        raw = m.group(0)
-        p = normalize_phone_loose(raw)
-        if p:
-            phones.insert(0, p)
-        else:
-            bad.insert(0, raw.strip())
-        rest = rest[:m.start()] + " " + rest[m.end():]
-    words = []
-    for tok in rest.split():
-        if any(ch.isdigit() for ch in tok):
+    '+972 52-111-2222, 03 9876543', '0501234567 0521111222 כהן')
+    → (phones, rest_of_line, bad_tokens).
+
+    A number may be split by spaces into up to 4 pieces; the SHORTEST run of
+    numeric tokens that forms a valid phone wins, so two numbers written
+    side by side stay two numbers. Leftover numeric tokens of 4+ digits are
+    reported as bad (they look like a phone but are not); shorter ones
+    ('דירה 5') are just part of the name."""
+    phones, bad, words, short_nums = [], [], [], []
+    toks = [t.strip(",;") for t in line.split()]
+    toks = [t for t in toks if t]
+    i = 0
+    while i < len(toks):
+        tok = toks[i]
+        if not _NUMERIC_TOK.fullmatch(tok):
+            words.append(tok)
+            i += 1
+            continue
+        matched = 0
+        for k in range(1, _MAX_PHONE_TOKENS + 1):
+            if i + k > len(toks) or not _NUMERIC_TOK.fullmatch(toks[i + k - 1]):
+                break
+            p = normalize_phone_loose("".join(toks[i:i + k]))
+            if p:
+                phones.append(p)
+                matched = k
+                break
+        if matched:
+            i += matched
+            continue
+        if sum(ch.isdigit() for ch in tok) >= 4:
             bad.append(tok)
         else:
             words.append(tok)
+            short_nums.append(tok)
+        i += 1
+    if not phones and short_nums:
+        # A line with NO phone at all: its numeric bits are the reason it was
+        # skipped — report them instead of hiding them inside a "name".
+        bad.extend(short_nums)
+        words = [w for w in words if w not in short_nums]
     return phones, " ".join(words), bad
 
 
@@ -499,11 +523,19 @@ def run_campaign(phones: dict, template_id: str | None = None,
             set_template_entries(numbers, main_id)
         except YemotError:
             pass
+    fallback = False
     if classic:
         try:
             return run_tzintuk(list(numbers))
-        except YemotError:
-            pass                      # tzintuk service unavailable → fallback
+        except YemotError as e:
+            # Fall back to the short-ring campaign ONLY when the server itself
+            # refused the command (no tzintuk service on this line). A network
+            # failure (-1) may mean the server already dialed — ringing everyone
+            # again would be worse; no units (103) / Shabbat (104) would fail
+            # the fallback too. Those propagate to the operator instead.
+            if e.code in (-1, 103, 104):
+                raise
+            fallback = True
         dial_id = ensure_classic_template()
         content = _download_template_message(main_id)
         try:
@@ -519,7 +551,10 @@ def run_campaign(phones: dict, template_id: str | None = None,
     caller = (db.get_setting(SET_CALLER_ID) or "").strip()
     if caller:
         params["callerId"] = caller
-    return _call("RunCampaign", params, post=True)
+    res = _call("RunCampaign", params, post=True)
+    if fallback and isinstance(res, dict):
+        res["classic_fallback"] = True   # the UI tells the operator it is answerable
+    return res
 
 
 # ─── Classic-tzintuk callback tracking (v2.96) ───────────────────────────────

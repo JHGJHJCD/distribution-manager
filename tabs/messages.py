@@ -334,8 +334,13 @@ class MessagesTab(QWidget):
         while self._vbox.count() > 1:
             item = self._vbox.takeAt(0)
             w = item.widget()
-            if w is not None:
-                w.setParent(None)
+            if w is None:
+                continue
+            w.setParent(None)
+            # The "no messages" placeholder is reused across refreshes — detach
+            # it but never delete it (deleting it crashed the app the next time
+            # the chat became empty, e.g. after deleting the last message).
+            if w is not self._empty:
                 w.deleteLater()
 
         if not msgs:

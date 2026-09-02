@@ -1103,6 +1103,7 @@ class GroupUpdateTab(QWidget):
         self._search_text = ""           # quick-search filter over the list
         self._extra_ids: set = set()     # one-time picks added from the one-time tab
         self._reserve_ids: set = set()   # which of those are reserves
+        self._row_notes: dict = {}       # inline-typed notes by recipient id (survive repopulate)
         self._load_extras()
         self._build_ui()
         self._update_mode_controls()
@@ -1158,48 +1159,54 @@ class GroupUpdateTab(QWidget):
             except Exception:
                 pass
         if total:
+            # The round is now in history — same wrap-up as 'שמור חלוקה' (one-time
+            # picks dropped, ticks cleared, back to prep). Ticks used to be drawn
+            # here as display-only marks, which lied to the operator: the count
+            # said 0, they vanished on the next refresh, and 'שמור' would have
+            # recorded the same round again.
+            self._after_round_recorded()
             if self.main_win:
                 self.main_win.status_msg(f"התקבלו {total} חלוקות ממתנדב במייל ונרשמו אוטומטית ✓")
                 self.main_win.refresh_all()
-            # Tick the people the volunteer marked as 'הגיע' right here in the
-            # list, so the operator sees at a glance who received.
-            self._mark_received_in_table(received_ids)
             title = " · ".join(dict.fromkeys(names)) or "רשימת חלוקה"
             QMessageBox.information(
                 self, "תוצאות מתנדב התקבלו במייל",
                 f"התקבלה במייל רשימה שמולאה על ידי המתנדב ({title}).\n"
                 f"נרשמו אוטומטית {total} חלוקות להיסטוריה ✓\n"
-                f"המקבלים שהגיעו סומנו ברשימה.")
-
-    def _mark_received_in_table(self, ids):
-        """Check the checkbox of every recipient the volunteer reported as
-        received, if they're present in the current list."""
-        idset = {int(i) for i in ids if i is not None}
-        if not idset:
-            return
-        # The ticks live in the record stage — reveal it (without wiping marks the
-        # operator may already have) so the imported results are actually visible.
-        if self._stage != "record":
-            self._set_stage("record", clear=False)
-        self.table.blockSignals(True)
-        for r in range(self.table.rowCount()):
-            chk = self.table.item(r, 0)
-            if chk is not None and chk.data(Qt.ItemDataRole.UserRole) in idset:
-                chk.setCheckState(Qt.CheckState.Checked)
-        self.table.blockSignals(False)
-        self._update_counts()
+                f"מי קיבל מופיע ב'חלוקות קודמות' ובכרטיס של כל מקבל.")
 
     # ── one-time-pick persistence (survive restart + save) ─────────────────────
     def _load_extras(self):
+        """The picks are stored as recipient GUIDs (stable across the two synced
+        computers) and resolved to this machine's local ids. Plain numbers are
+        legacy local ids written by older versions — honoured only here."""
         def _parse(key):
             raw = db.get_setting(key) or ""
-            return {int(x) for x in raw.split(",") if x.strip().isdigit()}
+            ids = set()
+            for tok in raw.split(","):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                if tok.isdigit():
+                    ids.add(int(tok))
+                    continue
+                rec = db.get_recipient_by_guid(tok)
+                if rec and rec.get("id") is not None:
+                    ids.add(rec["id"])
+            return ids
         self._extra_ids = _parse("weekly_extra_ids")
         self._reserve_ids = _parse("weekly_reserve_ids")
 
     def _persist_extras(self):
-        db.set_setting("weekly_extra_ids", ",".join(str(i) for i in sorted(self._extra_ids)))
-        db.set_setting("weekly_reserve_ids", ",".join(str(i) for i in sorted(self._reserve_ids)))
+        def _guids(ids):
+            out = []
+            for rid in sorted(ids):
+                rec = db.get_recipient(rid)
+                g = (rec or {}).get("guid") or ""
+                out.append(g if g else str(rid))
+            return ",".join(out)
+        db.set_setting("weekly_extra_ids", _guids(self._extra_ids))
+        db.set_setting("weekly_reserve_ids", _guids(self._reserve_ids))
 
     # ── remembered names for quick fill (distributor / distribution name) ──────
     _HIST_MAX = 15
@@ -2032,6 +2039,9 @@ class GroupUpdateTab(QWidget):
         return self._main_pick_count() > 0
 
     def refresh(self):
+        # Re-read the one-time picks: they are a synced setting, so a pick made
+        # on the other computer arrives through the sync refresh.
+        self._load_extras()
         mode = self._current_mode()
         if mode == "none":
             base = []
@@ -2083,8 +2093,8 @@ class GroupUpdateTab(QWidget):
         # are no exception: they're brought INTO the list (so they can receive),
         # but arrive unticked like the regulars, and get ticked only when the
         # operator marks them as arrived. A row the operator explicitly (un)ticked
-        # keeps its state across search/refresh. (The volunteer import ticks
-        # reported-received people via _mark_received_in_table.)
+        # keeps its state across search/refresh. (A volunteer import records the
+        # round straight to history and resets the cycle — no ticks drawn.)
         self._seen_ids = set(live)
         self._checked_ids &= live      # forget ticks for people no longer listed
         self._recompute_leaders()      # #z7xq1: auto-tag the top-N by need
@@ -2185,7 +2195,8 @@ class GroupUpdateTab(QWidget):
                     rec.get("phone2", ""), rec.get("phone3", ""),
                     rec.get("area", ""), freq_disp, next_disp,
                     str(rec.get("children_total", "") or ""),
-                    str(rec.get("souls", "") or ""), ""]
+                    str(rec.get("souls", "") or ""),
+                    self._row_notes.get(rid, "")]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(ALIGN_RIGHT)
@@ -2271,7 +2282,9 @@ class GroupUpdateTab(QWidget):
             show_score_breakdown(self, rec)
 
     def _on_item_changed(self, item):
-        """Keep _checked_ids in sync when the operator ticks/unticks a row."""
+        """Keep _checked_ids / _row_notes in sync when the operator ticks a row
+        or types a note — the table is rebuilt on every refresh, so state that
+        lives only in the cells would be lost."""
         if item.column() == 0:
             rid = item.data(Qt.ItemDataRole.UserRole)
             if rid is not None:
@@ -2279,6 +2292,16 @@ class GroupUpdateTab(QWidget):
                     self._checked_ids.add(rid)
                 else:
                     self._checked_ids.discard(rid)
+        elif item.column() == _COL_NOTES:
+            chk = self.table.item(item.row(), 0)
+            rid = chk.data(Qt.ItemDataRole.UserRole) if chk is not None else None
+            if rid is not None:
+                txt = item.text().strip()
+                if txt:
+                    self._row_notes[rid] = txt
+                else:
+                    self._row_notes.pop(rid, None)
+            return
         self._update_counts()
 
     def _update_counts(self):
@@ -2296,11 +2319,14 @@ class GroupUpdateTab(QWidget):
         self.lbl_souls.setText(f"נפשות: {souls}")
 
     def _check_all(self):
-        """Tick every row currently shown (respects an active search)."""
+        """Tick every row currently shown (respects an active search) — except
+        the reserve: it is a waiting list (RULE 3) and gets ticked one by one
+        only when someone actually steps in, never in bulk."""
         for rec in self._visible_rows():
             rid = rec.get("id")
-            if rid is not None:
-                self._checked_ids.add(rid)
+            if rid is None or rec.get("_reserve") or rid in self._reserve_ids:
+                continue
+            self._checked_ids.add(rid)
         self._populate()
 
     def _uncheck_all(self):
@@ -2309,21 +2335,15 @@ class GroupUpdateTab(QWidget):
         self._populate()
 
     def _get_checked_recipients(self):
-        # Inline-edited notes come from the visible table; checked-but-hidden
-        # rows fall back to their stored notes.
-        note_by_id = {}
-        for r in range(self.table.rowCount()):
-            chk = self.table.item(r, 0)
-            if chk is not None:
-                note_it = self.table.item(r, _COL_NOTES)
-                note_by_id[chk.data(Qt.ItemDataRole.UserRole)] = note_it.text() if note_it else ""
+        # Distribution notes are what the operator typed in the table for this
+        # round (_row_notes) — never the recipient's card notes, and the same
+        # for visible and search-hidden rows.
         result = []
         for rec in self._rows_data:
             rid = rec.get("id")
             if rid in self._checked_ids:
                 rec_copy = dict(rec)
-                if rid in note_by_id:
-                    rec_copy["notes"] = note_by_id[rid]
+                rec_copy["notes"] = self._row_notes.get(rid, "")
                 result.append(rec_copy)
         return result
 
@@ -2408,22 +2428,7 @@ class GroupUpdateTab(QWidget):
         self._push_name_history(dist_name)
         self._reload_name_history()
 
-        # One-time picks distributed — drop them so they aren't re-saved next time.
-        self._extra_ids.clear()
-        self._reserve_ids.clear()
-        self._persist_extras()
-        # Reset the entry fields + ticks for a clean next distribution, and drop
-        # back to the prep stage — the round is recorded.
-        self._checked_ids.clear()
-        self._seen_ids.clear()
-        self.note_input.clear()
-        self._record_visited = False     # new cycle → record opens blank again (#13)
-        self._set_stage("prep", clear=False)
-        # An auto-generated weekly name is date-stamped — clear it after saving
-        # so next week's round regenerates with the right date instead of
-        # silently reusing a stale one.
-        if self._is_auto_name(dist_name):
-            self.name_input.setCurrentText("")
+        self._after_round_recorded(dist_name)
 
         if export_path:
             reveal_in_folder(export_path)   # open Downloads with the file selected
@@ -2437,6 +2442,25 @@ class GroupUpdateTab(QWidget):
         if self.main_win:
             self.main_win.status_msg(f"נשמרה חלוקה ל-{len(checked)} מקבלים")
             self.main_win.refresh_all()
+
+    def _after_round_recorded(self, dist_name: str = ""):
+        """The round is in history (saved here or imported from the volunteer's
+        file) — start a clean next cycle: drop the one-time picks so they are
+        not recorded a second time, clear ticks/notes, back to the prep stage."""
+        self._extra_ids.clear()
+        self._reserve_ids.clear()
+        self._persist_extras()
+        self._checked_ids.clear()
+        self._seen_ids.clear()
+        self._row_notes.clear()
+        self.note_input.clear()
+        self._record_visited = False     # new cycle → record opens blank again (#13)
+        self._set_stage("prep", clear=False)
+        # An auto-generated weekly name is date-stamped — clear it after saving
+        # so next week's round regenerates with the right date instead of
+        # silently reusing a stale one.
+        if self._is_auto_name(dist_name or self.name_input.currentText().strip()):
+            self.name_input.setCurrentText("")
 
     def _reload_name_history(self):
         """Refresh the dropdown suggestions of the distributor + name combos,
@@ -2461,21 +2485,14 @@ class GroupUpdateTab(QWidget):
         reserve section ALONE and the whole main list vanished (reported bug).
         Reserve picks are flagged so `print_view` keeps them in their own
         'רזרבה' section (RULE 3: standby, printed but not recorded)."""
-        # Inline-edited notes come from the visible table; rows hidden by the
-        # quick-search fall back to their stored notes.
-        note_by_id = {}
-        for r in range(self.table.rowCount()):
-            chk = self.table.item(r, 0)
-            if chk is not None:
-                note_it = self.table.item(r, _COL_NOTES)
-                note_by_id[chk.data(Qt.ItemDataRole.UserRole)] = note_it.text() if note_it else ""
+        # Notes = what the operator typed in the table for this round
+        # (_row_notes), for visible and search-hidden rows alike.
         rows = []
         for rec in self._rows_data:
             rid = rec.get("id")
             r = dict(rec)
             r["_reserve"] = bool(rec.get("_reserve") or rid in self._reserve_ids)
-            if rid in note_by_id:
-                r["notes"] = note_by_id[rid]
+            r["notes"] = self._row_notes.get(rid, "")
             rows.append(r)
         return rows if rows else list(self._rows_data)
 
@@ -2706,14 +2723,13 @@ class GroupUpdateTab(QWidget):
             QMessageBox.critical(self, "שגיאה בקריאת הקובץ", str(e))
             return
         if n:
+            self._after_round_recorded()
             if self.main_win:
                 self.main_win.refresh_all()
                 self.main_win.status_msg(f"יובאו {n} חלוקות ממתנדב")
-            # Mark AFTER refresh (refresh rebuilds the table and would clear marks).
-            self._mark_received_in_table(ids)
             QMessageBox.information(
                 self, "הצלחה", f"נרשמו {n} חלוקות מהמתנדב להיסטוריה ✓\n"
-                               f"המקבלים שהגיעו סומנו ברשימה.")
+                               f"מי קיבל מופיע ב'חלוקות קודמות' ובכרטיס של כל מקבל.")
 
     def _print(self):
         # Plain weekly round with no name → auto-named ('חלוקה שבועית DD/MM');
@@ -2835,6 +2851,7 @@ class GroupUpdateTab(QWidget):
             return
         self._checked_ids.clear()
         self._seen_ids.clear()
+        self._row_notes.clear()
         self._extra_ids.clear()
         self._reserve_ids.clear()
         self._persist_extras()

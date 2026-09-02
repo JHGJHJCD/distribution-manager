@@ -20,14 +20,14 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDateTime, QTimer
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDateTime, QTimer, QEventLoop
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QMessageBox, QProgressBar, QScrollArea, QDialog, QLineEdit,
     QListWidget, QListWidgetItem, QFileDialog, QInputDialog, QTextEdit,
-    QDateTimeEdit
+    QDateTimeEdit, QProgressDialog
 )
 
 import database as db
@@ -1382,6 +1382,35 @@ class TzintukimTab(QWidget):
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
+    def _run_blocking(self, fn, text="מתחבר לשרת ימות המשיח…"):
+        """Run one server call off the UI thread behind a small modal "working"
+        dialog, and return its result (or re-raise its exception) as if it ran
+        inline. The window keeps repainting, so a slow/absent connection (up
+        to ~2.5 minutes of retries) no longer shows Windows' "לא מגיב", and the
+        operator cannot click anything else meanwhile."""
+        dlg = QProgressDialog(text, "", 0, 0, self)
+        dlg.setCancelButton(None)
+        dlg.setWindowTitle("צינתוקים")
+        dlg.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.setMinimumDuration(300)     # instant answers never flash a dialog
+        dlg.setValue(0)
+        box = {}
+        loop = QEventLoop(self)
+        worker = _TaskWorker(fn, self)
+        worker.done.connect(lambda r: (box.__setitem__("r", r), loop.quit()))
+        worker.finished.connect(loop.quit)
+        worker.start()
+        loop.exec()
+        worker.wait(2000)
+        worker.deleteLater()
+        dlg.reset()
+        dlg.deleteLater()
+        res = box.get("r")
+        if isinstance(res, Exception):
+            raise res
+        return res
+
     def _goto_settings(self):
         if self.main and hasattr(self.main, "navigate_to_tab"):
             self.main.navigate_to_tab(self.main.settings_tab)
@@ -1422,15 +1451,14 @@ class TzintukimTab(QWidget):
 
     def _upload_path(self, path: str, title: str) -> bool:
         """מעלה קובץ שמע לתבנית הקמפיין בימות; מציג הודעה. True = הצליח."""
-        with busy_cursor():
-            try:
-                yemot.upload_message_wav(path)
-                ok, msg = True, ("ההקלטה הועלתה בהצלחה ✓\n"
-                                 "שלח בדיקה למספר שלך כדי לשמוע אותה בטלפון.")
-            except yemot.YemotError as e:
-                ok, msg = False, str(e)
-            except Exception as e:
-                ok, msg = False, f"ההעלאה נכשלה: {e}"
+        try:
+            self._run_blocking(lambda: yemot.upload_message_wav(path), "מעלה את ההקלטה לשרת…")
+            ok, msg = True, ("ההקלטה הועלתה בהצלחה ✓\n"
+                             "שלח בדיקה למספר שלך כדי לשמוע אותה בטלפון.")
+        except yemot.YemotError as e:
+            ok, msg = False, str(e)
+        except Exception as e:
+            ok, msg = False, f"ההעלאה נכשלה: {e}"
         (QMessageBox.information if ok else QMessageBox.warning)(self, title, msg)
         self._refresh_recording_label()
         return ok
@@ -1492,15 +1520,14 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "שליחת בדיקה", "המספר שהוזן אינו תקין.")
             return
         db.set_setting(yemot.SET_TEST_PHONE, phone)
-        with busy_cursor():
-            try:
-                res = yemot.run_test(phone)
-            except yemot.YemotError as e:
-                QMessageBox.warning(self, "שליחת בדיקה", str(e))
-                return
-            except Exception as e:
-                QMessageBox.warning(self, "שליחת בדיקה", f"השליחה נכשלה: {e}")
-                return
+        try:
+            res = self._run_blocking(lambda: yemot.run_test(phone), "שולח שיחת בדיקה…")
+        except yemot.YemotError as e:
+            QMessageBox.warning(self, "שליחת בדיקה", str(e))
+            return
+        except Exception as e:
+            QMessageBox.warning(self, "שליחת בדיקה", f"השליחה נכשלה: {e}")
+            return
         cid = str(res.get("campaignId") or "")
         if cid:
             # מעקב חי — מספר הבדיקה לא תמיד ביד המפעיל, אז מראים כאן אם
@@ -1558,21 +1585,23 @@ class TzintukimTab(QWidget):
         classic = dlg.mode == "classic"
         self.btn_send.setEnabled(False)      # locked until the campaign ends
         self.btn_send.setText("שולח…")
-        with busy_cursor():
-            try:
-                template_id = yemot.ensure_template()
-                # store_list=True — הרשימה נשמרת בתבנית כדי שהקו ישמיע את
-                # ההודעה למי שמתקשר חזרה (#z4xy9, campaign_message_to_play).
-                res = yemot.run_campaign(phones, template_id, store_list=True,
-                                         classic=classic)
-            except yemot.YemotError as e:
-                QMessageBox.warning(self, "צינתוקים", str(e))
-                self._update_metrics()
-                return
-            except Exception as e:
-                QMessageBox.warning(self, "צינתוקים", f"השליחה נכשלה: {e}")
-                self._update_metrics()
-                return
+        def _do_send():
+            tid = yemot.ensure_template()
+            # store_list=True — הרשימה נשמרת בתבנית כדי שהקו ישמיע את
+            # ההודעה למי שמתקשר חזרה (#z4xy9, campaign_message_to_play).
+            return tid, yemot.run_campaign(phones, tid, store_list=True,
+                                           classic=classic)
+        try:
+            template_id, res = self._run_blocking(
+                _do_send, f"שולח צינתוק ל-{len(phones)} מספרים…")
+        except yemot.YemotError as e:
+            QMessageBox.warning(self, "צינתוקים", str(e))
+            self._update_metrics()
+            return
+        except Exception as e:
+            QMessageBox.warning(self, "צינתוקים", f"השליחה נכשלה: {e}")
+            self._update_metrics()
+            return
         from utils import sync
         name = self._campaign_name()
         if classic:
@@ -1590,10 +1619,15 @@ class TzintukimTab(QWidget):
                 json.dumps(tracker.entries(), ensure_ascii=False))
             self._active_guid = guid
             self._refresh_history()
+            if res.get("classic_fallback"):
+                ring_line = ("⚠ שירות הצינתוק אינו פעיל בקו, לכן נשלח צלצול קצר "
+                             f"({yemot.CLASSIC_RING_SECONDS} שניות) — מי שמספיק לענות "
+                             "ישמע את ההודעה.\n")
+            else:
+                ring_line = "הטלפונים יצלצלו ויתנתקו — אי אפשר לענות לצלצול.\n"
             QMessageBox.information(
                 self, "צינתוק קלאסי",
-                f"📞 הצלצולים יצאו ל-{len(phones)} מספרים.\n"
-                "הטלפונים יצלצלו ויתנתקו — אי אפשר לענות לצלצול.\n"
+                f"📞 הצלצולים יצאו ל-{len(phones)} מספרים.\n" + ring_line +
                 "מי שמתקשר חזרה לקו ישמע את ההודעה — ובחצי השעה הקרובה "
                 "תראה כאן בזמן אמת מי חזר לשיחה ומי אישר הגעה בהקשת 7.")
             self._start_callback_tracking(
@@ -1625,13 +1659,12 @@ class TzintukimTab(QWidget):
             QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes:
             return
-        with busy_cursor():
-            try:
-                name = yemot.publish_to_extension()
-                ok, msg = True, ("ההודעה פורסמה בשלוחה 1 ✓ "
-                                 f"(קובץ {name}).")
-            except Exception as e:
-                ok, msg = False, f"הפרסום נכשל:\n{e}"
+        try:
+            name = self._run_blocking(yemot.publish_to_extension, "מפרסם בשלוחה 1…")
+            ok, msg = True, ("ההודעה פורסמה בשלוחה 1 ✓ "
+                             f"(קובץ {name}).")
+        except Exception as e:
+            ok, msg = False, f"הפרסום נכשל:\n{e}"
         (QMessageBox.information if ok else QMessageBox.warning)(
             self, "פרסום בשלוחת ההודעות", msg)
 
@@ -1649,13 +1682,13 @@ class TzintukimTab(QWidget):
         if ans != QMessageBox.StandardButton.Yes:
             return
         self.btn_resend.setVisible(False)
-        with busy_cursor():
-            try:
-                template_id = yemot.ensure_template()
-                res = yemot.run_campaign(phones, template_id)
-            except Exception as e:
-                QMessageBox.warning(self, "צינתוקים", f"השליחה נכשלה: {e}")
-                return
+        try:
+            template_id, res = self._run_blocking(
+                lambda: (lambda t: (t, yemot.run_campaign(phones, t)))(yemot.ensure_template()),
+                f"שולח שוב ל-{len(phones)} מספרים…")
+        except Exception as e:
+            QMessageBox.warning(self, "צינתוקים", f"השליחה נכשלה: {e}")
+            return
         from utils import sync
         dist_date = self._dist_date_iso()
         self._active_guid = db.add_tzintuk_campaign(
@@ -1748,16 +1781,16 @@ class TzintukimTab(QWidget):
             QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes:
             return
-        with busy_cursor():
-            try:
-                template_id = yemot.ensure_template()
-                res = yemot.schedule_campaign(when, phones, template_id)
-            except yemot.YemotError as e:
-                QMessageBox.warning(self, "תזמון שליחה", str(e))
-                return
-            except Exception as e:
-                QMessageBox.warning(self, "תזמון שליחה", f"התזמון נכשל: {e}")
-                return
+        try:
+            template_id, res = self._run_blocking(
+                lambda: (lambda t: (t, yemot.schedule_campaign(when, phones, t)))(yemot.ensure_template()),
+                "שומר את התזמון בשרת…")
+        except yemot.YemotError as e:
+            QMessageBox.warning(self, "תזמון שליחה", str(e))
+            return
+        except Exception as e:
+            QMessageBox.warning(self, "תזמון שליחה", f"התזמון נכשל: {e}")
+            return
         from utils import sync
         db.add_tzintuk_campaign(
             f"צינתוק מתוזמן — {self._campaign_name()}",
@@ -1796,21 +1829,22 @@ class TzintukimTab(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes:
             return
-        with busy_cursor():
-            try:
-                yemot.delete_scheduled_campaign(camp.get("campaign_id") or "")
+        sched_id = camp.get("campaign_id") or ""
+        try:
+            self._run_blocking(lambda: yemot.delete_scheduled_campaign(sched_id),
+                               "מבטל את התזמון בשרת…")
+            db.update_tzintuk_campaign(camp["guid"], 0, 0, "canceled")
+            ok, msg = True, "התזמון בוטל — לא יישלח צינתוק."
+        except yemot.YemotError as e:
+            if e.code == 106:      # already ran — go pick up the results
+                ok, msg = False, str(e)
+            elif e.code == 105:    # not on the server → nothing will ring
                 db.update_tzintuk_campaign(camp["guid"], 0, 0, "canceled")
-                ok, msg = True, "התזמון בוטל — לא יישלח צינתוק."
-            except yemot.YemotError as e:
-                if e.code == 106:      # already ran — go pick up the results
-                    ok, msg = False, str(e)
-                elif e.code == 105:    # not on the server → nothing will ring
-                    db.update_tzintuk_campaign(camp["guid"], 0, 0, "canceled")
-                    ok, msg = True, "התזמון כבר לא קיים בשרת — סומן כמבוטל."
-                else:
-                    ok, msg = False, str(e)
-            except Exception as e:
-                ok, msg = False, f"הביטול נכשל: {e}"
+                ok, msg = True, "התזמון כבר לא קיים בשרת — סומן כמבוטל."
+            else:
+                ok, msg = False, str(e)
+        except Exception as e:
+            ok, msg = False, f"הביטול נכשל: {e}"
         (QMessageBox.information if ok else QMessageBox.warning)(
             self, "ביטול תזמון", msg)
         self._refresh_history()
