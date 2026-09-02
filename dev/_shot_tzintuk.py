@@ -41,20 +41,29 @@ app.processEvents(); app.processEvents()
 out = os.path.join(REPO, "dev", "_shots")
 os.makedirs(out, exist_ok=True)
 
-from PyQt6.QtWidgets import QScrollArea
 win.navigate_to_tab(win.tzintukim_tab)
-win.tzintukim_tab.refresh()
+tz = win.tzintukim_tab
+tz.refresh()
 for _ in range(6):
     app.processEvents()
-# QScrollArea content can paint empty in WA_DontShowOnScreen grabs (known trap)
-# — grab the INNER widget directly for a clean render.
-tz_inner = win.tzintukim_tab.findChild(QScrollArea).widget()
-tz_inner.grab().save(os.path.join(out, "tzintuk_tab.png"))
+# Whole tab (scroll body + sticky bottom bar) — empty / not-configured state.
+tz.grab().save(os.path.join(out, "tzintuk_tab.png"))
 
-# Settings panel (scroll to the Yemot panel by grabbing the inner content).
-win.navigate_to_tab(win.settings_tab)
-for _ in range(4):
+# Loaded state: configured line, week list loaded, a schedule waiting and a
+# live-progress strip — every strip of the bottom bar visible at once.
+db.set_setting("yemot_system", "0771234567")
+db.set_setting("yemot_password", "1234")
+db.set_setting("yemot_template_id", "1430692")
+tz._load_week_list()
+tz.lbl_sched.setText("🕒 צינתוק מתוזמן ל-03/09/2026 · 10:00 — ל-5 נמענים. "
+                     "המחשב לא חייב להיות דלוק בשעת השליחה.")
+tz.sched_frame.setVisible(True)
+tz.prog_frame.setVisible(True)
+tz.lbl_prog.setText("שולח בזמן אמת… אפשר להמשיך לעבוד, אל תסגור את התוכנה")
+tz.progress.setRange(0, 5); tz.progress.setValue(3)
+tz.lbl_conf.setText("✓ אישרו הגעה 1"); tz.lbl_done.setText("הצליחו 3")
+tz.lbl_fail.setText("נכשלו 0"); tz.lbl_wait.setText("ממתינים 2")
+for _ in range(6):
     app.processEvents()
-inner = win.settings_tab.findChild(QScrollArea).widget()
-inner.grab().save(os.path.join(out, "tzintuk_settings_full.png"))
+tz.grab().save(os.path.join(out, "tzintuk_tab_loaded.png"))
 print("done")

@@ -21,20 +21,31 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDateTime, QTimer, QEventLoop
-from PyQt6.QtGui import QColor
+from PyQt6.QtGui import QColor, QIcon
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QMessageBox, QProgressBar, QScrollArea, QDialog, QLineEdit,
     QListWidget, QListWidgetItem, QFileDialog, QInputDialog, QTextEdit,
-    QDateTimeEdit, QProgressDialog
+    QDateTimeEdit, QProgressDialog, QSizePolicy
 )
 
 import database as db
 from utils import timefmt, tts, yemot
-from utils.ui import busy_cursor, section_header, enable_touch_scroll
+from utils.ui import busy_cursor, enable_touch_scroll, line_icon
+# The design language (cards, glossy buttons, chips, page background) is shared
+# with the main "חלוקה ורישום" screen so both read as one app.
+from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _BTN_PRIMARY,
+                               _BTN_GHOST, _BTN_ACCENT, _BTN_PRINT)
 
 _LBL = "background:transparent; border:none;"
+_CHIP_AMBER = ("QLabel{background:#fdf0d5; color:#92600a; border:none; border-radius:16px;"
+               " padding:5px 13px; font-size:12.5px; font-weight:700;}")
+# A quiet text-only button for a rare, sensitive action (publishing to ext. 1).
+_BTN_LINK = ("QPushButton{background:transparent; color:#b45309; border:none;"
+             " font-weight:700; font-size:13px; padding:0 8px; min-height:38px;"
+             " text-decoration:underline;}"
+             "QPushButton:hover{color:#92400e;}")
 
 
 class _PollWorker(QThread):
@@ -791,126 +802,148 @@ class TzintukimTab(QWidget):
         QTimer.singleShot(6000, self._maybe_resume_tracking)
 
     # ── UI ────────────────────────────────────────────────────────────────────
+    #
+    # v3.00 — the screen was rebuilt from scratch as ONE clear flow:
+    #   header (title + connection chip)
+    #   ① נמענים  — where the list comes from, the counters, the table
+    #   ② ההודעה — what the phones will play (create / upload / library / test)
+    #   היסטוריה — every past send
+    #   sticky bottom bar — ③ שליחה: summary, schedule, the big send button,
+    #                        and the live-progress / scheduled strips.
+    # Every widget the logic talks to keeps its old attribute name.
 
     def _build_ui(self):
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        surface = QWidget()
+        surface.setObjectName("tz-surface")
+        surface.setStyleSheet(f"QWidget#tz-surface{{background:{_BG};}}")
+        root.addWidget(surface, 1)
+        s_lay = QVBoxLayout(surface)
+        s_lay.setContentsMargins(0, 0, 0, 0)
+        s_lay.setSpacing(0)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        outer.addWidget(scroll)
+        scroll.setStyleSheet("QScrollArea{background:transparent;}"
+                             "QScrollArea>QWidget>QWidget{background:transparent;}")
         enable_touch_scroll(scroll)
         content = QWidget()
         scroll.setWidget(content)
         lay = QVBoxLayout(content)
-        lay.setSpacing(8)
-        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(12)
+        lay.setContentsMargins(20, 12, 20, 8)
+        s_lay.addWidget(scroll, 1)
 
-        title = QLabel("צינתוקים — הודעה קולית לזכאי החלוקה")
-        title.setObjectName("title")
-        lay.addWidget(title)
-        sub = QLabel("טוענים רשימה (ממסך \"חלוקה ורישום\" או מחלוקה קודמת), "
-                     "המערכת מסננת מי שאין לו מספר תקין, ואחרי חלון אישור שולחת "
-                     "לכולם הודעה קולית דרך ימות המשיח. חריגים לא נשלחים.")
-        sub.setObjectName("subtitle")
-        sub.setWordWrap(True)
-        lay.addWidget(sub)
-
-        # Not-configured banner (hidden once credentials exist).
-        self.banner = QFrame()
-        self.banner.setStyleSheet("QFrame{background:#fef3e2; border:1px solid #f7d9a5;"
-                                  "border-radius:8px;}")
+        # ── Header: title · subtitle · connection chip ────────────────────────
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        title = QLabel("צינתוקים")
+        title.setStyleSheet("color:#064e3b; font-size:22px; font-weight:800; " + _LBL)
+        head.addWidget(title)
+        sub = QLabel("הודעה קולית לזכאי החלוקה דרך ימות המשיח")
+        sub.setStyleSheet("color:#64748b; font-size:13px; " + _LBL)
+        head.addWidget(sub)
+        head.addStretch()
+        # Connected chip (shown when credentials exist) …
+        self.lbl_ok = QLabel("●  מחובר לימות המשיח")
+        self.lbl_ok.setStyleSheet(_CHIP_GREEN)
+        head.addWidget(self.lbl_ok)
+        # … or the not-configured chip + a way in (hidden once configured).
+        self.banner = QWidget()
         b_lay = QHBoxLayout(self.banner)
-        b_lay.setContentsMargins(10, 6, 10, 6)
-        b_txt = QLabel("עוד לא הוזנו פרטי הגישה לימות המשיח — בלעדיהם אי אפשר לשלוח.")
-        b_txt.setStyleSheet("color:#92600a; font-weight:600; " + _LBL)
-        b_txt.setWordWrap(True)
-        b_lay.addWidget(b_txt, 1)
+        b_lay.setContentsMargins(0, 0, 0, 0)
+        b_lay.setSpacing(8)
+        b_txt = QLabel("●  עוד לא חובר לימות המשיח")
+        b_txt.setStyleSheet(_CHIP_AMBER)
+        b_lay.addWidget(b_txt)
         b_btn = QPushButton("פתח הגדרות")
-        b_btn.setObjectName("neutral")
+        b_btn.setStyleSheet(_BTN_GHOST)
+        b_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         b_btn.clicked.connect(self._goto_settings)
         b_lay.addWidget(b_btn)
-        lay.addWidget(self.banner)
+        head.addWidget(self.banner)
+        lay.addLayout(head)
 
-        # #9hgvi — strip shown while a PAST distribution's list is loaded.
+        # ── ① נמענים ─────────────────────────────────────────────────────────
+        card, c_lay, c_head = self._step_card(
+            "1", "נמענים", "מי יקבל את הצינתוק")
+        self.btn_load = QPushButton("  רשימת החלוקה הנוכחית")
+        self.btn_load.setStyleSheet(_BTN_PRIMARY)
+        self.btn_load.setIcon(QIcon(line_icon("import", 18, "#ffffff")))
+        self.btn_load.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_load.setToolTip("טוען לכאן את רשימת הזכאים ממסך \"חלוקה ורישום\" "
+                                 "(בלי הרזרבות)")
+        self.btn_load.clicked.connect(self._load_week_list)
+        c_head.addWidget(self.btn_load)
+        self.btn_free = QPushButton("  רשימה עצמאית…")
+        self.btn_free.setStyleSheet(_BTN_GHOST)
+        self.btn_free.setIcon(QIcon(line_icon("doc", 18, "#475569")))
+        self.btn_free.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_free.setToolTip("מדביקים מספרי טלפון או בוחרים קובץ אקסל — "
+                                 "בלי שום קשר לרשימות החלוקה")
+        self.btn_free.clicked.connect(self._load_free_list)
+        c_head.addWidget(self.btn_free)
+
+        # Empty state — until the operator picks a source.
+        self.load_frame = QLabel(
+            "עוד לא נטענה רשימה. בחר למעלה: רשימת החלוקה הנוכחית או רשימה "
+            "עצמאית. חלוקה קודמת — קליק ימני בלשונית \"חלוקות קודמות\".")
+        self.load_frame.setStyleSheet("color:#94a3b8; font-size:13px; padding:26px 0; " + _LBL)
+        self.load_frame.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.load_frame.setWordWrap(True)
+        c_lay.addWidget(self.load_frame)
+
+        self.list_frame = QWidget()
+        lf_lay = QVBoxLayout(self.list_frame)
+        lf_lay.setContentsMargins(0, 0, 0, 0)
+        lf_lay.setSpacing(8)
+
+        # Source strip — only for a past distribution / a standalone list.
         self.batch_frame = QFrame()
         self.batch_frame.setStyleSheet("QFrame{background:#eef2ff; border:1px solid"
-                                       " #c7d2fe; border-radius:8px;}")
+                                       " #c7d2fe; border-radius:9px;}")
         bt_lay = QHBoxLayout(self.batch_frame)
-        bt_lay.setContentsMargins(10, 6, 10, 6)
+        bt_lay.setContentsMargins(12, 5, 12, 5)
         self.lbl_batch = QLabel("")
         self.lbl_batch.setStyleSheet("color:#3730a3; font-weight:600; " + _LBL)
         self.lbl_batch.setWordWrap(True)
         bt_lay.addWidget(self.lbl_batch, 1)
         self.btn_back = QPushButton("חזור לרשימת השבוע")
-        self.btn_back.setObjectName("neutral")
+        self.btn_back.setStyleSheet(_BTN_GHOST)
         self.btn_back.clicked.connect(self._clear_batch)
         bt_lay.addWidget(self.btn_back)
         self.batch_frame.setVisible(False)
-        lay.addWidget(self.batch_frame)
+        lf_lay.addWidget(self.batch_frame)
 
-        # #ifc70 — shown until the operator explicitly loads a list.
-        self.load_frame = QFrame()
-        self.load_frame.setObjectName("panel")
-        ld_lay = QVBoxLayout(self.load_frame)
-        ld_lay.setContentsMargins(14, 18, 14, 18)
-        ld_lay.setSpacing(10)
-        ld_txt = QLabel("הרשימה עוד לא נטענה. אפשר לטעון את רשימת החלוקה "
-                        "הנוכחית ממסך \"חלוקה ורישום\", לטעון חלוקה קודמת "
-                        "בקליק ימני בלשונית \"חלוקות קודמות\", או להדביק "
-                        "רשימת מספרים עצמאית — בלי קשר לחלוקות.")
-        ld_txt.setObjectName("subtitle")
-        ld_txt.setWordWrap(True)
-        ld_txt.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ld_lay.addWidget(ld_txt)
-        self.btn_load = QPushButton("📥 הצג את רשימת החלוקה הנוכחית")
-        self.btn_load.setObjectName("primary")
-        self.btn_load.setMinimumHeight(46)
-        self.btn_load.setToolTip("טוען לכאן את רשימת הזכאים ממסך \"חלוקה ורישום\" "
-                                 "(בלי הרזרבות)")
-        self.btn_load.clicked.connect(self._load_week_list)
-        ld_lay.addWidget(self.btn_load, 0, Qt.AlignmentFlag.AlignCenter)
-        # #1/9: a fully independent list — pasted numbers / an Excel file,
-        # with zero connection to the distribution lists.
-        self.btn_free = QPushButton("📋 רשימה עצמאית — הדבק מספרים או טען אקסל…")
-        self.btn_free.setObjectName("neutral")
-        self.btn_free.setMinimumHeight(40)
-        self.btn_free.setToolTip("שדה נקי לגמרי: מדביקים מספרי טלפון או בוחרים "
-                                 "קובץ אקסל, רואים בדיוק מה עומד להישלח — "
-                                 "בלי שום קשר לרשימות החלוקה")
-        self.btn_free.clicked.connect(self._load_free_list)
-        ld_lay.addWidget(self.btn_free, 0, Qt.AlignmentFlag.AlignCenter)
-        lay.addWidget(self.load_frame)
-
-        # Metric chips: eligible / ready / exceptions.
-        metrics = QHBoxLayout()
-        metrics.setSpacing(8)
-        self.m_total = self._metric("זכאים השבוע", "#eaf3f0", "#0f766e")
-        self.m_ready = self._metric("מוכנים לשליחה", "#e1f5ee", "#0f6e56")
-        self.m_bad = self._metric("חריגים", "#fef3e2", "#92600a")
+        # Counters + list tools on one row.
+        tools = QHBoxLayout()
+        tools.setSpacing(8)
+        self.m_total = self._metric("זכאים", _CHIP_QSS)
+        self.m_ready = self._metric("מוכנים לשליחה", _CHIP_GREEN)
+        self.m_bad = self._metric("חריגים", _CHIP_AMBER)
         for m in (self.m_total, self.m_ready, self.m_bad):
-            metrics.addWidget(m["frame"], 1)
-        lay.addLayout(metrics)
-
-        # Recipients table.
-        list_frame = QFrame()
-        self.list_frame = list_frame
-        list_frame.setObjectName("panel")
-        lf_lay = QVBoxLayout(list_frame)
-        lf_lay.setContentsMargins(10, 7, 10, 7)
-        lf_lay.setSpacing(6)
-        list_top = QHBoxLayout()
-        list_top.addWidget(section_header("רשימת נמענים", "phone", "#0f766e"), 1)
-        # #1/9: bulk check/uncheck — no more clearing V one by one.
-        btn_check_all = QPushButton("☑ סמן את כולם")
-        btn_check_all.setObjectName("neutral")
+            tools.addWidget(m["frame"])
+        tools.addStretch()
+        btn_check_all = QPushButton("סמן את כולם")
+        btn_check_all.setStyleSheet(_BTN_GHOST)
         btn_check_all.clicked.connect(lambda: self._set_all_checked(True))
-        list_top.addWidget(btn_check_all)
-        btn_uncheck_all = QPushButton("☐ נקה סימון מכולם")
-        btn_uncheck_all.setObjectName("neutral")
+        tools.addWidget(btn_check_all)
+        btn_uncheck_all = QPushButton("נקה סימון")
+        btn_uncheck_all.setStyleSheet(_BTN_GHOST)
         btn_uncheck_all.clicked.connect(lambda: self._set_all_checked(False))
-        list_top.addWidget(btn_uncheck_all)
-        lf_lay.addLayout(list_top)
+        tools.addWidget(btn_uncheck_all)
+        btn_add = QPushButton("  הוסף אדם")
+        btn_add.setStyleSheet(_BTN_ACCENT)
+        btn_add.setIcon(QIcon(line_icon("plus", 18, "#7c2d12")))
+        btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_add.setToolTip("מוסיף לרשימה מקבל שאינו בה השבוע")
+        btn_add.clicked.connect(self._add_person)
+        tools.addWidget(btn_add)
+        lf_lay.addLayout(tools)
+
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["", "שם", "טלפון", "סטטוס"])
         self.table.verticalHeader().setVisible(False)
@@ -924,168 +957,87 @@ class TzintukimTab(QWidget):
         self.table.setColumnWidth(2, 340)
         hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setDefaultSectionSize(40)
-        # #1/9: the table grows to show ALL rows (the page scrolls, not a tiny
-        # inner window of ~4 rows) — see _fit_table_height in _populate.
+        # The table grows to show ALL rows — the page scrolls, not a tiny
+        # inner window (see _fit_table_height).
         self.table.setMinimumHeight(120)
-        self.table.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.table.itemChanged.connect(self._on_item_changed)
         lf_lay.addWidget(self.table)
-        hint = QLabel("☑ = יקבל צינתוק. מי שיש לו כמה מספרים — כולם מצולצלים, "
-                      "כדי שההודעה תגיע לכל המשפחה. מספר שמופיע אצל שני מקבלים "
-                      "מצולצל פעם אחת בלבד.")
-        hint.setObjectName("subtitle")
+        hint = QLabel("☑ = יקבל צינתוק · כל המספרים של כל משפחה מצולצלים · "
+                      "מספר משותף לשני מקבלים מצולצל פעם אחת · חריגים לא נשלחים")
+        hint.setStyleSheet("color:#94a3b8; font-size:12px; " + _LBL)
         hint.setWordWrap(True)
         lf_lay.addWidget(hint)
-        lay.addWidget(list_frame)
+        self.list_frame.setVisible(False)
+        c_lay.addWidget(self.list_frame)
+        lay.addWidget(card)
 
-        # Recording + actions row.
-        act_frame = QFrame()
-        act_frame.setObjectName("panel")
-        a_lay = QVBoxLayout(act_frame)
-        a_lay.setContentsMargins(10, 7, 10, 7)
-        a_lay.setSpacing(6)
-        a_lay.addWidget(section_header("הודעה ושליחה", "update", "#0f766e"))
+        # ── ② ההודעה ─────────────────────────────────────────────────────────
+        card, c_lay, c_head = self._step_card(
+            "2", "ההודעה המושמעת", "מה ישמעו בטלפון")
+        btn_test = QPushButton("  שלח בדיקה למספר שלי")
+        btn_test.setStyleSheet(_BTN_GHOST)
+        btn_test.setIcon(QIcon(line_icon("phone", 18, "#475569")))
+        btn_test.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_test.setToolTip("מצלצל רק אליך, כדי לשמוע איך ההודעה נשמעת לפני "
+                            "השליחה לכולם")
+        btn_test.clicked.connect(self._send_test)
+        c_head.addWidget(btn_test)
+
         self.lbl_rec = QLabel("")
-        self.lbl_rec.setObjectName("subtitle")
+        self.lbl_rec.setStyleSheet("color:#334155; font-size:13px; " + _LBL)
         self.lbl_rec.setWordWrap(True)
-        a_lay.addWidget(self.lbl_rec)
+        c_lay.addWidget(self.lbl_rec)
         rec_row = QHBoxLayout()
-        btn_tts = QPushButton("🎙 צור הקלטה מטקסט…")
-        btn_tts.setObjectName("neutral")
+        rec_row.setSpacing(8)
+        btn_tts = QPushButton("🎙  צור הקלטה מטקסט…")
+        btn_tts.setStyleSheet(_BTN_GHOST)
         btn_tts.setToolTip("כותבים את ההודעה — והמחשב מקריא אותה בקול טבעי "
                            "(חינם). ההקלטה נשמרת במאגר ומועלית לצינתוק.")
         btn_tts.clicked.connect(self._create_from_text)
         rec_row.addWidget(btn_tts)
-        btn_upload = QPushButton("העלה קובץ הקלטה…")
-        btn_upload.setObjectName("neutral")
+        btn_upload = QPushButton("  העלה קובץ הקלטה…")
+        btn_upload.setStyleSheet(_BTN_GHOST)
+        btn_upload.setIcon(QIcon(line_icon("upload", 18, "#475569")))
         btn_upload.setToolTip("קובץ שמע (WAV/MP3) שיושמע בצינתוק — מומר אוטומטית "
                               "לפורמט הטלפוני בשרת של ימות")
         btn_upload.clicked.connect(self._upload_recording)
         rec_row.addWidget(btn_upload)
-        self.btn_library = QPushButton("🎵 מאגר הקלטות")
-        self.btn_library.setObjectName("neutral")
+        self.btn_library = QPushButton("🎵  מאגר הקלטות")
+        self.btn_library.setStyleSheet(_BTN_GHOST)
         self.btn_library.setToolTip("הקלטות קודמות ששמורות במחשב — אפשר להשמיע "
                                     "או להעלות שוב בלי להקליט מחדש")
         self.btn_library.clicked.connect(self._open_library)
         rec_row.addWidget(self.btn_library)
-        btn_publish = QPushButton("📢 פרסם בשלוחה 1…")
-        btn_publish.setObjectName("neutral")
+        rec_row.addStretch()
+        btn_publish = QPushButton("פרסם בשלוחה 1…")
+        btn_publish.setStyleSheet(_BTN_LINK)
+        btn_publish.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_publish.setToolTip("מעתיק את ההודעה הנוכחית לשלוחת ההודעות של הקו — "
                                "שם כל מתקשר ישמע אותה. לא קורה אוטומטית אף פעם; "
                                "רק בלחיצה כאן ואחרי אישור.")
         btn_publish.clicked.connect(self._publish_to_line)
         rec_row.addWidget(btn_publish)
-        rec_row.addStretch()
-        a_lay.addLayout(rec_row)
+        c_lay.addLayout(rec_row)
+        tip = QLabel("💡 כדאי לומר בסוף ההקלטה: \"לאישור הגעה — הקש 7, לשמיעה "
+                     "חוזרת — הקש 1\". מי שמקיש 7 מסומן בתוכנה כ\"אישר הגעה\".")
+        tip.setStyleSheet("color:#94a3b8; font-size:12px; " + _LBL)
+        tip.setWordWrap(True)
+        c_lay.addWidget(tip)
+        lay.addWidget(card)
 
-        row = QHBoxLayout()
-        btn_add = QPushButton("➕ הוסף אדם")
-        btn_add.setObjectName("neutral")
-        btn_add.clicked.connect(self._add_person)
-        row.addWidget(btn_add)
-        btn_test = QPushButton("▶ שלח בדיקה למספר שלי")
-        btn_test.setObjectName("neutral")
-        btn_test.setToolTip("מצלצל רק אליך, כדי לשמוע איך ההודעה נשמעת לפני "
-                            "השליחה לכולם")
-        btn_test.clicked.connect(self._send_test)
-        row.addWidget(btn_test)
-        row.addStretch()
-        self.btn_sched = QPushButton("🕒 תזמן שליחה…")
-        self.btn_sched.setObjectName("neutral")
-        self.btn_sched.setToolTip("קובעים תאריך ושעה — והצינתוק יוצא לבד "
-                                  "מהשרת של ימות המשיח, גם כשהמחשב כבוי")
-        self.btn_sched.clicked.connect(self._schedule)
-        row.addWidget(self.btn_sched)
-        self.btn_send = QPushButton("")
-        self.btn_send.setObjectName("primary")
-        self.btn_send.clicked.connect(self._send)
-        row.addWidget(self.btn_send)
-        a_lay.addLayout(row)
-
-        # Scheduled-campaign strip (#xi85i) — visible while a schedule waits.
-        self.sched_frame = QFrame()
-        self.sched_frame.setStyleSheet(
-            "QFrame{background:#fdf7e7; border:1px solid #efdead;"
-            "border-radius:8px;}")
-        s_lay = QHBoxLayout(self.sched_frame)
-        s_lay.setContentsMargins(10, 6, 10, 6)
-        self.lbl_sched = QLabel("")
-        self.lbl_sched.setStyleSheet("color:#8a6410; font-weight:600; " + _LBL)
-        self.lbl_sched.setWordWrap(True)
-        s_lay.addWidget(self.lbl_sched, 1)
-        self.btn_cancel_sched = QPushButton("בטל תזמון")
-        self.btn_cancel_sched.setObjectName("neutral")
-        self.btn_cancel_sched.clicked.connect(self._cancel_sched)
-        s_lay.addWidget(self.btn_cancel_sched)
-        self.sched_frame.setVisible(False)
-        a_lay.addWidget(self.sched_frame)
-
-        # Live-progress strip (hidden until a campaign runs).
-        self.prog_frame = QFrame()
-        self.prog_frame.setStyleSheet("QFrame{background:#f3f8f6; border:1px solid #e3ede9;"
-                                      "border-radius:8px;}")
-        p_lay = QVBoxLayout(self.prog_frame)
-        p_lay.setContentsMargins(10, 6, 10, 6)
-        p_lay.setSpacing(4)
-        self.lbl_prog = QLabel("")
-        self.lbl_prog.setStyleSheet("font-weight:600; color:#0f766e; " + _LBL)
-        p_lay.addWidget(self.lbl_prog)
-        self.progress = QProgressBar()
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(12)
-        p_lay.addWidget(self.progress)
-        counters = QHBoxLayout()
-        self.lbl_conf = QLabel("")
-        self.lbl_conf.setStyleSheet("color:#166534; font-weight:700; " + _LBL)
-        self.lbl_done = QLabel("")
-        self.lbl_done.setStyleSheet("color:#0f6e56; font-weight:600; " + _LBL)
-        self.lbl_fail = QLabel("")
-        self.lbl_fail.setStyleSheet("color:#a32d2d; font-weight:600; " + _LBL)
-        self.lbl_wait = QLabel("")
-        self.lbl_wait.setStyleSheet("color:#5f6d69; " + _LBL)
-        for w in (self.lbl_conf, self.lbl_done, self.lbl_fail, self.lbl_wait):
-            counters.addWidget(w)
-        counters.addStretch()
-        # v2.96 — controls of the classic-tzintuk callback watch window.
-        self.btn_extend_track = QPushButton("⏱ הארך מעקב ב-30 דק'")
-        self.btn_extend_track.setObjectName("neutral")
-        self.btn_extend_track.clicked.connect(self._extend_tracking)
-        self.btn_extend_track.setVisible(False)
-        counters.addWidget(self.btn_extend_track)
-        self.btn_stop_track = QPushButton("סיים מעקב")
-        self.btn_stop_track.setObjectName("neutral")
-        self.btn_stop_track.setToolTip("סוגר את חלון המעקב עכשיו ושומר את מה "
-                                       "שנאסף עד כה בהיסטוריה")
-        self.btn_stop_track.clicked.connect(self._stop_tracking_now)
-        self.btn_stop_track.setVisible(False)
-        counters.addWidget(self.btn_stop_track)
-        self.btn_resend = QPushButton("🔄 שלח שוב לנכשלים")
-        self.btn_resend.setObjectName("neutral")
-        self.btn_resend.clicked.connect(self._resend_failed)
-        self.btn_resend.setVisible(False)
-        counters.addWidget(self.btn_resend)
-        p_lay.addLayout(counters)
-        self.prog_frame.setVisible(False)
-        a_lay.addWidget(self.prog_frame)
-        lay.addWidget(act_frame)
-
-        # History.
-        hist_frame = QFrame()
-        hist_frame.setObjectName("panel")
-        h_lay = QVBoxLayout(hist_frame)
-        h_lay.setContentsMargins(10, 7, 10, 7)
-        h_lay.setSpacing(6)
-        hist_top = QHBoxLayout()
-        hist_top.addWidget(section_header("היסטוריית צינתוקים", "calendar", "#0f766e"), 1)
-        btn_hist_xls = QPushButton("📊 ייצוא לאקסל")
-        btn_hist_xls.setObjectName("neutral")
+        # ── היסטוריה ─────────────────────────────────────────────────────────
+        card, c_lay, c_head = self._step_card(
+            "", "היסטוריית צינתוקים", "כל השליחות, משני המחשבים")
+        btn_hist_xls = QPushButton("  ייצוא לאקסל")
+        btn_hist_xls.setStyleSheet(_BTN_GHOST)
+        btn_hist_xls.setIcon(QIcon(line_icon("export", 18, "#475569")))
         btn_hist_xls.setToolTip("שומר קובץ אקסל עם כל הצינתוקים: סיכום לכל שליחה "
                                 "+ פירוט לכל מספר — מי קיבל, מי אישר הגעה (הקיש 7) "
                                 "ומי לא נענה")
         btn_hist_xls.clicked.connect(self._export_history)
-        hist_top.addWidget(btn_hist_xls)
-        h_lay.addLayout(hist_top)
+        c_head.addWidget(btn_hist_xls)
         self.hist = QTableWidget(0, 6)
         self.hist.setHorizontalHeaderLabels(
             ["מתי", "שם", "נשלחו", "הצליחו", "אישרו הגעה", "נכשלו"])
@@ -1097,24 +1049,170 @@ class TzintukimTab(QWidget):
         hh2.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         for c in (2, 3, 4, 5):
             hh2.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
-        self.hist.setMinimumHeight(140)
-        h_lay.addWidget(self.hist)
-        lay.addWidget(hist_frame)
+        self.hist.verticalHeader().setDefaultSectionSize(34)
+        self.hist.setMinimumHeight(150)
+        self.hist.setMaximumHeight(260)
+        c_lay.addWidget(self.hist)
+        lay.addWidget(card)
         lay.addStretch()
 
-    def _metric(self, label, bg, fg):
+        # ── Sticky bottom bar: ③ שליחה ───────────────────────────────────────
+        bottom_wrap = QWidget()
+        bw = QVBoxLayout(bottom_wrap)
+        bw.setContentsMargins(20, 4, 20, 12)
+        bw.setSpacing(0)
+        bottom_bar = QFrame()
+        bottom_bar.setObjectName("bottom-bar")
+        bottom_bar.setStyleSheet(
+            "QFrame#bottom-bar{background:#ffffff; border:1px solid #e6eaf2;"
+            " border-radius:14px;}")
+        bar = QVBoxLayout(bottom_bar)
+        bar.setContentsMargins(16, 8, 16, 8)
+        bar.setSpacing(6)
+
+        # Scheduled-campaign strip (#xi85i) — visible while a schedule waits.
+        self.sched_frame = QFrame()
+        self.sched_frame.setStyleSheet(
+            "QFrame{background:#fdf7e7; border:1px solid #efdead; border-radius:9px;}")
+        sc_lay = QHBoxLayout(self.sched_frame)
+        sc_lay.setContentsMargins(12, 5, 12, 5)
+        self.lbl_sched = QLabel("")
+        self.lbl_sched.setStyleSheet("color:#8a6410; font-weight:600; " + _LBL)
+        self.lbl_sched.setWordWrap(True)
+        sc_lay.addWidget(self.lbl_sched, 1)
+        self.btn_cancel_sched = QPushButton("בטל תזמון")
+        self.btn_cancel_sched.setStyleSheet(_BTN_GHOST)
+        self.btn_cancel_sched.clicked.connect(self._cancel_sched)
+        sc_lay.addWidget(self.btn_cancel_sched)
+        self.sched_frame.setVisible(False)
+        bar.addWidget(self.sched_frame)
+
+        # Live-progress strip (hidden until a campaign runs).
+        self.prog_frame = QFrame()
+        self.prog_frame.setStyleSheet(
+            "QFrame{background:#f0f9f6; border:1px solid #cfe9df; border-radius:9px;}")
+        p_lay = QVBoxLayout(self.prog_frame)
+        p_lay.setContentsMargins(12, 6, 12, 6)
+        p_lay.setSpacing(4)
+        self.lbl_prog = QLabel("")
+        self.lbl_prog.setStyleSheet("font-weight:600; color:#0f766e; " + _LBL)
+        self.lbl_prog.setWordWrap(True)
+        p_lay.addWidget(self.lbl_prog)
+        self.progress = QProgressBar()
+        self.progress.setTextVisible(False)
+        self.progress.setFixedHeight(10)
+        p_lay.addWidget(self.progress)
+        counters = QHBoxLayout()
+        counters.setSpacing(14)
+        self.lbl_conf = QLabel("")
+        self.lbl_conf.setStyleSheet("color:#166534; font-weight:700; " + _LBL)
+        self.lbl_done = QLabel("")
+        self.lbl_done.setStyleSheet("color:#0f6e56; font-weight:600; " + _LBL)
+        self.lbl_fail = QLabel("")
+        self.lbl_fail.setStyleSheet("color:#a32d2d; font-weight:600; " + _LBL)
+        self.lbl_wait = QLabel("")
+        self.lbl_wait.setStyleSheet("color:#5f6d69; " + _LBL)
+        for w in (self.lbl_conf, self.lbl_done, self.lbl_fail, self.lbl_wait):
+            counters.addWidget(w)
+        counters.addStretch()
+        self.btn_extend_track = QPushButton("⏱ הארך מעקב ב-30 דק'")
+        self.btn_extend_track.setStyleSheet(_BTN_GHOST)
+        self.btn_extend_track.clicked.connect(self._extend_tracking)
+        self.btn_extend_track.setVisible(False)
+        counters.addWidget(self.btn_extend_track)
+        self.btn_stop_track = QPushButton("סיים מעקב")
+        self.btn_stop_track.setStyleSheet(_BTN_GHOST)
+        self.btn_stop_track.setToolTip("סוגר את חלון המעקב עכשיו ושומר את מה "
+                                       "שנאסף עד כה בהיסטוריה")
+        self.btn_stop_track.clicked.connect(self._stop_tracking_now)
+        self.btn_stop_track.setVisible(False)
+        counters.addWidget(self.btn_stop_track)
+        self.btn_resend = QPushButton("🔄 שלח שוב לנכשלים")
+        self.btn_resend.setStyleSheet(_BTN_ACCENT)
+        self.btn_resend.clicked.connect(self._resend_failed)
+        self.btn_resend.setVisible(False)
+        counters.addWidget(self.btn_resend)
+        p_lay.addLayout(counters)
+        self.prog_frame.setVisible(False)
+        bar.addWidget(self.prog_frame)
+
+        act = QHBoxLayout()
+        act.setSpacing(12)
+        act.addWidget(self._step_badge("3"))
+        self.lbl_summary = QLabel("")
+        self.lbl_summary.setStyleSheet("color:#334155; font-size:14px; font-weight:700; " + _LBL)
+        act.addWidget(self.lbl_summary)
+        act.addStretch()
+        self.btn_sched = QPushButton("  תזמן שליחה…")
+        self.btn_sched.setStyleSheet(_BTN_GHOST)
+        self.btn_sched.setIcon(QIcon(line_icon("calendar", 18, "#475569")))
+        self.btn_sched.setMinimumHeight(46)
+        self.btn_sched.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_sched.setToolTip("קובעים תאריך ושעה — והצינתוק יוצא לבד "
+                                  "מהשרת של ימות המשיח, גם כשהמחשב כבוי")
+        self.btn_sched.clicked.connect(self._schedule)
+        act.addWidget(self.btn_sched)
+        self.btn_send = QPushButton("")
+        self.btn_send.setObjectName("primary")
+        self.btn_send.setStyleSheet(_BTN_PRINT)
+        self.btn_send.setIcon(QIcon(line_icon("send", 20, "#ffffff")))
+        self.btn_send.setMinimumWidth(240)
+        self.btn_send.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_send.clicked.connect(self._send)
+        act.addWidget(self.btn_send)
+        bar.addLayout(act)
+        bw.addWidget(bottom_bar)
+        s_lay.addWidget(bottom_wrap, 0)
+
+    # ── Small building blocks ────────────────────────────────────────────────
+
+    @staticmethod
+    def _step_badge(num: str) -> QLabel:
+        """A round green step number (① ② ③) — the visual thread of the flow."""
+        b = QLabel(num)
+        b.setFixedSize(28, 28)
+        b.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        b.setStyleSheet("QLabel{background:#0f9d78; color:#ffffff; border:none;"
+                        " border-radius:14px; font-size:14px; font-weight:800;}")
+        return b
+
+    def _step_card(self, num: str, title: str, hint: str = ""):
+        """A white card headed by a step badge, a title and a muted hint.
+        Returns (frame, body_layout, header_layout) — header widgets added to
+        header_layout land on its far (left) side."""
         frame = QFrame()
-        frame.setStyleSheet(f"QFrame{{background:{bg}; border-radius:10px;}}")
-        v = QVBoxLayout(frame)
-        v.setContentsMargins(12, 8, 12, 8)
-        v.setSpacing(0)
-        lbl = QLabel(label)
-        lbl.setStyleSheet(f"color:{fg}; font-size:13px; " + _LBL)
-        val = QLabel("0")
-        val.setStyleSheet(f"color:{fg}; font-size:24px; font-weight:700; " + _LBL)
-        v.addWidget(lbl)
-        v.addWidget(val)
-        return {"frame": frame, "val": val}
+        frame.setObjectName("ui-card")
+        frame.setStyleSheet(_CARD_QSS)
+        frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(18, 12, 18, 12)
+        outer.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        if num:
+            head.addWidget(self._step_badge(num))
+        tl = QLabel(title)
+        tl.setStyleSheet("color:#064e3b; font-size:15px; font-weight:800; " + _LBL)
+        head.addWidget(tl)
+        if hint:
+            hl = QLabel(hint)
+            hl.setStyleSheet("color:#94a3b8; font-size:12px; " + _LBL)
+            head.addWidget(hl)
+        head.addStretch()
+        outer.addLayout(head)
+        return frame, outer, head
+
+    @staticmethod
+    def _metric(label: str, qss: str):
+        """A counter chip ("מוכנים לשליחה 12"). Returns {'frame','label'} —
+        see _set_metric."""
+        lbl = QLabel(f"{label} 0")
+        lbl.setStyleSheet(qss)
+        return {"frame": lbl, "label": label}
+
+    @staticmethod
+    def _set_metric(m: dict, n: int):
+        m["frame"].setText(f"{m['label']} {n}")
 
     # ── List building ─────────────────────────────────────────────────────────
 
@@ -1122,15 +1220,15 @@ class TzintukimTab(QWidget):
         """Rebuild the call list from the CURRENT distribution list (the same
         rows the 'חלוקה ורישום' screen shows, minus the reserve section) — or,
         when a past distribution was loaded (#9hgvi), from that batch."""
-        self.banner.setVisible(not yemot.is_configured())
+        configured = yemot.is_configured()
+        self.banner.setVisible(not configured)
+        self.lbl_ok.setVisible(configured)
         self._refresh_batch_banner()
         # #ifc70 — nothing is loaded until the operator asks for a list.
         loaded = (self._batch is not None or self._free is not None
                   or self._list_loaded)
         self.load_frame.setVisible(not loaded)
         self.list_frame.setVisible(loaded)
-        for m in (self.m_total, self.m_ready, self.m_bad):
-            m["frame"].setVisible(loaded)
         base = self._distribution_rows() if loaded else []
         manual = [r for r in self._rows if r.get("manual")]
         manual_ids = {r["rec"].get("id") for r in manual}
@@ -1360,11 +1458,18 @@ class TzintukimTab(QWidget):
         total = len(self._rows)
         ready = len(self._ready_rows())
         bad = sum(1 for r in self._rows if r["why"])
-        self.m_total["val"].setText(str(total))
-        self.m_ready["val"].setText(str(ready))
-        self.m_bad["val"].setText(str(bad))
+        self._set_metric(self.m_total, total)
+        self._set_metric(self.m_ready, ready)
+        self._set_metric(self.m_bad, bad)
         busy = self._worker is not None or self._cb_worker is not None
-        self.btn_send.setText(f"אשר ושלח ל-{ready} »" if ready else "אין למי לשלוח")
+        if not self._rows:
+            self.lbl_summary.setText("שליחה — טען קודם רשימת נמענים")
+        elif ready:
+            self.lbl_summary.setText(f"שליחה — {ready} משפחות מסומנות"
+                                     + (f", {bad} חריגים לא יישלחו" if bad else ""))
+        else:
+            self.lbl_summary.setText("שליחה — אף נמען לא מסומן")
+        self.btn_send.setText(f"  שלח צינתוק ל-{ready}" if ready else "  שלח צינתוק")
         self.btn_send.setEnabled(ready > 0 and not busy)
         self.btn_sched.setEnabled(ready > 0 and not busy)
 
