@@ -35,12 +35,9 @@ from utils import timefmt, tts, yemot
 from utils.ui import busy_cursor, enable_touch_scroll, line_icon
 # The design language (cards, glossy buttons, chips, page background) is shared
 # with the main "חלוקה ורישום" screen so both read as one app.
-from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _BTN_PRIMARY,
-                               _BTN_GHOST, _BTN_ACCENT, _BTN_PRINT)
-
-_LBL = "background:transparent; border:none;"
-_CHIP_AMBER = ("QLabel{background:#fdf0d5; color:#92600a; border:none; border-radius:16px;"
-               " padding:5px 13px; font-size:12.5px; font-weight:700;}")
+from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _CHIP_AMBER,
+                               _LBL, _BTN_PRIMARY, _BTN_GHOST, _BTN_ACCENT, _BTN_PRINT,
+                               _step_badge, _step_card, _metric, _set_metric)
 # A quiet text-only button for a rare, sensitive action (publishing to ext. 1).
 _BTN_LINK = ("QPushButton{background:transparent; color:#b45309; border:none;"
              " font-weight:700; font-size:13px; padding:0 8px; min-height:38px;"
@@ -903,7 +900,7 @@ class TzintukimTab(QWidget):
         lay.addLayout(head)
 
         # ── ① נמענים ─────────────────────────────────────────────────────────
-        card, c_lay, c_head = self._step_card(
+        card, c_lay, c_head = _step_card(
             "1", "נמענים", "מי יקבל את הצינתוק")
         self.btn_load = QPushButton("  רשימת החלוקה הנוכחית")
         self.btn_load.setStyleSheet(_BTN_PRIMARY)
@@ -956,9 +953,9 @@ class TzintukimTab(QWidget):
         # Counters + list tools on one row.
         tools = QHBoxLayout()
         tools.setSpacing(8)
-        self.m_total = self._metric("זכאים", _CHIP_QSS)
-        self.m_ready = self._metric("מוכנים לשליחה", _CHIP_GREEN)
-        self.m_bad = self._metric("חריגים", _CHIP_AMBER)
+        self.m_total = _metric("זכאים", _CHIP_QSS)
+        self.m_ready = _metric("מוכנים לשליחה", _CHIP_GREEN)
+        self.m_bad = _metric("חריגים", _CHIP_AMBER)
         for m in (self.m_total, self.m_ready, self.m_bad):
             tools.addWidget(m["frame"])
         tools.addStretch()
@@ -1009,7 +1006,7 @@ class TzintukimTab(QWidget):
         lay.addWidget(card)
 
         # ── ② ההודעה ─────────────────────────────────────────────────────────
-        card, c_lay, c_head = self._step_card(
+        card, c_lay, c_head = _step_card(
             "2", "ההודעה המושמעת", "מה ישמעו בטלפון")
         btn_test = QPushButton("  שלח בדיקה למספר שלי")
         btn_test.setStyleSheet(_BTN_GHOST)
@@ -1065,7 +1062,7 @@ class TzintukimTab(QWidget):
         lay.addWidget(card)
 
         # ── היסטוריה ─────────────────────────────────────────────────────────
-        card, c_lay, c_head = self._step_card(
+        card, c_lay, c_head = _step_card(
             "", "היסטוריית צינתוקים", "כל השליחות, משני המחשבים")
         btn_hist_xls = QPushButton("  ייצוא לאקסל")
         btn_hist_xls.setStyleSheet(_BTN_GHOST)
@@ -1185,7 +1182,7 @@ class TzintukimTab(QWidget):
 
         act = QHBoxLayout()
         act.setSpacing(12)
-        act.addWidget(self._step_badge("3"))
+        act.addWidget(_step_badge("3"))
         self.lbl_summary = QLabel("")
         self.lbl_summary.setStyleSheet("color:#334155; font-size:14px; font-weight:700; " + _LBL)
         act.addWidget(self.lbl_summary)
@@ -1210,56 +1207,6 @@ class TzintukimTab(QWidget):
         bar.addLayout(act)
         bw.addWidget(bottom_bar)
         s_lay.addWidget(bottom_wrap, 0)
-
-    # ── Small building blocks ────────────────────────────────────────────────
-
-    @staticmethod
-    def _step_badge(num: str) -> QLabel:
-        """A round green step number (① ② ③) — the visual thread of the flow."""
-        b = QLabel(num)
-        b.setFixedSize(28, 28)
-        b.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        b.setStyleSheet("QLabel{background:#0f9d78; color:#ffffff; border:none;"
-                        " border-radius:14px; font-size:14px; font-weight:800;}")
-        return b
-
-    def _step_card(self, num: str, title: str, hint: str = ""):
-        """A white card headed by a step badge, a title and a muted hint.
-        Returns (frame, body_layout, header_layout) — header widgets added to
-        header_layout land on its far (left) side."""
-        frame = QFrame()
-        frame.setObjectName("ui-card")
-        frame.setStyleSheet(_CARD_QSS)
-        frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-        outer = QVBoxLayout(frame)
-        outer.setContentsMargins(18, 12, 18, 12)
-        outer.setSpacing(10)
-        head = QHBoxLayout()
-        head.setSpacing(10)
-        if num:
-            head.addWidget(self._step_badge(num))
-        tl = QLabel(title)
-        tl.setStyleSheet("color:#064e3b; font-size:15px; font-weight:800; " + _LBL)
-        head.addWidget(tl)
-        if hint:
-            hl = QLabel(hint)
-            hl.setStyleSheet("color:#94a3b8; font-size:12px; " + _LBL)
-            head.addWidget(hl)
-        head.addStretch()
-        outer.addLayout(head)
-        return frame, outer, head
-
-    @staticmethod
-    def _metric(label: str, qss: str):
-        """A counter chip ("מוכנים לשליחה 12"). Returns {'frame','label'} —
-        see _set_metric."""
-        lbl = QLabel(f"{label} 0")
-        lbl.setStyleSheet(qss)
-        return {"frame": lbl, "label": label}
-
-    @staticmethod
-    def _set_metric(m: dict, n: int):
-        m["frame"].setText(f"{m['label']} {n}")
 
     # ── List building ─────────────────────────────────────────────────────────
 
@@ -1505,9 +1452,9 @@ class TzintukimTab(QWidget):
         total = len(self._rows)
         ready = len(self._ready_rows())
         bad = sum(1 for r in self._rows if r["why"])
-        self._set_metric(self.m_total, total)
-        self._set_metric(self.m_ready, ready)
-        self._set_metric(self.m_bad, bad)
+        _set_metric(self.m_total, total)
+        _set_metric(self.m_ready, ready)
+        _set_metric(self.m_bad, bad)
         busy = self._worker is not None or self._cb_worker is not None
         if not self._rows:
             self.lbl_summary.setText("שליחה — טען קודם רשימת נמענים")

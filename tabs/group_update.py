@@ -978,6 +978,11 @@ _CHIP_QSS    = ("QLabel{background:#eef2f8; color:#475569; border:none; border-r
                 " padding:5px 13px; font-size:12.5px; font-weight:700;}")
 _CHIP_GREEN  = ("QLabel{background:#d3ede1; color:#334155; border:none; border-radius:16px;"
                 " padding:5px 13px; font-size:12.5px; font-weight:700;}")
+_CHIP_AMBER  = ("QLabel{background:#fdf0d5; color:#92600a; border:none; border-radius:16px;"
+                " padding:5px 13px; font-size:12.5px; font-weight:700;}")
+# Shorthand for "no frame/background" on the many transparent labels the redesign
+# lays over the soft grey surface.
+_LBL = "background:transparent; border:none;"
 
 
 def _card_shadow(widget):
@@ -1040,6 +1045,55 @@ def _field(label_text: str, widget, maxw: int = None):
         widget.setMaximumWidth(maxw)
     box.addWidget(widget)
     return box
+
+
+def _step_badge(num: str) -> QLabel:
+    """A round green step number (① ② ③) — the visual thread of the flow.
+    Shared with the צינתוקים screen so both read as one wizard."""
+    b = QLabel(num)
+    b.setFixedSize(28, 28)
+    b.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    b.setStyleSheet("QLabel{background:#0f9d78; color:#ffffff; border:none;"
+                    " border-radius:14px; font-size:14px; font-weight:800;}")
+    return b
+
+
+def _step_card(num: str, title: str, hint: str = ""):
+    """A white card headed by a step badge, a title and a muted hint. Returns
+    (frame, body_layout, header_layout) — widgets added to header_layout land on
+    its far (left) side, past the stretch."""
+    frame = QFrame()
+    frame.setObjectName("ui-card")
+    frame.setStyleSheet(_CARD_QSS)
+    frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+    outer = QVBoxLayout(frame)
+    outer.setContentsMargins(18, 12, 18, 12)
+    outer.setSpacing(10)
+    head = QHBoxLayout()
+    head.setSpacing(10)
+    if num:
+        head.addWidget(_step_badge(num))
+    tl = QLabel(title)
+    tl.setStyleSheet("color:#064e3b; font-size:15px; font-weight:800; " + _LBL)
+    head.addWidget(tl)
+    if hint:
+        hl = QLabel(hint)
+        hl.setStyleSheet("color:#94a3b8; font-size:12px; " + _LBL)
+        head.addWidget(hl)
+    head.addStretch()
+    outer.addLayout(head)
+    return frame, outer, head
+
+
+def _metric(label: str, qss: str):
+    """A counter chip ("סומנו 12"). Returns {'frame','label'} — see _set_metric."""
+    lbl = QLabel(f"{label} 0")
+    lbl.setStyleSheet(qss)
+    return {"frame": lbl, "label": label}
+
+
+def _set_metric(m: dict, n: int):
+    m["frame"].setText(f"{m['label']} {n}")
 
 
 class _CollapsibleCard(QFrame):
@@ -1278,8 +1332,10 @@ class GroupUpdateTab(QWidget):
         return added
 
     def _build_ui(self):
-        # ── 2026 redesign: cards on a soft grey surface + a sticky bottom bar.
-        #    Layout/visuals only — every widget, signal and method is unchanged.
+        # ── v3.03 redesign: a big header with live status chips, numbered step
+        #    cards (① פרטי החלוקה ② רשימת המקבלים) and a sticky bottom bar ③ — the
+        #    shared design language of the הגדרות/צינתוקים screens. Layout/visuals
+        #    only: every widget, signal and method below is unchanged.
         self.setObjectName("group-tab")
         self.setStyleSheet(f"QWidget#group-tab{{background:{_BG};}}")
 
@@ -1287,22 +1343,46 @@ class GroupUpdateTab(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # The detail/product/volunteer cards live in their own scroll region (so
-        # a long product list never squeezes anything else); the recipient list
-        # gets the remaining vertical space (stretch=1) with its own internal
-        # scroll. The bottom bar stays pinned below everything.
-        surface = QVBoxLayout()
-        surface.setContentsMargins(20, 16, 20, 6)
-        surface.setSpacing(10)
+        # One scroll region holds the header, the step cards and the recipient
+        # list; the table (its own scrollbars off) is sized to its rows, so there
+        # is exactly ONE scrollbar on screen. The bottom bar stays pinned below.
+        self._scroll_body = QScrollArea()
+        self._scroll_body.setWidgetResizable(True)
+        self._scroll_body.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll_body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_body.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        self._scroll_body.viewport().setStyleSheet("background:transparent;")
+        enable_touch_scroll(self._scroll_body)
 
-        top_content = QWidget()
-        top_content.setStyleSheet("background:transparent;")
-        top_col = QVBoxLayout(top_content)
-        top_col.setContentsMargins(0, 0, 0, 0)
-        top_col.setSpacing(10)
+        content = QWidget()
+        content.setStyleSheet("background:transparent;")
+        lay = QVBoxLayout(content)
+        lay.setContentsMargins(20, 12, 20, 8)
+        lay.setSpacing(12)
 
-        # ── Card 1: distribution details ──────────────────────────────────────
-        card1, c1 = _make_card("פרטי החלוקה", "doc")
+        # ── Header: title + subtitle + live status chips ──────────────────────
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        title = QLabel("חלוקה ורישום")
+        title.setStyleSheet("color:#064e3b; font-size:22px; font-weight:800; " + _LBL)
+        head.addWidget(title)
+        sub = QLabel("הכנת רשימת החלוקה ורישום מי קיבל בפועל")
+        sub.setStyleSheet("color:#64748b; font-size:13px; " + _LBL)
+        head.addWidget(sub)
+        head.addStretch()
+        # Which stage we're in (prep/record) + the active distribution mode when
+        # it isn't the plain weekly schedule — both update live.
+        self.chip_stage = QLabel("")
+        self.chip_stage.setStyleSheet(_CHIP_QSS)
+        head.addWidget(self.chip_stage)
+        self.chip_mode = QLabel("")
+        self.chip_mode.setStyleSheet(_CHIP_AMBER)
+        self.chip_mode.setVisible(False)
+        head.addWidget(self.chip_mode)
+        lay.addLayout(head)
+
+        # ── Step ①: distribution details ──────────────────────────────────────
+        card1, c1, _h1 = _step_card("1", "פרטי החלוקה", "שם, תאריך, כמות המוצרים והרזרבה")
         grid = QGridLayout()
         grid.setHorizontalSpacing(18)
         grid.setVerticalSpacing(8)
@@ -1340,10 +1420,10 @@ class GroupUpdateTab(QWidget):
         self.note_input.setAlignment(ALIGN_RIGHT)
         self.note_input.setToolTip("הערה על כל החלוקה — נשמרת פעם אחת בלשונית 'חלוקות'")
 
-        # מוצרים זמינים + רזרבה — moved here from the 'חד פעמי' tab so the whole
-        # distribution starts from ONE place (single source of truth, shared via
-        # the 'available_products'/'reserve_count' settings). The count drives how
-        # many portions are left for one-timers after the regulars are served.
+        # מוצרים זמינים + רזרבה — the single most important field on the screen
+        # (#ss0lm): the whole distribution starts from ONE place (single source of
+        # truth via the 'available_products'/'reserve_count' settings). The count
+        # drives how many portions are left for one-timers after regulars.
         self.products_spin = QSpinBox()
         self.products_spin.setRange(0, 99999)
         self.products_spin.setToolTip("כמה מוצרים/מנות יש בסך הכל בחלוקה זו. "
@@ -1364,12 +1444,9 @@ class GroupUpdateTab(QWidget):
         self.reserve_spin.valueChanged.connect(self._on_reserve_changed)
 
         # Live "how many portions are left for one-timers" hint — wrapped in its
-        # own little card (#xwxna) so it reads as a tidy panel, not text floating
-        # in mid-air. The label carries only the (state-dependent) text colour; the
-        # card frame carries the border/background.
+        # own little card (#xwxna) so it reads as a tidy panel.
         self.lbl_leftover = QLabel("")
-        self.lbl_leftover.setStyleSheet("color:#475569; font-size:12.5px; font-weight:700;"
-                                        " background:transparent; border:none;")
+        self.lbl_leftover.setStyleSheet("color:#475569; font-size:12.5px; font-weight:700; " + _LBL)
         self.lbl_leftover.setWordWrap(True)
         self.leftover_card = QFrame()
         self.leftover_card.setObjectName("leftover-card")
@@ -1379,8 +1456,6 @@ class GroupUpdateTab(QWidget):
         _lc = QHBoxLayout(self.leftover_card)
         _lc.setContentsMargins(12, 8, 12, 8)
         _lc.addWidget(self.lbl_leftover, 1)
-        # Pick the one-timers right here (no tab hopping) — opens a dialog with
-        # the candidates pre-marked by the standing recommendation.
         self.btn_pick_onetime = QPushButton("בחר חד-פעמיים")
         self.btn_pick_onetime.setStyleSheet(_BTN_SUCCESS)
         self.btn_pick_onetime.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1391,21 +1466,17 @@ class GroupUpdateTab(QWidget):
         self.leftover_card.setVisible(False)   # shown only when there's a hint
 
         # Live hint under 'מוצרים זמינים' showing how many regulars are actually on
-        # THIS week's list — the operator asked to see the real count (it was easy
-        # to misread the manually-typed products number as a fixed regulars count,
-        # bug #jcncv). The spin itself stays a manual products/portions count.
+        # THIS week's list (#jcncv).
         self.lbl_regulars_count = QLabel("")
         self.lbl_regulars_count.setStyleSheet(
-            "color:#334155; font-size:11.5px; font-weight:700;"
-            " background:transparent; border:none;")
+            "color:#334155; font-size:11.5px; font-weight:700; " + _LBL)
 
         grid.addLayout(_field("שם החלוקה", self.name_input), 0, 0)
         grid.addLayout(_field("תאריך", self.date_edit), 0, 1)
         grid.addLayout(_field("מחלק", self.dist_input), 0, 2)
 
-        # 'מוצרים זמינים' הוא השדה החשוב ביותר במסך (#ss0lm) — לכן הוא מוגש בתוך
-        # פאנל מודגש ובולט, ולצדו ממש 'רזרבה' (#l9lyw) כדי שהמפעיל ימלא את שניהם
-        # יחד: קודם כמה מוצרים, ומיד כמה רזרבה.
+        # 'מוצרים זמינים' is the hero field (#ss0lm) — a bold amber panel, with
+        # 'רזרבה' right beside it (#l9lyw) so the operator fills both together.
         self.products_spin.setMinimumHeight(48)
         self.products_spin.setMinimumWidth(120)
         self.products_spin.setStyleSheet(
@@ -1418,16 +1489,13 @@ class GroupUpdateTab(QWidget):
             "QFrame#prod-panel{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
             " stop:0 #fffbeb, stop:1 #fef3c7); border:2px solid #fbbf24;"
             " border-radius:14px;}")
-        # Hug the content so the amber box doesn't stretch into a big empty band.
         prod_panel.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         pp = QHBoxLayout(prod_panel)
         pp.setContentsMargins(16, 10, 16, 10)
         pp.setSpacing(24)
         prod_field = _field("★  מוצרים זמינים", self.products_spin, maxw=150)
-        # Make the star label of the hero field larger + bold amber.
         _plab = prod_field.itemAt(0).widget()
-        _plab.setStyleSheet("color:#b45309; font-size:15px; font-weight:900;"
-                            " background:transparent; border:none;")
+        _plab.setStyleSheet("color:#b45309; font-size:15px; font-weight:900; " + _LBL)
         prod_field.addWidget(self.lbl_regulars_count)
         pp.addLayout(prod_field)
         pp.addLayout(_field("רזרבה", self.reserve_spin, maxw=110))
@@ -1439,23 +1507,15 @@ class GroupUpdateTab(QWidget):
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(2, 1)
         c1.addLayout(grid)
-        top_col.addWidget(card1)
+        lay.addWidget(card1)
 
         # ── Collapsible: advanced distribution modes ──────────────────────────
-        # The regulars-mode selector + its per-mode buttons are rarely touched in
-        # the weekly routine — folded away so the daily screen stays clean. Opens
-        # automatically when a non-default mode / active filter would otherwise
-        # be hidden (state must never be invisible).
         self.adv_section = _CollapsibleCard(
             "מצבי חלוקה מתקדמים", "מצב קבועים · לפי ניקוד · סינון מותאם")
         adv_row = QHBoxLayout()
         adv_row.setSpacing(12)
 
-        # Regulars distribution mode: schedule / none / scored-by-need / filter
         self.mode_combo = QComboBox()
-        # Its dropdown otherwise renders dark-on-dark (unreadable black window,
-        # #ow11d) under the qt-material theme — force the same light card the
-        # editable combos use.
         self.mode_combo.setView(_light_popup_view())
         self.mode_combo.setMinimumHeight(42)
         self.mode_combo.setToolTip(
@@ -1464,12 +1524,6 @@ class GroupUpdateTab(QWidget):
             "• בלי קבועים — קבועים לא מקבלים\n"
             "• קבועים לפי ניקוד — רק הקבועים מדורגים לפי ניקוד צורך\n"
             "• לפי סינון מותאם — כל המקבלים שעונים על קריטריונים (מספר ילדים / הכנסה / פנוי לנפש)")
-        # The 'כל המקבלים' (all) mode added on 26/08 was removed from the picker
-        # per #7ycrg — the operator found it a misunderstanding. Seeing everyone
-        # ranked by need now lives where it belongs: the 'הוסף מקבל' picker opens
-        # neediest-first (#hkdif). Default reverts to the plain weekly 'schedule'.
-        # The backend 'all' path is kept for compatibility; a DB still holding it
-        # falls back to 'schedule' below.
         for label, val in (("רגיל — קבועים לפי לוח זמנים", "schedule"),
                            ("בלי קבועים", "none"),
                            ("קבועים לפי ניקוד", "scored"),
@@ -1478,16 +1532,12 @@ class GroupUpdateTab(QWidget):
         cur_mode = db.get_regulars_mode()
         idx = self.mode_combo.findData(cur_mode)
         if idx < 0:
-            # a saved 'all' mode that no longer has a picker entry (#7ycrg)
             idx = 0
             db.set_setting("dist_regulars_mode", "schedule")
         self.mode_combo.setCurrentIndex(idx)
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         adv_row.addLayout(_field("מצב חלוקה לקבועים", self.mode_combo, maxw=280))
 
-        # Scored-mode: the top-N leaders by need (N = 'מוצרים זמינים') are now
-        # tagged AUTOMATICALLY in the list and follow the products count live
-        # (#z7xq1 — the old 'סמן מובילים' button was unclear and static).
         self.lbl_leaders_hint = QLabel(
             "הרשימה מוגבלת אוטומטית למספר המוצרים הזמינים (הגבוהים בניקוד), "
             "ואחריהם הרזרבה")
@@ -1495,8 +1545,6 @@ class GroupUpdateTab(QWidget):
             "color:#166534; font-weight:600; font-size:12px;")
         adv_row.addWidget(self.lbl_leaders_hint, 0, Qt.AlignmentFlag.AlignBottom)
 
-        # Broad-filter mode: a button to open the criteria editor (children/income/
-        # per-soul thresholds). Shown only while the 'filter' mode is selected.
         self.btn_edit_filter = QPushButton("הגדר סינון")
         self.btn_edit_filter.setStyleSheet(_BTN_GHOST)
         self.btn_edit_filter.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1505,18 +1553,11 @@ class GroupUpdateTab(QWidget):
         adv_row.addWidget(self.btn_edit_filter, 0, Qt.AlignmentFlag.AlignBottom)
         adv_row.addStretch()
         self.adv_section.body_layout.addLayout(adv_row)
-        # Open at launch only when a non-default state is active — never hide a
-        # live mode/filter behind a closed fold. (During the session all changes
-        # originate inside this open section, so this is evaluated once here;
-        # refresh() never force-closes it on the operator.)
         if self._special_active():
             self.adv_section.set_open(True)
-        top_col.addWidget(self.adv_section)
+        lay.addWidget(self.adv_section)
 
         # ── Collapsible: volunteer messaging ──────────────────────────────────
-        # Not part of the daily routine (needs email know-how) — folded, always
-        # closed by default. The AUTOMATIC import of volunteer replies keeps
-        # running in the background regardless (it doesn't live in this UI).
         self.vol_section = _CollapsibleCard(
             "שליחה למתנדב במייל", "רשימה למילוי אצל מתנדב · קליטה אוטומטית")
         vol_row = QHBoxLayout()
@@ -1557,51 +1598,23 @@ class GroupUpdateTab(QWidget):
         self.vol_section.body_layout.addLayout(vol_row)
 
         auto_hint = QLabel("↻ תוצאות שהמתנדב שולח חזרה במייל נקלטות אוטומטית")
-        auto_hint.setStyleSheet("color:#7c3aed; font-size:12px; background:transparent; border:none;")
+        auto_hint.setStyleSheet("color:#7c3aed; font-size:12px; " + _LBL)
         self.vol_section.body_layout.addWidget(auto_hint)
-        top_col.addWidget(self.vol_section)
+        lay.addWidget(self.vol_section)
 
-        # ── ONE scroll region for the entire body ─────────────────────────────
-        # The detail cards + toolbar + recipient list all live inside a single
-        # QScrollArea, and the table is sized to its own rows (its scrollbars are
-        # off). Result: exactly ONE scrollbar on the screen — it shows only when
-        # the content doesn't fit, and disappears on a large screen. As the user
-        # scrolls, the fixed-height cards move up out of the way so the list fills
-        # the view (15 rows and well beyond), which the cards' hard minimum height
-        # never allowed when they were pinned in place.
-        self._scroll_body = QScrollArea()
-        self._scroll_body.setWidgetResizable(True)
-        self._scroll_body.setFrameShape(QFrame.Shape.NoFrame)
-        self._scroll_body.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._scroll_body.setStyleSheet("QScrollArea{background:transparent;border:none;}")
-        self._scroll_body.viewport().setStyleSheet("background:transparent;")
-        enable_touch_scroll(self._scroll_body)
+        # ── Step ②: recipient list ────────────────────────────────────────────
+        card2, c2, h2 = _step_card("2", "רשימת המקבלים",
+                                   "מי מקבל · בשלב הרישום סמן מי קיבל בפועל")
 
-        scroll_content = QWidget()
-        scroll_content.setStyleSheet("background:transparent;")
-        body = QVBoxLayout(scroll_content)
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(10)
-        body.addWidget(top_content)
-
-        # ── Toolbar over the recipient list ───────────────────────────────────
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(12)
-
-        # Manually add ANY active recipient to this distribution — even one that
-        # doesn't meet the filter criteria / isn't due this week (#243lo). Always
-        # available, in every mode.
+        # Header actions (add manual + prep export) sit at the card's far side.
         self.btn_add_manual = QPushButton("＋ הוסף מקבל")
         self.btn_add_manual.setStyleSheet(_BTN_ACCENT)
         self.btn_add_manual.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_add_manual.setToolTip("הוסף לחלוקה זו מקבל כלשהו מכל הרשימה — גם אם "
                                        "אינו עומד בקריטריונים או אינו בתור השבוע")
         self.btn_add_manual.clicked.connect(self._add_manual)
-        toolbar.addWidget(self.btn_add_manual)
+        h2.addWidget(self.btn_add_manual)
 
-        # Pre-distribution Excel export (#gli21): the full recipient sheet of the
-        # list AS PREPARED, before anyone is recorded. Available in the prep
-        # stage; the 'קיבל חלוקה' column reads 'ברשימה/רזרבה' instead.
         self.btn_export_prep = QPushButton("ייצוא לאקסל")
         self.btn_export_prep.setStyleSheet(_BTN_INFO)
         self.btn_export_prep.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1609,11 +1622,13 @@ class GroupUpdateTab(QWidget):
                                         "מעבר לרישום מי קיבל")
         self.btn_export_prep.setIcon(QIcon(line_icon("download", 18, "#ffffff")))
         self.btn_export_prep.clicked.connect(self._export_prep_excel)
-        toolbar.addWidget(self.btn_export_prep)
+        h2.addWidget(self.btn_export_prep)
 
+        # Tools row: quick search + select/clear-all.
+        tools = QHBoxLayout()
+        tools.setSpacing(10)
         self.search_input = QLineEdit()
         self.search_input.setMinimumHeight(42)
-        self.search_input.setMaximumWidth(520)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.setPlaceholderText("חיפוש מהיר ברשימה: שם, טלפון, אזור, ת״ז...")
         self.search_input.setAlignment(ALIGN_RIGHT)
@@ -1625,37 +1640,22 @@ class GroupUpdateTab(QWidget):
         self._search_timer.setSingleShot(True)
         self._search_timer.timeout.connect(self._apply_search)
         self.search_input.textChanged.connect(lambda: self._search_timer.start(180))
-        toolbar.addWidget(self.search_input, 1)
+        tools.addWidget(self.search_input, 1)
 
         self.btn_check_all = QPushButton("בחר הכל")
         self.btn_check_all.setStyleSheet(_BTN_SUCCESS)
         self.btn_check_all.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_check_all.clicked.connect(self._check_all)
-        toolbar.addWidget(self.btn_check_all)
+        tools.addWidget(self.btn_check_all)
 
         self.btn_uncheck_all = QPushButton("בטל הכל")
         self.btn_uncheck_all.setStyleSheet(_BTN_DANGER)
         self.btn_uncheck_all.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_uncheck_all.clicked.connect(self._uncheck_all)
-        toolbar.addWidget(self.btn_uncheck_all)
+        tools.addWidget(self.btn_uncheck_all)
+        c2.addLayout(tools)
 
-        toolbar.addStretch()
-        body.addLayout(toolbar)
-
-        # Stage banner — visible only in the record stage, explaining exactly what
-        # ticking means now (the old always-there ✔ column read ambiguous).
-        self.stage_banner = QLabel(
-            "📝 רישום מי קיבל: סמן ✓ ליד מי שהגיע וקיבל בפועל. "
-            "מי שלא יסומן — יירשם לו \"לא הגיע\".")
-        self.stage_banner.setWordWrap(True)
-        self.stage_banner.setStyleSheet(
-            "QLabel{background:#fff7ed; color:#9a3412; border:1px solid #fed7aa;"
-            " border-radius:10px; padding:9px 14px; font-size:13px; font-weight:700;}")
-        self.stage_banner.setVisible(False)
-        body.addWidget(self.stage_banner)
-
-        # Count chips live on their OWN row (not crammed into the toolbar) so the
-        # extra scored-mode controls can never squeeze/clip the 'סה"כ' chip.
+        # Count chips.
         counts_row = QHBoxLayout()
         counts_row.setSpacing(8)
         self.lbl_checked = QLabel("סומנו: 0")
@@ -1668,16 +1668,20 @@ class GroupUpdateTab(QWidget):
             lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             counts_row.addWidget(lbl)
         counts_row.addStretch()
-        body.addLayout(counts_row)
+        c2.addLayout(counts_row)
 
-        # ── Recipient list (tall card, sticky header, internal scroll) ────────
-        list_card = QFrame()
-        list_card.setObjectName("ui-card")
-        list_card.setStyleSheet(_CARD_QSS)
-        lc = QVBoxLayout(list_card)
-        lc.setContentsMargins(1, 1, 1, 1)
-        lc.setSpacing(0)
+        # Stage banner — visible only in the record stage.
+        self.stage_banner = QLabel(
+            "📝 רישום מי קיבל: סמן ✓ ליד מי שהגיע וקיבל בפועל. "
+            "מי שלא יסומן — יירשם לו \"לא הגיע\".")
+        self.stage_banner.setWordWrap(True)
+        self.stage_banner.setStyleSheet(
+            "QLabel{background:#fff7ed; color:#9a3412; border:1px solid #fed7aa;"
+            " border-radius:10px; padding:9px 14px; font-size:13px; font-weight:700;}")
+        self.stage_banner.setVisible(False)
+        c2.addWidget(self.stage_banner)
 
+        # ── Recipient list (tall, sticky header, sized to its rows) ────────────
         self.table = QTableWidget()
         self.table.setColumnCount(len(COLS))
         self.table.setHorizontalHeaderLabels(COLS)
@@ -1694,31 +1698,24 @@ class GroupUpdateTab(QWidget):
             "QTableWidget::item:selected{background:#e3f6ef; color:#064e3b;}")
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        # The name column sizes to its content (never squeezed by the phone/date
-        # columns, #2mx6a); the notes column absorbs the leftover width.
         hdr.setSectionResizeMode(_COL_NOTES, QHeaderView.ResizeMode.Stretch)
         hdr.setMinimumSectionSize(60)
         hdr.setResizeContentsPrecision(100)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(34)  # uniform row height
-        # The table has NO vertical scrollbar of its own — it is sized to fit all
-        # its rows and the single body scrollbar does the scrolling. This is what
-        # removes the second scrollbar the user complained about.
+        self.table.verticalHeader().setDefaultSectionSize(34)
         self.table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.cellClicked.connect(self._on_cell_clicked)
-        lc.addWidget(self.table)
+        c2.addWidget(self.table)
         attach_empty_state(self.table, "אין מקבלים להצגה")
-        body.addWidget(list_card)
-        body.addStretch(0)   # keep everything top-aligned when the body is short
+        lay.addWidget(card2)
 
-        self._scroll_body.setWidget(scroll_content)
-        surface.addWidget(self._scroll_body, 1)
+        lay.addStretch(0)
+        self._scroll_body.setWidget(content)
+        root.addWidget(self._scroll_body, 1)
 
-        root.addLayout(surface, 1)
-
-        # ── Sticky bottom action bar ──────────────────────────────────────────
+        # ── Sticky bottom action bar ③ ────────────────────────────────────────
         bottom_wrap = QWidget()
         bw = QHBoxLayout(bottom_wrap)
         bw.setContentsMargins(20, 4, 20, 12)
@@ -1727,15 +1724,23 @@ class GroupUpdateTab(QWidget):
         bottom_bar.setObjectName("bottom-bar")
         bottom_bar.setStyleSheet(
             "QFrame#bottom-bar{background:#ffffff; border:1px solid #e6eaf2; border-radius:14px;}")
-        _card_shadow(bottom_bar)
         bar = QHBoxLayout(bottom_bar)
         bar.setContentsMargins(16, 10, 16, 10)
         bar.setSpacing(12)
 
-        # Stage switch: an animated toggle between the prep and record stages
-        # (#k6bqi) — replaces the old pair of push-buttons.
+        bar.addWidget(_step_badge("3"))
+
+        # Stage switch: an animated toggle between prep and record (#k6bqi).
         self.stage_toggle = _StageToggle(self._on_stage_toggle)
         bar.addWidget(self.stage_toggle)
+
+        # A short live summary of the list state, so the bottom bar tells the
+        # operator where things stand without scrolling up.
+        self.lbl_summary = QLabel("")
+        self.lbl_summary.setStyleSheet("color:#334155; font-size:13.5px; font-weight:700; " + _LBL)
+        bar.addWidget(self.lbl_summary)
+
+        bar.addStretch()
 
         self.btn_save = QPushButton(" שמור חלוקה")
         self.btn_save.setObjectName("primary")
@@ -1767,8 +1772,6 @@ class GroupUpdateTab(QWidget):
         btn_print.clicked.connect(self._print)
         bar.addWidget(btn_print)
 
-        # Save the same list straight to a PDF in Downloads (opens automatically) —
-        # a printer-free alternative to the print preview (#qxnvx).
         btn_pdf = QPushButton("  שמור PDF")
         btn_pdf.setObjectName("ghost")
         btn_pdf.setStyleSheet(_BTN_GHOST)
@@ -1781,16 +1784,8 @@ class GroupUpdateTab(QWidget):
         btn_pdf.clicked.connect(self._export_pdf)
         bar.addWidget(btn_pdf)
 
-        bar.addStretch()
-
-        # Reset everything for a fresh distribution (#c8m83): clears the products/
-        # reserve counts, name, note, ticks and one-time picks so the operator can
-        # start recording a new round from scratch.
-        # #hwnwz — bright yellow + a clear reset glyph so the button pops out.
         btn_reset = QPushButton("  ⟳ חלוקה חדשה")
         btn_reset.setObjectName("warning")
-        # #kdld2: a single glyph (the ⟳ in the text — no extra QIcon) and the
-        # same glossy top-lit gradient as the rest of the app's buttons.
         btn_reset.setStyleSheet(
             "QPushButton{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             " stop:0 #fff08a,stop:0.49 #fcd34d,stop:0.51 #facc15,stop:1 #ca9a04);"
@@ -1807,9 +1802,25 @@ class GroupUpdateTab(QWidget):
         bar.addWidget(btn_reset)
         bw.addWidget(bottom_bar)
         root.addWidget(bottom_wrap)
+
+        self._refresh_header_chips()
         self._apply_stage()
 
-    # ── two-stage flow: prep (build the list) / record (tick who received) ─────
+    def _refresh_header_chips(self):
+        """Live header chips: the current stage, and (when it isn't the plain
+        weekly schedule) the active distribution mode."""
+        record = self._stage == "record"
+        self.chip_stage.setText("●  שלב רישום" if record else "●  שלב הכנה")
+        self.chip_stage.setStyleSheet(_CHIP_GREEN if record else _CHIP_QSS)
+        labels = {"none": "בלי קבועים", "scored": "קבועים לפי ניקוד",
+                  "filter": "סינון מותאם"}
+        mode = self._current_mode()
+        if mode in labels:
+            self.chip_mode.setText("●  " + labels[mode])
+            self.chip_mode.setVisible(True)
+        else:
+            self.chip_mode.setVisible(False)
+
     def _on_stage_toggle(self, stage: str):
         """The animated stage toggle was clicked (#k6bqi)."""
         self._set_stage(stage)
@@ -1849,6 +1860,7 @@ class GroupUpdateTab(QWidget):
         self.stage_banner.setVisible(record)
         self.btn_save.setVisible(record)
         self.stage_toggle.set_stage(self._stage)
+        self._refresh_header_chips()
 
     # ── data ───────────────────────────────────────────────────────────────────
     def _extra_recipients(self, base_ids: set) -> list:
@@ -1908,6 +1920,7 @@ class GroupUpdateTab(QWidget):
         mode = self._current_mode()
         self.lbl_leaders_hint.setVisible(mode in ("scored", "all"))
         self.btn_edit_filter.setVisible(mode == "filter")
+        self._refresh_header_chips()
 
     def _on_products_changed(self, *_):
         db.set_setting("available_products", str(self.products_spin.value()))
@@ -2367,6 +2380,12 @@ class GroupUpdateTab(QWidget):
         self.lbl_total.setText(f"סה\"כ ברשימה: {total}")
         self.lbl_checked.setText(f"סומנו: {checked}")
         self.lbl_souls.setText(f"נפשות: {souls}")
+        # Live one-line summary for the sticky bottom bar (v3.03) — in the record
+        # stage it leads with how many are ticked; in prep it's the list size.
+        if self._stage == "record":
+            self.lbl_summary.setText(f"סומנו {checked} מתוך {total} · {souls} נפשות")
+        else:
+            self.lbl_summary.setText(f"{total} ברשימה · {souls} נפשות")
 
     def _check_all(self):
         """Tick every row currently shown (respects an active search) — except
