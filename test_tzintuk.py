@@ -314,6 +314,14 @@ def line_transport(url, data):
 
 yemot._TRANSPORT = line_transport
 db.set_setting(yemot.SET_CALLBACK_READY, "")
+# נעילה (תקרית 3/9/2026 14:38): כברירת מחדל המנגנון כבוי — שליחה לא נוגעת בשורש
+n0 = len(calls)
+yemot.run_campaign({"0521234567": "כהן"}, store_list=True)
+seq = [c[0] for c in calls[n0:]]
+ok("נעילה: כשהמנגנון כבוי השליחה לא קוראת ולא כותבת דבר בשורש הקו",
+   not yemot.CALLBACK_ENABLED and "DownloadFile" not in seq and "FileAction" not in seq
+   and "UploadFile" not in seq and line_files["ivr2:/ext.ini"] == ROOT_INI, str(seq))
+yemot.CALLBACK_ENABLED = True
 n0 = len(calls)
 yemot.run_campaign({"0521234567": "כהן"}, store_list=True)
 seq = [c[0] for c in calls[n0:]]
@@ -403,6 +411,7 @@ n0 = len(calls)
 yemot.run_campaign({"0521234567": "כהן"})
 ok("בלי store_list — אין נגיעה ברשימה",
    [c[0] for c in calls[n0:]] == ["RunCampaign"])
+yemot.CALLBACK_ENABLED = False
 
 # publish_to_extension (#kx6wd): הורדת ההקלטה מהתבנית → מספר פנוי → העלאה
 WAV = b"RIFF\xff\x00fake-wav"
@@ -466,9 +475,9 @@ yemot.run_campaign({"0521234567": "כהן"}, classic=True)
 seq = [c[0] for c in calls[n0:]]
 ok("קלאסי: יוצא דרך RunTzintuk ולא RunCampaign",
    seq[-1] == "RunTzintuk" and "RunCampaign" not in seq, str(seq))
-ok("קלאסי: הרשימה נשמרת ומסלול ההתקשרות-החוזרת נבדק לפני הצינתוק",
-   seq.index("UploadPhoneList") < seq.index("GetTemplates") < seq.index("RunTzintuk"),
-   str(seq))
+ok("קלאסי: הרשימה נשמרת לפני הצינתוק, ובלי נגיעה בשורש הקו (המנגנון נעול)",
+   seq.index("UploadPhoneList") < seq.index("RunTzintuk")
+   and "DownloadFile" not in seq and "FileAction" not in seq, str(seq))
 tz = calls[-1]
 ok("קלאסי: מספרים + זמן צלצול, בלי sayInfoOnAnswer (שלא יהיה מענה)",
    tz[1].get("phones") == "0521234567"
@@ -496,8 +505,8 @@ yemot._TRANSPORT = fake_transport
 n0 = len(calls)
 yemot.run_test("0501234567")
 seq = [c[0] for c in calls[n0:]]
-ok("בדיקה: המספר נוסף לרשימה בלי ניקוי + בדיקת מסלול ההתקשרות-החוזרת",
-   seq[0] == "UploadPhoneList" and "GetTemplates" in seq and seq[-1] == "RunCampaign",
+ok("בדיקה: המספר נוסף לרשימה בלי ניקוי, בלי נגיעה בשורש (המנגנון נעול)",
+   seq[0] == "UploadPhoneList" and "DownloadFile" not in seq and seq[-1] == "RunCampaign",
    str(seq))
 upl = [c for c in calls[n0:] if c[0] == "UploadPhoneList"][0]
 ok("בדיקה: עדכון בלי מחיקת הרשימה (UPDATE)",

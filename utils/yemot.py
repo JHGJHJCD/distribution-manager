@@ -446,6 +446,7 @@ def template_position(template_id: str) -> int:
 # reliably on this line. Restore path: dev/callback_line.py restore.
 CALLBACK_EXT = "78"
 CALLBACK_TITLE = "הודעת החלוקה (מנהל חלוקה)"
+CALLBACK_ENABLED = False     # kill switch — see ensure_callback_extension (3/9/2026 incident)
 SET_CALLBACK_READY = "yemot_callback_ready"      # "<template position>:<date>"
 ROOT_EXT_INI = "ivr2:/ext.ini"
 _ROOT_LEGACY_KEYS = ("campaign_message_to_play_file_by_template",)
@@ -648,6 +649,13 @@ def ensure_callback_extension(template_id: str | None = None) -> dict:
     compared every time, the rest once a day per template position
     (SET_CALLBACK_READY). Raises YemotError when the extension itself is
     missing — it is created once (dev/callback_line.py) and never by a send."""
+    if not CALLBACK_ENABLED:
+        # 3/9/2026 14:38 incident: check_template_filter=17 matched template
+        # 1430693 (the OTHER computer's list, 363 real recipients) instead of
+        # 1430692 — Yemot's list numbering is not GetTemplates' 1-based order —
+        # and ~140 callers heard the test recording. Disabled until the
+        # numbering is verified against the right list on the live line.
+        return {"disabled": True}
     template_id = template_id or ensure_template()
     pos = template_position(template_id)
     if not pos:
