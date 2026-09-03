@@ -88,7 +88,8 @@ read=t-ברוכים הבאים...=Num_Stop,no,,,,No,,No,*/,,,   ← מ-f2 topic/
 ואוסף הקשה אחת (מקס' ספרה אחת, timeout קצר, ריק-מותר), והשרת מנהל את האינדקס
 לפי `ApiCallId`. בפורום ממליצים על Node.js עם הספרייה הקהילתית
 **yemot-router2** (github.com/ShlomoCode/yemot-router2) שממדלת בדיוק את
-המודול הזה (`call.read(...)` וכו') — ⚠ ספרייה קהילתית, לא של ימות.
+המודול הזה (`call.read(...)` וכו') — ⚠ ספרייה קהילתית, לא של ימות. חלופות
+ב-Python (zevisvei/yemot_api) ו-.NET (HTP.Yemot.NET): סקיל `yemot-ecosystem`.
 
 ## 3. סוגי השמעה — הטבלה המלאה (`id_list_message`)
 

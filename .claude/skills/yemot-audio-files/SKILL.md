@@ -184,6 +184,7 @@ description: >-
   והשמעת נתונים אישיים.
 - **yemot-campaigns-ivr** — קמפיינים ורשימות מתוך הטלפון (כולל
   `record_end_run_tzintuk` בצד הקמפיינים ו-campaign_message_to_play).
+- **yemot-ecosystem** — מודולים רשמיים, כלי צד-שלישי (פתרונאי, עורך אודיו בדפדפן) וספריות.
 - **anthropic-skills:yemot-hamashiach** (ענן) — ה-API החיצוני המלא + learned-solutions.
 
 ## עדכון הידע
