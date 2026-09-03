@@ -1139,12 +1139,20 @@ def schedule_smart(date, buckets: dict, progress=None) -> list:
         if when <= now:
             when = now.replace(second=0, microsecond=0) + timedelta(minutes=3)
             pushed = True
-        tid = ensure_hour_template(hour)
-        _attach_message_bytes(tid, message)
-        count = set_template_entries(phones, tid)
-        data = _call("ScheduleCampaign",
-                     {"templateId": tid,
-                      "time": when.strftime("%Y-%m-%d %H:%M")}, post=True)
+        try:
+            tid = ensure_hour_template(hour)
+            _attach_message_bytes(tid, message)
+            count = set_template_entries(phones, tid)
+            data = _call("ScheduleCampaign",
+                         {"templateId": tid,
+                          "time": when.strftime("%Y-%m-%d %H:%M")}, post=True)
+        except Exception as e:
+            # A failure in the middle leaves the EARLIER hours scheduled on the
+            # server. Hand them to the caller on the exception so they get
+            # recorded (and can be canceled) instead of ringing people with no
+            # trace in the app.
+            e.partial_results = results        # noqa: B010
+            raise
         sched_id = str(_dig(data, "schedId") or _dig(data, "id") or "").strip()
         if not sched_id:
             for c in reversed(get_scheduled_campaigns("PENDING")):
@@ -1649,18 +1657,20 @@ def list_best_hour(phones, stats) -> int | None:
     return max(best)[2] if best else None
 
 
-def run_test(phone: str) -> dict:
+def run_test(phone: str, store: bool = True) -> dict:
     """Ring one number (the operator's own) so they can hear the recording.
     The number is also added to the template's stored list (without clearing
     it) so calling the line back plays the message — the field test of 1/9
     found a callback after a test heard nothing because tests never stored
-    the number."""
+    the number. store=False skips that (a pending SCHEDULE dials the stored
+    list — the test number must not sneak into it)."""
     p = normalize_phone(phone)
     if not p:
         raise YemotError("מספר הבדיקה אינו תקין")
-    try:
-        add_template_entry(p, "בדיקה")
-        ensure_callback_extension()   # the tester hears the message on callback
-    except YemotError:
-        pass                          # best-effort — never blocks the test ring
+    if store:
+        try:
+            add_template_entry(p, "בדיקה")
+            ensure_callback_extension()   # the tester hears the message on callback
+        except YemotError:
+            pass                          # best-effort — never blocks the test ring
     return run_campaign({p: "בדיקה"})

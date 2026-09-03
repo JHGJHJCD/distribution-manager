@@ -367,9 +367,9 @@ class _SendModeDialog(QDialog):
                                        "(כמעט בלי עלות)")
         lay.addWidget(self.rb_classic)
         note = QLabel("בצינתוק קלאסי הטלפון מצלצל ומתנתק — אי אפשר לענות "
-                      "לשיחה. מי שרואה שיחה שלא נענתה ומתקשר חזרה לקו — "
-                      "שומע את ההודעה. אחרי השליחה התוכנה עוקבת כחצי שעה "
-                      "בזמן אמת מי חזר לשיחה ומי אישר הגעה בהקשת 7.")
+                      "לשיחה. " + TzintukimTab._callback_line() +
+                      " אחרי השליחה התוכנה עוקבת כחצי שעה בזמן אמת מי חזר "
+                      f"לשיחה ומה ענה בסקר (הקשה {yemot.SURVEY_EXT}).")
         note.setObjectName("subtitle")
         note.setWordWrap(True)
         lay.addWidget(note)
@@ -466,6 +466,12 @@ class _TestStatusDialog(QDialog):
         if self._worker is not None:
             self._worker.stop()
         super().accept()
+
+    def reject(self):
+        # Esc — stop polling too (it used to keep the thread alive ~15 min).
+        if self._worker is not None:
+            self._worker.stop()
+        super().reject()
 
 
 class _ScheduleDialog(QDialog):
@@ -763,10 +769,22 @@ class TtsDialog(QDialog):
             self.accept()
         self._generate(_finish)
 
-    def closeEvent(self, ev):
+    def _detach_worker(self):
+        """Cancel while generating: the result must not pop the player / call
+        accept() on a dialog that was already dismissed."""
         if self._worker is not None:
-            self._worker.done.disconnect()
+            try:
+                self._worker.done.disconnect()
+            except TypeError:
+                pass
+
+    def closeEvent(self, ev):
+        self._detach_worker()
         super().closeEvent(ev)
+
+    def reject(self):
+        self._detach_worker()
+        super().reject()
 
 
 class LibraryDialog(QDialog):
@@ -899,6 +917,8 @@ class TzintukimTab(QWidget):
         self._active_guid = ""    # DB guid of the campaign being tracked
         self._last_failed = []    # [{'phone','name'}] from the last finished run
         self._last_entries = []   # per-number results shown in the table (survive refresh)
+        self._last_final = False  # …and whether they are the campaign's FINAL results
+        self._chain_next = False  # the poll worker finished cleanly → look for the next due send
         self._sched_checker = None   # worker probing the server for due schedules
         self._batch = None        # #9hgvi: past-distribution batch loaded as list
         self._free = None         # #1/9: standalone list [(phone, name), …]
@@ -1332,12 +1352,19 @@ class TzintukimTab(QWidget):
         base = self._distribution_rows() if loaded else []
         manual = [r for r in self._rows if r.get("manual")]
         manual_ids = {r["rec"].get("id") for r in manual}
+        # A refresh arrives every time the other computer syncs a change —
+        # the operator's V marks must survive it (rows are rebuilt from scratch).
+        prev_checked = {self._row_key(r): r["checked"] for r in self._rows}
         self._rows = []
         for rec in base:
             if rec.get("id") in manual_ids:
                 manual = [m for m in manual if m["rec"].get("id") != rec.get("id")]
             self._rows.append(self._make_row(rec))
         self._rows.extend(manual)      # keep hand-added people across refreshes
+        for r in self._rows:
+            k = self._row_key(r)
+            if k in prev_checked and r["phones"]:
+                r["checked"] = prev_checked[k]
         try:                           # #y7jr0 — tooltips of answer history
             self._stats = yemot.answer_stats()
         except Exception:
@@ -1371,13 +1398,30 @@ class TzintukimTab(QWidget):
 
     # ── Past-distribution mode (#9hgvi) ───────────────────────────────────────
 
+    def _is_loaded(self) -> bool:
+        """A list is on screen: the week list, a past batch, or a free list."""
+        return (self._batch is not None or self._free is not None
+                or self._list_loaded)
+
+    @staticmethod
+    def _row_key(row: dict):
+        """Stable identity of a row across refreshes (recipient id, or the
+        numbers themselves for a standalone list)."""
+        rid = row["rec"].get("id")
+        return ("id", rid) if rid is not None else ("ph", tuple(row["phones"]))
+
+    def _reset_results(self):
+        """Forget the per-row results of the last campaign (list changed)."""
+        self._rows = []
+        self._last_entries = []
+        self._last_final = False
+
     def load_batch(self, batch: dict):
         """Show a PAST distribution's recipients as the call list — entry point
         of the right-click 'שלח צינתוק' action in 'חלוקות קודמות'."""
         self._batch = dict(batch or {})
         self._free = None
-        self._rows = []                # drop week-list rows and manual picks
-        self._last_entries = []
+        self._reset_results()          # drop week-list rows and manual picks
         self.refresh()
 
     def _load_week_list(self):
@@ -1393,15 +1437,13 @@ class TzintukimTab(QWidget):
             return
         self._free = list(dlg.entries)
         self._batch = None
-        self._rows = []
-        self._last_entries = []
+        self._reset_results()
         self.refresh()
 
     def _clear_batch(self):
         self._batch = None
         self._free = None
-        self._rows = []
-        self._last_entries = []
+        self._reset_results()
         self._list_loaded = False    # back to the explicit-load state (#ifc70)
         self.refresh()
 
@@ -1524,8 +1566,10 @@ class TzintukimTab(QWidget):
         self.table.blockSignals(False)
         if self._last_entries:
             # A refresh (tab switch / sync) rebuilt the rows — restore the
-            # per-row results of the campaign still being tracked / just done.
-            self._apply_results_to_table(self._last_entries)
+            # per-row results of the campaign still being tracked / just done
+            # (with the FINAL flag, so "לא הגיב" does not turn back into
+            # "קיבל את ההודעה" after a tab switch).
+            self._apply_results_to_table(self._last_entries, final=self._last_final)
         self._fit_table_height()
         self._update_metrics()
 
@@ -1576,6 +1620,7 @@ class TzintukimTab(QWidget):
         self.btn_send.setText(f"  שלח צינתוק ל-{ready}" if ready else "  שלח צינתוק")
         self.btn_send.setEnabled(ready > 0 and not busy)
         self.btn_sched.setEnabled(ready > 0 and not busy)
+        self.btn_smart.setEnabled(ready > 0 and not busy)
 
     def _ready_rows(self):
         return [r for r in self._rows if r["checked"] and r["send"]]
@@ -1631,11 +1676,24 @@ class TzintukimTab(QWidget):
             self._flag_duplicates()
             self._populate()
 
+    @staticmethod
+    def _callback_line() -> str:
+        """What happens to someone who misses the call — honest to the CURRENT
+        state of the line: the automatic message-on-callback (ext. 78) is
+        switched off since the 3/9 incident, so the dialogs must not promise
+        it while yemot.CALLBACK_ENABLED is False."""
+        if yemot.CALLBACK_ENABLED:
+            return ("מי שלא ענה ישמע את ההודעה כשיתקשר חזרה לקו "
+                    "(מושמעת רק למי שברשימה הזו).")
+        return ("מי שלא ענה יראה שיחה שלא נענתה מהמספר של הקו; "
+                "ההשמעה האוטומטית למתקשר-חוזר כבויה כרגע — "
+                "מי שמתקשר חזרה מגיע לתפריט הרגיל של הקו.")
+
     def _refresh_recording_label(self):
         tid = (db.get_setting(yemot.SET_TEMPLATE) or "").strip()
-        confirm_tip = ("\n💡 כדאי לומר בסוף ההקלטה: \"לאישור הגעה — הקש 7, "
-                       "לשמיעה חוזרת — הקש 1\". מי שיקיש 7 יסומן בתוכנה "
-                       "כ\"אישר הגעה\" (המקשים קבועים ע\"י ימות המשיח).")
+        confirm_tip = ("\n💡 כדאי לומר בסוף ההקלטה: \"לאישור הגעה — התקשרו "
+                       f"חזרה לקו והקישו {yemot.SURVEY_EXT}\". התשובה "
+                       "(1 מגיע / 2 לא מגיע / 3 לא יודע) נרשמת בתוכנה.")
         if not yemot.is_configured():
             self.lbl_rec.setText("ההודעה המושמעת: תוגדר אחרי חיבור המערכת (בהגדרות).")
         elif tid:
@@ -1729,8 +1787,12 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "שליחת בדיקה", "המספר שהוזן אינו תקין.")
             return
         db.set_setting(yemot.SET_TEST_PHONE, phone)
+        # A pending schedule dials the list STORED in the template — a test
+        # must not add the operator's number to it (open finding #2, 2/9).
+        store = self._pending_sched() is None
         try:
-            res = self._run_blocking(lambda: yemot.run_test(phone), "שולח שיחת בדיקה…")
+            res = self._run_blocking(lambda: yemot.run_test(phone, store=store),
+                                     "שולח שיחת בדיקה…")
         except yemot.YemotError as e:
             QMessageBox.warning(self, "שליחת בדיקה", str(e))
             return
@@ -1746,7 +1808,7 @@ class TzintukimTab(QWidget):
             QMessageBox.information(
                 self, "שליחת בדיקה",
                 f"📞 מצלצל עכשיו ({phone}) — מי שעונה ישמע את ההודעה.\n"
-                "אפשר גם לא לענות ולהתקשר חזרה לקו — ההודעה תושמע בכניסה.")
+                + self._callback_line())
 
     def _send(self):
         if not self._require_config():
@@ -1785,8 +1847,7 @@ class TzintukimTab(QWidget):
                    f"עומד לשלוח צינתוק ל-{len(rows)} משפחות "
                    f"({len(phones)} מספרי טלפון — כל המספרים של כל משפחה).\n"
                    f"חריגים שלא יישלחו: {bad}.\n"
-                   "מי שלא ענה ישמע את ההודעה כשיתקשר חזרה לקו "
-                   "(מושמעת רק למי שברשימה הזו).\n"
+                   + self._callback_line() + "\n"
                    f"מי שיחייג חזרה ויקיש {yemot.SURVEY_EXT} יסומן בתוכנה לפי "
                    "תשובתו: 1 מגיע / 2 לא מגיע / 3 לא יודע; "
                    f"מי שלא יקיש — \"לא הגיב\".{extra}")
@@ -1840,7 +1901,7 @@ class TzintukimTab(QWidget):
             QMessageBox.information(
                 self, "צינתוק קלאסי",
                 f"📞 הצלצולים יצאו ל-{len(phones)} מספרים.\n" + ring_line +
-                "מי שמתקשר חזרה לקו ישמע את ההודעה — ובחצי השעה הקרובה "
+                self._callback_line() + "\nבחצי השעה הקרובה "
                 f"תראה כאן בזמן אמת מי חזר לשיחה ומה ענה בסקר (הקשה {yemot.SURVEY_EXT}).")
             self._start_callback_tracking(
                 guid, phones, time.time() + yemot.CLASSIC_TRACK_SECONDS,
@@ -1901,15 +1962,17 @@ class TzintukimTab(QWidget):
                 f"שולח שוב ל-{len(phones)} מספרים…")
         except Exception as e:
             QMessageBox.warning(self, "צינתוקים", f"השליחה נכשלה: {e}")
+            self.btn_resend.setVisible(True)     # nothing went out — allow a retry
             return
         from utils import sync
         dist_date = self._dist_date_iso()
+        sent_iso = datetime.now(timezone.utc).isoformat()   # survey answers count from now
         self._active_guid = db.add_tzintuk_campaign(
             f"שליחה חוזרת לנכשלים ({len(phones)})", dist_date, template_id,
             str(res.get("campaignId") or ""), len(phones),
             device=sync.device_name() or "")
         self._refresh_history()
-        self._start_tracking(str(res.get("campaignId") or ""), len(phones))
+        self._start_tracking(str(res.get("campaignId") or ""), len(phones), sent_iso)
 
     # ── Scheduled campaigns (#xi85i) ─────────────────────────────────────────
 
@@ -2018,6 +2081,7 @@ class TzintukimTab(QWidget):
             sent_at=self._to_utc_iso(when),
             device=sync.device_name() or "", status="scheduled")
         self._refresh_history()
+        self._refresh_sched_banner()     # the strip shows up right away
         QMessageBox.information(
             self, "תזמון שליחה",
             f"נקבע ✓ — הצינתוק יישלח ביום {when.strftime('%d/%m/%Y')} "
@@ -2082,16 +2146,16 @@ class TzintukimTab(QWidget):
             QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes:
             return
+        error = None
         try:
             results = self._run_blocking(
                 lambda: yemot.schedule_smart(date, buckets),
                 "קובע את השיגורים בשרת…")
-        except yemot.YemotError as e:
-            QMessageBox.warning(self, "שיגור חכם", str(e))
-            return
         except Exception as e:                               # noqa: BLE001
-            QMessageBox.warning(self, "שיגור חכם", f"השיגור נכשל: {e}")
-            return
+            # The hours scheduled BEFORE the failure are live on the server —
+            # record them so they show in the strip and can be canceled.
+            error = e
+            results = list(getattr(e, "partial_results", None) or [])
         from utils import sync
         dev = sync.device_name() or ""
         name = self._campaign_name()
@@ -2106,6 +2170,15 @@ class TzintukimTab(QWidget):
             pushed = pushed or bool(r.get("pushed"))
         self._refresh_history()
         self._refresh_sched_banner()
+        if error is not None:
+            text = (str(error) if isinstance(error, yemot.YemotError)
+                    else f"השיגור נכשל: {error}")
+            if results:
+                text += (f"\n\n⚠ {len(results)} קבוצות שעה כבר נקבעו בשרת לפני "
+                         "התקלה והן מופיעות ברצועת התזמון — אפשר לבטל אותן "
+                         "ב\"בטל שיגור חכם\" ולנסות שוב.")
+            QMessageBox.warning(self, "שיגור חכם", text)
+            return
         msg = (f"נקבע ✓ — {total} נמענים ב-{len(results)} קבוצות שעה, "
                f"כל אחד בשעה שלו ביום {date.strftime('%d/%m/%Y')}, "
                "גם אם המחשב יהיה כבוי.")
@@ -2197,13 +2270,16 @@ class TzintukimTab(QWidget):
         closed): ask the server what happened, off the UI thread, and continue
         with the normal live tracking once the real campaignId is known."""
         self._refresh_sched_banner()
+        # Not while ANY tracker runs: both share the progress strip and
+        # _active_guid (a classic watch + a due schedule would write each
+        # other's results into the wrong record).
         if (self._sched_checker is not None or self._worker is not None
-                or not yemot.is_configured()):
+                or self._cb_worker is not None or not yemot.is_configured()):
             return
         zone = timefmt._israel_zone()
         now = datetime.now(zone) if zone is not None else datetime.now().astimezone()
         due = []
-        for c in db.get_tzintuk_campaigns(limit=25):
+        for c in db.get_tzintuk_campaigns(limit=60):
             if c.get("status") != "scheduled":
                 continue
             dt = self._sched_dt(c)
@@ -2259,9 +2335,14 @@ class TzintukimTab(QWidget):
         if changed:
             self._refresh_history()
             self._refresh_sched_banner()
-        if track and self._worker is None:
-            self._active_guid = track[0]
-            self._start_tracking(track[1], track[2])
+        if track and self._worker is None and self._cb_worker is None:
+            guid, cid, total = track
+            self._active_guid = guid
+            # since = the planned send time: survey answers given BEFORE the
+            # campaign (last week's) must not be counted as this week's.
+            since = next((c.get("sent_at") or "" for c, _r in res
+                          if c.get("guid") == guid), "")
+            self._start_tracking(cid, total, since)
 
     # ── Live tracking ─────────────────────────────────────────────────────────
 
@@ -2301,6 +2382,8 @@ class TzintukimTab(QWidget):
                 self._active_guid, st["delivered"], st["failed"], "done",
                 json.dumps(st.get("entries") or [], ensure_ascii=False))
         if st.get("finished"):
+            self._chain_next = True      # a smart send has more hour groups to track
+            self._last_final = True
             self._last_failed = [e for e in st.get("entries") or [] if e.get("failed")]
             self.lbl_prog.setText(
                 f"הקמפיין הסתיים ✓ — {st['delivered']} קיבלו את ההודעה, "
@@ -2364,6 +2447,11 @@ class TzintukimTab(QWidget):
     def _on_worker_done(self):
         self._worker = None
         self._update_metrics()
+        if self._chain_next:
+            # A smart send schedules one campaign per hour; when one finishes,
+            # pick up the next due one without waiting for a tab switch.
+            self._chain_next = False
+            QTimer.singleShot(0, self._maybe_resume_tracking)
 
     # ── Classic-tzintuk callback watch (v2.96) ────────────────────────────────
 
@@ -2427,6 +2515,7 @@ class TzintukimTab(QWidget):
                 "להתעדכן — כפתור \"רענן תשובות\" בהיסטוריה.")
             self._persist_callback(st, final=True)
             self._last_entries = list(entries)
+            self._last_final = True
             self._apply_results_to_table(entries, final=True)
             self._refresh_history()
             gt = getattr(self.main, "group_tab", None)
@@ -2446,6 +2535,7 @@ class TzintukimTab(QWidget):
         if st.get("changed"):
             # in-window: repaint only who RETURNED (the rest stay "מוכן")
             self._last_entries = [e for e in entries if e.get("ok")]
+            self._last_final = False
             self._apply_results_to_table(self._last_entries)
             if time.time() - self._cb_last_persist > 120:
                 self._persist_callback(st, final=False)
@@ -2491,20 +2581,32 @@ class TzintukimTab(QWidget):
         if (self._worker is not None or self._cb_worker is not None
                 or not yemot.is_configured()):
             return
-        camps = [c for c in db.get_tzintuk_campaigns(limit=5)
-                 if c.get("status") != "scheduled"][:1]
-        if not camps or camps[0].get("status") != "sending":
+        # Scheduled records sort FIRST (future sent_at) — a smart send makes
+        # up to 24 of them, so look past them; then the newest 'sending' of the
+        # last week (a smart send leaves several: they are tracked one after
+        # the other via _chain_next). Older stuck records are left alone.
+        cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        camp = None
+        for c in db.get_tzintuk_campaigns(limit=60):
+            if c.get("status") != "sending":
+                continue
+            sent = timefmt.to_israel(c.get("sent_at") or "")
+            if sent is not None and sent < cutoff:
+                break
+            classic = (c.get("name") or "").startswith("צינתוק קלאסי")
+            if classic or c.get("campaign_id"):
+                camp = c
+                break
+        if camp is None:
             self._auto_refresh_answers()   # v3.02 — late survey answers
             return
-        camp = camps[0]
         if (camp.get("name") or "").startswith("צינתוק קלאסי"):
             self._resume_classic(camp)   # v2.96 — callback watch, not polling
             return
-        if camp.get("campaign_id"):
-            self._active_guid = camp["guid"]
-            self._start_tracking(camp["campaign_id"],
-                                 int(camp.get("total") or 0),
-                                 camp.get("sent_at") or "")
+        self._active_guid = camp["guid"]
+        self._start_tracking(camp["campaign_id"],
+                             int(camp.get("total") or 0),
+                             camp.get("sent_at") or "")
 
     # ── Survey answers (v3.02) ────────────────────────────────────────────────
 
@@ -2578,7 +2680,7 @@ class TzintukimTab(QWidget):
             self._hist_worker = None
             try:
                 self._stats = yemot.answer_stats()
-                if self._list_loaded:
+                if self._is_loaded():
                     self._populate()
             except Exception:
                 pass
@@ -2665,10 +2767,11 @@ class TzintukimTab(QWidget):
                 changed_any = True
             if newest is None:
                 newest = (camp, entries)
-        if newest is not None and self._list_loaded:
+        if newest is not None and self._is_loaded():
             camp, entries = newest
             if (camp.get("dist_date") or "") == self._dist_date_iso():
                 self._last_entries = list(entries)
+                self._last_final = True
                 self._apply_results_to_table(entries, final=True)
         self._refresh_history()
         gt = getattr(self.main, "group_tab", None)

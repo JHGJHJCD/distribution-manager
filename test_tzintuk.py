@@ -517,6 +517,11 @@ ok("בדיקה: המספר נוסף לרשימה בלי ניקוי, בלי נג�
 upl = [c for c in calls[n0:] if c[0] == "UploadPhoneList"][0]
 ok("בדיקה: עדכון בלי מחיקת הרשימה (UPDATE)",
    upl[1].get("updateType") == "UPDATE")
+n0 = len(calls)
+yemot.run_test("0501234567", store=False)
+seq = [c[0] for c in calls[n0:]]
+ok("בדיקה בזמן תזמון ממתין (store=False): לא נוגעים ברשימת התבנית",
+   "UploadPhoneList" not in seq and seq[-1] == "RunCampaign", str(seq))
 
 # ── 4. היסטוריה ב-DB + שומר שליחה-כפולה ─────────────────────────────────────
 print("— היסטוריה ושומר כפילות —")
@@ -1150,6 +1155,31 @@ n1 = len(calls)
 yemot.schedule_smart(date(2027, 1, 6), {9: {"0521111111": "א"}})
 ok("ריצה שנייה משתמשת בתבנית השמורה (בלי יצירת תבנית חדשה)",
    "CreateTemplate" not in [c[0] for c in calls[n1:]])
+
+# תקלה באמצע: הקבוצות שכבר נקבעו בשרת חוזרות על החריגה (כדי שיירשמו ויוכלו להתבטל)
+_sched_n = [0]
+
+
+def failing_smart_transport(url, data):
+    command = urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]
+    if command == "ScheduleCampaign":
+        _sched_n[0] += 1
+        if _sched_n[0] == 2:
+            return json.dumps({"responseStatus": "ERROR", "messageCode": 1,
+                               "message": "boom"}).encode("utf-8")
+    return smart_transport(url, data)
+
+
+yemot._TRANSPORT = failing_smart_transport
+try:
+    yemot.schedule_smart(date(2027, 1, 6),
+                         {9: {"0521111111": "א"}, 13: {"0522222222": "ב"},
+                          16: {"0523333333": "ג"}})
+    ok("תקלה באמצע שיגור חכם מעלה חריגה", False)
+except yemot.YemotError as e:
+    partial = getattr(e, "partial_results", None)
+    ok("תקלה באמצע שיגור חכם: הקבוצה שכבר נקבעה מוחזרת על החריגה",
+       isinstance(partial, list) and [r["hour"] for r in partial] == [9], str(partial))
 yemot._TRANSPORT = fake_transport
 
 print()
