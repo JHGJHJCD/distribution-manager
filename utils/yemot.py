@@ -1084,6 +1084,21 @@ _FAILED = {"failed", "no_answer", "busy", "canceled", "error", "blocked",
            "remove_request"}
 
 
+def _israel_str_to_utc_iso(text) -> str:
+    """'2026-09-03 14:50:43' (server = Israel local time) → UTC iso; '' when
+    missing/unparsable."""
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    try:
+        local = datetime.strptime(raw[:19], "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return ""
+    zone = timefmt._israel_zone()
+    at = local.replace(tzinfo=zone) if zone is not None else local.astimezone()
+    return at.astimezone(timezone.utc).isoformat()
+
+
 def get_campaign_status(campaign_id: str) -> dict:
     """Live campaign status → {'finished': bool, 'total': n, 'delivered': n,
     'confirmed': n, 'failed': n, 'pending': n,
@@ -1105,6 +1120,11 @@ def get_campaign_status(campaign_id: str) -> dict:
             "ok": status in _DELIVERED,
             "confirmed": status == "accepted",
             "failed": status in _FAILED,
+            # v3.09 — the real dial time of THIS number (Israel clock on the
+            # server → UTC iso) and how long they listened, in seconds; feeds
+            # the per-person hour statistics (answer_stats)
+            "at": _israel_str_to_utc_iso(e.get("startTime")),
+            "duration": round(float(e.get("duration") or 0) / 1000.0, 1),
         })
     delivered = sum(1 for e in entries if e["ok"])
     confirmed = sum(1 for e in entries if e["confirmed"])
@@ -1313,22 +1333,42 @@ def confirmed_phones(dist_date: str) -> set:
     return out
 
 
-# ─── Smart-timing statistics (#y7jr0, stage 1) ───────────────────────────────
+# ─── Smart-timing statistics (#y7jr0, stage 1 · v3.09 real hours) ──────────
 
-MIN_SMART_HISTORY = 10   # attempts needed before a personal best hour is shown
+MIN_SMART_HISTORY = 10   # dial attempts needed before a personal best hour is shown
+MIN_CALLBACK_HISTORY = 3  # …or this many times the person called the line back
+
+
+def _entry_hour(iso: str):
+    """UTC iso → Israel hour, or None."""
+    when = timefmt.to_israel(iso or "")
+    return None if when is None else when.hour
 
 
 def answer_stats() -> dict:
-    """Per-phone answer history, built from the campaign reports already stored
-    (and synced) in tzintuk_campaigns — nothing new is recorded:
-    {phone: {"attempts": n, "answered": n, "by_hour": {hour: [answered, tries]},
+    """Per-phone reachability history, built only from what the campaign
+    reports already store (and sync) in tzintuk_campaigns:
+    {phone: {"attempts": n, "answered": n, "calls": n,
+             "by_hour": {hour: [good, tries]}, "by_call_hour": {hour: n},
              "best_hour": int|None}}.
-    The hour is the campaign's send hour on the Israel clock (the reports hold
-    no per-entry time). best_hour appears only after MIN_SMART_HISTORY
-    attempts — the hour with the highest answer rate among hours tried at
-    least twice. Stage 2 (a future version) will use it to auto-split the
-    send by personal hours."""
+    Two kinds of evidence, both on the Israel clock:
+    * dial attempts — the hour the server actually rang THIS number
+      (entry 'at', v3.09; older reports fall back to the campaign's send hour)
+      and whether it was answered;
+    * calls back — the hour the person themself called the line (survey
+      answer 'answer_at', or 'returned_at' of the classic-tzintuk tracker).
+      Calling in is the strongest signal that the person is reachable at that
+      hour, so it counts as a success in by_hour too.
+    best_hour appears after MIN_SMART_HISTORY attempts or
+    MIN_CALLBACK_HISTORY calls back — the hour with the highest success rate
+    among hours seen at least twice."""
     stats = {}
+
+    def _rec(p):
+        return stats.setdefault(p, {"attempts": 0, "answered": 0, "calls": 0,
+                                    "by_hour": {}, "by_call_hour": {},
+                                    "best_hour": None})
+
     for camp in db.get_tzintuk_campaigns():
         if camp.get("status") != "done":
             continue
@@ -1336,35 +1376,54 @@ def answer_stats() -> dict:
             entries = json.loads(camp.get("report_json") or "[]")
         except ValueError:
             continue
-        when = timefmt.to_israel(camp.get("sent_at") or "")
-        if when is None or not entries:
-            continue
-        hour = when.hour
-        for e in entries:
+        camp_hour = _entry_hour(camp.get("sent_at") or "")
+        for e in entries or []:
             if not isinstance(e, dict):
                 continue
-            status = str(e.get("status") or "").lower()
-            answered = bool(e.get("ok")) or status in _DELIVERED
-            failed = bool(e.get("failed")) or status in _FAILED
-            if not answered and not failed:
-                continue               # pending/unknown — not an attempt
             p = normalize_phone(e.get("phone"))
             if not p:
                 continue
-            s = stats.setdefault(p, {"attempts": 0, "answered": 0,
-                                     "by_hour": {}, "best_hour": None})
-            s["attempts"] += 1
-            s["answered"] += 1 if answered else 0
-            bucket = s["by_hour"].setdefault(hour, [0, 0])
-            bucket[1] += 1
-            bucket[0] += 1 if answered else 0
+            status = str(e.get("status") or "").lower()
+            # (a) a real dial attempt (classic 'callback'/'no_callback' rows
+            #     are not attempts — the tzintuk never connects)
+            answered = (bool(e.get("ok")) or status in _DELIVERED) and status != "callback"
+            failed = bool(e.get("failed")) or status in _FAILED
+            hour = _entry_hour(e.get("at") or "")
+            if hour is None:
+                hour = camp_hour
+            if (answered or failed) and hour is not None:
+                s = _rec(p)
+                s["attempts"] += 1
+                s["answered"] += 1 if answered else 0
+                bucket = s["by_hour"].setdefault(hour, [0, 0])
+                bucket[1] += 1
+                bucket[0] += 1 if answered else 0
+            # (b) the person called the line back (one event per campaign)
+            call_hour = _entry_hour(e.get("answer_at") or "")
+            if call_hour is None:
+                call_hour = _entry_hour(e.get("returned_at") or "")
+            if call_hour is not None:
+                s = _rec(p)
+                s["calls"] += 1
+                s["by_call_hour"][call_hour] = s["by_call_hour"].get(call_hour, 0) + 1
+                bucket = s["by_hour"].setdefault(call_hour, [0, 0])
+                bucket[1] += 1
+                bucket[0] += 1
     for s in stats.values():
-        if s["attempts"] < MIN_SMART_HISTORY:
+        if s["attempts"] < MIN_SMART_HISTORY and s["calls"] < MIN_CALLBACK_HISTORY:
             continue
         candidates = [(a / t, t, h) for h, (a, t) in s["by_hour"].items() if t >= 2]
         if candidates:
             s["best_hour"] = max(candidates)[2]
     return stats
+
+
+def usual_call_hour(s: dict):
+    """The hour a person most often calls the line (None below
+    MIN_CALLBACK_HISTORY calls)."""
+    if not s or s.get("calls", 0) < MIN_CALLBACK_HISTORY:
+        return None
+    return max(s["by_call_hour"].items(), key=lambda kv: (kv[1], -kv[0]))[0]
 
 
 def run_test(phone: str) -> dict:

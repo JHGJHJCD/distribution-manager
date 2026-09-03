@@ -1372,11 +1372,17 @@ class TzintukimTab(QWidget):
             if not s:
                 continue
             line = f"{p}: ענה ב-{s['answered']} מתוך {s['attempts']} צינתוקים"
+            if s.get("calls"):
+                line += f" · התקשר חזרה לקו {s['calls']} פעמים"
+                usual = yemot.usual_call_hour(s)
+                if usual is not None:
+                    line += f" (בדרך כלל בסביבות {usual:02d}:00)"
             if s.get("best_hour") is not None:
-                line += f" · השעה עם הכי הרבה מענה: {s['best_hour']:02d}:00"
-            elif s["attempts"] < yemot.MIN_SMART_HISTORY:
+                line += f" · השעה הכי טובה להשיג אותו: {s['best_hour']:02d}:00"
+            else:
                 line += (f" (שעה מומלצת תוצג אחרי "
-                         f"{yemot.MIN_SMART_HISTORY} שליחות)")
+                         f"{yemot.MIN_SMART_HISTORY} שליחות או "
+                         f"{yemot.MIN_CALLBACK_HISTORY} התקשרויות חוזרות)")
             parts.append(line)
         return "\n".join(parts)
 
@@ -1837,8 +1843,10 @@ class TzintukimTab(QWidget):
         if not best:
             return ""
         rate, total, hour = max(best)
-        return (f"לפי ההיסטוריה של הרשימה הזו, השעה עם הכי הרבה מענה היא "
-                f"{hour:02d}:00 ({rate:.0%} מענה, {total} שיחות שנבדקו).")
+        calls = sum((self._stats.get(p) or {}).get("calls", 0) for p in phones)
+        extra = f", כולל {calls} התקשרויות חוזרות לקו" if calls else ""
+        return (f"לפי ההיסטוריה של הרשימה הזו, השעה שבה הכי קל להשיג אנשים היא "
+                f"{hour:02d}:00 ({rate:.0%} הצלחה, {total} שיחות שנבדקו{extra}).")
 
     def _schedule(self):
         if not self._require_config():

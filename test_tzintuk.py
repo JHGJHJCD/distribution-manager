@@ -733,6 +733,35 @@ ok(f"מתחת ל-{yemot.MIN_SMART_HISTORY} שליחות אין המלצה",
    new.get("attempts") == 3 and new.get("best_hour") is None)
 ok("מי שלא הופיע בדוחות — אין רשומה", "0520000000" not in stats)
 
+# v3.09 — שעה אמיתית לכל מספר + התקשרויות חוזרות לקו
+P_CALL = "0527777777"
+for i in range(3):
+    g = db.add_tzintuk_campaign(f"קלאסי {i}", f"2026-08-{i + 1:02d}", "t",
+                                f"cb-{i}", 1,
+                                sent_at=f"2026-08-{i + 1:02d}T10:00:00+03:00")
+    report = [{"phone": P_CALL, "status": "callback", "ok": True,
+               "failed": False, "survey_reached": True,
+               # חזר לקו ב-20:xx שעון ישראל (17:xx UTC)
+               "returned_at": f"2026-08-{i + 1:02d}T17:05:00+00:00",
+               "answer_at": f"2026-08-{i + 1:02d}T17:06:00+00:00", "answer": "1"},
+              # לחלוקה נשלח ב-10:00 אבל המספר הזה חויג בפועל ב-12:30
+              {"phone": P_NEW, "status": "done", "ok": True,
+               "at": f"2026-08-{i + 1:02d}T09:30:00+00:00"}]
+    db.update_tzintuk_campaign(g, 1, 0, "done", json.dumps(report, ensure_ascii=False))
+stats = yemot.answer_stats()
+cb = stats.get(P_CALL) or {}
+ok("שורת 'חזר לשיחה' אינה ניסיון-חיוג אלא התקשרות חוזרת",
+   cb.get("attempts") == 0 and cb.get("calls") == 3, str(cb))
+ok("שעת ההתקשרות החוזרת = שעון ישראל (20:00)",
+   cb.get("by_call_hour") == {20: 3} and yemot.usual_call_hour(cb) == 20, str(cb))
+ok("3 התקשרויות חוזרות מספיקות להמלצה אישית", cb.get("best_hour") == 20)
+new = stats.get(P_NEW) or {}
+ok("שעת החיוג האמיתית של המספר גוברת על שעת הקמפיין",
+   new.get("by_hour", {}).get(12) == [3, 3], str(new))
+ok("_israel_str_to_utc_iso: startTime של השרת → UTC",
+   yemot._israel_str_to_utc_iso("2026-09-03 14:50:43").startswith("2026-09-03T11:50:43")
+   and yemot._israel_str_to_utc_iso("") == "" and yemot._israel_str_to_utc_iso("xx") == "")
+
 # ── 8. מעקב חזרה-לשיחה אחרי צינתוק קלאסי (v2.96) ────────────────────────────
 print("— מעקב צינתוק קלאסי —")
 
