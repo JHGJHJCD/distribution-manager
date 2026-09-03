@@ -8,6 +8,7 @@
 התחבורה (HTTP) ניתנת להזרקה דרך ``_TRANSPORT`` כדי שהבדיקות ירוצו בלי רשת.
 """
 import json
+import os
 import re
 import ssl
 import time
@@ -1359,9 +1360,10 @@ def answer_stats() -> dict:
     * the app's own campaign reports (tzintuk_campaigns, synced) — the hour the
       server actually rang THIS number (entry 'at', v3.09; older reports fall
       back to the campaign's send hour), its redials, and whether it answered;
-    * v3.10: the Yemot server's history cached by utils.call_history — every
-      campaign the line ever ran (even before the app) and every INCOMING
-      call to the line from the folder log. A campaign already stored in the
+    * v3.10/v3.11: the Yemot server's history cached by utils.call_history —
+      every campaign the line ever ran (even before the app) and every
+      INCOMING call to the line from the folder log, since the line began
+      (aggregated phone→hour counts per month). A campaign already stored in the
       DB is not counted twice (campaign_id), and the app's own call-back
       stamps ('answer_at'/'returned_at') are skipped for months the server log
       covers.
@@ -1370,6 +1372,18 @@ def answer_stats() -> dict:
     MIN_SMART_HISTORY attempts or MIN_CALLBACK_HISTORY calls — the hour with
     the highest success rate among hours seen at least twice."""
     from utils import call_history
+    camps = db.get_tzintuk_campaigns()
+    # memo: seven years of history take ~1.5 s to fold — recompute only when
+    # the server cache file or the app's own campaign rows changed
+    try:
+        cache_mtime = os.path.getmtime(call_history.cache_path())
+    except OSError:
+        cache_mtime = None
+    key = (cache_mtime, len(camps),
+           max((str(c.get("status_ts") or "") for c in camps), default=""),
+           tuple(c.get("status") for c in camps[:3]))
+    if _STATS_MEMO.get("key") == key:
+        return _STATS_MEMO["stats"]
     stats = {}
 
     def _rec(p):
@@ -1426,7 +1440,7 @@ def answer_stats() -> dict:
     hist = call_history.load()
     covered = set(hist.get("months") or {})
     seen_ids = set()
-    for camp in db.get_tzintuk_campaigns():
+    for camp in camps:
         if camp.get("status") != "done":
             continue
         try:
@@ -1441,21 +1455,30 @@ def answer_stats() -> dict:
             continue
         _entries(camp.get("entries"), _entry_hour(camp.get("at") or ""), False, covered)
     for month in (hist.get("months") or {}).values():
-        for row in (month or {}).get("calls") or []:
-            try:
-                p, stamp = row[0], row[1]
-                hour = int(stamp[11:13])
-            except (IndexError, TypeError, ValueError):
-                continue
-            if p and 0 <= hour < 24:
-                _call_in(p, hour)
+        for p, hours in ((month or {}).get("hours") or {}).items():
+            for h, n in (hours or {}).items():
+                try:
+                    hour, n = int(h), int(n)
+                except (TypeError, ValueError):
+                    continue
+                if p and 0 <= hour < 24 and n > 0:
+                    s = _rec(p)
+                    s["calls"] += n
+                    s["by_call_hour"][hour] = s["by_call_hour"].get(hour, 0) + n
+                    bucket = s["by_hour"].setdefault(hour, [0, 0])
+                    bucket[1] += n
+                    bucket[0] += n
     for s in stats.values():
         if s["attempts"] < MIN_SMART_HISTORY and s["calls"] < MIN_CALLBACK_HISTORY:
             continue
         candidates = [(a / t, t, h) for h, (a, t) in s["by_hour"].items() if t >= 2]
         if candidates:
             s["best_hour"] = max(candidates)[2]
+    _STATS_MEMO.update(key=key, stats=stats)
     return stats
+
+
+_STATS_MEMO = {"key": None, "stats": {}}
 
 
 def usual_call_hour(s: dict):

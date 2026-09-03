@@ -1083,7 +1083,7 @@ class TzintukimTab(QWidget):
         btn_srv.setStyleSheet(_BTN_GHOST)
         btn_srv.setIcon(QIcon(line_icon("download", 18, "#475569")))
         btn_srv.setToolTip("מושך מהשרת של ימות את כל הקמפיינים שהקו הריץ אי-פעם "
-                           "(גם לפני התוכנה) ואת יומן השיחות הנכנסות לקו — "
+                           "(גם לפני התוכנה) ואת יומן כל השיחות הנכנסות לקו מאז ומעולם — "
                            "כדי שהתוכנה תדע באיזו שעה כל אחד באמת עונה או מתקשר. "
                            "רץ לבד פעם ביום ברקע; הכפתור מרענן עכשיו.")
         btn_srv.clicked.connect(lambda: self._sync_history(manual=True))
@@ -2332,9 +2332,10 @@ class TzintukimTab(QWidget):
                 "ידע על שעות מענה: עדיין לא נמשכה היסטוריה מהשרת של ימות.")
             return
         when = timefmt.relative(s["updated"]) if s["updated"] else ""
+        since = f"מאז {s['since'][5:]}/{s['since'][:4]}" if s.get("since") else ""
         self.lbl_hist_sync.setText(
             f"ידע על שעות מענה מהשרת: {s['campaigns']} קמפיינים ו-{s['calls']:,} "
-            f"שיחות נכנסות לקו ({len(s['months'])} חודשים)"
+            f"שיחות נכנסות לקו" + (f" ({since})" if since else "")
             + (f" · עודכן {when}" if when else ""))
 
     def _sync_history(self, manual: bool):
