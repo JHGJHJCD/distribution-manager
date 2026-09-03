@@ -56,6 +56,10 @@ DEFAULT_SURVEY_PROMPT = ("אם אתם מגיעים לחלוקה הקישו 1. א
 SET_CLASSIC_TEMPLATE = "yemot_classic_template_id"
 SET_CLASSIC_READY = "yemot_classic_ready"
 CLASSIC_DESCRIPTION = "מנהל חלוקה — צינתוק קלאסי"
+# Smart per-hour scheduling (#y7jr0 stage 2): one dedicated template per hour so
+# each hour's list never overwrites another's. Synced JSON {str(hour): id}.
+SET_HOUR_TEMPLATES = "yemot_hour_templates"
+HOUR_TEMPLATE_DESC = "מנהל חלוקה — צינתוק חכם שעה {:02d}"
 CLASSIC_RING_SECONDS = 8          # ~2 rings, then give up (no answer = no cost)
 TZINTUK_RING_SECONDS = 16         # RunTzintuk ring length — unanswerable anyway
 
@@ -1042,6 +1046,116 @@ def schedule_campaign(when: datetime, phones: dict,
     return {"schedId": sched_id, "count": count, "raw": data}
 
 
+def bucket_by_hour(phones: dict, stats: dict, fallback_hour: int) -> dict:
+    """Split {phone: name} into {hour: {phone: name}} by each phone's personal
+    best hour (answer_stats' de-biased best_hour); phones without one go to
+    `fallback_hour` (the list's crowd hour). Pure — unit-tested."""
+    buckets: dict = {}
+    for p, name in phones.items():
+        s = (stats or {}).get(p)
+        h = s.get("best_hour") if s else None
+        if h is None:
+            h = fallback_hour
+        buckets.setdefault(int(h), {})[p] = name
+    return buckets
+
+
+def ensure_hour_template(hour: int) -> str:
+    """The dedicated campaign template for one send hour, created once and
+    remembered in a synced setting. Adopts an existing same-named template first
+    (the other computer may have made it) so the two machines converge instead
+    of breeding twin templates — the mistake that broke the callback filter."""
+    hour = int(hour)
+    raw = (db.get_setting(SET_HOUR_TEMPLATES) or "").strip()
+    try:
+        mapping = json.loads(raw) if raw else {}
+    except ValueError:
+        mapping = {}
+    tid = str(mapping.get(str(hour)) or "").strip()
+    if tid:
+        return tid
+    desc = HOUR_TEMPLATE_DESC.format(hour)
+    used = {str(v) for v in mapping.values()}
+    used.add((db.get_setting(SET_TEMPLATE) or "").strip())
+    used.add((db.get_setting(SET_CLASSIC_TEMPLATE) or "").strip())
+    data = _call("GetTemplates")
+    for t in (data.get("templates") or []):
+        cand = str(t.get("templateId") or "").strip()
+        if cand and cand not in used and str(t.get("description") or "") == desc:
+            tid = cand
+            break
+    if not tid:
+        created = _call("CreateTemplate", {"description": desc}, post=True)
+        tid = str(_dig(created, "templateId") or "").strip()
+        if not tid:
+            raise YemotError(f"יצירת תבנית לשעה {hour:02d}:00 נכשלה")
+    mapping[str(hour)] = tid
+    db.set_setting(SET_HOUR_TEMPLATES, json.dumps(mapping))
+    return tid
+
+
+def _attach_message_bytes(template_id: str, content: bytes) -> None:
+    """Attach an already-telephony-WAV recording (bytes) to a template, with the
+    same tpl:/ivr2: path fallback as upload_message_wav (no local file needed)."""
+    try:
+        _upload_multipart(f"tpl:{template_id}", content, convert="0")
+    except YemotError as e:
+        if e.code not in (107, 109, 110):
+            raise
+        _upload_multipart(f"ivr2:{template_id}.wav", content, convert="0")
+
+
+def schedule_smart(date, buckets: dict, progress=None) -> list:
+    """Server-side scheduling that dials each hour's group at ITS hour — so each
+    recipient is rung at their own best time, even when this computer is off.
+    `date` is a datetime/date/'YYYY-MM-DD' for the send day; `buckets` is
+    {hour: {phone: name}} (from bucket_by_hour). Any bucket whose time is already
+    in the past is pushed to a few minutes from now. Each hour uses its own
+    dedicated template (lists never overwrite), seeded with the current recording
+    copied server-side from the main template. Returns one dict per bucket:
+    {'hour','when' (datetime),'schedId','count','template_id','pushed' (bool)}."""
+    from datetime import datetime, date as _date, time as _time, timedelta
+    if isinstance(date, str):
+        d = datetime.strptime(date[:10], "%Y-%m-%d").date()
+    elif isinstance(date, datetime):
+        d = date.date()
+    elif isinstance(date, _date):
+        d = date
+    else:
+        raise YemotError("תאריך שליחה לא תקין")
+    zone = timefmt._israel_zone()
+    now = datetime.now(zone) if zone is not None else datetime.now()
+    now = now.replace(tzinfo=None)
+    main = ensure_template()
+    message = _download_template_message(main)      # raises if no recording yet
+    results = []
+    hours = sorted(int(h) for h, ph in buckets.items() if ph)
+    for i, hour in enumerate(hours):
+        phones = buckets[hour]
+        if progress:
+            progress(i, len(hours), hour)
+        when = datetime.combine(d, _time(hour, 0))
+        pushed = False
+        if when <= now:
+            when = now.replace(second=0, microsecond=0) + timedelta(minutes=3)
+            pushed = True
+        tid = ensure_hour_template(hour)
+        _attach_message_bytes(tid, message)
+        count = set_template_entries(phones, tid)
+        data = _call("ScheduleCampaign",
+                     {"templateId": tid,
+                      "time": when.strftime("%Y-%m-%d %H:%M")}, post=True)
+        sched_id = str(_dig(data, "schedId") or _dig(data, "id") or "").strip()
+        if not sched_id:
+            for c in reversed(get_scheduled_campaigns("PENDING")):
+                if str(_dig(c, "templateId") or "") == str(tid):
+                    sched_id = str(_dig(c, "schedId") or _dig(c, "id") or "").strip()
+                    break
+        results.append({"hour": hour, "when": when, "schedId": sched_id,
+                        "count": count, "template_id": tid, "pushed": pushed})
+    return results
+
+
 def get_scheduled_campaigns(sched_type: str = "PENDING") -> list:
     """The account's scheduled campaigns of one type
     (PENDING / SUCCESSFUL / FAILED)."""
@@ -1468,25 +1582,71 @@ def answer_stats() -> dict:
                     bucket = s["by_hour"].setdefault(hour, [0, 0])
                     bucket[1] += n
                     bucket[0] += n
+    # ── personal best hour — the "deviation" method ──────────────────────────
+    # Raw hour counts are useless here: because the line almost always sends its
+    # tzintuk around one hour (13:00), EVERY signal piles up there — people call
+    # the line back at 13:00, and they can only ANSWER at hours we actually rang
+    # (13:00). Taking each person's busiest hour therefore returns the line's
+    # global peak for almost everyone (a self-fulfilling loop). Instead we score
+    # each hour by how much THIS person stands out at it versus the whole line
+    # (personal share ÷ global share), using only INBOUND calls — the one signal
+    # the person initiates themselves, independent of when we choose to dial. It
+    # sharpens on its own once we start sending at varied hours.
+    gcall = {}
     for s in stats.values():
-        if s["attempts"] < MIN_SMART_HISTORY and s["calls"] < MIN_CALLBACK_HISTORY:
-            continue
-        candidates = [(a / t, t, h) for h, (a, t) in s["by_hour"].items() if t >= 2]
-        if candidates:
-            s["best_hour"] = max(candidates)[2]
+        for h, n in s["by_call_hour"].items():
+            gcall[h] = gcall.get(h, 0) + n
+    gt = sum(gcall.values())
+    gshare = {h: (gcall.get(h, 0) + 1) / (gt + 24) for h in range(24)}
+    for s in stats.values():
+        s["best_hour"] = personal_hour(s["by_call_hour"], gshare)
     _STATS_MEMO.update(key=key, stats=stats)
     return stats
 
 
 _STATS_MEMO = {"key": None, "stats": {}}
 
+PERSONAL_HOUR_MIN_MASS = 2      # at least this many of the person's calls at the hour
+PERSONAL_HOUR_MIN_FRAC = 0.15   # …and at least this share of all their calls
+
+
+def personal_hour(by_call_hour: dict, gshare: dict):
+    """The hour a person is relatively most active at, vs the line as a whole
+    (the "deviation" method — see answer_stats). `gshare` is the line-wide hour
+    distribution {hour: fraction}. None until MIN_CALLBACK_HISTORY inbound calls
+    and one hour that carries real personal mass. Pure — unit-tested."""
+    total = sum((by_call_hour or {}).values())
+    if total < MIN_CALLBACK_HISTORY:
+        return None
+    cand = [h for h, n in by_call_hour.items()
+            if n >= PERSONAL_HOUR_MIN_MASS and n / total >= PERSONAL_HOUR_MIN_FRAC]
+    if not cand:
+        return None
+    return max(cand, key=lambda h: (by_call_hour[h] / total) / gshare.get(h, 1e-9))
+
 
 def usual_call_hour(s: dict):
-    """The hour a person most often calls the line (None below
-    MIN_CALLBACK_HISTORY calls)."""
-    if not s or s.get("calls", 0) < MIN_CALLBACK_HISTORY:
-        return None
-    return max(s["by_call_hour"].items(), key=lambda kv: (kv[1], -kv[0]))[0]
+    """Kept for callers/tooltips: the person's relative best hour (same value as
+    best_hour), or None when there is not enough personal signal yet."""
+    return (s or {}).get("best_hour")
+
+
+def list_best_hour(phones, stats) -> int | None:
+    """The single hour that historically works best for the WHOLE list (highest
+    answer rate across everyone with history) — the fallback bucket for people
+    who have no personal hour yet. This is the crowd's peak (typically ~13:00),
+    which is a sensible default when we know nothing personal about someone."""
+    by_hour = {}
+    for p in phones:
+        s = (stats or {}).get(p)
+        if not s:
+            continue
+        for h, (a, t) in s["by_hour"].items():
+            b = by_hour.setdefault(h, [0, 0])
+            b[0] += a
+            b[1] += t
+    best = [(a / t, t, h) for h, (a, t) in by_hour.items() if t >= 10]
+    return max(best)[2] if best else None
 
 
 def run_test(phone: str) -> dict:

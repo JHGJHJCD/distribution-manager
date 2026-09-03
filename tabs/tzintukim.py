@@ -524,6 +524,85 @@ class _ScheduleDialog(QDialog):
         self.accept()
 
 
+class _SmartScheduleDialog(QDialog):
+    """שיגור לפי השעה של כל אחד (#y7jr0 שלב 2) — מציג את חלוקת הנמענים לקבוצות
+    לפי השעה האישית, ובוחרים רק את יום החלוקה (השעות מגיעות מהנתונים)."""
+
+    def __init__(self, buckets: dict, fallback_hour: int,
+                 n_personal: int, n_fallback: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("שיגור לפי השעה של כל אחד")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.date = None
+        total = sum(len(v) for v in buckets.values())
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        info = QLabel(
+            f"התוכנה תשלח ל-{total} נמענים, כל אחד בשעה שבה הכי קל להשיג אותו "
+            "לפי ההיסטוריה. לכל שעה יוצא שיגור נפרד מהשרת של ימות המשיח — "
+            "המחשב לא חייב להיות דלוק.")
+        info.setWordWrap(True)
+        lay.addWidget(info)
+
+        lbl = QLabel("בחר את יום החלוקה:")
+        lbl.setStyleSheet("font-weight:700;")
+        lay.addWidget(lbl)
+        self.dt_edit = QDateTimeEdit()
+        self.dt_edit.setCalendarPopup(True)
+        self.dt_edit.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.dt_edit.setDisplayFormat("dd/MM/yyyy")
+        self.dt_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        earliest = min(buckets) if buckets else fallback_hour
+        now = datetime.now()
+        default = now if now.hour < earliest else now + timedelta(days=1)
+        self.dt_edit.setDateTime(QDateTime(default.year, default.month,
+                                           default.day, 0, 0))
+        self.dt_edit.setMinimumDate(QDateTime.currentDateTime().date())
+        lay.addWidget(self.dt_edit)
+
+        prev = QLabel("פירוט השעות:")
+        prev.setStyleSheet("font-weight:700; margin-top:4px;")
+        lay.addWidget(prev)
+        box = QScrollArea()
+        box.setWidgetResizable(True)
+        box.setFixedHeight(180)
+        box.setStyleSheet("QScrollArea{border:1px solid #e6eaf2; border-radius:8px;}")
+        inner = QWidget()
+        il = QVBoxLayout(inner)
+        il.setContentsMargins(10, 8, 10, 8)
+        il.setSpacing(3)
+        for hour in sorted(buckets):
+            n = len(buckets[hour])
+            row = QLabel(f"🕒 {hour:02d}:00 — {n} נמענים")
+            row.setStyleSheet("font-size:14px;")
+            il.addWidget(row)
+        il.addStretch()
+        box.setWidget(inner)
+        lay.addWidget(box)
+
+        note = QLabel(
+            f"מתוכם {n_personal} משובצים לפי שעה אישית, ו-{n_fallback} "
+            f"(שאין להם עדיין מספיק היסטוריה) בשעה הכללית {fallback_hour:02d}:00.")
+        note.setObjectName("subtitle")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+
+        btns = QHBoxLayout()
+        ok = QPushButton("המשך »")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self._accept)
+        cancel = QPushButton("ביטול")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(ok)
+        btns.addWidget(cancel)
+        btns.addStretch()
+        lay.addLayout(btns)
+
+    def _accept(self):
+        self.date = self.dt_edit.dateTime().toPyDateTime().date()
+        self.accept()
+
+
 class _TaskWorker(QThread):
     """Runs one blocking callable off the UI thread (TTS synthesis takes a few
     seconds — freezing the dialog would look like a hang)."""
@@ -1213,6 +1292,16 @@ class TzintukimTab(QWidget):
                                   "מהשרת של ימות המשיח, גם כשהמחשב כבוי")
         self.btn_sched.clicked.connect(self._schedule)
         act.addWidget(self.btn_sched)
+        self.btn_smart = QPushButton("  שגר לפי השעה של כל אחד…")
+        self.btn_smart.setStyleSheet(_BTN_GHOST)
+        self.btn_smart.setIcon(QIcon(line_icon("users", 18, "#475569")))
+        self.btn_smart.setMinimumHeight(46)
+        self.btn_smart.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_smart.setToolTip(
+            "מפזר את השליחה לאורך היום — כל נמען מצולצל בשעה שבה הכי קל להשיג "
+            "אותו לפי ההיסטוריה. יוצא מהשרת של ימות המשיח גם כשהמחשב כבוי.")
+        self.btn_smart.clicked.connect(self._smart_schedule)
+        act.addWidget(self.btn_smart)
         self.btn_send = QPushButton("")
         self.btn_send.setObjectName("primary")
         self.btn_send.setStyleSheet(_BTN_PRINT)
@@ -1391,15 +1480,13 @@ class TzintukimTab(QWidget):
             line = f"{p}: ענה ב-{s['answered']} מתוך {s['attempts']} צינתוקים"
             if s.get("calls"):
                 line += f" · התקשר חזרה לקו {s['calls']} פעמים"
-                usual = yemot.usual_call_hour(s)
-                if usual is not None:
-                    line += f" (בדרך כלל בסביבות {usual:02d}:00)"
             if s.get("best_hour") is not None:
-                line += f" · השעה הכי טובה להשיג אותו: {s['best_hour']:02d}:00"
+                line += (f" · השעה שבה הכי כדאי לצלצל אליו: "
+                         f"{s['best_hour']:02d}:00 (השעה שבה הוא בולט "
+                         f"בפעילות מול שאר הקו)")
             else:
-                line += (f" (שעה מומלצת תוצג אחרי "
-                         f"{yemot.MIN_SMART_HISTORY} שליחות או "
-                         f"{yemot.MIN_CALLBACK_HISTORY} התקשרויות חוזרות)")
+                line += (f" (שעה אישית תוצג אחרי "
+                         f"{yemot.MIN_CALLBACK_HISTORY} התקשרויות חוזרות לקו)")
             parts.append(line)
         return "\n".join(parts)
 
@@ -1838,11 +1925,15 @@ class TzintukimTab(QWidget):
         """The planned run time of a scheduled record, as aware Israel time."""
         return timefmt.to_israel(camp.get("sent_at") or "")
 
+    def _pending_scheds(self):
+        """Every scheduled-but-not-yet-run campaign (a smart send makes one per
+        hour bucket; a plain schedule makes one)."""
+        return [c for c in db.get_tzintuk_campaigns(limit=60)
+                if c.get("status") == "scheduled"]
+
     def _pending_sched(self):
-        for c in db.get_tzintuk_campaigns(limit=25):
-            if c.get("status") == "scheduled":
-                return c
-        return None
+        scheds = self._pending_scheds()
+        return scheds[0] if scheds else None
 
     def _smart_hint(self, phones) -> str:
         """#y7jr0 שלב 1 — ההמלצה בדיאלוג התזמון: השעה עם אחוז המענה הגבוה
@@ -1932,49 +2023,172 @@ class TzintukimTab(QWidget):
             f"נקבע ✓ — הצינתוק יישלח ביום {when.strftime('%d/%m/%Y')} "
             f"בשעה {when.strftime('%H:%M')}, גם אם המחשב יהיה כבוי.")
 
+    def _smart_schedule(self):
+        """#y7jr0 stage 2 — send each recipient at their own personal best hour:
+        split the list into hour buckets and schedule one server-side campaign
+        per hour (each on its own template)."""
+        if not self._require_config():
+            return
+        rows = self._ready_rows()
+        phones = self._phones_map(rows)
+        if not phones:
+            QMessageBox.warning(self, "שיגור חכם",
+                                "אין אף נמען מסומן עם מספר תקין.")
+            return
+        if self._pending_scheds():
+            QMessageBox.information(
+                self, "שיגור חכם",
+                "כבר קיים תזמון ממתין. בטל אותו קודם (\"בטל תזמון\") "
+                "ואז שגר מחדש.")
+            return
+        if not (db.get_setting(yemot.SET_TEMPLATE) or "").strip():
+            QMessageBox.information(
+                self, "שיגור חכם",
+                "עדיין לא הוגדרה הודעה מוקלטת. צור או העלה הקלטה קודם.")
+            return
+        stats = self._stats or {}
+        fallback = yemot.list_best_hour(phones, stats)
+        if fallback is None:
+            fallback = 13
+        buckets = yemot.bucket_by_hour(phones, stats, fallback)
+        n_personal = sum(1 for p in phones
+                         if (stats.get(p) or {}).get("best_hour") is not None)
+        n_fallback = len(phones) - n_personal
+        dlg = _SmartScheduleDialog(buckets, fallback, n_personal, n_fallback, self)
+        if not dlg.exec() or dlg.date is None:
+            return
+        date = dlg.date
+        dist_date = self._dist_date_iso()
+        prev = db.tzintuk_campaign_for_date(dist_date)
+        extra = ""
+        if prev:
+            prev_when = timefmt.datetime_str(prev.get("sent_at") or "")
+            verb = ("כבר מתוזמן צינתוק"
+                    if prev.get("status") == "scheduled" else "כבר נשלח צינתוק")
+            extra = (f"\n\n⚠ שים לב: {verb} לחלוקה של תאריך זה ({prev_when}). "
+                     "שליחה נוספת תצלצל לאנשים פעם שנייה!")
+        bad = sum(1 for r in self._rows if r["why"])
+        total = len(phones)
+        ans = QMessageBox.question(
+            self, "אישור שיגור חכם",
+            f"יישלחו {total} נמענים ב-{len(buckets)} קבוצות שעה, "
+            f"ביום {date.strftime('%d/%m/%Y')} — כל אחד בשעה שבה הכי קל "
+            "להשיג אותו.\n"
+            f"חריגים שלא יישלחו: {bad}.\n"
+            f"עלות משוערת: כ-{total} יחידות.\n"
+            "השליחה יוצאת מהשרת של ימות המשיח, גם אם המחשב יהיה כבוי."
+            f"{extra}\n\nלשגר?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            results = self._run_blocking(
+                lambda: yemot.schedule_smart(date, buckets),
+                "קובע את השיגורים בשרת…")
+        except yemot.YemotError as e:
+            QMessageBox.warning(self, "שיגור חכם", str(e))
+            return
+        except Exception as e:                               # noqa: BLE001
+            QMessageBox.warning(self, "שיגור חכם", f"השיגור נכשל: {e}")
+            return
+        from utils import sync
+        dev = sync.device_name() or ""
+        name = self._campaign_name()
+        pushed = False
+        for r in results:
+            db.add_tzintuk_campaign(
+                f"שיגור חכם {r['hour']:02d}:00 — {name}",
+                dist_date, r["template_id"], str(r.get("schedId") or ""),
+                int(r.get("count") or 0),
+                sent_at=self._to_utc_iso(r["when"]),
+                device=dev, status="scheduled")
+            pushed = pushed or bool(r.get("pushed"))
+        self._refresh_history()
+        self._refresh_sched_banner()
+        msg = (f"נקבע ✓ — {total} נמענים ב-{len(results)} קבוצות שעה, "
+               f"כל אחד בשעה שלו ביום {date.strftime('%d/%m/%Y')}, "
+               "גם אם המחשב יהיה כבוי.")
+        if pushed:
+            msg += "\n(שעות שכבר עברו היום יישלחו בעוד כמה דקות.)"
+        QMessageBox.information(self, "שיגור חכם", msg)
+
     def _refresh_sched_banner(self):
-        camp = self._pending_sched()
-        if camp is None:
+        scheds = self._pending_scheds()
+        if not scheds:
             self.sched_frame.setVisible(False)
             return
-        when = timefmt.datetime_str(camp.get("sent_at") or "")
-        src = camp.get("device") or ""
-        self.lbl_sched.setText(
-            f"🕒 צינתוק מתוזמן ל-{when} — ל-{camp.get('total') or 0} נמענים"
-            + (f" (נקבע מ{src})" if src else "")
-            + ". המחשב לא חייב להיות דלוק בשעת השליחה.")
+        if len(scheds) == 1:
+            camp = scheds[0]
+            when = timefmt.datetime_str(camp.get("sent_at") or "")
+            src = camp.get("device") or ""
+            self.lbl_sched.setText(
+                f"🕒 צינתוק מתוזמן ל-{when} — ל-{camp.get('total') or 0} נמענים"
+                + (f" (נקבע מ{src})" if src else "")
+                + ". המחשב לא חייב להיות דלוק בשעת השליחה.")
+            self.btn_cancel_sched.setText("בטל תזמון")
+        else:
+            total = sum(int(c.get("total") or 0) for c in scheds)
+            hrs = sorted({w.hour for c in scheds
+                          for w in [timefmt.to_israel(c.get("sent_at") or "")]
+                          if w is not None})
+            rng = f"{hrs[0]:02d}:00–{hrs[-1]:02d}:00" if hrs else ""
+            self.lbl_sched.setText(
+                f"🕒 שיגור חכם מתוזמן — {len(scheds)} קבוצות שעה ({rng}), "
+                f"ל-{total} נמענים בסך הכול, כל אחד בשעה שלו. "
+                "המחשב לא חייב להיות דלוק.")
+            self.btn_cancel_sched.setText("בטל שיגור חכם")
         self.sched_frame.setVisible(True)
 
     def _cancel_sched(self):
-        camp = self._pending_sched()
-        if camp is None:
+        scheds = self._pending_scheds()
+        if not scheds:
             self.sched_frame.setVisible(False)
             return
-        when = timefmt.datetime_str(camp.get("sent_at") or "")
-        ans = QMessageBox.question(
-            self, "ביטול תזמון",
-            f"לבטל את הצינתוק המתוזמן ל-{when}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if ans != QMessageBox.StandardButton.Yes:
+        if len(scheds) == 1:
+            when = timefmt.datetime_str(scheds[0].get("sent_at") or "")
+            q = f"לבטל את הצינתוק המתוזמן ל-{when}?"
+        else:
+            q = f"לבטל את השיגור החכם ({len(scheds)} קבוצות שעה מתוזמנות)?"
+        if QMessageBox.question(
+                self, "ביטול תזמון", q,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                ) != QMessageBox.StandardButton.Yes:
             return
-        sched_id = camp.get("campaign_id") or ""
+
+        def work(items=scheds):
+            out = []
+            for c in items:
+                try:
+                    yemot.delete_scheduled_campaign(c.get("campaign_id") or "")
+                    out.append((c["guid"], True, ""))
+                except yemot.YemotError as e:
+                    # 105 = already gone from the server → still mark canceled.
+                    out.append((c["guid"], e.code == 105, str(e)))
+                except Exception as e:                       # noqa: BLE001
+                    out.append((c["guid"], False, str(e)))
+            return out
+
         try:
-            self._run_blocking(lambda: yemot.delete_scheduled_campaign(sched_id),
-                               "מבטל את התזמון בשרת…")
-            db.update_tzintuk_campaign(camp["guid"], 0, 0, "canceled")
-            ok, msg = True, "התזמון בוטל — לא יישלח צינתוק."
-        except yemot.YemotError as e:
-            if e.code == 106:      # already ran — go pick up the results
-                ok, msg = False, str(e)
-            elif e.code == 105:    # not on the server → nothing will ring
-                db.update_tzintuk_campaign(camp["guid"], 0, 0, "canceled")
-                ok, msg = True, "התזמון כבר לא קיים בשרת — סומן כמבוטל."
+            res = self._run_blocking(work, "מבטל את התזמון בשרת…")
+        except Exception as e:                               # noqa: BLE001
+            QMessageBox.warning(self, "ביטול תזמון", f"הביטול נכשל: {e}")
+            return
+        canceled, errors = 0, []
+        for guid, ok, msg in res:
+            if ok:
+                db.update_tzintuk_campaign(guid, 0, 0, "canceled")
+                canceled += 1
             else:
-                ok, msg = False, str(e)
-        except Exception as e:
-            ok, msg = False, f"הביטול נכשל: {e}"
-        (QMessageBox.information if ok else QMessageBox.warning)(
-            self, "ביטול תזמון", msg)
+                errors.append(msg)
+        if errors:
+            QMessageBox.warning(
+                self, "ביטול תזמון",
+                f"בוטלו {canceled}. חלק לא בוטלו (אולי כבר יצאו לדרך):\n"
+                + "\n".join(dict.fromkeys(errors)))
+        else:
+            QMessageBox.information(self, "ביטול תזמון",
+                                    "התזמון בוטל — לא יישלח צינתוק.")
         self._refresh_history()
         self._maybe_resume_tracking()
 

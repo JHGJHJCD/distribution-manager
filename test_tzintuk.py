@@ -733,10 +733,10 @@ stats = yemot.answer_stats()
 hot = stats.get(P_HOT) or {}
 ok("נספרו כל הניסיונות", hot.get("attempts") == 12 and hot.get("answered") == 7,
    str(hot))
-ok("השעה המומלצת = השעה עם אחוז המענה הגבוה", hot.get("best_hour") == 18)
+ok("שעה אישית באה משיחות נכנסות בלבד — ניסיונות-חיוג לא נותנים המלצה "
+   "(מוטים לשעת השליחה שלנו)", hot.get("best_hour") is None, str(hot))
 new = stats.get(P_NEW) or {}
-ok(f"מתחת ל-{yemot.MIN_SMART_HISTORY} שליחות אין המלצה",
-   new.get("attempts") == 3 and new.get("best_hour") is None)
+ok("מספר בלי שיחות נכנסות — אין שעה אישית", new.get("best_hour") is None)
 ok("מי שלא הופיע בדוחות — אין רשומה", "0520000000" not in stats)
 
 # v3.09 — שעה אמיתית לכל מספר + התקשרויות חוזרות לקו
@@ -1066,6 +1066,91 @@ sync.run_sync()
 ok("התשובות מגיעות למחשב השני דרך הסנכרון",
    yemot.answers_for_date("2026-09-09").get("0501234567") == "1")
 use_machine(dir_a)
+
+# ── 8. שעה אישית בשיטת החריגה + שיגור חכם פר-שעה (#y7jr0 שלב 2) ──────────────
+print("— שיטת החריגה + שיגור חכם —")
+# 13:00 היא שעת השיא הכללית (כי אז שולחים). שיטת החריגה בוחרת שעה שבה האדם
+# בולט מול הכלל — לא את 13:00 שכולם נופלים עליה.
+gshare = {h: (0.5 if h == 13 else 0.5 / 23) for h in range(24)}
+ok("החריגה בוחרת שעה שבה האדם בולט, לא את שעת השיא הכללית (13:00)",
+   yemot.personal_hour({13: 5, 8: 3}, gshare) == 8)
+ok("שעה נדירה עם מסה קטנה מדי (שיחה אחת) לא מנצחת",
+   yemot.personal_hour({13: 5, 8: 1}, gshare) == 13)
+ok("מתחת ל-3 שיחות נכנסות אין שעה אישית",
+   yemot.personal_hour({8: 2}, gshare) is None)
+
+stats_l = {"a": {"by_hour": {13: [8, 10], 19: [6, 12]}},
+           "b": {"by_hour": {19: [2, 5]}}}
+ok("list_best_hour = שעת השיא של הרשימה (fallback כללי)",
+   yemot.list_best_hour(["a", "b"], stats_l) == 13)
+
+buckets = yemot.bucket_by_hour(
+    {"05x": "a", "05y": "b", "05z": "c"},
+    {"05x": {"best_hour": 9}, "05y": {"best_hour": 9}}, 13)
+ok("bucket_by_hour: קיבוץ לפי שעה אישית + נפילה לשעה הכללית",
+   sorted(buckets) == [9, 13] and set(buckets[9]) == {"05x", "05y"}
+   and list(buckets[13]) == ["05z"])
+
+# --- ensure_hour_template + schedule_smart (תחבורה מדומה) ---
+_tpl = [9000]
+canned["ScheduleCampaign"] = {"responseStatus": "OK"}   # schedId ייווצר בתחבורה
+
+
+def smart_transport(url, data):
+    q = urllib.parse.urlparse(url)
+    command = q.path.rsplit("/", 1)[-1]
+    params = {k: v[0] for k, v in urllib.parse.parse_qs(q.query).items()}
+    if data:
+        try:
+            params.update({k: v[0] for k, v in
+                           urllib.parse.parse_qs(data.decode("utf-8")).items()})
+        except UnicodeDecodeError:
+            params["_raw"] = data
+    calls.append((command, params))
+    if command == "DownloadFile":
+        return b"RIFF....WAVEmessage-bytes"          # הודעת התבנית הראשית
+    if command == "GetTemplates":
+        return json.dumps({"responseStatus": "OK", "templates": []}).encode("utf-8")
+    if command == "CreateTemplate":
+        _tpl[0] += 1
+        return json.dumps({"responseStatus": "OK",
+                           "templateId": _tpl[0]}).encode("utf-8")
+    if command == "ScheduleCampaign":
+        return json.dumps({"responseStatus": "OK",
+                           "schedId": 5000 + _tpl[0]}).encode("utf-8")
+    return json.dumps(canned.get(command, {"responseStatus": "OK"})).encode("utf-8")
+
+
+yemot._TRANSPORT = smart_transport
+db.set_setting(yemot.SET_HOUR_TEMPLATES, "")            # מתחילים נקי
+buckets = {9: {"0521111111": "א"}, 13: {"0522222222": "ב", "0523333333": "ג"}}
+n0 = len(calls)
+results = yemot.schedule_smart(date(2027, 1, 6), buckets)
+seq = [c[0] for c in calls[n0:]]
+ok("schedule_smart מחזיר רשומה לכל קבוצת-שעה", len(results) == 2)
+ok("כל קבוצה קיבלה תבנית ייעודית משלה (בלי דריסה)",
+   results[0]["template_id"] != results[1]["template_id"])
+ok("לכל קבוצה יש schedId", all(r["schedId"] for r in results))
+scheds = [c for c in calls[n0:] if c[0] == "ScheduleCampaign"]
+ok("שיגור אחד לכל שעה בשעה הנכונה",
+   len(scheds) == 2
+   and {c[1].get("time") for c in scheds}
+   == {"2027-01-06 09:00", "2027-01-06 13:00"})
+ok("ההודעה הועתקה לכל תבנית-שעה (UploadFile)",
+   seq.count("UploadFile") == 2)
+ok("רשימת הנמענים הועלתה לכל תבנית-שעה",
+   seq.count("UploadPhoneList") == 2)
+counts = {r["hour"]: r["count"] for r in results}
+ok("מספר הנמענים פר-שעה נכון", counts == {9: 1, 13: 2}, str(counts))
+saved = json.loads(db.get_setting(yemot.SET_HOUR_TEMPLATES) or "{}")
+ok("תבניות-השעה נשמרו בהגדרה מסונכרנת", set(saved) == {"9", "13"})
+
+# ריצה שנייה מאמצת את התבניות השמורות — בלי CreateTemplate נוסף
+n1 = len(calls)
+yemot.schedule_smart(date(2027, 1, 6), {9: {"0521111111": "א"}})
+ok("ריצה שנייה משתמשת בתבנית השמורה (בלי יצירת תבנית חדשה)",
+   "CreateTemplate" not in [c[0] for c in calls[n1:]])
+yemot._TRANSPORT = fake_transport
 
 print()
 if fails:
