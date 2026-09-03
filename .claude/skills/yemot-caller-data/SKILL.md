@@ -207,3 +207,16 @@ default=t-לא נמצאה עבורך הודעה
 לעדכן כאן וב-`references/caller-data-details.md` באותה הזדמנות. אם הפיצ'ר
 ממומש באפליקציה — לעדכן גם את CLAUDE.md של הפרויקט ואת learned-solutions
 של `anthropic-skills:yemot-hamashiach`.
+
+
+## נלמד בשטח — 2/9/2026 (סקר אישור הגעה של מנהל חלוקה, שלוחה 77)
+- **`recording_and_entering_data` עם שאלת-הקשה יחידה ובלי הקלטות עובד:** `050-option=1-1-15-No-AskNo-123-`
+  (מקס 1 ספרה, מין 1, 15 שנ' המתנה, `No` = לא להקריא את ההקשה, `AskNo` = בלי בקשת אישור, מקשים מותרים
+  `123`). פרומפט השאלה = קובץ `050.tts` (טקסט להקראה) — נכתב ב-`UploadTextFile what=ivr2:/77/050.tts`.
+  `say_approval_number=say_approval_no_number` מבטל הקראת מספר אישור; `..._end_goto/_error_goto/_timeout_goto=/`.
+- **פורמט `ApprovalAll.ymgr` (אומת על שלוחה 6 בקו):** שורה לכל השלמה, `%` מפריד, `key#value`:
+  `Status#OK%Folder#6%DID#0795378810%IncomingDID#048691834%Phone#0548478678%Date#02/12/2024%Time#09:40:12%HebrewDate#…%var#Folder-6%Booking#1002%Data#%P000#שם%P050#5252`
+  — `Phone` = המתקשר, `Date`/`Time` **בשעון ישראל**, `P0NN` = התשובה לשאלה NN (`P000` = תמלול הקלטה). קריאה:
+  `DownloadFile path=ivr2:/<ext>/ApprovalAll.ymgr` (קובץ גדול נכשל ב-GetTextFile). הפרסר: `utils/yemot.py::parse_approval_rows`.
+- **MCP `pitron-ivr` (`plan_extension_changes`) משמיט מפתחות ממשפחות דינמיות** (`050-option`) בשקט — לוודא
+  ב-`read_extension` אחרי ביצוע, ולכתוב ext.ini מלא דרך `UploadTextFile` כשצריך.

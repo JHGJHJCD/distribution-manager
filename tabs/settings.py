@@ -18,6 +18,7 @@ from utils import updater
 from utils import email_utils
 from utils import sync
 from version import APP_VERSION
+import json
 
 # ── v3.01 design language — shared with "חלוקה ורישום" / "צינתוקים" ──────────
 from PyQt6.QtWidgets import QSizePolicy
@@ -485,6 +486,36 @@ class SettingsTab(QWidget):
             _btn("בדוק חיבור", _BTN_GHOST, self._test_yemot_connection,
                  "מתחבר לימות המשיח ומוודא שהפרטים נכונים"),
             self.lbl_ym_status))
+        # ── סקר אישור הגעה (v3.02): שלוחה 77 בקו — 1 מגיע / 2 לא מגיע / 3 לא יודע ──
+        from utils import yemot as _ym
+        body.addWidget(_desc(
+            f"סקר אישור הגעה: מי שמקבל צינתוק מחייג חזרה לקו, מקיש {_ym.SURVEY_EXT} "
+            "ועונה במקש אחד. כאן קובעים מה כל מקש אומר (התוויות מופיעות בתוכנה) "
+            "ואת השאלה שהקו מקריא. אחרי שינוי השאלה — \"עדכן את הסקר בקו\"."))
+        sform = _form()
+        self.ym_ans = {}
+        for key in _ym.ANSWER_KEYS:
+            w = QLineEdit()
+            w.setPlaceholderText(_ym.DEFAULT_ANSWER_LABELS[key])
+            w.setAlignment(ALIGN_RIGHT)
+            w.setMaxLength(24)
+            self.ym_ans[key] = w
+            _form_row(sform, f"מקש {key} =", w)
+        self.ym_survey_prompt = QLineEdit()
+        self.ym_survey_prompt.setPlaceholderText(_ym.DEFAULT_SURVEY_PROMPT)
+        self.ym_survey_prompt.setAlignment(ALIGN_RIGHT)
+        self.ym_survey_prompt.setToolTip("הטקסט שהקו מקריא למי שמקיש "
+                                         f"{_ym.SURVEY_EXT} (הקראה ממוחשבת)")
+        _form_row(sform, "השאלה בטלפון", self.ym_survey_prompt)
+        body.addLayout(sform)
+        self._load_survey_settings()
+        self.lbl_survey_status = QLabel("")
+        self.lbl_survey_status.setWordWrap(True)
+        self.lbl_survey_status.setStyleSheet("color:#334155; font-size:12.5px; " + _LBL)
+        body.addLayout(_btn_row(
+            _btn("עדכן את הסקר בקו", _BTN_GHOST, self._upload_survey_prompt,
+                 "שומר את התוויות והשאלה, ומעלה את השאלה לשלוחת הסקר בקו"),
+            self.lbl_survey_status))
         _place(row, card, body)
 
         # ═════════════════════════ עבודה משני מחשבים ═════════════════════════
@@ -713,6 +744,7 @@ class SettingsTab(QWidget):
         self._refresh_manager_status()
         self._refresh_feedback_inbox_btn()
         self._refresh_header_chips()
+        self._load_survey_settings()      # v3.02 — may have synced from the other PC
 
     def _refresh_feedback_inbox_btn(self):
         try:
@@ -1012,6 +1044,39 @@ class SettingsTab(QWidget):
         if self.main_win and hasattr(self.main_win, "_refresh_sync_led"):
             self.main_win._refresh_sync_led()
 
+    # ── Arrival survey (v3.02) ──────────────────────────────────────────────────
+    def _load_survey_settings(self):
+        from utils import yemot
+        try:
+            saved = json.loads(db.get_setting(yemot.SET_ANSWER_LABELS) or "{}")
+        except ValueError:
+            saved = {}
+        for key, w in self.ym_ans.items():
+            w.setText(str((saved or {}).get(key) or ""))
+        self.ym_survey_prompt.setText(db.get_setting(yemot.SET_SURVEY_PROMPT) or "")
+
+    def _save_survey_settings(self):
+        """Labels + question text → synced settings (blank = default)."""
+        from utils import yemot
+        labels = {k: w.text().strip() for k, w in self.ym_ans.items() if w.text().strip()}
+        db.set_setting(yemot.SET_ANSWER_LABELS, json.dumps(labels, ensure_ascii=False))
+        db.set_setting(yemot.SET_SURVEY_PROMPT, self.ym_survey_prompt.text().strip())
+
+    def _upload_survey_prompt(self):
+        from utils import yemot
+        self._save_survey_settings()
+        if not yemot.is_configured():
+            self.lbl_survey_status.setText("⚠ קודם הזן את פרטי ימות ולחץ \"שמור\".")
+            return
+        try:
+            with busy_cursor():
+                yemot.upload_survey_prompt()
+            self.lbl_survey_status.setText(
+                f"✓ השאלה עודכנה בקו (שלוחה {yemot.SURVEY_EXT}). "
+                "התוויות נשמרו ומופיעות בתוכנה.")
+        except Exception as e:
+            self.lbl_survey_status.setText(f"⚠ העדכון בקו נכשל: {e}")
+
     # ── Manager computer + change control (#5rhe9) ──────────────────────────────
     def _refresh_manager_status(self):
         from utils import sync
@@ -1227,6 +1292,7 @@ class SettingsTab(QWidget):
         db.set_setting(yemot.SET_SYSTEM, system)
         db.set_setting(yemot.SET_PASSWORD, password)
         db.set_setting("gemini_api_key", self.ym_gemini_key.text().strip())
+        self._save_survey_settings()      # v3.02 — labels + question text
         self._refresh_header_chips()
         if not silent:
             self.lbl_ym_status.setText("הפרטים נשמרו ✓ — עכשיו לחץ \"בדוק חיבור\"")

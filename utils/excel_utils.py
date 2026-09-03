@@ -986,8 +986,12 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
     thin = Side(style="thin", color="CBD5E1")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     cell_align = Alignment(horizontal="right", vertical="center")
-    conf_fill = PatternFill("solid", fgColor="DCFCE7")    # ירוק — אישר הגעה
-    fail_fill = PatternFill("solid", fgColor="FEE2E2")    # אדום — נכשל
+    conf_fill = PatternFill("solid", fgColor="DCFCE7")    # ירוק — מגיע
+    fail_fill = PatternFill("solid", fgColor="FEE2E2")    # אדום — לא מגיע / נכשל
+    unsure_fill = PatternFill("solid", fgColor="FEF3C7")  # ענבר — לא יודע
+    from utils import yemot as _yemot
+    labels = _yemot.answer_labels()
+    NO_ANSWER = "לא הגיב"
 
     status_he = {"sending": "בתהליך", "done": "הסתיים", "scheduled": "מתוזמן",
                  "canceled": "בוטל", "sched_failed": "התזמון נכשל"}
@@ -1012,8 +1016,13 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
 
     def _entry_state(e):
         st = str(e.get("status") or "").lower()
+        ans = str(e.get("answer") or "")
+        if ans in labels:                  # v3.02 — survey answer (1/2/3)
+            return labels[ans]
         if e.get("confirmed") or st == "accepted":
-            return "אישר הגעה"
+            return labels["1"]             # legacy key-7 reports
+        if "answer" in e:                  # survey checked, no answer given
+            return NO_ANSWER
         if st == "callback":               # v2.96 — צינתוק קלאסי: חזר לשיחה
             return "חזר לשיחה ושמע"
         if e.get("ok"):
@@ -1028,19 +1037,22 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
     ws = wb.active
     ws.title = "סיכום"
     _style_header(ws, ["מתי", "שם הצינתוק", "מצב", "נשלחו", "הצליחו",
-                       "אישרו הגעה", "נכשלו", "מחשב"])
+                       labels["1"], labels["2"], labels["3"], NO_ANSWER,
+                       "נכשלו", "מחשב"])
     for i, c in enumerate(campaigns, 1):
         ents = _entries(c)
-        confirmed = sum(1 for e in ents if _entry_state(e) == "אישר הגעה")
+        states = [_entry_state(e) for e in ents]
         ws.append([_fmt_date(str(c.get("sent_at") or "")[:10]) or (c.get("sent_at") or ""),
                    c.get("name") or "",
                    status_he.get(c.get("status") or "", c.get("status") or ""),
                    int(c.get("total") or 0), int(c.get("delivered") or 0),
-                   confirmed, int(c.get("failed") or 0), c.get("device") or ""])
+                   states.count(labels["1"]), states.count(labels["2"]),
+                   states.count(labels["3"]), states.count(NO_ANSWER),
+                   int(c.get("failed") or 0), c.get("device") or ""])
         for cell in ws[i + 1]:
             cell.alignment = cell_align
             cell.border = border
-    for col, w in enumerate([14, 34, 12, 9, 9, 12, 9, 14], 1):
+    for col, w in enumerate([14, 34, 12, 9, 9, 10, 10, 10, 10, 9, 14], 1):
         ws.column_dimensions[get_column_letter(col)].width = w
 
     # ── גיליון פירוט — מי ענה ומי אישר ───────────────────────────────────────
@@ -1059,10 +1071,12 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
             for cell in wd[r]:
                 cell.alignment = cell_align
                 cell.border = border
-            if state == "אישר הגעה":
+            if state == labels["1"]:
                 wd.cell(r, 5).fill = conf_fill
-            elif state == "לא נענה / נכשל":
+            elif state in (labels["2"], "לא נענה / נכשל"):
                 wd.cell(r, 5).fill = fail_fill
+            elif state == labels["3"]:
+                wd.cell(r, 5).fill = unsure_fill
             _write_phone_cell(wd.cell(r, 4), phone)
     for col, w in enumerate([14, 30, 24, 16, 18], 1):
         wd.column_dimensions[get_column_letter(col)].width = w

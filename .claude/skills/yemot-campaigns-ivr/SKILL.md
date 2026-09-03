@@ -220,3 +220,11 @@ checking_units_mail=aaa@ccc.com
 כשמאמתים בשטח פרט שמסומן ⚠ (מפת המקשים של yemot_dialer, add_admin_to_list),
 או מגלים הגדרה/התנהגות חדשה במודולים האלה — לעדכן כאן וב-references באותה
 הזדמנות. מלכודת שהתגלתה **בקו שלנו** → להוסיף גם ל-yemot-line-knowledge.
+
+
+## נלמד בשטח — 2/9/2026
+- **`yemotContext=REPEAT` נדחה בקו שלנו** (0795378810): `UpdateTemplate` עם `REPEAT` מחזיר שגיאה פנימית גם דרך
+  ה-MCP, בעוד `SIMPLE`/`maxDialAttempts` מתקבלים. לפי התיעוד (post/32034) REPEAT = "השמעה חוזרת ב-1 ואישור
+  קבלה ב-7" — כנראה שירות שמפעילים מול שירות הלקוחות של ימות. **מנהל חלוקה עבר לסקר בשלוחה 77** במקום.
+- `list_campaign_templates`/`get_campaign_template_details` (MCP) לא מחזירים `originateTimeout` — רק
+  `maxDialAttempts`/`yemotContext`/`redialPolicy`.

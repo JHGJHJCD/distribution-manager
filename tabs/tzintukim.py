@@ -53,13 +53,30 @@ class _PollWorker(QThread):
     campaign finishes (or ~15 minutes pass)."""
     tick = pyqtSignal(object)          # status dict | Exception
 
-    def __init__(self, campaign_id: str, parent=None):
+    def __init__(self, campaign_id: str, parent=None, since_iso: str = ""):
         super().__init__(parent)
         self.campaign_id = campaign_id
+        self.since_iso = since_iso        # campaign send time — survey answers before it don't count
+        self._rows = None                 # last survey rows fetched (v3.02)
+        self._n = 0
         self._stop = False
 
     def stop(self):
         self._stop = True
+
+    def _merge_survey(self, st: dict, force: bool = False):
+        """v3.02 — every ~5th tick (and at the end) read the survey extension's
+        answers and stamp them onto the entries; a fetch failure keeps the
+        last rows (the campaign status itself is what matters live)."""
+        self._n += 1
+        if force or self._n % 5 == 1:
+            try:
+                self._rows = yemot.fetch_survey_rows()
+            except Exception:
+                pass
+        if self._rows is not None:
+            yemot.merge_survey_answers(st.get("entries") or [], self._rows, self.since_iso)
+            st["answers"] = yemot.answer_counts(st.get("entries") or [])
 
     def run(self):
         errors = 0
@@ -76,6 +93,7 @@ class _PollWorker(QThread):
                 time.sleep(8)
                 continue
             errors = 0
+            self._merge_survey(st, force=bool(st.get("finished")))
             self.tick.emit(st)
             if st.get("finished"):
                 return
@@ -89,16 +107,19 @@ class _CallbackWorker(QThread):
     """v2.96 — live watch after a CLASSIC tzintuk: Yemot keeps no call
     history, so while the window is open we poll the line's LIVE calls
     (GetIncomingCalls) and mark every target number that calls back — and
-    whether it reached extension 7 (arrival confirmation)."""
+    (v3.02) what they answered on the survey extension (1/2/3)."""
     tick = pyqtSignal(object)          # snapshot dict | Exception
 
     def __init__(self, targets: dict, deadline: float,
-                 seed_entries=None, parent=None):
+                 seed_entries=None, parent=None, since_iso: str = ""):
         super().__init__(parent)
         self.tracker = yemot.CallbackTracker(targets)
         if seed_entries:
             self.tracker.seed(seed_entries)
         self.deadline = float(deadline)
+        self.since_iso = since_iso
+        self._rows = None
+        self._rows_at = 0.0
         self._stop = False
 
     def stop(self):
@@ -108,9 +129,20 @@ class _CallbackWorker(QThread):
         self.deadline += seconds
 
     def _snapshot(self, done: bool, changed: bool = False, error: str = ""):
-        returned, confirmed = self.tracker.counts()
-        return {"returned": returned, "confirmed": confirmed,
-                "entries": self.tracker.entries(), "changed": changed,
+        returned, _ = self.tracker.counts()
+        entries = self.tracker.entries()
+        # Survey answers: refreshed once a minute (and when the window closes).
+        if self._rows is None or done or time.time() - self._rows_at > 60:
+            try:
+                self._rows = yemot.fetch_survey_rows()
+                self._rows_at = time.time()
+            except Exception:
+                pass
+        if self._rows is not None:
+            _, ans_changed = yemot.merge_survey_answers(entries, self._rows, self.since_iso)
+            changed = changed or ans_changed
+        return {"returned": returned, "answers": yemot.answer_counts(entries),
+                "entries": entries, "changed": changed,
                 "remaining": max(0.0, self.deadline - time.time()),
                 "done": done, "error": error}
 
@@ -389,7 +421,8 @@ class _TestStatusDialog(QDialog):
         btns.addWidget(self.btn_close)
         btns.addStretch()
         lay.addLayout(btns)
-        self._worker = _PollWorker(campaign_id, self)
+        self._worker = _PollWorker(campaign_id, self,
+                                   datetime.now(timezone.utc).isoformat())
         self._worker.tick.connect(self._on_tick)
         self._worker.start()
 
@@ -403,8 +436,10 @@ class _TestStatusDialog(QDialog):
         entries = st.get("entries") or []
         e = entries[0] if entries else {}
         status = e.get("status") or ""
-        if e.get("confirmed"):
-            txt, color = "✓ השיחה נענתה — וההודעה אושרה בהקשת 7", "#166534"
+        ans = str(e.get("answer") or "")
+        if ans in yemot.ANSWER_KEYS:
+            txt = f"✓ השיחה נענתה — ובסקר הוקש {ans} ({yemot.answer_label(ans)})"
+            color = "#166534"
         elif e.get("ok"):
             txt = ("✓ השיחה נענתה ע\"י תא קולי — ההודעה הושארה בו"
                    if status == "amd" else "✓ השיחה נענתה — ההודעה הושמעה")
@@ -415,8 +450,8 @@ class _TestStatusDialog(QDialog):
             txt, color = "✗ " + txt, "#a32d2d"
         else:
             txt, color = "📞 מצלצל עכשיו…", "#0f4c81"
-        # עוצרים רק כשהקמפיין באמת הסתיים — הקשת 7 נרשמת בסוף השיחה, ואם
-        # נעצור כבר על "נענתה" נפספס את האישור.
+        # עוצרים רק כשהקמפיין באמת הסתיים — אם נעצור כבר על "נענתה" נפספס
+        # את הסטטוס הסופי של השיחה.
         if st.get("finished"):
             self._worker.stop()
         else:
@@ -1020,8 +1055,10 @@ class TzintukimTab(QWidget):
         btn_publish.clicked.connect(self._publish_to_line)
         rec_row.addWidget(btn_publish)
         c_lay.addLayout(rec_row)
-        tip = QLabel("💡 כדאי לומר בסוף ההקלטה: \"לאישור הגעה — הקש 7, לשמיעה "
-                     "חוזרת — הקש 1\". מי שמקיש 7 מסומן בתוכנה כ\"אישר הגעה\".")
+        tip = QLabel("💡 כדאי לומר בסוף ההקלטה: \"לאישור הגעה חייגו חזרה לקו "
+                     f"והקישו {yemot.SURVEY_EXT}: 1 מגיע, 2 לא מגיע, 3 לא יודע. "
+                     "מי שלא יקיש — ייחשב כמי שלא שיתף פעולה\". התשובות מופיעות "
+                     "בתוכנה ליד כל שם.")
         tip.setStyleSheet("color:#94a3b8; font-size:12px; " + _LBL)
         tip.setWordWrap(True)
         c_lay.addWidget(tip)
@@ -1034,13 +1071,22 @@ class TzintukimTab(QWidget):
         btn_hist_xls.setStyleSheet(_BTN_GHOST)
         btn_hist_xls.setIcon(QIcon(line_icon("export", 18, "#475569")))
         btn_hist_xls.setToolTip("שומר קובץ אקסל עם כל הצינתוקים: סיכום לכל שליחה "
-                                "+ פירוט לכל מספר — מי קיבל, מי אישר הגעה (הקיש 7) "
-                                "ומי לא נענה")
+                                "+ פירוט לכל מספר — מי קיבל, מה ענה בסקר "
+                                "(מגיע / לא מגיע / לא יודע / לא הגיב) ומי לא נענה")
         btn_hist_xls.clicked.connect(self._export_history)
+        btn_ans = QPushButton("  רענן תשובות")
+        btn_ans.setStyleSheet(_BTN_GHOST)
+        btn_ans.setIcon(QIcon(line_icon("refresh", 18, "#475569")))
+        btn_ans.setToolTip("קורא מהקו את התשובות שהוקשו בסקר (שלוחה "
+                           f"{yemot.SURVEY_EXT}: 1 מגיע / 2 לא מגיע / 3 לא יודע) "
+                           "לצינתוקים של השבועיים האחרונים ומעדכן את הטבלה, "
+                           "ההיסטוריה ורשימת החלוקה")
+        btn_ans.clicked.connect(self._refresh_answers)
+        c_head.addWidget(btn_ans)
         c_head.addWidget(btn_hist_xls)
         self.hist = QTableWidget(0, 6)
         self.hist.setHorizontalHeaderLabels(
-            ["מתי", "שם", "נשלחו", "הצליחו", "אישרו הגעה", "נכשלו"])
+            ["מתי", "שם", "נשלחו", "הצליחו", "תשובות בסקר", "נכשלו"])
         self.hist.verticalHeader().setVisible(False)
         self.hist.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.hist.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1104,15 +1150,16 @@ class TzintukimTab(QWidget):
         p_lay.addWidget(self.progress)
         counters = QHBoxLayout()
         counters.setSpacing(14)
-        self.lbl_conf = QLabel("")
-        self.lbl_conf.setStyleSheet("color:#166534; font-weight:700; " + _LBL)
+        self.lbl_ans = QLabel("")          # v3.02 — survey answers, rich text
+        self.lbl_ans.setStyleSheet("font-weight:700; " + _LBL)
+        self.lbl_ans.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_done = QLabel("")
         self.lbl_done.setStyleSheet("color:#0f6e56; font-weight:600; " + _LBL)
         self.lbl_fail = QLabel("")
         self.lbl_fail.setStyleSheet("color:#a32d2d; font-weight:600; " + _LBL)
         self.lbl_wait = QLabel("")
         self.lbl_wait.setStyleSheet("color:#5f6d69; " + _LBL)
-        for w in (self.lbl_conf, self.lbl_done, self.lbl_fail, self.lbl_wait):
+        for w in (self.lbl_ans, self.lbl_done, self.lbl_fail, self.lbl_wait):
             counters.addWidget(w)
         counters.addStretch()
         self.btn_extend_track = QPushButton("⏱ הארך מעקב ב-30 דק'")
@@ -1681,9 +1728,11 @@ class TzintukimTab(QWidget):
                    f"עומד לשלוח צינתוק ל-{len(rows)} משפחות "
                    f"({len(phones)} מספרי טלפון — כל המספרים של כל משפחה).\n"
                    f"חריגים שלא יישלחו: {bad}.\n"
-                   "מי שיקיש 7 בשיחה יסומן בתוכנה כ\"אישר הגעה\".\n"
                    "מי שלא ענה ישמע את ההודעה כשיתקשר חזרה לקו "
-                   f"(מושמעת רק למי שברשימה הזו).{extra}")
+                   "(מושמעת רק למי שברשימה הזו).\n"
+                   f"מי שיחייג חזרה ויקיש {yemot.SURVEY_EXT} יסומן בתוכנה לפי "
+                   "תשובתו: 1 מגיע / 2 לא מגיע / 3 לא יודע; "
+                   f"מי שלא יקיש — \"לא הגיב\".{extra}")
         dlg = _SendModeDialog(summary, self)
         if not dlg.exec() or not dlg.mode:
             return
@@ -1709,10 +1758,11 @@ class TzintukimTab(QWidget):
             return
         from utils import sync
         name = self._campaign_name()
+        sent_iso = datetime.now(timezone.utc).isoformat()   # survey answers count from now
         if classic:
             # v2.96 — קלאסי: אין מענה לצלצול עצמו, אבל עוקבים חי אחרי מי
-            # שמתקשר חזרה לקו (ומי שמקיש 7 שם = אישר הגעה). לימות אין יומן
-            # שיחות עבר, לכן המעקב חי בלבד — כל עוד חלון המעקב פתוח בתוכנה.
+            # שמתקשר חזרה לקו; התשובה בסקר (77) נקראת מקובץ הנתונים של
+            # השלוחה. לימות אין יומן שיחות עבר, לכן מעקב-החזרה חי בלבד.
             tracker = yemot.CallbackTracker(phones)
             guid = db.add_tzintuk_campaign(
                 "צינתוק קלאסי — " + name, dist_date, template_id,
@@ -1734,9 +1784,10 @@ class TzintukimTab(QWidget):
                 self, "צינתוק קלאסי",
                 f"📞 הצלצולים יצאו ל-{len(phones)} מספרים.\n" + ring_line +
                 "מי שמתקשר חזרה לקו ישמע את ההודעה — ובחצי השעה הקרובה "
-                "תראה כאן בזמן אמת מי חזר לשיחה ומי אישר הגעה בהקשת 7.")
+                f"תראה כאן בזמן אמת מי חזר לשיחה ומה ענה בסקר (הקשה {yemot.SURVEY_EXT}).")
             self._start_callback_tracking(
-                guid, phones, time.time() + yemot.CLASSIC_TRACK_SECONDS)
+                guid, phones, time.time() + yemot.CLASSIC_TRACK_SECONDS,
+                since_iso=sent_iso)
             return
         self._active_guid = db.add_tzintuk_campaign(
             name, dist_date, template_id,
@@ -1744,7 +1795,7 @@ class TzintukimTab(QWidget):
             int(res.get("entriesCount") or len(phones)),
             device=sync.device_name() or "")
         self._refresh_history()
-        self._start_tracking(str(res.get("campaignId") or ""), len(phones))
+        self._start_tracking(str(res.get("campaignId") or ""), len(phones), sent_iso)
 
     def _publish_to_line(self):
         """#kx6wd — copy the current campaign recording into the line's central
@@ -2028,17 +2079,17 @@ class TzintukimTab(QWidget):
 
     # ── Live tracking ─────────────────────────────────────────────────────────
 
-    def _start_tracking(self, campaign_id: str, total: int):
+    def _start_tracking(self, campaign_id: str, total: int, since_iso: str = ""):
         self.prog_frame.setVisible(True)
         self.btn_resend.setVisible(False)
         self.lbl_prog.setText("שולח בזמן אמת… אפשר להמשיך לעבוד, אל תסגור את התוכנה")
         self.progress.setRange(0, max(1, total))
         self.progress.setValue(0)
-        self.lbl_conf.setText("✓ אישרו הגעה 0")
+        self.lbl_ans.setText(self._answers_html(None))
         self.lbl_done.setText("הצליחו 0")
         self.lbl_fail.setText("נכשלו 0")
         self.lbl_wait.setText(f"ממתינים {total}")
-        self._worker = _PollWorker(campaign_id, self)
+        self._worker = _PollWorker(campaign_id, self, since_iso)
         self._worker.tick.connect(self._on_tick)
         self._worker.finished.connect(self._on_worker_done)
         self._worker.start()
@@ -2052,7 +2103,7 @@ class TzintukimTab(QWidget):
         done = st["delivered"] + st["failed"]
         self.progress.setRange(0, max(1, st["total"]))
         self.progress.setValue(min(done, st["total"]))
-        self.lbl_conf.setText(f"✓ אישרו הגעה {st.get('confirmed', 0)}")
+        self.lbl_ans.setText(self._answers_html(st.get("answers"), final=bool(st.get("finished"))))
         self.lbl_done.setText(f"הצליחו {st['delivered']}")
         self.lbl_fail.setText(f"נכשלו {st['failed']}")
         self.lbl_wait.setText(f"ממתינים {st['pending']}")
@@ -2066,13 +2117,13 @@ class TzintukimTab(QWidget):
         if st.get("finished"):
             self._last_failed = [e for e in st.get("entries") or [] if e.get("failed")]
             self.lbl_prog.setText(
-                f"הקמפיין הסתיים ✓ — {st['delivered']} קיבלו את ההודעה "
-                f"(מתוכם {st.get('confirmed', 0)} אישרו הגעה בהקשה), "
-                f"{st['failed']} נכשלו.")
+                f"הקמפיין הסתיים ✓ — {st['delivered']} קיבלו את ההודעה, "
+                f"{st['failed']} נכשלו. התשובות בסקר (הקשה {yemot.SURVEY_EXT}) "
+                "ממשיכות להתעדכן — כפתור \"רענן תשובות\" בהיסטוריה.")
             self.btn_resend.setText(f"🔄 שלח שוב ל-{len(self._last_failed)} שנכשלו")
             self.btn_resend.setVisible(bool(self._last_failed))
             self._last_entries = list(st.get("entries") or [])
-            self._apply_results_to_table(self._last_entries)
+            self._apply_results_to_table(self._last_entries, final=True)
             self._refresh_history()
             # The confirmation badges on the "חלוקה ורישום" list come from the
             # stored report — repaint it so they appear without a tab switch.
@@ -2083,20 +2134,32 @@ class TzintukimTab(QWidget):
                 except Exception:
                     pass
 
-    def _apply_results_to_table(self, entries):
+    _ANSWER_STYLE = {"1": ("✓", "#166534"), "2": ("✗", "#b91c1c"), "3": ("?", "#b45309")}
+
+    def _apply_results_to_table(self, entries, final: bool = False):
         """Write each person's final result into the status column, so the
-        operator sees WHO confirmed (pressed 7), who just got the call, and
-        who failed. A row may have several dialed numbers (#gaira) — the BEST
-        outcome among them wins (confirmed > delivered > failed)."""
+        operator sees what each family ANSWERED on the survey (1/2/3), who
+        just got the call, and who failed. A row may have several dialed
+        numbers (#gaira) — the BEST outcome among them wins. `final` = the
+        campaign is over, so "no survey answer" is shown as "לא הגיב"."""
         by_phone = {e.get("phone"): e for e in entries if e.get("phone")}
+        labels = yemot.answer_labels()
         self.table.blockSignals(True)
         for i, row in enumerate(self._rows):
             mine = [by_phone[p] for p in row.get("send") or [] if p in by_phone]
             if not mine or i >= self.table.rowCount():
                 continue
             statuses = {str(e.get("status") or "") for e in mine}
-            if any(e.get("confirmed") for e in mine):
-                txt, color = "✓ אישר הגעה", QColor("#166534")
+            answer = next((str(e.get("answer")) for e in mine
+                           if str(e.get("answer") or "") in self._ANSWER_STYLE), "")
+            checked = any("answer" in e for e in mine)
+            if answer:
+                mark, col = self._ANSWER_STYLE[answer]
+                txt, color = f"{mark} {labels.get(answer, '')}", QColor(col)
+            elif any(e.get("confirmed") for e in mine):    # legacy key-7 reports
+                txt, color = f"✓ {labels['1']}", QColor("#166534")
+            elif final and checked:
+                txt, color = f"לא הגיב (לא הקיש {yemot.SURVEY_EXT})", QColor("#6b7280")
             elif "callback" in statuses:     # v2.96 — classic: called back
                 txt, color = "📞 חזר לשיחה ושמע", QColor("#0f6e56")
             elif any(e.get("ok") for e in mine):
@@ -2119,10 +2182,12 @@ class TzintukimTab(QWidget):
     # ── Classic-tzintuk callback watch (v2.96) ────────────────────────────────
 
     def _start_callback_tracking(self, guid: str, targets: dict,
-                                 deadline: float, seed_entries=None):
+                                 deadline: float, seed_entries=None,
+                                 since_iso: str = ""):
         """Open the live watch window after a classic tzintuk: who calls the
-        line back (and presses 7) is caught in real time — Yemot keeps no call
-        log, so this works only while the window is open in the app."""
+        line back is caught in real time (Yemot keeps no call log, so this
+        works only while the window is open); what they answered on the
+        survey extension is read from its data file (persistent)."""
         if self._cb_worker is not None:
             return
         self._active_guid = guid
@@ -2132,11 +2197,11 @@ class TzintukimTab(QWidget):
         self.btn_stop_track.setVisible(True)
         self.progress.setRange(0, 0)          # time window — busy stripe
         self.lbl_fail.setText("")
-        self.lbl_conf.setText("✓ אישרו הגעה 0")
+        self.lbl_ans.setText(self._answers_html(None))
         self.lbl_done.setText("📞 חזרו לשיחה 0")
         self.lbl_wait.setText(f"טרם חזרו {len(targets)}")
         self._cb_last_persist = time.time()
-        self._cb_worker = _CallbackWorker(targets, deadline, seed_entries, self)
+        self._cb_worker = _CallbackWorker(targets, deadline, seed_entries, self, since_iso)
         self._cb_worker.tick.connect(self._on_cb_tick)
         self._cb_worker.finished.connect(self._on_cb_worker_done)
         self._cb_worker.start()
@@ -2164,21 +2229,19 @@ class TzintukimTab(QWidget):
             return
         entries = st.get("entries") or []
         returned = int(st.get("returned") or 0)
-        confirmed = int(st.get("confirmed") or 0)
-        self.lbl_conf.setText(f"✓ אישרו הגעה {confirmed}")
+        self.lbl_ans.setText(self._answers_html(st.get("answers"), final=bool(st.get("done"))))
         self.lbl_done.setText(f"📞 חזרו לשיחה {returned}")
         self.lbl_wait.setText(f"טרם חזרו {max(0, len(entries) - returned)}")
         if st.get("done"):
             self.progress.setRange(0, 1)
             self.progress.setValue(1)
             self.lbl_prog.setText(
-                f"המעקב הסתיים ✓ — {returned} חזרו לשיחה ושמעו את ההודעה, "
-                f"מתוכם {confirmed} אישרו הגעה בהקשת 7. "
-                "(מי שיחזור מאוחר יותר עדיין ישמע את ההודעה — "
-                "אבל בלי רישום בתוכנה.)")
+                f"המעקב הסתיים ✓ — {returned} חזרו לשיחה ושמעו את ההודעה. "
+                f"התשובות בסקר (הקשה {yemot.SURVEY_EXT}) נשמרות בקו וממשיכות "
+                "להתעדכן — כפתור \"רענן תשובות\" בהיסטוריה.")
             self._persist_callback(st, final=True)
             self._last_entries = list(entries)
-            self._apply_results_to_table(entries)
+            self._apply_results_to_table(entries, final=True)
             self._refresh_history()
             gt = getattr(self.main, "group_tab", None)
             if gt is not None:
@@ -2223,7 +2286,8 @@ class TzintukimTab(QWidget):
                     if sent is not None else 0.0)
         if targets and deadline > time.time() + 5:
             self._start_callback_tracking(camp["guid"], targets, deadline,
-                                          seed_entries=entries)
+                                          seed_entries=entries,
+                                          since_iso=camp.get("sent_at") or "")
         elif deadline and time.time() - deadline > 600:
             # long past (10-min grace for the sender's own finalize) — close it
             returned = sum(1 for e in entries if e.get("ok"))
@@ -2243,6 +2307,7 @@ class TzintukimTab(QWidget):
         camps = [c for c in db.get_tzintuk_campaigns(limit=5)
                  if c.get("status") != "scheduled"][:1]
         if not camps or camps[0].get("status") != "sending":
+            self._auto_refresh_answers()   # v3.02 — late survey answers
             return
         camp = camps[0]
         if (camp.get("name") or "").startswith("צינתוק קלאסי"):
@@ -2251,7 +2316,110 @@ class TzintukimTab(QWidget):
         if camp.get("campaign_id"):
             self._active_guid = camp["guid"]
             self._start_tracking(camp["campaign_id"],
-                                 int(camp.get("total") or 0))
+                                 int(camp.get("total") or 0),
+                                 camp.get("sent_at") or "")
+
+    # ── Survey answers (v3.02) ────────────────────────────────────────────────
+
+    @staticmethod
+    def _answers_html(counts, final: bool = False) -> str:
+        """Rich-text counters for the tracking strip:
+        '✓ מגיע 2 · ✗ לא מגיע 1 · ? לא יודע 0 · לא הגיבו 5' (the last part
+        only once the campaign is over)."""
+        labels = yemot.answer_labels()
+        c = counts or {k: 0 for k in yemot.ANSWER_KEYS}
+        parts = [f"<span style='color:{col}'>{mark} {labels[k]} {int(c.get(k, 0))}</span>"
+                 for k, (mark, col) in TzintukimTab._ANSWER_STYLE.items()]
+        if final and counts is not None:
+            parts.append(f"<span style='color:#6b7280'>לא הגיבו {int(c.get('', 0))}</span>")
+        return " · ".join(parts)
+
+    def _answer_campaigns(self) -> list:
+        """Finished campaigns from the last 14 days — the ones whose survey
+        answers can still change."""
+        out = []
+        for c in db.get_tzintuk_campaigns(limit=30):
+            if c.get("status") != "done":
+                continue
+            sent = timefmt.to_israel(c.get("sent_at") or "")
+            if sent is None or time.time() - sent.timestamp() > 14 * 86400:
+                continue
+            out.append(c)
+        return out
+
+    def _refresh_answers(self):
+        """Button: read the survey extension's answers now and refresh the
+        table, the history and the distribution list."""
+        if not self._require_config():
+            return
+        if not self._answer_campaigns():
+            QMessageBox.information(self, "צינתוקים",
+                                    "אין צינתוק מהשבועיים האחרונים לעדכן.")
+            return
+        try:
+            rows = self._run_blocking(yemot.fetch_survey_rows, "קורא את התשובות מהקו…")
+        except Exception as e:
+            QMessageBox.warning(self, "צינתוקים", f"קריאת התשובות נכשלה:\n{e}")
+            return
+        changed = self._apply_answer_rows(rows)
+        QMessageBox.information(
+            self, "צינתוקים",
+            "התשובות עודכנו ✓" if changed else "אין תשובות חדשות מאז הפעם הקודמת.")
+
+    def _auto_refresh_answers(self):
+        """Background refresh (from refresh()/resume) — at most once per 10
+        minutes, only when nothing else is polling the server."""
+        if (self._worker is not None or self._cb_worker is not None
+                or getattr(self, "_ans_worker", None) is not None
+                or not yemot.is_configured()
+                or time.time() - getattr(self, "_ans_last", 0.0) < 600
+                or not self._answer_campaigns()):
+            return
+        self._ans_last = time.time()
+        self._ans_worker = _TaskWorker(yemot.fetch_survey_rows, self)
+
+        def _done(res):
+            self._ans_worker = None
+            if isinstance(res, list):
+                try:
+                    self._apply_answer_rows(res)
+                except Exception:
+                    pass
+        self._ans_worker.done.connect(_done)
+        self._ans_worker.start()
+
+    def _apply_answer_rows(self, rows) -> bool:
+        """Merge survey rows into every recent finished campaign; persist only
+        the ones that changed (each write is a sync-journal entry). Repaints
+        the loaded list when it belongs to the newest of them."""
+        changed_any = False
+        newest = None
+        for camp in self._answer_campaigns():
+            entries = yemot._report_entries(camp)
+            if not entries:
+                continue
+            entries, changed = yemot.merge_survey_answers(entries, rows, camp.get("sent_at") or "")
+            if changed:
+                db.update_tzintuk_campaign(
+                    camp["guid"], int(camp.get("delivered") or 0),
+                    int(camp.get("failed") or 0), "done",
+                    json.dumps(entries, ensure_ascii=False))
+                changed_any = True
+            if newest is None:
+                newest = (camp, entries)
+        if newest is not None and self._list_loaded:
+            camp, entries = newest
+            if (camp.get("dist_date") or "") == self._dist_date_iso():
+                self._last_entries = list(entries)
+                self._apply_results_to_table(entries, final=True)
+        self._refresh_history()
+        gt = getattr(self.main, "group_tab", None)
+        if gt is not None and changed_any:
+            try:
+                gt._populate()
+            except Exception:
+                pass
+        return changed_any
 
     # ── History ───────────────────────────────────────────────────────────────
 
@@ -2270,14 +2438,14 @@ class TzintukimTab(QWidget):
             self.hist.setItem(i, 1, QTableWidgetItem(f"{name} — {st}"))
             self.hist.setItem(i, 2, QTableWidgetItem(str(c.get("total") or 0)))
             self.hist.setItem(i, 3, QTableWidgetItem(str(c.get("delivered") or 0)))
-            conf = QTableWidgetItem(str(self._confirmed_count(c)))
-            conf.setForeground(QColor("#166534"))
-            self.hist.setItem(i, 4, conf)
+            ans = QTableWidgetItem(self._answers_text(c))
+            ans.setForeground(QColor("#166534"))
+            self.hist.setItem(i, 4, ans)
             self.hist.setItem(i, 5, QTableWidgetItem(str(c.get("failed") or 0)))
 
     def _export_history(self):
         """#67rdi — ייצוא כל היסטוריית הצינתוקים לאקסל, כולל סטטוס פר-מספר
-        (מי אישר הגעה בהקשת 7, מי רק קיבל ומי לא נענה)."""
+        (מה ענה בסקר — מגיע / לא מגיע / לא יודע / לא הגיב — מי רק קיבל ומי לא נענה)."""
         from utils.ui import reveal_in_folder
         from utils.excel_utils import export_tzintuk_history_to_excel
         camps = db.get_tzintuk_campaigns()
@@ -2303,14 +2471,14 @@ class TzintukimTab(QWidget):
             QMessageBox.critical(self, "שגיאה", str(e))
 
     @staticmethod
-    def _confirmed_count(camp: dict) -> int:
-        """How many pressed the confirm key — derived from the stored report
-        (no DB column; the report is synced so both computers agree)."""
-        try:
-            entries = json.loads(camp.get("report_json") or "[]")
-        except ValueError:
-            return 0
-        return sum(1 for e in entries or []
-                   if isinstance(e, dict)
-                   and (e.get("confirmed")
-                        or str(e.get("status") or "").lower() == "accepted"))
+    def _answers_text(camp: dict) -> str:
+        """'✓2 ✗1 ?0 · 5 לא הגיבו' — derived from the stored report (no DB
+        column; the report is synced so both computers agree). Old reports
+        (before the survey) show the legacy key-7 count."""
+        entries = yemot._report_entries(camp)
+        if not yemot.survey_checked(entries):
+            legacy = sum(1 for e in entries if e.get("confirmed")
+                         or str(e.get("status") or "").lower() == "accepted")
+            return f"✓{legacy}" if legacy else "—"
+        a = yemot.answer_counts(entries)
+        return f"✓{a['1']} ✗{a['2']} ?{a['3']} · {a['']} לא הגיבו"

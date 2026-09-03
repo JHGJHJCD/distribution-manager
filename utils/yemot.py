@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 import database as db
 from utils import timefmt
@@ -31,8 +31,20 @@ SET_PASSWORD = "yemot_password"
 SET_TEMPLATE = "yemot_template_id"
 SET_CALLER_ID = "yemot_caller_id"
 SET_TEST_PHONE = "yemot_test_phone"
-# Which template already got the REPEAT campaign type (arrival-confirm keys).
-SET_CONFIRM_CTX = "yemot_confirm_ctx"
+# Arrival survey (v3.01): the recipient calls the line back, dials SURVEY_EXT
+# from the main menu and answers ONE key — 1 coming / 2 not coming / 3 unsure.
+# The old "press 7 during the campaign message" path (yemotContext=REPEAT) is
+# gone: this line's server rejects REPEAT (verified live 2/9/2026), and a
+# classic tzintuk can't be answered anyway. Labels + the question text are
+# operator-editable settings (synced between the computers).
+SURVEY_EXT = "77"
+SURVEY_Q = "050"                        # the key-press question inside the extension
+SET_ANSWER_LABELS = "tzintuk_answer_labels"   # JSON {"1": "מגיע", "2": …, "3": …}
+SET_SURVEY_PROMPT = "tzintuk_survey_prompt"   # the question played on the extension
+ANSWER_KEYS = ("1", "2", "3")
+DEFAULT_ANSWER_LABELS = {"1": "מגיע", "2": "לא מגיע", "3": "לא יודע"}
+DEFAULT_SURVEY_PROMPT = ("אם אתם מגיעים לחלוקה הקישו 1. אם אינכם מגיעים הקישו 2. "
+                         "אם עדיין לא יודעים הקישו 3.")
 # Classic-tzintuk (ring-only) support: a second template configured for a short
 # unanswered ring; callers hear the message only when they dial back.
 SET_CLASSIC_TEMPLATE = "yemot_classic_template_id"
@@ -352,29 +364,7 @@ def ensure_template() -> str:
         if not tid:
             raise YemotError("יצירת תבנית קמפיין נכשלה — לא התקבל מזהה")
         db.set_setting(SET_TEMPLATE, tid)
-    _ensure_confirm_context(tid)
     return tid
-
-
-def _ensure_confirm_context(template_id: str):
-    """One-time per template: set the campaign type to REPEAT so key presses
-    work during the message (Yemot's built-in keys: 1 = replay, 7 = confirm →
-    the entry becomes entryStatus 'accepted' in the report). Non-fatal — a
-    failure never blocks sending. Verified 31/08/2026: the CURRENT server
-    rejects REPEAT via UpdateTemplate ("yemotContext value is invalid"; the
-    API enum is SIMPLE/MESSAGE/VOICEMAIL/BRIDGE) — that answer is remembered
-    as 'na:<id>' so we stop re-asking on every send; a network error is NOT
-    remembered and gets retried."""
-    flag = (db.get_setting(SET_CONFIRM_CTX) or "").strip()
-    if flag in (str(template_id), f"na:{template_id}"):
-        return
-    try:
-        _call("UpdateTemplate", {"templateId": template_id,
-                                 "yemotContext": "REPEAT"}, post=True)
-        db.set_setting(SET_CONFIRM_CTX, str(template_id))
-    except YemotError as e:
-        if e.code != -1:
-            db.set_setting(SET_CONFIRM_CTX, f"na:{template_id}")
 
 
 def ensure_classic_template() -> str:
@@ -564,7 +554,6 @@ def run_campaign(phones: dict, template_id: str | None = None,
 # during a tracking window after the send; there is nothing to fetch later.
 
 CLASSIC_TRACK_SECONDS = 30 * 60      # default watch window after a classic send
-CONFIRM_EXT = "7"                    # pressing 7 routes the caller to /7
 
 
 def get_incoming_calls() -> list:
@@ -589,7 +578,9 @@ class CallbackTracker:
     """Pure accumulator (no Qt/HTTP): feed it get_incoming_calls() snapshots
     and it remembers, per target number, whether the person called the line
     back after the classic tzintuk, how long the call lasted, and whether they
-    reached extension 7 (arrival confirmation)."""
+    reached the survey extension. The survey ANSWER itself (1/2/3) is not
+    known from the live call — merge_survey_answers() adds it from the
+    extension's data file."""
 
     def __init__(self, targets: dict):
         # {'0501234567': 'שם', …} — the numbers the classic tzintuk rang.
@@ -599,7 +590,7 @@ class CallbackTracker:
     @staticmethod
     def _is_confirm_path(path: str) -> bool:
         p = (path or "").strip("/")
-        return p == CONFIRM_EXT or p.startswith(CONFIRM_EXT + "/")
+        return p == SURVEY_EXT or p.startswith(SURVEY_EXT + "/")
 
     def seed(self, entries: list):
         """Restore previous results (resume after the app was closed
@@ -609,12 +600,16 @@ class CallbackTracker:
                 continue
             p = normalize_phone(e.get("phone"))
             status = str(e.get("status") or "").lower()
-            if p in self.targets and (e.get("ok") or e.get("confirmed")
+            if p in self.targets and (e.get("ok") or e.get("survey_reached")
+                                      or e.get("confirmed")
                                       or status in ("callback", "accepted")):
                 self.state[p] = {
                     "returned_at": e.get("returned_at") or "",
                     "duration": float(e.get("duration") or 0),
-                    "confirmed": bool(e.get("confirmed") or status == "accepted"),
+                    # 'confirmed' here = reached the survey extension (legacy
+                    # reports: pressed 7 / 'accepted')
+                    "confirmed": bool(e.get("survey_reached") or e.get("confirmed")
+                                      or status == "accepted"),
                 }
 
     def update(self, live_calls: list, now_iso: str = "") -> bool:
@@ -645,16 +640,18 @@ class CallbackTracker:
 
     def entries(self) -> list:
         """report_json-shaped rows — same keys the regular campaign report
-        uses, so history / Excel export / confirmed_phones all work as-is.
-        'callback' = returned and heard; 'accepted' = also pressed 7;
-        'no_callback' has ok=failed=False so answer_stats ignores it."""
+        uses, so history / Excel export / answers_for_date all work as-is.
+        'callback' = returned and heard ('survey_reached' = also entered the
+        survey extension — the answer itself comes from
+        merge_survey_answers); 'no_callback' has ok=failed=False so
+        answer_stats ignores it."""
         out = []
         for p, name in self.targets.items():
             s = self.state.get(p)
-            status = ("accepted" if s and s["confirmed"]
-                      else "callback" if s else "no_callback")
-            out.append({"phone": p, "name": name, "status": status,
-                        "ok": bool(s), "confirmed": bool(s and s["confirmed"]),
+            out.append({"phone": p, "name": name,
+                        "status": "callback" if s else "no_callback",
+                        "ok": bool(s), "confirmed": False,
+                        "survey_reached": bool(s and s["confirmed"]),
                         "failed": False,
                         "duration": round(s["duration"], 1) if s else 0,
                         "returned_at": (s or {}).get("returned_at") or ""})
@@ -666,16 +663,22 @@ class CallbackTracker:
 MESSAGES_EXT = "1"          # שלוחת ההודעות המרכזית בקו (הכרעת המשתמש, #kx6wd)
 
 
-def _download_template_message(template_id: str) -> bytes:
-    """The template's current recording, as bytes (telephony WAV)."""
-    query = urllib.parse.urlencode({"token": _token(),
-                                    "path": f"tpl:{template_id}"})
+def _download(path: str) -> bytes:
+    """Raw DownloadFile of any line path (``tpl:<id>`` / ``ivr2:/…``) — the
+    answer is the file's bytes; a JSON body (starts with ``{``) means the
+    server answered with an error/empty instead of a file."""
+    query = urllib.parse.urlencode({"token": _token(), "path": path})
     try:
-        content = _http(f"{BASE_URL}/DownloadFile?{query}")
+        return _http(f"{BASE_URL}/DownloadFile?{query}")
     except YemotError as e:
         if e.code != -1:
             raise
-        content = _http(f"{ALT_URL}/DownloadFile?{query}")
+        return _http(f"{ALT_URL}/DownloadFile?{query}")
+
+
+def _download_template_message(template_id: str) -> bytes:
+    """The template's current recording, as bytes (telephony WAV)."""
+    content = _download(f"tpl:{template_id}")
     if not content or content[:1] == b"{":
         raise YemotError("להודעת הצינתוק אין הקלטה בשרת — העלה קודם הקלטה")
     return content
@@ -831,24 +834,190 @@ def get_campaign_status(campaign_id: str) -> dict:
             "entries": entries, "campaign_status": status_word}
 
 
+# ─── Arrival survey (v3.01) — the answers live on extension 77 ────────────────
+# The extension is a Yemot "recording_and_entering_data" module with ONE key
+# question (file 050). Every completed entry is appended to ApprovalAll.ymgr in
+# the extension folder — one line per call, '%'-separated 'key#value' pairs
+# (verified live on this line, 2/9/2026):
+#   Status#OK%Folder#77%DID#…%Phone#0501234567%Date#02/09/2026%Time#19:40:12%…%P050#1
+# Times are Israel local time; the app keeps everything else in UTC.
+
+_YMGR_TS = "%d/%m/%Y %H:%M:%S"
+
+
+def answer_labels() -> dict:
+    """{'1': 'מגיע', '2': 'לא מגיע', '3': 'לא יודע'} — operator overrides from
+    the synced setting merged over the defaults (blank override = default)."""
+    out = dict(DEFAULT_ANSWER_LABELS)
+    try:
+        data = json.loads(db.get_setting(SET_ANSWER_LABELS) or "{}")
+    except ValueError:
+        data = {}
+    if isinstance(data, dict):
+        for k in ANSWER_KEYS:
+            v = str(data.get(k) or "").strip()
+            if v:
+                out[k] = v
+    return out
+
+
+def answer_label(digit) -> str:
+    return answer_labels().get(str(digit or ""), "")
+
+
+def survey_prompt_text() -> str:
+    return (db.get_setting(SET_SURVEY_PROMPT) or "").strip() or DEFAULT_SURVEY_PROMPT
+
+
+def upload_survey_prompt(text: str | None = None) -> str:
+    """Write the question text the line reads out on the survey extension
+    (file 050.tts — Yemot's TTS prompt). Returns the server path written."""
+    text = (survey_prompt_text() if text is None else str(text)).strip()
+    if not text:
+        raise YemotError("טקסט השאלה ריק")
+    what = f"ivr2:/{SURVEY_EXT}/{SURVEY_Q}.tts"
+    try:
+        _call("UploadTextFile", {"what": what, "contents": text}, post=True)
+    except YemotError as e:
+        if e.code == -1:
+            raise
+        _upload_multipart(what, text.encode("utf-8"), convert="0")
+    return what
+
+
+def _ymgr_kv(line: str) -> dict:
+    """'Status#OK%Folder#77%Phone#05…%P050#1' → {'Status': 'OK', …}."""
+    out = {}
+    for part in line.split("%"):
+        if "#" in part:
+            k, v = part.split("#", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+
+def parse_approval_rows(text: str) -> list:
+    """ApprovalAll.ymgr text → [{'phone', 'at' (aware UTC datetime), 'answer'}]
+    in file order. Lines without a phone / answer / parsable time are skipped."""
+    zone = timefmt._israel_zone()
+    rows = []
+    for raw in (text or "").splitlines():
+        kv = _ymgr_kv(raw.strip())
+        phone = normalize_phone(kv.get("Phone"))
+        answer = (kv.get("P" + SURVEY_Q) or "").strip()
+        if not phone or not answer:
+            continue
+        try:
+            local = datetime.strptime(f"{kv.get('Date', '')} {kv.get('Time', '')}", _YMGR_TS)
+        except ValueError:
+            continue
+        at = local.replace(tzinfo=zone) if zone is not None else local.astimezone()
+        rows.append({"phone": phone, "at": at.astimezone(timezone.utc), "answer": answer})
+    return rows
+
+
+def fetch_survey_rows() -> list:
+    """Download + parse the survey data file. No file yet (the server answers
+    JSON instead of bytes, or nothing) → []."""
+    raw = _download(f"ivr2:/{SURVEY_EXT}/ApprovalAll.ymgr")
+    if not raw or raw[:1] == b"{":
+        return []
+    return parse_approval_rows(raw.decode("utf-8", errors="replace"))
+
+
+def _parse_since(since_iso):
+    if not since_iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(since_iso)
+    except (TypeError, ValueError):
+        return None
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def merge_survey_answers(entries: list, rows: list, since_iso: str = "") -> tuple:
+    """Stamp each report entry with the person's LATEST survey answer given
+    after `since_iso` (the campaign's send time — last week's answers must not
+    leak into this week): entry['answer'] = '1'/'2'/'3', or '' = the survey was
+    checked and the person did not answer ("לא הגיב"); entry['answer_at'] =
+    UTC iso. Returns (entries, changed)."""
+    since = _parse_since(since_iso)
+    latest = {}
+    for r in rows or []:
+        if since is not None and r["at"] < since:
+            continue
+        cur = latest.get(r["phone"])
+        if cur is None or r["at"] >= cur[0]:
+            latest[r["phone"]] = (r["at"], r["answer"])
+    changed = False
+    for e in entries or []:
+        if not isinstance(e, dict):
+            continue
+        hit = latest.get(normalize_phone(e.get("phone")))
+        answer = hit[1] if hit else ""
+        at = hit[0].isoformat() if hit else ""
+        if "answer" not in e or e.get("answer") != answer or (e.get("answer_at") or "") != at:
+            changed = True
+        e["answer"] = answer
+        e["answer_at"] = at
+    return entries, changed
+
+
+def survey_checked(entries) -> bool:
+    """True once merge_survey_answers ran on these entries (the 'answer' key
+    exists) — only then does 'no answer' mean 'did not respond'."""
+    return any(isinstance(e, dict) and "answer" in e for e in entries or [])
+
+
+def answer_counts(entries) -> dict:
+    """{'1': n, '2': n, '3': n, '': n} — '' = checked, did not answer."""
+    out = {k: 0 for k in ANSWER_KEYS}
+    out[""] = 0
+    for e in entries or []:
+        if not isinstance(e, dict) or "answer" not in e:
+            continue
+        a = str(e.get("answer") or "")
+        if a in out:
+            out[a] += 1
+    return out
+
+
+def _report_entries(camp: dict) -> list:
+    try:
+        entries = json.loads(camp.get("report_json") or "[]")
+    except ValueError:
+        return []
+    return [e for e in entries or [] if isinstance(e, dict)]
+
+
+def answers_for_date(dist_date: str) -> dict:
+    """{phone: '1'/'2'/'3'} for the distribution date, from the synced campaign
+    reports — the newest campaign's answer wins when a number was rung twice."""
+    out = {}
+    if not dist_date:
+        return out
+    camps = [c for c in db.get_tzintuk_campaigns()
+             if (c.get("dist_date") or "") == dist_date]
+    for camp in reversed(camps):          # get_tzintuk_campaigns is newest-first
+        for e in _report_entries(camp):
+            p = normalize_phone(e.get("phone"))
+            a = str(e.get("answer") or "")
+            if p and a:
+                out[p] = a
+    return out
+
+
 def confirmed_phones(dist_date: str) -> set:
-    """Phones that pressed the confirm key (entryStatus 'accepted') in any
-    campaign sent for this distribution date — parsed from the reports stored
-    in tzintuk_campaigns.report_json (synced, so both computers see them)."""
+    """Phones that said "coming" (survey answer 1) in any campaign of this
+    distribution date — plus the legacy key-7 'accepted' status of old reports."""
     out = set()
     if not dist_date:
         return out
     for camp in db.get_tzintuk_campaigns():
         if (camp.get("dist_date") or "") != dist_date:
             continue
-        try:
-            entries = json.loads(camp.get("report_json") or "[]")
-        except ValueError:
-            continue
-        for e in entries or []:
-            if not isinstance(e, dict):
-                continue
-            if e.get("confirmed") or str(e.get("status") or "").lower() == "accepted":
+        for e in _report_entries(camp):
+            if (str(e.get("answer") or "") == "1" or e.get("confirmed")
+                    or str(e.get("status") or "").lower() == "accepted"):
                 p = normalize_phone(e.get("phone"))
                 if p:
                     out.add(p)

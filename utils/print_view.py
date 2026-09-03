@@ -72,7 +72,7 @@ def _th(txt: str, cls: str = "") -> str:
 
 
 _THEAD = ("<thead><tr>"
-          + _th("אזור") + _th("טלפון / ים") + _th("אישר הגעה", "chk") + _th("שם מלא")
+          + _th("אזור") + _th("טלפון / ים") + _th("תשובה", "chk") + _th("שם מלא")
           + _th("מס'", "num") + _th("✓ סימון", "chk")
           + "</tr></thead>")
 
@@ -97,7 +97,7 @@ def _table_rows(rows: List[Dict]) -> str:
             f"<tr>"
             f"<td>{_esc(rec.get('area', ''))}</td>"
             f"<td>{_esc(phones)}</td>"
-            f"<td class='chk'>{'✓' if rec.get('_confirmed') else ''}</td>"
+            f"<td class='chk'>{_esc(rec.get('_answer') or ('✓' if rec.get('_confirmed') else ''))}</td>"
             f"<td><b>{_esc(rec.get('full_name', ''))}</b></td>"
             f"<td class='num'>{i}</td>"
             f"<td class='chk'>☐</td>"

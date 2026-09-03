@@ -61,7 +61,7 @@ tz.sched_frame.setVisible(True)
 tz.prog_frame.setVisible(True)
 tz.lbl_prog.setText("שולח בזמן אמת… אפשר להמשיך לעבוד, אל תסגור את התוכנה")
 tz.progress.setRange(0, 5); tz.progress.setValue(3)
-tz.lbl_conf.setText("✓ אישרו הגעה 1"); tz.lbl_done.setText("הצליחו 3")
+tz.lbl_ans.setText(tz._answers_html({"1": 1, "2": 0, "3": 0, "": 0})); tz.lbl_done.setText("הצליחו 3")
 tz.lbl_fail.setText("נכשלו 0"); tz.lbl_wait.setText("ממתינים 2")
 for _ in range(6):
     app.processEvents()

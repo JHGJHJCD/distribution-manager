@@ -2197,13 +2197,18 @@ class GroupUpdateTab(QWidget):
         # "לא הגיע" at/over the operator-set threshold (0 disables).
         thr = db.get_no_show_threshold()
         streaks = db.no_show_streaks([r.get("id") for r in rows]) if thr else {}
-        # Arrival confirmations (v2.85): who pressed the confirm key in this
-        # week's tzintuk call — parsed from the synced campaign reports.
+        # Arrival survey (v3.02): what each family answered on the line's
+        # survey extension after this week's tzintuk (1 coming / 2 not coming /
+        # 3 unsure) — parsed from the synced campaign reports.
         try:
             from utils import yemot
-            confirmed_ph = yemot.confirmed_phones(db.next_wednesday().isoformat())
+            answers = yemot.answers_for_date(db.next_wednesday().isoformat())
+            labels = yemot.answer_labels() if answers else {}
         except Exception:
-            yemot, confirmed_ph = None, set()
+            yemot, answers, labels = None, {}, {}
+        answer_style = {"1": ("✓", "#dcfce7", "#166534"),
+                        "2": ("✗", "#fee2e2", "#b91c1c"),
+                        "3": ("?", "#fef3c7", "#b45309")}
         self.table.blockSignals(True)
         self.table.clearContents()
         self.table.setRowCount(0)
@@ -2245,13 +2250,18 @@ class GroupUpdateTab(QWidget):
                         item.setForeground(QColor("#b91c1c"))
                         item.setToolTip(f"לא הגיע לקחת {streak} פעמים ברצף — "
                                         "כדאי לבדוק מולו. הסף ניתן לשינוי בהגדרות.")
-                    elif confirmed_ph and any(
-                            yemot.normalize_phone(rec.get(f)) in confirmed_ph
-                            for f in ("phone1", "phone2", "phone3")):
-                        item.setText(f"{v}   ✓ אישר הגעה")
-                        item.setBackground(QColor("#dcfce7"))
-                        item.setForeground(QColor("#166534"))
-                        item.setToolTip("אישר הגעה בהקשה על 7 בצינתוק של השבוע")
+                    elif answers:
+                        ans = next((answers[p] for p in (
+                            yemot.normalize_phone(rec.get(f))
+                            for f in ("phone1", "phone2", "phone3"))
+                            if p in answers), "")
+                        if ans in answer_style:
+                            mark, abg, afg = answer_style[ans]
+                            item.setText(f"{v}   {mark} {labels.get(ans, '')}")
+                            item.setBackground(QColor(abg))
+                            item.setForeground(QColor(afg))
+                            item.setToolTip("התשובה שהקיש בסקר הטלפוני (שלוחה "
+                                            f"{yemot.SURVEY_EXT}) אחרי הצינתוק של השבוע")
                 self.table.setItem(r, col, item)
 
         self.table.blockSignals(False)
@@ -2532,17 +2542,22 @@ class GroupUpdateTab(QWidget):
         try:
             from utils import yemot
             confirmed_ph = yemot.confirmed_phones(self.date_edit.get_iso())
+            answers = yemot.answers_for_date(self.date_edit.get_iso())
+            labels = yemot.answer_labels() if answers else {}
         except Exception:
-            yemot, confirmed_ph = None, set()
+            yemot, confirmed_ph, answers, labels = None, set(), {}, {}
         rows = []
         for rec in self._rows_data:
             rid = rec.get("id")
             r = dict(rec)
             r["_reserve"] = bool(rec.get("_reserve") or rid in self._reserve_ids)
             r["notes"] = self._row_notes.get(rid, "")
-            r["_confirmed"] = bool(confirmed_ph and any(
-                yemot.normalize_phone(rec.get(f)) in confirmed_ph
-                for f in ("phone1", "phone2", "phone3")))
+            phones = [yemot.normalize_phone(rec.get(f))
+                      for f in ("phone1", "phone2", "phone3")] if yemot else []
+            r["_confirmed"] = bool(confirmed_ph and any(p in confirmed_ph for p in phones))
+            # v3.02 — the survey answer label (מגיע / לא מגיע / לא יודע) for print
+            r["_answer"] = next((labels.get(answers[p], "") for p in phones
+                                 if p in answers), "")
             rows.append(r)
         return rows if rows else list(self._rows_data)
 

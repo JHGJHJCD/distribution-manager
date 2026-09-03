@@ -130,9 +130,8 @@ tid = yemot.ensure_template()
 ok("ensure_template יוצר ושומר", tid == "1117319"
    and db.get_setting(yemot.SET_TEMPLATE) == "1117319")
 upd = [c for c in calls if c[0] == "UpdateTemplate"]
-ok("סוג הקמפיין הוגדר REPEAT (מקשי אישור הגעה)",
-   len(upd) == 1 and upd[0][1].get("yemotContext") == "REPEAT"
-   and db.get_setting(yemot.SET_CONFIRM_CTX) == "1117319")
+ok("v3.02: אין יותר ניסיון REPEAT (השרת דוחה; האישור עבר לסקר בשלוחה 77)",
+   len(upd) == 0)
 n_before = len(calls)
 ok("ensure_template לא פונה שוב לשרת",
    yemot.ensure_template() == "1117319" and len(calls) == n_before)
@@ -601,14 +600,15 @@ ok("מתקשר-חוזר חדש = שינוי", ch1 and tr.counts() == (1, 0))
 ch2 = tr.update([{"phone": "0521111222", "duration": 11.0, "path": "/"}])
 ok("רק גדילת משך שיחה ≠ שינוי מהותי", not ch2
    and tr.state["0521111222"]["duration"] == 11.0)
-ch3 = tr.update([{"phone": "0521111222", "duration": 14.0, "path": "/7"}])
-ok("מעבר לשלוחה 7 = אישור הגעה", ch3 and tr.counts() == (1, 1))
+ch3 = tr.update([{"phone": "0521111222", "duration": 14.0, "path": "/77"}])
+ok("מעבר לשלוחת הסקר 77 = נכנס לסקר", ch3 and tr.counts() == (1, 1))
 tr.update([{"phone": "0509999999", "duration": 5.0, "path": "/"}])
 ok("מספר שאינו ברשימה לא נספר", tr.counts() == (1, 1))
 ents = {e["phone"]: e for e in tr.entries()}
-ok("סטטוסים בדוח: accepted / no_callback",
-   ents["0521111222"]["status"] == "accepted"
-   and ents["0521111222"]["confirmed"] and ents["0521111222"]["ok"]
+ok("סטטוסים בדוח: callback+survey_reached / no_callback (בלי 'accepted' מזויף)",
+   ents["0521111222"]["status"] == "callback"
+   and ents["0521111222"]["survey_reached"] and ents["0521111222"]["ok"]
+   and not ents["0521111222"]["confirmed"]
    and ents["0533334444"]["status"] == "no_callback"
    and not ents["0533334444"]["failed"], str(ents))
 
@@ -618,9 +618,10 @@ ok("seed משחזר מצב אחרי סגירת התוכנה", tr2.counts() == (1
 tr2.update([{"phone": "0533334444", "duration": 2.0, "path": "/"}])
 ok("אחרי seed ממשיכים לצבור", tr2.counts() == (2, 1)
    and {e["phone"]: e["status"] for e in tr2.entries()}["0533334444"] == "callback")
-ok("נתיב 7/תת-שלוחה נחשב אישור; 70 לא",
-   yemot.CallbackTracker._is_confirm_path("/7/1")
-   and not yemot.CallbackTracker._is_confirm_path("/70"))
+ok("נתיב 77/תת-שלוחה נחשב כניסה לסקר; 770 ו-7 לא",
+   yemot.CallbackTracker._is_confirm_path("/77/1")
+   and not yemot.CallbackTracker._is_confirm_path("/770")
+   and not yemot.CallbackTracker._is_confirm_path("/7"))
 
 # ── 9. v2.97 — תיקוני סקירה ────────────────────────────────────────────────
 print("— v2.97: רשימה עצמאית, תוצאות מנורמלות, ביטול תזמון מסונכרן —")
@@ -677,6 +678,103 @@ with db.get_connection() as conn:
                                  "report_json": ""})
 ok("רשומה ישנה עם חותמת עתידית מקבלת עדכון",
    [c for c in db.get_tzintuk_campaigns() if c["guid"] == g_s][0]["status"] == "canceled")
+
+# ── 12. סקר אישור הגעה (v3.02) — שלוחה 77: 1 מגיע / 2 לא מגיע / 3 לא יודע ──
+print("— סקר אישור הגעה —")
+use_machine(dir_a)
+yemot._TRANSPORT = fake_transport
+_L = ("Status#OK%Folder#77%DID#0795378810%IncomingDID#048691834%Phone#{p}%Date#{d}"
+      "%Time#{t}%HebrewDate#י׳ אלול%var#Folder-77%Booking#{b}%Data#%P050#{a}")
+ymgr = "\r\n".join([
+    _L.format(p="0501234567", d="02/09/2026", t="19:40:12", b=1001, a="2"),
+    _L.format(p="972501234567", d="02/09/2026", t="20:05:00", b=1002, a="1"),   # שינה דעתו, פורמט 972
+    _L.format(p="0529999999", d="26/08/2026", t="10:00:00", b=1003, a="1"),     # שבוע שעבר
+    _L.format(p="0521111222", d="02/09/2026", t="21:00:00", b=1004, a="3"),
+    "Status#OK%Folder#77%Phone#0500000000%Date#02/09/2026%Time#21:00:00%Data#",  # בלי תשובה
+    "Status#OK%Folder#77%Phone#0500000001%Date#bad%Time#x%P050#1",               # תאריך שבור
+    "",
+])
+rows = yemot.parse_approval_rows(ymgr)
+ok("פרסר: 4 שורות תקינות (בלי תשובה/תאריך שבור נזרקות)", len(rows) == 4, str(len(rows)))
+ok("פרסר: 972 מנורמל ל-05", rows[1]["phone"] == "0501234567")
+ok("פרסר: שעון ישראל → UTC (19:40 IDT = 16:40Z)",
+   rows[0]["at"].isoformat() == "2026-09-02T16:40:12+00:00", rows[0]["at"].isoformat())
+ok("פרסר: התשובה נשמרת כספרה", [r["answer"] for r in rows] == ["2", "1", "1", "3"])
+
+entries = [{"phone": "0501234567", "name": "כהן", "status": "done", "ok": True},
+           {"phone": "0529999999", "name": "לוי", "status": "done", "ok": True},
+           {"phone": "0521111222", "name": "מזרחי", "status": "no_answer", "failed": True},
+           {"phone": "0538888888", "name": "שקט", "status": "done", "ok": True}]
+sent = "2026-09-02T15:00:00+00:00"          # הצינתוק יצא היום 18:00 ישראל
+entries, changed = yemot.merge_survey_answers(entries, rows, sent)
+by = {e["phone"]: e for e in entries}
+ok("merge: התשובה האחרונה גוברת (2 ואז 1 → 1)", by["0501234567"]["answer"] == "1")
+ok("merge: תשובה משבוע שעבר לא נספרת", by["0529999999"]["answer"] == "")
+ok("merge: לא-נענה שהקיש 3 בהתקשרות חוזרת", by["0521111222"]["answer"] == "3")
+ok("merge: מי שלא הקיש = מפתח answer ריק (לא הגיב)",
+   by["0538888888"]["answer"] == "" and "answer_at" in by["0538888888"])
+ok("merge: changed בפעם הראשונה", changed)
+_, changed2 = yemot.merge_survey_answers(entries, rows, sent)
+ok("merge: אותם נתונים שוב → changed=False", not changed2)
+ok("survey_checked אחרי merge", yemot.survey_checked(entries) and not yemot.survey_checked([{"phone": "1"}]))
+cnt = yemot.answer_counts(entries)
+ok("answer_counts", cnt == {"1": 1, "2": 0, "3": 1, "": 2}, str(cnt))
+
+# תוויות ניתנות לעריכה + ברירות מחדל
+ok("תוויות ברירת מחדל", yemot.answer_labels() == {"1": "מגיע", "2": "לא מגיע", "3": "לא יודע"})
+db.set_setting(yemot.SET_ANSWER_LABELS, json.dumps({"2": "לא מגיע השבוע", "3": ""}))
+ok("דריסת תווית + ריק=ברירת מחדל",
+   yemot.answer_labels() == {"1": "מגיע", "2": "לא מגיע השבוע", "3": "לא יודע"})
+ok("answer_label", yemot.answer_label("2") == "לא מגיע השבוע" and yemot.answer_label("9") == "")
+db.set_setting(yemot.SET_ANSWER_LABELS, "")
+ok("טקסט השאלה — ברירת מחדל", yemot.survey_prompt_text() == yemot.DEFAULT_SURVEY_PROMPT)
+db.set_setting(yemot.SET_SURVEY_PROMPT, "  מגיעים? 1 כן 2 לא  ")
+ok("טקסט השאלה — מההגדרה", yemot.survey_prompt_text() == "מגיעים? 1 כן 2 לא")
+calls.clear()
+what = yemot.upload_survey_prompt()
+up = [p for c, p in calls if c == "UploadTextFile"]
+ok("upload_survey_prompt → UploadTextFile לשלוחה 77", what == "ivr2:/77/050.tts" and up
+   and up[0].get("what") == "ivr2:/77/050.tts" and up[0].get("contents") == "מגיעים? 1 כן 2 לא",
+   str(up[:1]))
+
+# הורדת קובץ התשובות: בייטים → שורות; JSON (אין קובץ) → []
+def survey_transport(url, data):
+    if "DownloadFile" in url:
+        q = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(url).query).items()}
+        calls.append(("DownloadFile", q))
+        return ymgr.encode("utf-8") if q.get("path") == "ivr2:/77/ApprovalAll.ymgr" else b'{"responseStatus":"ERROR"}'
+    return fake_transport(url, data)
+yemot._TRANSPORT = survey_transport
+calls.clear()
+fetched = yemot.fetch_survey_rows()
+ok("fetch_survey_rows קורא מ-ivr2:/77/ApprovalAll.ymgr", len(fetched) == 4
+   and calls and calls[0][1].get("path") == "ivr2:/77/ApprovalAll.ymgr")
+yemot.SURVEY_EXT = "78"
+ok("אין קובץ (תשובת JSON) → רשימה ריקה", yemot.fetch_survey_rows() == [])
+yemot.SURVEY_EXT = "77"
+yemot._TRANSPORT = fake_transport
+
+# תשובות לפי תאריך חלוקה מהדוחות השמורים + סנכרון בין 2 מחשבים
+g1 = db.add_tzintuk_campaign("ישן", "2026-09-09", "1", "c-old", 2, device="A")
+db.update_tzintuk_campaign(g1, 2, 0, "done", json.dumps(
+    [{"phone": "0501234567", "answer": "2", "answer_at": "2026-09-02T16:40:12+00:00"},
+     {"phone": "0547777777", "answer": "1", "answer_at": "2026-09-02T16:41:00+00:00"}]))
+g2 = db.add_tzintuk_campaign("חדש", "2026-09-09", "1", "c-new", 1, device="A")
+db.update_tzintuk_campaign(g2, 1, 0, "done", json.dumps(
+    [{"phone": "0501234567", "answer": "1", "answer_at": "2026-09-02T18:00:00+00:00"},
+     {"phone": "0509999999", "status": "accepted", "confirmed": True}]))
+ans = yemot.answers_for_date("2026-09-09")
+ok("answers_for_date — הקמפיין החדש גובר", ans.get("0501234567") == "1" and ans.get("0547777777") == "1")
+ok("answers_for_date — תאריך אחר ריק", yemot.answers_for_date("2026-09-16") == {})
+conf = yemot.confirmed_phones("2026-09-09")
+ok("confirmed_phones = תשובה 1 + accepted ישן",
+   conf == {"0501234567", "0547777777", "0509999999"}, str(conf))
+sync.run_sync()
+use_machine(dir_b)
+sync.run_sync()
+ok("התשובות מגיעות למחשב השני דרך הסנכרון",
+   yemot.answers_for_date("2026-09-09").get("0501234567") == "1")
+use_machine(dir_a)
 
 print()
 if fails:
