@@ -244,3 +244,11 @@ checking_units_mail=aaa@ccc.com
   קבלה ב-7" — כנראה שירות שמפעילים מול שירות הלקוחות של ימות. **מנהל חלוקה עבר לסקר בשלוחה 77** במקום.
 - `list_campaign_templates`/`get_campaign_template_details` (MCP) לא מחזירים `originateTimeout` — רק
   `maxDialAttempts`/`yemotContext`/`redialPolicy`.
+
+## נלמד חי 3/9/2026 — שדות פר-רשומה ב-GetCampaignStatus
+`GetCampaignStatus&entries=all` מחזיר לכל רשומה, מעבר ל-`phone`/`entryStatus`:
+`startTime` ("2026-09-03 14:50:43", **שעון ישראל**), `duration` (**מילישניות** של השיחה),
+`bridgedDuration`, `redials`, `currentPrice` (יחידות). כלומר יש שעת-חיוג אמיתית לכל
+מספר בנפרד (רלוונטי כשיש redials או כשהקמפיין מדורג לפי `maxActiveChannels`).
+ב-`utils/yemot.py` (v3.09) זה נשמר כ-`at` (UTC iso) ו-`duration` (שניות) בתוך
+`report_json` ומזין את `answer_stats`.
