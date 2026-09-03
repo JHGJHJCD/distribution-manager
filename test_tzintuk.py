@@ -242,12 +242,34 @@ canned["RunCampaign"] = {"responseStatus": "OK", "campaignId": "c-x",
                          "entriesCount": 1}
 canned["ClearTemplateEntries"] = {"responseStatus": "OK"}
 canned["UploadPhoneList"] = {"responseStatus": "OK"}
+# 3/9/2026: אחרי שמירת הרשימה נמחק זיכרון "כבר שמע" של התבנית שלנו בשורש —
+# המספר בשורה campaign_message_to_play = המיקום ברשימת התבניות (1-based).
+_main_tid = yemot.ensure_template()
+canned["GetTemplates"] = {"responseStatus": "OK", "templates": [
+    {"templateId": 900001, "description": "קופה"},
+    {"templateId": 900002, "description": "נעליים"},
+    {"templateId": int(_main_tid), "description": yemot.TEMPLATE_DESCRIPTION}]}
+canned["FileAction"] = {"responseStatus": "OK", "success": True}
 n0 = len(calls)
 yemot.run_campaign({"0521234567": "כהן"}, store_list=True)
 seq = [c[0] for c in calls[n0:]]
 ok("store_list: ניקוי+העלאת רשימה לפני RunCampaign",
    seq[:2] == ["ClearTemplateEntries", "UploadPhoneList"]
    and seq[-1] == "RunCampaign", str(seq))
+fa = [c for c in calls[n0:] if c[0] == "FileAction"]
+ok("store_list: זיכרון ההשמעה של התבנית (מיקום 3) נמחק לפני החיוג",
+   len(fa) == 1 and fa[0][1].get("action") == "delete"
+   and fa[0][1].get("what") == "ivr2:/CampaignMessageAmountPlay-Template-3.ini"
+   and seq.index("FileAction") < seq.index("RunCampaign"), str(fa))
+ok("template_position: לא ברשימה = 0", yemot.template_position("123") == 0)
+canned["FileAction"] = {"responseStatus": "ERROR", "messageCode": 109,
+                        "message": "file not found"}
+n0 = len(calls)
+res_missing = yemot.run_campaign({"0521234567": "כהן"}, store_list=True)
+ok("קובץ זיכרון חסר (עוד אף אחד לא חזר) לא חוסם שליחה",
+   [c[0] for c in calls[n0:]][-1] == "RunCampaign" and res_missing.get("campaignId") == "c-x")
+canned["FileAction"] = {"responseStatus": "OK", "success": True}
+del canned["GetTemplates"]
 n0 = len(calls)
 yemot.run_campaign({"0521234567": "כהן"})
 ok("בלי store_list — אין נגיעה ברשימה",
@@ -315,6 +337,8 @@ yemot.run_campaign({"0521234567": "כהן"}, classic=True)
 seq = [c[0] for c in calls[n0:]]
 ok("קלאסי: יוצא דרך RunTzintuk ולא RunCampaign",
    seq[-1] == "RunTzintuk" and "RunCampaign" not in seq, str(seq))
+ok("קלאסי: הזיכרון של התבנית הראשית מתאפס לפני הצינתוק",
+   "FileAction" in seq and seq.index("FileAction") < seq.index("RunTzintuk"), str(seq))
 tz = calls[-1]
 ok("קלאסי: מספרים + זמן צלצול, בלי sayInfoOnAnswer (שלא יהיה מענה)",
    tz[1].get("phones") == "0521234567"
@@ -342,8 +366,8 @@ yemot._TRANSPORT = fake_transport
 n0 = len(calls)
 yemot.run_test("0501234567")
 seq = [c[0] for c in calls[n0:]]
-ok("בדיקה: המספר נוסף לרשימה בלי ניקוי (התקשרות חוזרת עובדת)",
-   seq == ["UploadPhoneList", "RunCampaign"], str(seq))
+ok("בדיקה: המספר נוסף לרשימה בלי ניקוי + איפוס זיכרון ההשמעה (התקשרות חוזרת עובדת)",
+   seq == ["UploadPhoneList", "GetTemplates", "FileAction", "RunCampaign"], str(seq))
 upl = [c for c in calls[n0:] if c[0] == "UploadPhoneList"][0]
 ok("בדיקה: עדכון בלי מחיקת הרשימה (UPDATE)",
    upl[1].get("updateType") == "UPDATE")

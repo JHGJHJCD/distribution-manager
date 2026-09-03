@@ -421,6 +421,40 @@ def add_template_entry(phone: str, name: str = "",
                               "updateType": "UPDATE"}, post=True)
 
 
+def template_position(template_id: str) -> int:
+    """1-based position of `template_id` in the line's template list — the
+    number the entry menu's campaign_message_to_play line refers to (verified
+    statistically on the live line 2/9/2026: 17 = 1430692). 0 = not found."""
+    data = _call("GetTemplates")
+    for i, t in enumerate(data.get("templates") or [], start=1):
+        if str(t.get("templateId") or "").strip() == str(template_id):
+            return i
+    return 0
+
+
+def reset_callback_memory(template_id: str | None = None) -> str:
+    """Forget who already heard this template's message when calling the line
+    back — so after EVERY send each recipient hears the current message once
+    (3/9/2026: a caller who heard last week's message stayed silent for the
+    whole `-1-6d` window). The line root keeps that memory per campaign in
+    ``CampaignMessageAmountPlay-Template-<N>.ini`` (needs
+    ``campaign_message_to_play_file_by_template=yes`` in the root ext.ini);
+    deleting only OUR file never touches the manager's own campaign entries.
+    Returns the deleted path ("" when the template is not in the list)."""
+    template_id = template_id or ensure_template()
+    pos = template_position(template_id)
+    if not pos:
+        return ""
+    what = f"ivr2:/CampaignMessageAmountPlay-Template-{pos}.ini"
+    try:
+        _call("FileAction", {"what": what, "action": "delete"}, post=True)
+    except YemotError as e:
+        if e.code == -1:
+            raise
+        # a missing file (nobody called back yet) is not a failure
+    return what
+
+
 def upload_message_wav(file_path: str, template_id: str | None = None) -> dict:
     """Attach a recording file to the campaign template (converted to the
     telephony WAV format server-side). The campaign-file path uses the
@@ -521,6 +555,10 @@ def run_campaign(phones: dict, template_id: str | None = None,
     if store_list or classic:
         try:
             set_template_entries(numbers, main_id)
+        except YemotError:
+            pass
+        try:
+            reset_callback_memory(main_id)   # everyone hears the NEW message once
         except YemotError:
             pass
     fallback = False
@@ -1095,6 +1133,7 @@ def run_test(phone: str) -> dict:
         raise YemotError("מספר הבדיקה אינו תקין")
     try:
         add_template_entry(p, "בדיקה")
+        reset_callback_memory()   # the tester hears the message on callback
     except YemotError:
         pass                      # best-effort — never blocks the test ring
     return run_campaign({p: "בדיקה"})
