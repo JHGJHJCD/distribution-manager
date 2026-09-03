@@ -264,6 +264,7 @@ ROOT_INI = ("type=menu\n; הערה של המנהל\nplay_campaign_message=yes\n"
 line_files = {"ivr2:/ext.ini": ROOT_INI, "ivr2:/M0000.wav": WELCOME_WAV,
               f"tpl:{_main_tid}": MSG_WAV}
 ext78 = {"exists": True, "dirs": [{"name": "1", "exists": True}], "files": []}
+listings = {"ivr2:/78": ext78}          # /78/menu נוצרת רק ע"י UploadFile
 uploads = []            # (path, bytes) של UploadFile
 
 
@@ -283,9 +284,10 @@ def line_transport(url, data):
             return json.dumps({"responseStatus": "OK", "dirs": [
                 {"name": n, "exists": True} for n in ("0", "1", "2", "77", "Log", "78")],
                 "files": []}).encode()
-        if params.get("path") == "ivr2:/78" and ext78["exists"]:
-            return json.dumps({"responseStatus": "OK", "dirs": ext78["dirs"],
-                               "files": ext78["files"]}).encode()
+        lst = listings.get(params.get("path"))
+        if lst and lst.get("exists", True):
+            return json.dumps({"responseStatus": "OK", "dirs": lst["dirs"],
+                               "files": lst["files"]}).encode()
         return json.dumps({"responseStatus": "ERROR", "messageCode": 0,
                            "message": "extension does not exist"}).encode()
     if command == "UploadTextFile" and data:
@@ -294,14 +296,19 @@ def line_transport(url, data):
     if command == "UploadFile" and data:
         m = re.search(rb'name="path"\r\n\r\n(.+?)\r\n', data)
         path = m.group(1).decode() if m else ""
-        body = data.split(b"\r\n\r\n", 5)[-1]
+        body = data.split(b"\r\n\r\n", 5)[-1].rsplit(b"\r\n--", 1)[0]
         uploads.append((path, body))
-        mm = re.fullmatch(r"ivr2:/78/(\w+)/ext\.ini", path)
-        if mm:
-            ext78["dirs"].append({"name": mm.group(1), "exists": True})
-            line_files[path] = body.split(b"\r\n--")[0].decode("utf-8", "replace")
-        elif path == "ivr2:/78/M0000.wav":
-            ext78["files"].append({"name": "M0000.wav"})
+        mm = re.fullmatch(r"(ivr2:/78(?:/menu)?)/(\w+)/ext\.ini", path)
+        if path == "ivr2:/78/ext.ini":
+            line_files[path] = body.decode("utf-8", "replace")
+        elif path == "ivr2:/78/menu/ext.ini":
+            listings.setdefault("ivr2:/78/menu", {"dirs": [], "files": []})
+            line_files[path] = body.decode("utf-8", "replace")
+        elif mm:
+            listings[mm.group(1)]["dirs"].append({"name": mm.group(2), "exists": True})
+            line_files[path] = body.decode("utf-8", "replace")
+        elif path.endswith("/M0000.wav"):
+            listings[path.rsplit("/", 1)[0]]["files"].append({"name": "M0000.wav"})
     return fake_transport(url, data)
 
 
@@ -328,22 +335,40 @@ ok("השורש: שאר השורות (הערות, ניתוב DID, go_to_folder) �
    and root_now.get("check_did_and_go_to_folder") == "yes"
    and root_now.get("go_to_folder") == "/2"
    and line_files["ivr2:/ext.ini"].startswith("type=menu\n; הערה"))
-linked = sorted(p.split("/")[2] for p, _ in uploads if p.endswith("/ext.ini"))
+linked = sorted(p.split("/")[2] for p, _ in uploads
+                if re.fullmatch(r"ivr2:/78/\d+/ext\.ini", p))
 ok("שלוחה 78: קישור לכל שלוחת-ספרות בשורש שחסרה (לא 1 שכבר קיימת, לא Log, לא 78 עצמה)",
    linked == ["0", "2", "77"], str(linked))
 ok("הקישור מפנה לשלוחה המקבילה בשורש",
    "go_to_folder=/77" in line_files.get("ivr2:/78/77/ext.ini", ""))
+sub_linked = sorted(p.split("/")[3] for p, _ in uploads
+                    if re.fullmatch(r"ivr2:/78/menu/\w+/ext\.ini", p))
+ok("78/menu (מי שכבר שמע): נוצרה עם כל קישורי המקשים ובלי אקסס-פילטר",
+   sub_linked == ["0", "1", "2", "77"]
+   and "check_access_filter" not in line_files.get("ivr2:/78/menu/ext.ini", ""),
+   str(sub_linked))
+ok("78: אקסס-פילטר — פעם אחת ל-30 יום, מי שכבר שמע → 78/menu",
+   "access_filter_1=g.*.*.*.*.*.30d.1.30d" in line_files.get("ivr2:/78/ext.ini", "")
+   and "access_filter_no_goto=/78/menu" in line_files.get("ivr2:/78/ext.ini", ""))
 msg_up = [b for p, b in uploads if p == "ivr2:/78/M0000.wav"]
-ok("שלוחה 78: קובץ הפתיחה = ההודעה + פתיח התפריט הראשי (ארוך משניהם)",
-   len(msg_up) == 1 and len(msg_up[0]) > len(MSG_WAV) + len(WELCOME_WAV) - 100)
+sub_up = [b for p, b in uploads if p == "ivr2:/78/menu/M0000.wav"]
+ok("שלוחה 78: קובץ הפתיחה = ההודעה + פתיח התפריט הראשי; 78/menu = הפתיח בלבד",
+   len(msg_up) == 1 and len(msg_up[0]) > len(MSG_WAV) + len(WELCOME_WAV) - 100
+   and sub_up == [WELCOME_WAV])
+fa = [c for c in calls[n0:] if c[0] == "FileAction"]
+ok("בכל שליחה: זיכרון 'כבר שמע' של 78 נמחק לפני החיוג",
+   len(fa) == 1 and fa[0][1].get("what") == "ivr2:/78/AccessFilterLogTime.ini"
+   and fa[0][1].get("action") == "delete"
+   and seq.index("FileAction") < seq.index("RunCampaign"), str(fa))
 ok("template_position: לא ברשימה = 0", yemot.template_position("123") == 0)
 
 # ריצה שנייה באותו יום: רק בדיקת השורש (הורדה אחת), בלי כתיבות
 n0 = len(calls); n_up = len(uploads)
 yemot.run_campaign({"0521234567": "כהן"}, store_list=True)
 seq = [c[0] for c in calls[n0:]]
-ok("ריצה חוזרת: השורש רק נבדק, שום דבר לא נכתב שוב",
+ok("ריצה חוזרת: השורש רק נבדק והזיכרון מאופס, שום דבר לא נכתב שוב",
    seq.count("DownloadFile") == 1 and "UploadTextFile" not in seq
+   and seq.count("FileAction") == 1
    and len(uploads) == n_up and seq[-1] == "RunCampaign", str(seq))
 # המנהל שינה את השורש מהממשק ומחק את השורות שלנו → מתוקן בשליחה הבאה
 line_files["ivr2:/ext.ini"] = "type=menu\ncampaign_message_to_play=6-ACTIVE,\n"

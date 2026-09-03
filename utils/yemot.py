@@ -463,10 +463,38 @@ def _root_filter_wanted(pos: int) -> dict:
             "check_template_filter_error_enter": "yes"}
 
 
+CALLBACK_MENU_SUB = "menu"      # /78/menu — the plain main-menu clone (message already heard)
+ACCESS_LOG_FILE = "AccessFilterLogTime.ini"   # the per-caller "already passed" memory
+
+
 def _callback_menu_ini() -> str:
-    # Same key behaviour as the main menu: 2 digits, then the human transfer.
+    # Same key behaviour as the main menu (2 digits, then the human transfer),
+    # gated by an access filter (f2 topic/6165): each caller passes ONCE per
+    # 30 days — the second call goes straight to the plain menu clone. The
+    # memory file is deleted at every send, so a new message is heard once.
     return (f"type=menu\ntitle={CALLBACK_TITLE}\ndigits=2\ntimeout=1\n"
+            f"timeout_goto=/2\ncheck_access_filter=yes\n"
+            f"access_filter_1=g.*.*.*.*.*.30d.1.30d\n"
+            f"access_filter_no_goto=/{CALLBACK_EXT}/{CALLBACK_MENU_SUB}\n")
+
+
+def _callback_submenu_ini() -> str:
+    return (f"type=menu\ntitle={CALLBACK_TITLE} — תפריט\ndigits=2\ntimeout=1\n"
             f"timeout_goto=/2\n")
+
+
+def reset_callback_memory() -> bool:
+    """Forget who already heard the message (delete the access-filter memory
+    of CALLBACK_EXT) — so after a new send every list member hears the new
+    message once. A missing file (nobody called back yet) is not a failure."""
+    try:
+        _call("FileAction", {"what": f"ivr2:/{CALLBACK_EXT}/{ACCESS_LOG_FILE}",
+                             "action": "delete"}, post=True)
+        return True
+    except YemotError as e:
+        if e.code == -1:
+            raise
+        return False
 
 
 def _read_text(path: str) -> str | None:
@@ -603,6 +631,9 @@ def publish_callback_message(template_id: str | None = None) -> str:
         welcome = None
     what = f"ivr2:/{CALLBACK_EXT}/M0000.wav"
     _upload_multipart(what, _concat_wavs(message, welcome), convert="0")
+    if welcome:      # the plain clone greets like the main menu, without the message
+        _upload_multipart(f"ivr2:/{CALLBACK_EXT}/{CALLBACK_MENU_SUB}/M0000.wav",
+                          welcome, convert="0")
     return what
 
 
@@ -622,8 +653,9 @@ def ensure_callback_extension(template_id: str | None = None) -> dict:
     if not pos:
         raise YemotError("תבנית הצינתוק לא נמצאה ברשימת התבניות של הקו")
     result = {"position": pos, "root_changed": ensure_root_filter(pos),
+              "memory_reset": reset_callback_memory(),
               "links_added": [], "message_published": False}
-    stamp = f"{pos}:{time.strftime('%Y-%m-%d')}"
+    stamp = f"v2:{pos}:{time.strftime('%Y-%m-%d')}"
     if (db.get_setting(SET_CALLBACK_READY) or "") == stamp:
         return result
     try:
@@ -633,23 +665,27 @@ def ensure_callback_extension(template_id: str | None = None) -> dict:
             raise
         raise YemotError(f"שלוחה {CALLBACK_EXT} (הודעת החלוקה) לא קיימת בקו — "
                          f"יש ליצור אותה פעם אחת: dev/callback_line.py apply")
-    cur = _ini_items(_read_text(f"ivr2:/{CALLBACK_EXT}/ext.ini") or "")
-    if any(cur.get(k) != v for k, v in _ini_items(_callback_menu_ini()).items()):
-        _write_text(f"ivr2:/{CALLBACK_EXT}/ext.ini", _callback_menu_ini())
     root = _call("GetIVR2Dir", {"path": "ivr2:/"})
     digit_exts = [d.get("name") for d in root.get("dirs") or []
                   if d.get("exists") and re.fullmatch(r"\d+", str(d.get("name") or ""))]
-    have = {d.get("name") for d in ext.get("dirs") or [] if d.get("exists")}
-    for name in digit_exts:
-        if name == CALLBACK_EXT or name in have:
-            continue
-        # UploadFile creates the missing sub-folder; UploadTextFile does not.
-        _upload_multipart(f"ivr2:/{CALLBACK_EXT}/{name}/ext.ini",
-                          _link_ini(name).encode("utf-8"), convert="0")
-        result["links_added"].append(name)
-    if not any(str(f.get("name")) == "M0000.wav" for f in ext.get("files") or []):
+    sub = f"{CALLBACK_EXT}/{CALLBACK_MENU_SUB}"
+    for path, wanted in ((CALLBACK_EXT, _callback_menu_ini()), (sub, _callback_submenu_ini())):
+        cur = _ini_items(_read_text(f"ivr2:/{path}/ext.ini") or "")
+        if any(cur.get(k) != v for k, v in _ini_items(wanted).items()):
+            # UploadFile also creates a missing folder; UploadTextFile does not.
+            _upload_multipart(f"ivr2:/{path}/ext.ini", wanted.encode("utf-8"), convert="0")
+        listing = ext if path == CALLBACK_EXT else _call("GetIVR2Dir", {"path": f"ivr2:/{path}"})
+        have = {d.get("name") for d in listing.get("dirs") or [] if d.get("exists")}
+        for name in digit_exts:
+            if name == CALLBACK_EXT or name in have:
+                continue
+            _upload_multipart(f"ivr2:/{path}/{name}/ext.ini",
+                              _link_ini(name).encode("utf-8"), convert="0")
+            result["links_added"].append(f"{path}/{name}")
+        if not any(str(f.get("name")) == "M0000.wav" for f in listing.get("files") or []):
+            result["message_published"] = True
+    if result["message_published"]:
         publish_callback_message(template_id)
-        result["message_published"] = True
     db.set_setting(SET_CALLBACK_READY, stamp)
     return result
 
