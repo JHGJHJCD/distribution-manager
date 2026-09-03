@@ -236,39 +236,143 @@ try:
 except yemot.YemotError:
     ok("בדיקה עם מספר שבור נחסמת", True)
 
-# ── 3ב. store_list — הרשימה נשמרת בתבנית לפני שליחה (#z4xy9) ────────────────
-print("— שמירת הרשימה בתבנית + פרסום בשלוחה —")
+# ── 3ב. store_list — הרשימה נשמרת בתבנית + מסלול ההתקשרות-החוזרת (v3.06) ────
+print("— שמירת הרשימה בתבנית + שלוחת ההתקשרות החוזרת —")
 canned["RunCampaign"] = {"responseStatus": "OK", "campaignId": "c-x",
                          "entriesCount": 1}
 canned["ClearTemplateEntries"] = {"responseStatus": "OK"}
 canned["UploadPhoneList"] = {"responseStatus": "OK"}
-# 3/9/2026: אחרי שמירת הרשימה נמחק זיכרון "כבר שמע" של התבנית שלנו בשורש —
-# המספר בשורה campaign_message_to_play = המיקום ברשימת התבניות (1-based).
+# מי שברשימת התבנית ומחייג לקו מופנה מהשורש לשלוחה 78 (check_template_filter);
+# מספר הרשימה = המיקום ברשימת התבניות (1-based).
 _main_tid = yemot.ensure_template()
 canned["GetTemplates"] = {"responseStatus": "OK", "templates": [
     {"templateId": 900001, "description": "קופה"},
     {"templateId": 900002, "description": "נעליים"},
     {"templateId": int(_main_tid), "description": yemot.TEMPLATE_DESCRIPTION}]}
-canned["FileAction"] = {"responseStatus": "OK", "success": True}
+import io, re, wave
+def make_wav(frames, rate=8000):
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(rate)
+        w.writeframes(b"\x01\x00" * frames)
+    return buf.getvalue()
+MSG_WAV, WELCOME_WAV = make_wav(800), make_wav(1600)
+ROOT_INI = ("type=menu\n; הערה של המנהל\nplay_campaign_message=yes\n"
+            "campaign_message_to_play=0-ACTIVE,3-ACTIVE-1-1h,\n"
+            "campaign_message_to_play_file_by_template=yes\ngo_to_folder=/2\n"
+            "check_did_and_go_to_folder=yes\n")
+line_files = {"ivr2:/ext.ini": ROOT_INI, "ivr2:/M0000.wav": WELCOME_WAV,
+              f"tpl:{_main_tid}": MSG_WAV}
+ext78 = {"exists": True, "dirs": [{"name": "1", "exists": True}], "files": []}
+uploads = []            # (path, bytes) של UploadFile
+
+
+def line_transport(url, data):
+    q = urllib.parse.urlparse(url)
+    command = q.path.rsplit("/", 1)[-1]
+    params = {k: v[0] for k, v in urllib.parse.parse_qs(q.query).items()}
+    if command == "DownloadFile":
+        calls.append(("DownloadFile", {"path": params.get("path")}))
+        v = line_files.get(params.get("path"))
+        if v is None:
+            return json.dumps({"responseStatus": "ERROR"}).encode()
+        return v.encode("utf-8") if isinstance(v, str) else v
+    if command == "GetIVR2Dir":
+        calls.append(("GetIVR2Dir", params))
+        if params.get("path") == "ivr2:/":
+            return json.dumps({"responseStatus": "OK", "dirs": [
+                {"name": n, "exists": True} for n in ("0", "1", "2", "77", "Log", "78")],
+                "files": []}).encode()
+        if params.get("path") == "ivr2:/78" and ext78["exists"]:
+            return json.dumps({"responseStatus": "OK", "dirs": ext78["dirs"],
+                               "files": ext78["files"]}).encode()
+        return json.dumps({"responseStatus": "ERROR", "messageCode": 0,
+                           "message": "extension does not exist"}).encode()
+    if command == "UploadTextFile" and data:
+        p = {k: v[0] for k, v in urllib.parse.parse_qs(data.decode("utf-8")).items()}
+        line_files[p["what"]] = p["contents"]
+    if command == "UploadFile" and data:
+        m = re.search(rb'name="path"\r\n\r\n(.+?)\r\n', data)
+        path = m.group(1).decode() if m else ""
+        body = data.split(b"\r\n\r\n", 5)[-1]
+        uploads.append((path, body))
+        mm = re.fullmatch(r"ivr2:/78/(\w+)/ext\.ini", path)
+        if mm:
+            ext78["dirs"].append({"name": mm.group(1), "exists": True})
+            line_files[path] = body.split(b"\r\n--")[0].decode("utf-8", "replace")
+        elif path == "ivr2:/78/M0000.wav":
+            ext78["files"].append({"name": "M0000.wav"})
+    return fake_transport(url, data)
+
+
+yemot._TRANSPORT = line_transport
+db.set_setting(yemot.SET_CALLBACK_READY, "")
 n0 = len(calls)
 yemot.run_campaign({"0521234567": "כהן"}, store_list=True)
 seq = [c[0] for c in calls[n0:]]
 ok("store_list: ניקוי+העלאת רשימה לפני RunCampaign",
    seq[:2] == ["ClearTemplateEntries", "UploadPhoneList"]
    and seq[-1] == "RunCampaign", str(seq))
-fa = [c for c in calls[n0:] if c[0] == "FileAction"]
-ok("store_list: זיכרון ההשמעה של התבנית (מיקום 3) נמחק לפני החיוג",
-   len(fa) == 1 and fa[0][1].get("action") == "delete"
-   and fa[0][1].get("what") == "ivr2:/CampaignMessageAmountPlay-Template-3.ini"
-   and seq.index("FileAction") < seq.index("RunCampaign"), str(fa))
+root_now = yemot._ini_items(line_files["ivr2:/ext.ini"])
+ok("השורש: פילטר רשימת-תפוצה (מיקום 3) → שלוחה 78, כל השאר נכנסים כרגיל",
+   root_now.get("check_template_filter") == "3"
+   and root_now.get("check_template_filter_active_go_to") == "/78"
+   and all(root_now.get(k) == "yes" for k in (
+       "check_template_filter_none_enter", "check_template_filter_blocked_enter",
+       "check_template_filter_error_enter")), str(root_now))
+ok("השורש: הרשומה הישנה של התוכנה הוסרה מהשורה של המנהל, הרשומה שלו נשארה",
+   root_now.get("campaign_message_to_play") == "0-ACTIVE,"
+   and "campaign_message_to_play_file_by_template" not in root_now)
+ok("השורש: שאר השורות (הערות, ניתוב DID, go_to_folder) לא נגעו",
+   "; הערה של המנהל" in line_files["ivr2:/ext.ini"]
+   and root_now.get("check_did_and_go_to_folder") == "yes"
+   and root_now.get("go_to_folder") == "/2"
+   and line_files["ivr2:/ext.ini"].startswith("type=menu\n; הערה"))
+linked = sorted(p.split("/")[2] for p, _ in uploads if p.endswith("/ext.ini"))
+ok("שלוחה 78: קישור לכל שלוחת-ספרות בשורש שחסרה (לא 1 שכבר קיימת, לא Log, לא 78 עצמה)",
+   linked == ["0", "2", "77"], str(linked))
+ok("הקישור מפנה לשלוחה המקבילה בשורש",
+   "go_to_folder=/77" in line_files.get("ivr2:/78/77/ext.ini", ""))
+msg_up = [b for p, b in uploads if p == "ivr2:/78/M0000.wav"]
+ok("שלוחה 78: קובץ הפתיחה = ההודעה + פתיח התפריט הראשי (ארוך משניהם)",
+   len(msg_up) == 1 and len(msg_up[0]) > len(MSG_WAV) + len(WELCOME_WAV) - 100)
 ok("template_position: לא ברשימה = 0", yemot.template_position("123") == 0)
-canned["FileAction"] = {"responseStatus": "ERROR", "messageCode": 109,
-                        "message": "file not found"}
+
+# ריצה שנייה באותו יום: רק בדיקת השורש (הורדה אחת), בלי כתיבות
+n0 = len(calls); n_up = len(uploads)
+yemot.run_campaign({"0521234567": "כהן"}, store_list=True)
+seq = [c[0] for c in calls[n0:]]
+ok("ריצה חוזרת: השורש רק נבדק, שום דבר לא נכתב שוב",
+   seq.count("DownloadFile") == 1 and "UploadTextFile" not in seq
+   and len(uploads) == n_up and seq[-1] == "RunCampaign", str(seq))
+# המנהל שינה את השורש מהממשק ומחק את השורות שלנו → מתוקן בשליחה הבאה
+line_files["ivr2:/ext.ini"] = "type=menu\ncampaign_message_to_play=6-ACTIVE,\n"
+yemot.run_campaign({"0521234567": "כהן"}, store_list=True)
+ok("השורות שלנו חזרו אחרי שהמנהל מחק אותן (השורה שלו נשמרה)",
+   "check_template_filter=3" in line_files["ivr2:/ext.ini"]
+   and "campaign_message_to_play=6-ACTIVE," in line_files["ivr2:/ext.ini"])
+# שלוחה 78 נמחקה מהקו → השליחה עצמה ממשיכה (best-effort)
+ext78["exists"] = False
+db.set_setting(yemot.SET_CALLBACK_READY, "")
 n0 = len(calls)
 res_missing = yemot.run_campaign({"0521234567": "כהן"}, store_list=True)
-ok("קובץ זיכרון חסר (עוד אף אחד לא חזר) לא חוסם שליחה",
+ok("שלוחה 78 חסרה — לא חוסם שליחה",
    [c[0] for c in calls[n0:]][-1] == "RunCampaign" and res_missing.get("campaignId") == "c-x")
-canned["FileAction"] = {"responseStatus": "OK", "success": True}
+try:
+    yemot.ensure_callback_extension()
+    ok("שלוחה 78 חסרה — הודעה ברורה ב-ensure", False)
+except yemot.YemotError as e:
+    ok("שלוחה 78 חסרה — הודעה ברורה ב-ensure", "78" in str(e))
+ext78["exists"] = True
+ok("strip: הרשומה שלנו יוצאת, של המנהר נשארת",
+   yemot._strip_campaign_entry("0-ACTIVE,17-ACTIVE-1-1h,", 17) == "0-ACTIVE,"
+   and yemot._strip_campaign_entry("17-ACTIVE", 17) == ""
+   and yemot._strip_campaign_entry("6-ACTIVE, 17-ACTIVE-1-6d", 17) == "6-ACTIVE"
+   and yemot._strip_campaign_entry("6-ACTIVE,7-ACTIVE", 17) == "6-ACTIVE,7-ACTIVE")
+ok("concat: פורמט שונה → ההודעה לבד",
+   yemot._concat_wavs(MSG_WAV, make_wav(10, rate=16000)) == MSG_WAV
+   and yemot._concat_wavs(MSG_WAV, b"not-a-wav") == MSG_WAV)
+yemot._TRANSPORT = fake_transport
 del canned["GetTemplates"]
 n0 = len(calls)
 yemot.run_campaign({"0521234567": "כהן"})
@@ -337,8 +441,9 @@ yemot.run_campaign({"0521234567": "כהן"}, classic=True)
 seq = [c[0] for c in calls[n0:]]
 ok("קלאסי: יוצא דרך RunTzintuk ולא RunCampaign",
    seq[-1] == "RunTzintuk" and "RunCampaign" not in seq, str(seq))
-ok("קלאסי: הזיכרון של התבנית הראשית מתאפס לפני הצינתוק",
-   "FileAction" in seq and seq.index("FileAction") < seq.index("RunTzintuk"), str(seq))
+ok("קלאסי: הרשימה נשמרת ומסלול ההתקשרות-החוזרת נבדק לפני הצינתוק",
+   seq.index("UploadPhoneList") < seq.index("GetTemplates") < seq.index("RunTzintuk"),
+   str(seq))
 tz = calls[-1]
 ok("קלאסי: מספרים + זמן צלצול, בלי sayInfoOnAnswer (שלא יהיה מענה)",
    tz[1].get("phones") == "0521234567"
@@ -366,8 +471,9 @@ yemot._TRANSPORT = fake_transport
 n0 = len(calls)
 yemot.run_test("0501234567")
 seq = [c[0] for c in calls[n0:]]
-ok("בדיקה: המספר נוסף לרשימה בלי ניקוי + איפוס זיכרון ההשמעה (התקשרות חוזרת עובדת)",
-   seq == ["UploadPhoneList", "GetTemplates", "FileAction", "RunCampaign"], str(seq))
+ok("בדיקה: המספר נוסף לרשימה בלי ניקוי + בדיקת מסלול ההתקשרות-החוזרת",
+   seq[0] == "UploadPhoneList" and "GetTemplates" in seq and seq[-1] == "RunCampaign",
+   str(seq))
 upl = [c for c in calls[n0:] if c[0] == "UploadPhoneList"][0]
 ok("בדיקה: עדכון בלי מחיקת הרשימה (UPDATE)",
    upl[1].get("updateType") == "UPDATE")

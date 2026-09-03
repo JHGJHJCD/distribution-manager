@@ -432,27 +432,226 @@ def template_position(template_id: str) -> int:
     return 0
 
 
-def reset_callback_memory(template_id: str | None = None) -> str:
-    """Forget who already heard this template's message when calling the line
-    back — so after EVERY send each recipient hears the current message once
-    (3/9/2026: a caller who heard last week's message stayed silent for the
-    whole `-1-6d` window). The line root keeps that memory per campaign in
-    ``CampaignMessageAmountPlay-Template-<N>.ini`` (needs
-    ``campaign_message_to_play_file_by_template=yes`` in the root ext.ini);
-    deleting only OUR file never touches the manager's own campaign entries.
-    Returns the deleted path ("" when the template is not in the list)."""
+# ─── Callback message — extension CALLBACK_EXT (v3.06) ───────────────────────
+# Someone who missed the call dials the line back. The main menu (root ext.ini)
+# runs a documented entry filter — check_template_filter (f2 post/124) — that
+# looks the caller up in OUR template's stored list and sends list members to
+# CALLBACK_EXT; everyone else enters the main menu exactly as before.
+# CALLBACK_EXT is a menu whose welcome file (M0000.wav) is
+# [the campaign message + the line's regular welcome], and whose digit
+# sub-extensions are links back to the main menu's extensions — so after the
+# message the caller gets the normal menu (77 = arrival survey) without ever
+# re-entering the root filter (no loop). Nothing in the flow depends on the
+# opaque campaign_message_to_play mechanism (v2.88–v3.05), which never played
+# reliably on this line. Restore path: dev/callback_line.py restore.
+CALLBACK_EXT = "78"
+CALLBACK_TITLE = "הודעת החלוקה (מנהל חלוקה)"
+SET_CALLBACK_READY = "yemot_callback_ready"      # "<template position>:<date>"
+ROOT_EXT_INI = "ivr2:/ext.ini"
+_ROOT_LEGACY_KEYS = ("campaign_message_to_play_file_by_template",)
+
+
+def _root_filter_wanted(pos: int) -> dict:
+    """The root ext.ini keys that route our list members to CALLBACK_EXT. The
+    list number is the template's position in the line's template list (the
+    same numbering campaign_message_to_play used, verified statistically
+    2/9/2026). Everyone else keeps entering the menu (…_enter=yes)."""
+    return {"check_template_filter": str(pos),
+            "check_template_filter_active_go_to": f"/{CALLBACK_EXT}",
+            "check_template_filter_blocked_enter": "yes",
+            "check_template_filter_none_enter": "yes",
+            "check_template_filter_error_enter": "yes"}
+
+
+def _callback_menu_ini() -> str:
+    # Same key behaviour as the main menu: 2 digits, then the human transfer.
+    return (f"type=menu\ntitle={CALLBACK_TITLE}\ndigits=2\ntimeout=1\n"
+            f"timeout_goto=/2\n")
+
+
+def _read_text(path: str) -> str | None:
+    """A text file from the line, or None when it does not exist."""
+    try:
+        raw = _download(path)
+    except YemotError as e:
+        if e.code == -1 and "Not Found" not in str(e):
+            raise
+        return None
+    if not raw or raw[:1] == b"{":
+        return None
+    return raw.decode("utf-8", errors="replace")
+
+
+def _write_text(path: str, text: str) -> None:
+    _call("UploadTextFile", {"what": path, "contents": text}, post=True)
+
+
+def _ini_items(text: str) -> dict:
+    out = {}
+    for line in (text or "").splitlines():
+        s = line.strip()
+        if not s or s.startswith(";") or "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def _ini_apply(text: str, updates: dict, drop=()) -> str:
+    """Rewrite `text` with `updates` (in place when the key exists, appended
+    otherwise) and without `drop` keys — every other line, comment and order
+    is preserved. Adding a key never rewrites the manager's own lines."""
+    lines, seen = [], set()
+    for line in (text or "").splitlines():
+        s = line.strip()
+        key = s.split("=", 1)[0].strip() if "=" in s and not s.startswith(";") else None
+        if key in drop:
+            continue
+        if key in updates and key not in seen:
+            lines.append(f"{key}={updates[key]}")
+            seen.add(key)
+            continue
+        if key in seen:
+            continue                      # a duplicate of a key we just wrote
+        lines.append(line)
+    for k, v in updates.items():
+        if k not in seen:
+            lines.append(f"{k}={v}")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def _strip_campaign_entry(value: str, pos: int) -> str:
+    """Remove OUR template's entry (`<pos>-…`) from the manager's
+    campaign_message_to_play line — the old mechanism. Other entries and the
+    trailing comma style stay as they are."""
+    parts = [p for p in value.split(",")]
+    kept = [p for p in parts if p.strip() and p.strip().split("-", 1)[0].strip() != str(pos)]
+    trailing = value.rstrip().endswith(",")
+    return ",".join(kept) + ("," if trailing and kept else "")
+
+
+def _backup_root(text: str) -> str:
+    """Keep a copy of the root ext.ini next to the DB before any rewrite —
+    the manager edits this file from the Yemot site, so every version matters."""
+    import os
+    folder = os.path.join(os.path.dirname(db.DB_PATH), "line_backups")
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"root_ext.ini.{time.strftime('%Y%m%d-%H%M%S')}")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    return path
+
+
+def ensure_root_filter(pos: int) -> bool:
+    """Make the root ext.ini route our list members to CALLBACK_EXT (and drop
+    the leftovers of the old mechanism). Writes ONLY when something differs,
+    and then only the keys that are ours. Returns True when it wrote."""
+    text = _read_text(ROOT_EXT_INI)
+    if text is None:
+        raise YemotError("לא ניתן לקרוא את הגדרות השלוחה הראשית של הקו")
+    cur = _ini_items(text)
+    wanted = _root_filter_wanted(pos)
+    if "campaign_message_to_play" in cur:
+        stripped = _strip_campaign_entry(cur["campaign_message_to_play"], pos)
+        if stripped != cur["campaign_message_to_play"]:
+            wanted["campaign_message_to_play"] = stripped
+    drop = [k for k in _ROOT_LEGACY_KEYS if k in cur]
+    if not drop and all(cur.get(k) == v for k, v in wanted.items()):
+        return False
+    _backup_root(text)
+    _write_text(ROOT_EXT_INI, _ini_apply(text, wanted, drop))
+    return True
+
+
+def _concat_wavs(first: bytes, second: bytes | None, gap_s: float = 0.6) -> bytes:
+    """[first + silence + second] as one WAV — when both are plain PCM with the
+    same format (the line's files: 8 kHz / 16-bit / mono). Otherwise `first`."""
+    import io
+    import wave
+    if not second:
+        return first
+    try:
+        with wave.open(io.BytesIO(first)) as a, wave.open(io.BytesIO(second)) as b:
+            if (a.getparams()[:3] != b.getparams()[:3]
+                    or a.getcomptype() != "NONE" or b.getcomptype() != "NONE"):
+                return first
+            pa, fa, fb = a.getparams(), a.readframes(a.getnframes()), b.readframes(b.getnframes())
+        gap = b"\x00" * int(pa.framerate * gap_s) * pa.nchannels * pa.sampwidth
+        out = io.BytesIO()
+        with wave.open(out, "wb") as w:
+            w.setnchannels(pa.nchannels)
+            w.setsampwidth(pa.sampwidth)
+            w.setframerate(pa.framerate)
+            w.writeframes(fa + gap + fb)
+        return out.getvalue()
+    except (wave.Error, EOFError):
+        return first
+
+
+def publish_callback_message(template_id: str | None = None) -> str:
+    """Build CALLBACK_EXT's welcome file: the template's current recording
+    followed by the main menu's own welcome (root M0000.wav — the manager's
+    "press 1 for…" prompt), so the caller-back hears the message and then the
+    familiar menu. Returns the uploaded path."""
+    template_id = template_id or ensure_template()
+    message = _download_template_message(template_id)
+    try:
+        welcome = _download("ivr2:/M0000.wav")
+        if welcome[:4] != b"RIFF":
+            welcome = None
+    except YemotError:
+        welcome = None
+    what = f"ivr2:/{CALLBACK_EXT}/M0000.wav"
+    _upload_multipart(what, _concat_wavs(message, welcome), convert="0")
+    return what
+
+
+def _link_ini(target: str) -> str:
+    return f"type=go_to_folder\ngo_to_folder=/{target}\n"
+
+
+def ensure_callback_extension(template_id: str | None = None) -> dict:
+    """Verify (and repair) the whole callback path before a send:
+    root filter → CALLBACK_EXT menu → digit links to the main menu's
+    extensions → welcome file. Cheap when nothing changed: the root ext.ini is
+    compared every time, the rest once a day per template position
+    (SET_CALLBACK_READY). Raises YemotError when the extension itself is
+    missing — it is created once (dev/callback_line.py) and never by a send."""
     template_id = template_id or ensure_template()
     pos = template_position(template_id)
     if not pos:
-        return ""
-    what = f"ivr2:/CampaignMessageAmountPlay-Template-{pos}.ini"
+        raise YemotError("תבנית הצינתוק לא נמצאה ברשימת התבניות של הקו")
+    result = {"position": pos, "root_changed": ensure_root_filter(pos),
+              "links_added": [], "message_published": False}
+    stamp = f"{pos}:{time.strftime('%Y-%m-%d')}"
+    if (db.get_setting(SET_CALLBACK_READY) or "") == stamp:
+        return result
     try:
-        _call("FileAction", {"what": what, "action": "delete"}, post=True)
+        ext = _call("GetIVR2Dir", {"path": f"ivr2:/{CALLBACK_EXT}"})
     except YemotError as e:
         if e.code == -1:
             raise
-        # a missing file (nobody called back yet) is not a failure
-    return what
+        raise YemotError(f"שלוחה {CALLBACK_EXT} (הודעת החלוקה) לא קיימת בקו — "
+                         f"יש ליצור אותה פעם אחת: dev/callback_line.py apply")
+    cur = _ini_items(_read_text(f"ivr2:/{CALLBACK_EXT}/ext.ini") or "")
+    if any(cur.get(k) != v for k, v in _ini_items(_callback_menu_ini()).items()):
+        _write_text(f"ivr2:/{CALLBACK_EXT}/ext.ini", _callback_menu_ini())
+    root = _call("GetIVR2Dir", {"path": "ivr2:/"})
+    digit_exts = [d.get("name") for d in root.get("dirs") or []
+                  if d.get("exists") and re.fullmatch(r"\d+", str(d.get("name") or ""))]
+    have = {d.get("name") for d in ext.get("dirs") or [] if d.get("exists")}
+    for name in digit_exts:
+        if name == CALLBACK_EXT or name in have:
+            continue
+        # UploadFile creates the missing sub-folder; UploadTextFile does not.
+        _upload_multipart(f"ivr2:/{CALLBACK_EXT}/{name}/ext.ini",
+                          _link_ini(name).encode("utf-8"), convert="0")
+        result["links_added"].append(name)
+    if not any(str(f.get("name")) == "M0000.wav" for f in ext.get("files") or []):
+        publish_callback_message(template_id)
+        result["message_published"] = True
+    db.set_setting(SET_CALLBACK_READY, stamp)
+    return result
 
 
 def upload_message_wav(file_path: str, template_id: str | None = None) -> dict:
@@ -464,11 +663,16 @@ def upload_message_wav(file_path: str, template_id: str | None = None) -> dict:
     with open(file_path, "rb") as f:
         content = f.read()
     try:
-        return _upload_multipart(f"tpl:{template_id}", content)
+        res = _upload_multipart(f"tpl:{template_id}", content)
     except YemotError as e:
-        if e.code in (107, 109, 110):     # path not accepted — try the other form
-            return _upload_multipart(f"ivr2:{template_id}.wav", content)
-        raise
+        if e.code not in (107, 109, 110):   # path not accepted — try the other form
+            raise
+        res = _upload_multipart(f"ivr2:{template_id}.wav", content)
+    try:
+        publish_callback_message(template_id)   # the caller-back hears the NEW message
+    except YemotError:
+        pass                                    # repaired again at the next send
+    return res
 
 
 def _upload_multipart(path: str, content: bytes, convert: str = "1") -> dict:
@@ -555,10 +759,7 @@ def run_campaign(phones: dict, template_id: str | None = None,
     if store_list or classic:
         try:
             set_template_entries(numbers, main_id)
-        except YemotError:
-            pass
-        try:
-            reset_callback_memory(main_id)   # everyone hears the NEW message once
+            ensure_callback_extension(main_id)   # list members → message on callback
         except YemotError:
             pass
     fallback = False
@@ -1133,7 +1334,7 @@ def run_test(phone: str) -> dict:
         raise YemotError("מספר הבדיקה אינו תקין")
     try:
         add_template_entry(p, "בדיקה")
-        reset_callback_memory()   # the tester hears the message on callback
+        ensure_callback_extension()   # the tester hears the message on callback
     except YemotError:
-        pass                      # best-effort — never blocks the test ring
+        pass                          # best-effort — never blocks the test ring
     return run_campaign({p: "בדיקה"})

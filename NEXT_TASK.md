@@ -2,7 +2,13 @@
 
 > קובץ סטטוס זמני — מתעדכן כל הזמן. פרטים קבועים (ארכיטקטורה/כללים/שחרור) ב-`CLAUDE.md`.
 
-## ✅ v3.05 — מי שחוזר לצינתוק שומע את ההודעה פעם אחת אחרי כל שליחה (3/9/2026)
+## ✅ v3.06 — התקשרות חוזרת נבנתה מחדש: שלוחה 78 + פילטר בשורש (3/9/2026 אחה"צ) — ממתין לאימות חי
+- **למה:** גם אחרי v3.05 (איפוס זיכרון + `1h`) החוזרים לא שמעו (יומן: 5–8 שנ' בכניסה ב-12:57 וב-13:22). המשתמש ביקש לזרוק את המנגנון ולבנות מחדש עם דרך שחזור. `campaign_message_to_play` ננטש כליל.
+- **הקו (בוצע ואומת מבנית):** שורש — הרשומה שלנו הוסרה (`0-ACTIVE,` של המנהל נשמרה), `file_by_template` הוסר, נוספו 5 שורות `check_template_filter=17` → `/78` (+`none/blocked/error_enter=yes`). שלוחה `/78` (menu) עם `M0000.wav` = הודעה (12.6 שנ') + פתיח השורש (14 שנ') = 27 שנ', ו-20 קישורי `go_to_folder`. `validate_ext_ini` OK. גיבוי/שחזור: `dev/line_backup_2026-09-03-callback/RESTORE.md`, `dev/callback_line.py`, תג `pre-callback-78`.
+- **התוכנה:** `yemot.ensure_callback_extension`/`ensure_root_filter`/`publish_callback_message` (פירוט ב-CLAUDE.md). test_tzintuk עובר.
+- **נותר — אימות חי:** המשתמש מחייג מ-0548434668 (ברשימת התבנית) ל-048691834 → צריך לשמוע הודעה+פתיח; ביומן `LogFolderEnterExit` אמורה להופיע כניסה ל-`Folder#78` (~27 שנ' בלי הקשה). אם לא נכנס ל-78 בכלל → הפילטר לא זיהה (לבדוק מספר-הרשימה/פורמט); אם נכנס ושתק → בעיית הקובץ (`callback_line.py apply` מחדש).
+
+## ✅ v3.05 — (בוטלה ב-3.06) מי שחוזר לצינתוק שומע את ההודעה פעם אחת אחרי כל שליחה (3/9/2026)
 - **הבעיה (מאומתת ביומן הקו):** הרשומה `17-ACTIVE-1-6d` בשורש = פעם אחת ל-6 ימים לכל מתקשר; המשתמש שמע ב-2/9 (31 שנ' בכניסה) ולכן ב-3/9 12:57 שהה 5 שנ' ולא שמע כלום.
 - **בקו (באישור המשתמש):** שורש `ext.ini` — `17-ACTIVE-1-1h` + `campaign_message_to_play_file_by_template=yes`. גיבוי ושחזור: `dev/line_backup_2026-09-03/` (`root_ext.py show|apply|restore`), תג git `pre-callback-fix`.
 - **בתוכנה:** `yemot.template_position` + `yemot.reset_callback_memory` (FileAction delete על `CampaignMessageAmountPlay-Template-17.ini`) בכל שליחה/בדיקה. אומת חי (קובץ דמה נמחק). test_tzintuk: 154 OK.
