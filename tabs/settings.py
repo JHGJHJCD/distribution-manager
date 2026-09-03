@@ -466,6 +466,13 @@ class SettingsTab(QWidget):
         self.ym_password.setPlaceholderText("הסיסמה של המערכת בימות")
         self.ym_password.setAlignment(ALIGN_RIGHT)
         self.ym_password.setText(db.get_setting("yemot_password") or "")
+        self.ym_caller = QLineEdit()
+        self.ym_caller.setPlaceholderText("048691834")
+        self.ym_caller.setAlignment(ALIGN_RIGHT)
+        self.ym_caller.setToolTip(
+            "המספר שהזכאים רואים כשהמערכת מחייגת אליהם. מספר 04 עובר בפלאפונים "
+            "כשרים; אם משאירים ריק — נשלח מ-048691834.")
+        self.ym_caller.setText(db.get_setting("yemot_caller_id") or "")
         self.ym_gemini_key = QLineEdit()
         self.ym_gemini_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.ym_gemini_key.setPlaceholderText("לקול המשופר ב\"צור הקלטה מטקסט\" (לא חובה)")
@@ -476,8 +483,12 @@ class SettingsTab(QWidget):
         self.ym_gemini_key.setText(db.get_setting("gemini_api_key") or "")
         _form_row(form, "מספר מערכת", self.ym_system)
         _form_row(form, "סיסמה", self.ym_password)
+        _form_row(form, "מספר מזוהה ביוצא", self.ym_caller)
         _form_row(form, "מפתח Gemini", self.ym_gemini_key)
         body.addLayout(form)
+        body.addWidget(_hint(
+            "\"מספר מזוהה ביוצא\" = המספר שהזכאי רואה כשהצינתוק מגיע. מספר 04 "
+            "עובר בפלאפונים כשרים (המספר הראשי 079 חסום); ריק ⇐ 048691834."))
         self.lbl_ym_status = QLabel("")
         self.lbl_ym_status.setWordWrap(True)
         self.lbl_ym_status.setStyleSheet("color:#334155; font-size:12.5px; " + _LBL)
@@ -1291,6 +1302,7 @@ class SettingsTab(QWidget):
             return
         db.set_setting(yemot.SET_SYSTEM, system)
         db.set_setting(yemot.SET_PASSWORD, password)
+        db.set_setting(yemot.SET_CALLER_ID, self.ym_caller.text().strip())
         db.set_setting("gemini_api_key", self.ym_gemini_key.text().strip())
         self._save_survey_settings()      # v3.02 — labels + question text
         self._refresh_header_chips()

@@ -31,6 +31,11 @@ SET_PASSWORD = "yemot_password"
 SET_TEMPLATE = "yemot_template_id"
 SET_CALLER_ID = "yemot_caller_id"
 SET_TEST_PHONE = "yemot_test_phone"
+# The number recipients see when the line dials them. The line's main DID is an
+# 079 number that kosher phones block, so a caller-back is impossible. Default to
+# the line's 04 landline DID (048691834 — verified approved for outgoing on this
+# line), overridable in Settings. A public phone number, not a secret.
+DEFAULT_CALLER_ID = "048691834"
 # Arrival survey (v3.01): the recipient calls the line back, dials SURVEY_EXT
 # from the main menu and answers ONE key — 1 coming / 2 not coming / 3 unsure.
 # The old "press 7 during the campaign message" path (yemotContext=REPEAT) is
@@ -467,6 +472,13 @@ def _upload_multipart(path: str, content: bytes, convert: str = "1") -> dict:
     return data
 
 
+def _caller_id() -> str:
+    """The outgoing caller-id for every dial path — the operator's setting, or
+    the 04 default when it is empty (so a caller-back is never blocked on a
+    kosher phone). Both computers share the synced setting."""
+    return (db.get_setting(SET_CALLER_ID) or DEFAULT_CALLER_ID).strip()
+
+
 def run_tzintuk(phones_list: list, timeout: int | None = None) -> dict:
     """A TRUE tzintuk via the dedicated RunTzintuk API — the phone rings and
     the call is never connected, so answering is impossible (the user's
@@ -477,10 +489,8 @@ def run_tzintuk(phones_list: list, timeout: int | None = None) -> dict:
     if not phones_list:
         raise YemotError("אין אף מספר תקין לשליחה")
     params = {"phones": ",".join(phones_list),
-              "TzintukTimeOut": str(timeout or TZINTUK_RING_SECONDS)}
-    caller = (db.get_setting(SET_CALLER_ID) or "").strip()
-    if caller:
-        params["callerId"] = caller
+              "TzintukTimeOut": str(timeout or TZINTUK_RING_SECONDS),
+              "callerId": _caller_id()}
     return _call("RunTzintuk", params, post=True)
 
 
@@ -537,10 +547,8 @@ def run_campaign(phones: dict, template_id: str | None = None,
                 raise
     payload = json.dumps({p: {"name": (n or "")[:60]} for p, n in numbers.items()},
                          ensure_ascii=False)
-    params = {"templateId": dial_id, "phones": payload}
-    caller = (db.get_setting(SET_CALLER_ID) or "").strip()
-    if caller:
-        params["callerId"] = caller
+    params = {"templateId": dial_id, "phones": payload,
+              "callerId": _caller_id()}
     res = _call("RunCampaign", params, post=True)
     if fallback and isinstance(res, dict):
         res["classic_fallback"] = True   # the UI tells the operator it is answerable
@@ -721,13 +729,11 @@ def set_template_entries(phones: dict, template_id: str) -> int:
                               "delimiter": "TAB", "nameColumns": "1",
                               "updateType": "NEW"}, post=True)
     # A scheduled run takes the caller-id from the template (no per-run param).
-    caller = (db.get_setting(SET_CALLER_ID) or "").strip()
-    if caller:
-        try:
-            _call("UpdateTemplate", {"templateId": template_id,
-                                     "callerId": caller}, post=True)
-        except YemotError:
-            pass                      # cosmetic — never blocks the scheduling
+    try:
+        _call("UpdateTemplate", {"templateId": template_id,
+                                 "callerId": _caller_id()}, post=True)
+    except YemotError:
+        pass                          # cosmetic — never blocks the scheduling
     return len(numbers)
 
 
