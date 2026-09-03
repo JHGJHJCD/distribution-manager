@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 )
 
 import database as db
-from utils import timefmt, tts, yemot
+from utils import call_history, timefmt, tts, yemot
 from utils.ui import busy_cursor, enable_touch_scroll, line_icon
 # The design language (cards, glossy buttons, chips, page background) is shared
 # with the main "חלוקה ורישום" screen so both read as one app.
@@ -1079,8 +1079,25 @@ class TzintukimTab(QWidget):
                            "לצינתוקים של השבועיים האחרונים ומעדכן את הטבלה, "
                            "ההיסטוריה ורשימת החלוקה")
         btn_ans.clicked.connect(self._refresh_answers)
+        btn_srv = QPushButton("  היסטוריה מהשרת")
+        btn_srv.setStyleSheet(_BTN_GHOST)
+        btn_srv.setIcon(QIcon(line_icon("download", 18, "#475569")))
+        btn_srv.setToolTip("מושך מהשרת של ימות את כל הקמפיינים שהקו הריץ אי-פעם "
+                           "(גם לפני התוכנה) ואת יומן השיחות הנכנסות לקו — "
+                           "כדי שהתוכנה תדע באיזו שעה כל אחד באמת עונה או מתקשר. "
+                           "רץ לבד פעם ביום ברקע; הכפתור מרענן עכשיו.")
+        btn_srv.clicked.connect(lambda: self._sync_history(manual=True))
+        self.btn_hist_sync = btn_srv
+        c_head.addWidget(btn_srv)
         c_head.addWidget(btn_ans)
         c_head.addWidget(btn_hist_xls)
+        self.lbl_hist_sync = QLabel("")
+        self.lbl_hist_sync.setStyleSheet(_LBL)
+        self.lbl_hist_sync.setWordWrap(True)
+        c_lay.addWidget(self.lbl_hist_sync)
+        self._hist_worker = None
+        self._hist_prog = ""
+        self._refresh_hist_sync_label()
         self.hist = QTableWidget(0, 6)
         self.hist.setHorizontalHeaderLabels(
             ["מתי", "שם", "נשלחו", "הצליחו", "תשובות בסקר", "נכשלו"])
@@ -2256,6 +2273,7 @@ class TzintukimTab(QWidget):
         still 'sending'. Pick its tracking back up so the results get written —
         works also for a campaign the OTHER computer started (same account)."""
         self._check_scheduled()          # #xi85i — due schedules first
+        self._sync_history(manual=False)  # v3.10 — server history, once a day
         if (self._worker is not None or self._cb_worker is not None
                 or not yemot.is_configured()):
             return
@@ -2301,6 +2319,76 @@ class TzintukimTab(QWidget):
                 continue
             out.append(c)
         return out
+
+    # ── Server history (v3.10) ───────────────────────────────────────────────
+
+    def _refresh_hist_sync_label(self):
+        if self._hist_worker is not None:
+            self.lbl_hist_sync.setText("⏳ " + (self._hist_prog or "מושך היסטוריה מהשרת…"))
+            return
+        s = call_history.summary()
+        if not s["campaigns"] and not s["calls"]:
+            self.lbl_hist_sync.setText(
+                "ידע על שעות מענה: עדיין לא נמשכה היסטוריה מהשרת של ימות.")
+            return
+        when = timefmt.relative(s["updated"]) if s["updated"] else ""
+        self.lbl_hist_sync.setText(
+            f"ידע על שעות מענה מהשרת: {s['campaigns']} קמפיינים ו-{s['calls']:,} "
+            f"שיחות נכנסות לקו ({len(s['months'])} חודשים)"
+            + (f" · עודכן {when}" if when else ""))
+
+    def _sync_history(self, manual: bool):
+        """Pull the Yemot server's campaign + incoming-call history into the
+        local cache (utils.call_history) in the background. Automatic once a
+        day; the button forces it and reports at the end."""
+        if self._hist_worker is not None or not yemot.is_configured():
+            if manual and self._hist_worker is not None:
+                QMessageBox.information(self, "צינתוקים", "המשיכה מהשרת כבר רצה.")
+            return
+        if not manual and not call_history.is_stale():
+            return
+        self._hist_prog = ""
+
+        def _prog(text):
+            self._hist_prog = text
+
+        self._hist_worker = _TaskWorker(
+            lambda: call_history.sync_from_server(progress=_prog), self)
+        timer = QTimer(self)
+        timer.setInterval(700)
+        timer.timeout.connect(self._refresh_hist_sync_label)
+
+        def _done(res):
+            timer.stop()
+            self._hist_worker = None
+            try:
+                self._stats = yemot.answer_stats()
+                if self._list_loaded:
+                    self._populate()
+            except Exception:
+                pass
+            self._refresh_hist_sync_label()
+            if not manual:
+                return
+            if isinstance(res, Exception):
+                QMessageBox.warning(self, "צינתוקים",
+                                    f"משיכת ההיסטוריה מהשרת נכשלה:\n{res}")
+                return
+            errs = int(res.get("errors") or 0)
+            QMessageBox.information(
+                self, "צינתוקים",
+                f"ההיסטוריה עודכנה ✓\n"
+                f"קמפיינים חדשים: {res.get('new_campaigns', 0)} · "
+                f"חודשי יומן שנקראו: {res.get('months_fetched', 0)}\n"
+                f"סה\"כ בידע: {res.get('campaigns', 0)} קמפיינים, "
+                f"{res.get('calls', 0):,} שיחות נכנסות"
+                + (f"\n({errs} פריטים לא נקראו — ינוסו שוב בפעם הבאה)" if errs else ""))
+        self._hist_worker.done.connect(_done)
+        self.btn_hist_sync.setEnabled(False)
+        self._hist_worker.finished.connect(lambda: self.btn_hist_sync.setEnabled(True))
+        timer.start()
+        self._hist_worker.start()
+        self._refresh_hist_sync_label()
 
     def _refresh_answers(self):
         """Button: read the survey extension's answers now and refresh the

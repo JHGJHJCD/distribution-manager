@@ -7,7 +7,7 @@
 היסטוריה ב-DB (idempotence + LWW), שומר שליחה-כפולה, וסנכרון בין 2 מחשבים.
 """
 import os, sys, json, tempfile, urllib.parse
-from datetime import datetime
+from datetime import date, datetime
 os.environ["PYTHONUTF8"] = "1"
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -758,6 +758,92 @@ ok("3 התקשרויות חוזרות מספיקות להמלצה אישית", c
 new = stats.get(P_NEW) or {}
 ok("שעת החיוג האמיתית של המספר גוברת על שעת הקמפיין",
    new.get("by_hour", {}).get(12) == [3, 3], str(new))
+# v3.10 — היסטוריה מהשרת של ימות (utils/call_history)
+from utils import call_history
+import tempfile as _tf
+_hist_dir = _tf.mkdtemp(prefix="yhist_")
+call_history.cache_path = lambda: os.path.join(_hist_dir, "yemot_history.json")
+call_history._memo.update(path=None, mtime=None, data=None)
+ok("month_keys — 12 חודשים, הנוכחי אחרון",
+   call_history.month_keys(3, date(2026, 1, 15)) == ["2025-11", "2025-12", "2026-01"])
+_log = (
+    "Folder#main%Phone#0534196458%IncomingDID#048691834%EnterDate#01/06/2026%EnterTime#08:10:36%ExitTime#08:10:43%TimeTotal#7%CallId#aaa%PathTitle#\n"
+    "Folder#1%Phone#0534196458%IncomingDID#048691834%EnterDate#01/06/2026%EnterTime#08:10:43%ExitTime#08:10:49%TimeTotal#6%CallId#aaa%PathTitle#\n"
+    "Folder#main%Phone#972533163581%IncomingDID#048691834%EnterDate#02/06/2026%EnterTime#20:47:16%ExitTime#20:47:19%TimeTotal#3%CallId#bbb%PathTitle#\n"
+    "Folder#main%Phone#%EnterDate#02/06/2026%EnterTime#20:47:16%CallId#ccc\n")
+rows = call_history.parse_enter_exit(_log)
+ok("parse_enter_exit — שיחה אחת לכל CallId, מספר מנורמל, בלי מספר חסוי",
+   rows == [["0534196458", "2026-06-01 08:10"], ["0533163581", "2026-06-02 20:47"]], str(rows))
+
+P_OLD = "0536666666"
+canned["GetTransactions"] = {"responseStatus": "OK", "transactions": [
+    {"transactionTime": "2026-06-10 13:00:30", "campaignId": "old-camp-1"},
+    {"transactionTime": "2026-06-10 12:59:00", "campaignId": None},
+    {"transactionTime": "2025-01-01 10:00:00", "campaignId": "ancient"},   # מחוץ לטווח
+]}
+canned["GetCampaignStatus"] = {"responseStatus": "OK", "campaign": {
+    "campaignStatus": "FINISHED", "totalEntries": 2, "pendingEntries": 0, "activeEntries": 0,
+    "entries": [
+        {"phone": P_OLD, "entryStatus": "done", "duration": 15000, "startTime": "2026-06-10 13:03:00",
+         "redials": [{"entryStatus": "busy", "startTime": "2026-06-10 13:00:30"}]},
+        {"phone": P_NEW, "entryStatus": "no_answer", "startTime": "2026-06-10 13:00:31"},
+    ]}}
+_dl_old = canned.get("DownloadFile")
+
+
+def _hist_transport(url, data):
+    if "DownloadFile" in url and "LogFolderEnterExit-2026-06" in urllib.parse.unquote(url):
+        return _log.encode("utf-8")
+    if "DownloadFile" in url:
+        return b'{"responseStatus":"ERROR"}'
+    return fake_transport(url, data)
+
+
+yemot._TRANSPORT = _hist_transport
+calls.clear()
+res = call_history.sync_from_server(months=2, today=date(2026, 6, 20))
+ok("sync — קמפיין אחד בטווח נמשך, הישן מחוץ לטווח לא",
+   res["new_campaigns"] == 1 and "old-camp-1" in call_history.load()["campaigns"]
+   and "ancient" not in call_history.load()["campaigns"], str(res))
+ok("sync — חודשי היומן נקראו (הריק נשמר כדי לא לנסות שוב)",
+   res["months_fetched"] == 2 and res["calls"] == 2, str(res))
+n_status = sum(1 for c, _ in calls if c == "GetCampaignStatus")
+res2 = call_history.sync_from_server(months=2, today=date(2026, 6, 20))
+ok("sync חוזר — קמפיין שכבר במטמון לא נמשך שוב, רק החודש הנוכחי נקרא",
+   sum(1 for c, _ in calls if c == "GetCampaignStatus") == n_status
+   and res2["months_fetched"] == 1 and res2["new_campaigns"] == 0, str(res2))
+yemot._TRANSPORT = fake_transport
+
+stats = call_history_stats = yemot.answer_stats()
+old_s = stats.get(P_OLD) or {}
+ok("קמפיין מהשרת (לפני התוכנה) נספר: ניסיון + חיוג חוזר = 2 ניסיונות, 1 מענה",
+   old_s.get("attempts") == 2 and old_s.get("answered") == 1
+   and old_s.get("by_hour", {}).get(13) == [1, 2], str(old_s))
+c1 = stats.get("0534196458") or {}
+ok("שיחה נכנסת מהיומן = התקשרות בשעה 08",
+   c1.get("calls") == 1 and c1.get("by_call_hour") == {8: 1}, str(c1))
+# קמפיין שכבר ב-DB לא נספר פעמיים דרך המטמון
+g_dup = db.add_tzintuk_campaign("כפול", "2026-06-10", "t", "old-camp-1", 1,
+                                sent_at="2026-06-10T10:00:00+00:00")
+db.update_tzintuk_campaign(g_dup, 1, 0, "done",
+                           json.dumps([{"phone": P_OLD, "status": "done", "ok": True,
+                                        "at": "2026-06-10T10:03:00+00:00"}]))
+old_s2 = (yemot.answer_stats().get(P_OLD) or {})
+ok("campaign_id שכבר ב-DB — המטמון לא סופר אותו שוב",
+   old_s2.get("attempts") == 1 and old_s2.get("answered") == 1, str(old_s2))
+# התקשרות חוזרת שנרשמה בתוכנה בחודש שהיומן מכסה — לא נספרת פעמיים
+g_cb = db.add_tzintuk_campaign("קלאסי יוני", "2026-06-11", "t", "cb-june", 1,
+                               sent_at="2026-06-11T10:00:00+00:00")
+db.update_tzintuk_campaign(g_cb, 1, 0, "done",
+                           json.dumps([{"phone": "0534196458", "status": "callback", "ok": True,
+                                        "returned_at": "2026-06-01T05:10:00+00:00"}]))
+c1b = yemot.answer_stats().get("0534196458") or {}
+ok("callback של התוכנה בחודש מכוסה ביומן — לא נספר פעמיים",
+   c1b.get("calls") == 1, str(c1b))
+ok("summary/is_stale", call_history.summary()["campaigns"] == 1 and not call_history.is_stale())
+if _dl_old is not None:
+    canned["DownloadFile"] = _dl_old
+
 ok("_israel_str_to_utc_iso: startTime של השרת → UTC",
    yemot._israel_str_to_utc_iso("2026-09-03 14:50:43").startswith("2026-09-03T11:50:43")
    and yemot._israel_str_to_utc_iso("") == "" and yemot._israel_str_to_utc_iso("xx") == "")

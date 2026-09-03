@@ -252,3 +252,8 @@ checking_units_mail=aaa@ccc.com
 מספר בנפרד (רלוונטי כשיש redials או כשהקמפיין מדורג לפי `maxActiveChannels`).
 ב-`utils/yemot.py` (v3.09) זה נשמר כ-`at` (UTC iso) ו-`duration` (שניות) בתוך
 `report_json` ומזין את `answer_stats`.
+
+## נלמד חי 3/9/2026 — היסטוריה של הקו נגישה מה-API
+- **רשימת כל הקמפיינים:** `GetTransactions` (`from`=offset, `limit`≤200; `totalCount` חוזר 0 — לדפדף עד עמוד ריק/ישן מדי). רשומת קמפיין = `campaignId` לא-ריק (`description`="Start-<campaignId>"); שאר התנועות (ניתוב, צינתוק מהשלוחה) עם `campaignId=null` אבל `who`=מספר המתקשר.
+- **קמפיינים ישנים לא נמחקים:** `GetCampaignStatus` עונה גם לקמפיין מינואר 2026 עם `entries` מלאות (`startTime`, `redials`).
+- **יומן שיחות נכנסות:** `ivr2:/Log/LogFolderEnterExit-YYYY-MM.ymgr` — שורה לכל ביקור בשלוחה (`Folder#main%Phone#…%IncomingDID#…%EnterDate#dd/mm/yyyy%EnterTime#HH:MM:SS%ExitTime#…%TimeTotal#שניות%CallId#…`), שיחה = כל השורות עם אותו `CallId`. קבצים חודשיים מ-2020 (עד ~6MB לחודש). זה התחליף ל"יומן שיחות" שאין לו API. מומש ב-`utils/call_history.py` של מנהל חלוקה.

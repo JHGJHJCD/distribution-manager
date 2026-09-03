@@ -1125,6 +1125,11 @@ def get_campaign_status(campaign_id: str) -> dict:
             # the per-person hour statistics (answer_stats)
             "at": _israel_str_to_utc_iso(e.get("startTime")),
             "duration": round(float(e.get("duration") or 0) / 1000.0, 1),
+            # earlier attempts of the same number (maxDialAttempts>1) — each
+            # one is a real "rang at that hour, no answer" observation
+            "redials": [{"status": str(r.get("entryStatus") or "").lower(),
+                         "at": _israel_str_to_utc_iso(r.get("startTime"))}
+                        for r in (e.get("redials") or []) if isinstance(r, dict)],
         })
     delivered = sum(1 for e in entries if e["ok"])
     confirmed = sum(1 for e in entries if e["confirmed"])
@@ -1346,22 +1351,25 @@ def _entry_hour(iso: str):
 
 
 def answer_stats() -> dict:
-    """Per-phone reachability history, built only from what the campaign
-    reports already store (and sync) in tzintuk_campaigns:
+    """Per-phone reachability history:
     {phone: {"attempts": n, "answered": n, "calls": n,
              "by_hour": {hour: [good, tries]}, "by_call_hour": {hour: n},
              "best_hour": int|None}}.
-    Two kinds of evidence, both on the Israel clock:
-    * dial attempts — the hour the server actually rang THIS number
-      (entry 'at', v3.09; older reports fall back to the campaign's send hour)
-      and whether it was answered;
-    * calls back — the hour the person themself called the line (survey
-      answer 'answer_at', or 'returned_at' of the classic-tzintuk tracker).
-      Calling in is the strongest signal that the person is reachable at that
-      hour, so it counts as a success in by_hour too.
-    best_hour appears after MIN_SMART_HISTORY attempts or
-    MIN_CALLBACK_HISTORY calls back — the hour with the highest success rate
-    among hours seen at least twice."""
+    Sources (all on the Israel clock):
+    * the app's own campaign reports (tzintuk_campaigns, synced) — the hour the
+      server actually rang THIS number (entry 'at', v3.09; older reports fall
+      back to the campaign's send hour), its redials, and whether it answered;
+    * v3.10: the Yemot server's history cached by utils.call_history — every
+      campaign the line ever ran (even before the app) and every INCOMING
+      call to the line from the folder log. A campaign already stored in the
+      DB is not counted twice (campaign_id), and the app's own call-back
+      stamps ('answer_at'/'returned_at') are skipped for months the server log
+      covers.
+    Calling in is the strongest signal that the person is reachable at that
+    hour, so it counts as a success in by_hour too. best_hour appears after
+    MIN_SMART_HISTORY attempts or MIN_CALLBACK_HISTORY calls — the hour with
+    the highest success rate among hours seen at least twice."""
+    from utils import call_history
     stats = {}
 
     def _rec(p):
@@ -1369,14 +1377,23 @@ def answer_stats() -> dict:
                                     "by_hour": {}, "by_call_hour": {},
                                     "best_hour": None})
 
-    for camp in db.get_tzintuk_campaigns():
-        if camp.get("status") != "done":
-            continue
-        try:
-            entries = json.loads(camp.get("report_json") or "[]")
-        except ValueError:
-            continue
-        camp_hour = _entry_hour(camp.get("sent_at") or "")
+    def _attempt(p, hour, answered):
+        s = _rec(p)
+        s["attempts"] += 1
+        s["answered"] += 1 if answered else 0
+        bucket = s["by_hour"].setdefault(hour, [0, 0])
+        bucket[1] += 1
+        bucket[0] += 1 if answered else 0
+
+    def _call_in(p, hour):
+        s = _rec(p)
+        s["calls"] += 1
+        s["by_call_hour"][hour] = s["by_call_hour"].get(hour, 0) + 1
+        bucket = s["by_hour"].setdefault(hour, [0, 0])
+        bucket[1] += 1
+        bucket[0] += 1
+
+    def _entries(entries, camp_hour, callbacks: bool, covered: set):
         for e in entries or []:
             if not isinstance(e, dict):
                 continue
@@ -1392,23 +1409,46 @@ def answer_stats() -> dict:
             if hour is None:
                 hour = camp_hour
             if (answered or failed) and hour is not None:
-                s = _rec(p)
-                s["attempts"] += 1
-                s["answered"] += 1 if answered else 0
-                bucket = s["by_hour"].setdefault(hour, [0, 0])
-                bucket[1] += 1
-                bucket[0] += 1 if answered else 0
+                _attempt(p, hour, answered)
+                for r in e.get("redials") or []:
+                    rh = _entry_hour((r or {}).get("at") or "")
+                    if rh is not None:
+                        _attempt(p, rh, False)
             # (b) the person called the line back (one event per campaign)
-            call_hour = _entry_hour(e.get("answer_at") or "")
-            if call_hour is None:
-                call_hour = _entry_hour(e.get("returned_at") or "")
-            if call_hour is not None:
-                s = _rec(p)
-                s["calls"] += 1
-                s["by_call_hour"][call_hour] = s["by_call_hour"].get(call_hour, 0) + 1
-                bucket = s["by_hour"].setdefault(call_hour, [0, 0])
-                bucket[1] += 1
-                bucket[0] += 1
+            if not callbacks:
+                continue
+            call_iso = e.get("answer_at") or e.get("returned_at") or ""
+            when = timefmt.to_israel(call_iso)
+            if when is None or when.strftime("%Y-%m") in covered:
+                continue
+            _call_in(p, when.hour)
+
+    hist = call_history.load()
+    covered = set(hist.get("months") or {})
+    seen_ids = set()
+    for camp in db.get_tzintuk_campaigns():
+        if camp.get("status") != "done":
+            continue
+        try:
+            entries = json.loads(camp.get("report_json") or "[]")
+        except ValueError:
+            continue
+        if camp.get("campaign_id"):
+            seen_ids.add(str(camp["campaign_id"]))
+        _entries(entries, _entry_hour(camp.get("sent_at") or ""), True, covered)
+    for cid, camp in (hist.get("campaigns") or {}).items():
+        if cid in seen_ids or not isinstance(camp, dict):
+            continue
+        _entries(camp.get("entries"), _entry_hour(camp.get("at") or ""), False, covered)
+    for month in (hist.get("months") or {}).values():
+        for row in (month or {}).get("calls") or []:
+            try:
+                p, stamp = row[0], row[1]
+                hour = int(stamp[11:13])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if p and 0 <= hour < 24:
+                _call_in(p, hour)
     for s in stats.values():
         if s["attempts"] < MIN_SMART_HISTORY and s["calls"] < MIN_CALLBACK_HISTORY:
             continue
