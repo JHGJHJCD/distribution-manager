@@ -57,6 +57,7 @@ class _PollWorker(QThread):
         self._rows = None                 # last survey rows fetched (v3.02)
         self._n = 0
         self._stop = False
+        self.timed_out = False            # poll budget ran out before the campaign ended
 
     def stop(self):
         self._stop = True
@@ -77,7 +78,7 @@ class _PollWorker(QThread):
 
     def run(self):
         errors = 0
-        for _ in range(225):
+        for _ in range(900):            # ~60 minutes of 4-second polls
             if self._stop:
                 return
             try:
@@ -98,6 +99,10 @@ class _PollWorker(QThread):
                 if self._stop:
                     return
                 time.sleep(0.5)
+        # A very long campaign outlived the poll budget: the record is still
+        # 'sending' in the DB — the tab picks the tracking back up (a fresh
+        # budget) instead of leaving a frozen "שולח…" strip with no results.
+        self.timed_out = True
 
 
 class _CallbackWorker(QThread):
@@ -2232,8 +2237,20 @@ class TzintukimTab(QWidget):
         def work(items=scheds):
             out = []
             for c in items:
+                sid = str(c.get("campaign_id") or "").strip()
+                if not sid:
+                    # The server never echoed a schedId: find the pending run
+                    # of this record's template. Without an id, "not found"
+                    # (105) would wrongly mark it canceled while the server
+                    # still dials the list at the planned hour.
+                    sid = yemot.find_pending_sched_id(c.get("template_id") or "")
+                    if not sid:
+                        out.append((c["guid"], False,
+                                    "לא נמצא מזהה לתזמון הזה בשרת — בטל אותו "
+                                    "בממשק ימות (תזמוני קמפיינים) לפני שליחה חדשה"))
+                        continue
                 try:
-                    yemot.delete_scheduled_campaign(c.get("campaign_id") or "")
+                    yemot.delete_scheduled_campaign(sid)
                     out.append((c["guid"], True, ""))
                 except yemot.YemotError as e:
                     # 105 = already gone from the server → still mark canceled.
@@ -2347,6 +2364,21 @@ class TzintukimTab(QWidget):
     # ── Live tracking ─────────────────────────────────────────────────────────
 
     def _start_tracking(self, campaign_id: str, total: int, since_iso: str = ""):
+        # A tracker may already be running (a sync refresh resumed the other
+        # computer's campaign — or a due smart-send group — while the operator
+        # sat in the confirmation dialog). Retire it FIRST: two live workers on
+        # one strip would write campaign A's final results into campaign B's
+        # record (_active_guid), and A's finish would unlock the send buttons
+        # while B still polls.
+        old = self._worker
+        if old is not None:
+            try:
+                old.tick.disconnect(self._on_tick)
+                old.finished.disconnect(self._on_worker_done)
+            except (TypeError, RuntimeError):
+                pass
+            old.stop()
+            self._worker = None
         self.prog_frame.setVisible(True)
         self.btn_resend.setVisible(False)
         self.lbl_prog.setText("שולח בזמן אמת… אפשר להמשיך לעבוד, אל תסגור את התוכנה")
@@ -2391,7 +2423,10 @@ class TzintukimTab(QWidget):
                 "ממשיכות להתעדכן — כפתור \"רענן תשובות\" בהיסטוריה.")
             self.btn_resend.setText(f"🔄 שלח שוב ל-{len(self._last_failed)} שנכשלו")
             self.btn_resend.setVisible(bool(self._last_failed))
-            self._last_entries = list(st.get("entries") or [])
+            # A smart send / resend = several campaigns on the SAME list —
+            # keep the earlier groups' results, the newest wins per number.
+            self._last_entries = self._merge_entries(
+                self._last_entries, st.get("entries") or [])
             self._apply_results_to_table(self._last_entries, final=True)
             self._refresh_history()
             # The confirmation badges on the "חלוקה ורישום" list come from the
@@ -2404,6 +2439,18 @@ class TzintukimTab(QWidget):
                     pass
 
     _ANSWER_STYLE = {"1": ("✓", "#166534"), "2": ("✗", "#b91c1c"), "3": ("?", "#b45309")}
+
+    @staticmethod
+    def _merge_entries(older, newer) -> list:
+        """Per-number merge of two result lists — the newer entry replaces the
+        older one for the same phone, the rest of the older ones survive
+        (a smart send tracks one hour group after another; a resend rings only
+        the failed ones)."""
+        out = {}
+        for e in list(older or []) + list(newer or []):
+            if isinstance(e, dict) and e.get("phone"):
+                out[e["phone"]] = e
+        return list(out.values())
 
     def _apply_results_to_table(self, entries, final: bool = False):
         """Write each person's final result into the status column, so the
@@ -2445,8 +2492,12 @@ class TzintukimTab(QWidget):
         self.table.blockSignals(False)
 
     def _on_worker_done(self):
+        w = self._worker
         self._worker = None
         self._update_metrics()
+        if w is not None and getattr(w, "timed_out", False):
+            self.lbl_prog.setText("הקמפיין עדיין רץ בימות — ממשיך לעקוב…")
+            self._chain_next = True      # re-pick the still-'sending' record
         if self._chain_next:
             # A smart send schedules one campaign per hour; when one finishes,
             # pick up the next due one without waiting for a tab switch.
@@ -2753,7 +2804,7 @@ class TzintukimTab(QWidget):
         the ones that changed (each write is a sync-journal entry). Repaints
         the loaded list when it belongs to the newest of them."""
         changed_any = False
-        newest = None
+        mine = []                        # entries of every campaign of the loaded list's date
         for camp in self._answer_campaigns():
             entries = yemot._report_entries(camp)
             if not entries:
@@ -2765,14 +2816,17 @@ class TzintukimTab(QWidget):
                     int(camp.get("failed") or 0), "done",
                     json.dumps(entries, ensure_ascii=False))
                 changed_any = True
-            if newest is None:
-                newest = (camp, entries)
-        if newest is not None and self._is_loaded():
-            camp, entries = newest
             if (camp.get("dist_date") or "") == self._dist_date_iso():
-                self._last_entries = list(entries)
-                self._last_final = True
-                self._apply_results_to_table(entries, final=True)
+                mine.append(entries)
+        if mine and self._is_loaded():
+            # Every campaign of this list (smart-send hour groups, a resend)
+            # feeds the table — oldest first, so the newest wins per number.
+            merged = []
+            for entries in reversed(mine):
+                merged = self._merge_entries(merged, entries)
+            self._last_entries = merged
+            self._last_final = True
+            self._apply_results_to_table(merged, final=True)
         self._refresh_history()
         gt = getattr(self.main, "group_tab", None)
         if gt is not None and changed_any:

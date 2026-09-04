@@ -644,6 +644,22 @@ ok("find_scheduled מזהה שהתזמון רץ (SUCCESSFUL)",
 ok("find_scheduled לתזמון שאינו קיים", yemot.find_scheduled(999)[0] == "missing")
 yemot._TRANSPORT = fake_transport
 
+# v3.14 — רשומת תזמון בלי schedId: הביטול מאתר את המזהה לפי התבנית ברשימת
+# הממתינים (ובלי מזהה — לא מסמן "בוטל" בזמן שהשרת עדיין מחייג)
+ok("find_pending_sched_id מאתר לפי התבנית",
+   yemot.find_pending_sched_id(1117319) == "555")
+ok("find_pending_sched_id — תבנית בלי תזמון ממתין", yemot.find_pending_sched_id(42) == "")
+ok("find_pending_sched_id — בלי תבנית", yemot.find_pending_sched_id("") == "")
+
+# v3.14 — מיזוג תוצאות של כמה קמפיינים על אותה רשימה (שיגור חכם / שליחה חוזרת)
+from tabs.tzintukim import TzintukimTab as _TT
+_m = _TT._merge_entries([{"phone": "0521111111", "failed": True},
+                         {"phone": "0522222222", "ok": True}],
+                        [{"phone": "0521111111", "ok": True}, {"phone": ""}])
+_by = {e["phone"]: e for e in _m}
+ok("מיזוג תוצאות: החדש גובר לאותו מספר, הישן נשאר לשאר",
+   set(_by) == {"0521111111", "0522222222"} and _by["0521111111"].get("ok") is True)
+
 # ביטול תזמון + שגיאות בעברית
 canned["DeleteScheduledCampaign"] = {"responseStatus": "OK"}
 yemot.delete_scheduled_campaign(777)

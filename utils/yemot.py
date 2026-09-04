@@ -1188,6 +1188,18 @@ def find_scheduled(sched_id) -> tuple:
     return "missing", None
 
 
+def find_pending_sched_id(template_id) -> str:
+    """The schedId of the PENDING run of `template_id` on the server ('' when
+    none) — recovers a record whose ScheduleCampaign answer carried no id."""
+    tid = str(template_id or "").strip()
+    if not tid:
+        return ""
+    for c in reversed(get_scheduled_campaigns("PENDING")):
+        if str(_dig(c, "templateId") or "") == tid:
+            return str(_dig(c, "schedId") or _dig(c, "id") or "").strip()
+    return ""
+
+
 def delete_scheduled_campaign(sched_id) -> None:
     """Cancel a pending scheduled campaign. Raises a clear Hebrew error when it
     already ran (106) or is not on the server (105)."""
