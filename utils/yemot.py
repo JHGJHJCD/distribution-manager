@@ -77,18 +77,30 @@ class YemotError(Exception):
 
 _TRANSPORT = None          # tests inject: callable(url, data_bytes|None) -> bytes
 _SSL_FALLBACK = False      # switched on after the first SSLCertVerificationError
+# v3.15 — commands that DIAL (or arm a dial) are sent exactly ONCE: no automatic
+# retry and no twin-host fallback. A lost answer (timeout after the server
+# already accepted the request) used to be retried up to 4 times (main ×2,
+# private ×2) — every family rung again for each repeat. Reads/uploads stay
+# idempotent and keep the retries.
+_DIAL_COMMANDS = frozenset({"RunCampaign", "RunTzintuk", "ScheduleCampaign"})
+_DIAL_LOST_MSG = ("לא התקבלה תשובה משרת ימות המשיח על פקודת השליחה.\n"
+                  "ייתכן שהשליחה כבר יצאה — לפני שליחה חוזרת בדוק בממשק ימות "
+                  "(קמפיינים) או המתן לתוצאות בתוכנה, כדי לא לצלצל לכולם פעמיים.\n"
+                  "פרטים טכניים: {detail}")
 
 
-def _http(url: str, data: bytes | None = None) -> bytes:
-    if _TRANSPORT is not None:
-        return _TRANSPORT(url, data)
+def _http(url: str, data: bytes | None = None, retry: bool = True) -> bytes:
     global _SSL_FALLBACK
-    req = urllib.request.Request(url, data=data,
-                                 headers={"User-Agent": "ManhalHaluka"})
+    req = None
     last_err = None
-    retried = False
+    retried = not retry            # retry=False → a single attempt
     while True:
         try:
+            if _TRANSPORT is not None:
+                return _TRANSPORT(url, data)
+            if req is None:
+                req = urllib.request.Request(url, data=data,
+                                             headers={"User-Agent": "ManhalHaluka"})
             with urllib.request.urlopen(req, timeout=40) as resp:
                 return resp.read()
         except urllib.error.URLError as e:
@@ -114,8 +126,10 @@ def _http(url: str, data: bytes | None = None) -> bytes:
         # Surface the real cause — "check the internet" alone hides whether it
         # was DNS, SSL, a timeout or a filter block (learned in the v2.82 E2E).
         detail = str(last_err) or type(last_err).__name__
-        raise YemotError("אין חיבור לשרת ימות המשיח — בדוק את האינטרנט.\n"
-                         f"פרטים טכניים: {detail}", code=-1) from (
+        msg = (_DIAL_LOST_MSG.format(detail=detail) if not retry else
+               "אין חיבור לשרת ימות המשיח — בדוק את האינטרנט.\n"
+               f"פרטים טכניים: {detail}")
+        raise YemotError(msg, code=-1) from (
             last_err if isinstance(last_err, BaseException) else None)
 
 
@@ -151,16 +165,20 @@ def _call(command: str, params: dict | None = None, post: bool = False) -> dict:
     query = {"token": _token()}
     query.update({k: v for k, v in (params or {}).items() if v not in (None, "")})
     encoded = urllib.parse.urlencode(query)
+    once = command in _DIAL_COMMANDS     # v3.15 — a dial goes out exactly once
 
     def _fetch(base):
         if post:
-            return _http(f"{base}/{command}", encoded.encode("utf-8"))
-        return _http(f"{base}/{command}?{encoded}")
+            return _http(f"{base}/{command}", encoded.encode("utf-8"), retry=not once)
+        return _http(f"{base}/{command}?{encoded}", retry=not once)
 
     try:
         raw = _fetch(BASE_URL)
     except YemotError as e:
-        if e.code != -1:
+        if e.code != -1 or once:
+            if once and e.code == -1 and "ייתכן שהשליחה" not in str(e):
+                # a test transport raised the bare network error — same rule
+                raise YemotError(_DIAL_LOST_MSG.format(detail=str(e)), code=-1) from e
             raise
         raw = _fetch(ALT_URL)
     try:

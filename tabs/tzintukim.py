@@ -120,6 +120,8 @@ class _CallbackWorker(QThread):
             self.tracker.seed(seed_entries)
         self.deadline = float(deadline)
         self.since_iso = since_iso
+        self.guid = ""                    # the DB record this watch writes to (v3.15)
+        self.last_snapshot = None         # …and what it collected so far
         self._rows = None
         self._rows_at = 0.0
         self._stop = False
@@ -143,10 +145,12 @@ class _CallbackWorker(QThread):
         if self._rows is not None:
             _, ans_changed = yemot.merge_survey_answers(entries, self._rows, self.since_iso)
             changed = changed or ans_changed
-        return {"returned": returned, "answers": yemot.answer_counts(entries),
+        snap = {"returned": returned, "answers": yemot.answer_counts(entries),
                 "entries": entries, "changed": changed,
                 "remaining": max(0.0, self.deadline - time.time()),
                 "done": done, "error": error}
+        self.last_snapshot = snap
+        return snap
 
     def run(self):
         errors = 0
@@ -1430,9 +1434,17 @@ class TzintukimTab(QWidget):
         self.refresh()
 
     def _load_week_list(self):
-        """#ifc70 — explicit load of the current distribution list."""
-        self._list_loaded = True
+        """#ifc70 — explicit load of the current distribution list.
+        v3.15: also LEAVES a loaded past distribution / standalone list (the
+        batch used to win over this button — the operator kept seeing, and
+        sending to, last week's people) and drops the previous list's
+        per-row results so they cannot paint this list's rows."""
+        switching = self._batch is not None or self._free is not None
+        self._batch = None
         self._free = None
+        if switching:
+            self._reset_results()
+        self._list_loaded = True
         self.refresh()
 
     def _load_free_list(self):
@@ -1446,10 +1458,14 @@ class TzintukimTab(QWidget):
         self.refresh()
 
     def _clear_batch(self):
+        # "חזור לרשימת השבוע" (a past batch) lands on the week list, as its
+        # label promises; "נקה את הרשימה" (a standalone list) goes back to
+        # the explicit-load state (#ifc70).
+        was_batch = self._batch is not None and self._free is None
         self._batch = None
         self._free = None
         self._reset_results()
-        self._list_loaded = False    # back to the explicit-load state (#ifc70)
+        self._list_loaded = was_batch
         self.refresh()
 
     def _refresh_batch_banner(self):
@@ -2363,22 +2379,42 @@ class TzintukimTab(QWidget):
 
     # ── Live tracking ─────────────────────────────────────────────────────────
 
-    def _start_tracking(self, campaign_id: str, total: int, since_iso: str = ""):
-        # A tracker may already be running (a sync refresh resumed the other
-        # computer's campaign — or a due smart-send group — while the operator
-        # sat in the confirmation dialog). Retire it FIRST: two live workers on
-        # one strip would write campaign A's final results into campaign B's
-        # record (_active_guid), and A's finish would unlock the send buttons
-        # while B still polls.
-        old = self._worker
-        if old is not None:
+    @staticmethod
+    def _disconnect_all(worker, *signals):
+        for sig in signals:
             try:
-                old.tick.disconnect(self._on_tick)
-                old.finished.disconnect(self._on_worker_done)
+                sig.disconnect()
             except (TypeError, RuntimeError):
                 pass
-            old.stop()
-            self._worker = None
+
+    def _retire_trackers(self):
+        """v3.15 — stop EVERY live tracker before a new one starts. Both the
+        campaign poll and the classic call-back watch share one strip and
+        _active_guid; a tracker that outlives a new send writes campaign A's
+        results into campaign B's record. Until now only a poll retired a
+        poll — a classic send on top of a running poll (or any send on top of
+        a running call-back watch, e.g. the other computer's classic resumed
+        by a sync while the operator sat in the confirmation dialog) left both
+        alive, and a second classic send was silently not watched at all.
+        A retired call-back watch keeps what it collected (record stays
+        'sending' → _maybe_resume_tracking reopens it while its window lasts);
+        a retired poll's record stays 'sending' and is re-polled later."""
+        w, self._worker = self._worker, None
+        if w is not None:
+            self._disconnect_all(w, w.tick, w.finished)
+            w.stop()
+        cb, self._cb_worker = self._cb_worker, None
+        if cb is not None:
+            self._disconnect_all(cb, cb.tick, cb.finished)
+            cb.stop()
+            snap = getattr(cb, "last_snapshot", None)
+            if isinstance(snap, dict) and getattr(cb, "guid", ""):
+                self._persist_callback(snap, final=False, guid=cb.guid)
+            self.btn_extend_track.setVisible(False)
+            self.btn_stop_track.setVisible(False)
+
+    def _start_tracking(self, campaign_id: str, total: int, since_iso: str = ""):
+        self._retire_trackers()
         self.prog_frame.setVisible(True)
         self.btn_resend.setVisible(False)
         self.lbl_prog.setText("שולח בזמן אמת… אפשר להמשיך לעבוד, אל תסגור את התוכנה")
@@ -2388,13 +2424,18 @@ class TzintukimTab(QWidget):
         self.lbl_done.setText("הצליחו 0")
         self.lbl_fail.setText("נכשלו 0")
         self.lbl_wait.setText(f"ממתינים {total}")
-        self._worker = _PollWorker(campaign_id, self, since_iso)
-        self._worker.tick.connect(self._on_tick)
-        self._worker.finished.connect(self._on_worker_done)
-        self._worker.start()
+        w = _PollWorker(campaign_id, self, since_iso)
+        self._worker = w
+        # The worker rides along with its tick: a tick already queued by a
+        # worker retired a moment ago must not land on the new campaign.
+        w.tick.connect(lambda st, w=w: self._on_tick(st, w))
+        w.finished.connect(self._on_worker_done)
+        w.start()
         self._update_metrics()
 
-    def _on_tick(self, st):
+    def _on_tick(self, st, worker=None):
+        if worker is not None and worker is not self._worker:
+            return                       # stale tick of a retired tracker
         if isinstance(st, Exception):
             self.lbl_prog.setText("החיבור למעקב נכשל — הקמפיין ממשיך לרוץ בימות; "
                                   "התוצאות יתעדכנו בכניסה הבאה ללשונית.")
@@ -2513,8 +2554,7 @@ class TzintukimTab(QWidget):
         line back is caught in real time (Yemot keeps no call log, so this
         works only while the window is open); what they answered on the
         survey extension is read from its data file (persistent)."""
-        if self._cb_worker is not None:
-            return
+        self._retire_trackers()           # v3.15 — never two watches at once
         self._active_guid = guid
         self.prog_frame.setVisible(True)
         self.btn_resend.setVisible(False)
@@ -2526,10 +2566,12 @@ class TzintukimTab(QWidget):
         self.lbl_done.setText("📞 חזרו לשיחה 0")
         self.lbl_wait.setText(f"טרם חזרו {len(targets)}")
         self._cb_last_persist = time.time()
-        self._cb_worker = _CallbackWorker(targets, deadline, seed_entries, self, since_iso)
-        self._cb_worker.tick.connect(self._on_cb_tick)
-        self._cb_worker.finished.connect(self._on_cb_worker_done)
-        self._cb_worker.start()
+        cb = _CallbackWorker(targets, deadline, seed_entries, self, since_iso)
+        cb.guid = guid
+        self._cb_worker = cb
+        cb.tick.connect(lambda st, cb=cb: self._on_cb_tick(st, cb))
+        cb.finished.connect(self._on_cb_worker_done)
+        cb.start()
         self._update_metrics()
 
     def _extend_tracking(self):
@@ -2540,16 +2582,19 @@ class TzintukimTab(QWidget):
         if self._cb_worker is not None:
             self._cb_worker.stop()     # the worker emits a final snapshot
 
-    def _persist_callback(self, st, final: bool):
-        if not self._active_guid:
+    def _persist_callback(self, st, final: bool, guid: str = ""):
+        guid = guid or self._active_guid
+        if not guid:
             return
         db.update_tzintuk_campaign(
-            self._active_guid, int(st.get("returned") or 0), 0,
+            guid, int(st.get("returned") or 0), 0,
             "done" if final else "sending",
             json.dumps(st.get("entries") or [], ensure_ascii=False))
         self._cb_last_persist = time.time()
 
-    def _on_cb_tick(self, st):
+    def _on_cb_tick(self, st, worker=None):
+        if worker is not None and worker is not self._cb_worker:
+            return                       # stale tick of a retired watch
         if not isinstance(st, dict):
             return
         entries = st.get("entries") or []
@@ -2564,7 +2609,8 @@ class TzintukimTab(QWidget):
                 f"המעקב הסתיים ✓ — {returned} חזרו לשיחה ושמעו את ההודעה. "
                 f"התשובות בסקר (הקשה {yemot.SURVEY_EXT}) נשמרות בקו וממשיכות "
                 "להתעדכן — כפתור \"רענן תשובות\" בהיסטוריה.")
-            self._persist_callback(st, final=True)
+            self._persist_callback(st, final=True,
+                                   guid=getattr(worker, "guid", "") or "")
             self._last_entries = list(entries)
             self._last_final = True
             self._apply_results_to_table(entries, final=True)
@@ -2589,7 +2635,8 @@ class TzintukimTab(QWidget):
             self._last_final = False
             self._apply_results_to_table(self._last_entries)
             if time.time() - self._cb_last_persist > 120:
-                self._persist_callback(st, final=False)
+                self._persist_callback(st, final=False,
+                                       guid=getattr(worker, "guid", "") or "")
 
     def _on_cb_worker_done(self):
         self._cb_worker = None

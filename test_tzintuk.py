@@ -1198,6 +1198,162 @@ except yemot.YemotError as e:
        isinstance(partial, list) and [r["hour"] for r in partial] == [9], str(partial))
 yemot._TRANSPORT = fake_transport
 
+# ── 13. v3.15 — פקודות חיוג נשלחות פעם אחת (בלי ניסיון חוזר / שרת תאום) ─────
+print("— v3.15: פקודות חיוג יוצאות פעם אחת —")
+import urllib.error as _uerr
+import time as _time
+_real_sleep = _time.sleep
+yemot.time.sleep = lambda s: None          # the transient-retry pause
+attempts = []
+
+
+def dead_transport(url, data):
+    attempts.append(url)
+    raise _uerr.URLError("timed out")
+
+
+yemot._TRANSPORT = dead_transport
+try:
+    yemot.check_connection()
+    ok("קריאה רגילה: ניסיון חוזר + שרת תאום", False)
+except yemot.YemotError as e:
+    ok("קריאה רגילה: ניסיון חוזר + שרת תאום (4 ניסיונות)",
+       len(attempts) == 4 and e.code == -1
+       and sum("private.call2all" in u for u in attempts) == 2, str(len(attempts)))
+attempts.clear()
+try:
+    yemot.run_campaign({"0521111111": "א"}, "1117319")
+    ok("RunCampaign: ניסיון אחד בלבד", False)
+except yemot.YemotError as e:
+    ok("RunCampaign: ניסיון אחד בלבד + הודעת 'ייתכן שהשליחה כבר יצאה'",
+       len(attempts) == 1 and "RunCampaign" in attempts[0]
+       and "ייתכן שהשליחה" in str(e) and e.code == -1, f"{len(attempts)} {e}")
+attempts.clear()
+try:
+    yemot.run_tzintuk(["0521111111"])
+    ok("RunTzintuk: ניסיון אחד בלבד", False)
+except yemot.YemotError as e:
+    ok("RunTzintuk: ניסיון אחד בלבד", len(attempts) == 1 and e.code == -1)
+attempts.clear()
+try:
+    yemot._call("ScheduleCampaign", {"templateId": "1117319", "time": "2026-10-07 09:00"}, post=True)
+    ok("ScheduleCampaign: ניסיון אחד בלבד", False)
+except yemot.YemotError as e:
+    ok("ScheduleCampaign: ניסיון אחד בלבד", len(attempts) == 1 and e.code == -1)
+# a transient hiccup on a READ still recovers on the retry
+_n = {"i": 0}
+
+
+def once_flaky(url, data):
+    _n["i"] += 1
+    if _n["i"] == 1:
+        raise _uerr.URLError("connection reset")
+    return fake_transport(url, data)
+
+
+yemot._TRANSPORT = once_flaky
+yemot.check_connection()
+ok("תקלה חולפת בקריאה רגילה — הניסיון החוזר מצליח", _n["i"] == 2)
+yemot.time.sleep = _real_sleep
+yemot._TRANSPORT = fake_transport
+
+# ── 14. v3.15 — מסך הצינתוקים: מעקבים לא דורסים זה את זה; מעבר בין רשימות ──
+print("— v3.15: מעקבים ומעבר בין רשימות —")
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PyQt6.QtWidgets import QApplication
+_app = QApplication.instance() or QApplication([])
+import tabs.tzintukim as tzmod
+tzmod._PollWorker.start = lambda self: None          # no real threads in tests
+tzmod._CallbackWorker.start = lambda self: None
+tzmod._TaskWorker.start = lambda self: None
+tab = tzmod.TzintukimTab(None)
+tab._retire_trackers()
+ok("retire בלי מעקבים — שקט", tab._worker is None and tab._cb_worker is None)
+
+
+def _camp(guid):
+    return next(c for c in db.get_tzintuk_campaigns() if c["guid"] == guid)
+
+
+# (א) מעקב-חזרה של צינתוק קלאסי רץ (למשל של המחשב השני, שנקלט בסנכרון) —
+#     ואז שליחה רגילה: המעקב הישן נסגר, מה שאסף נשמר ברשומה *שלו*.
+gA = db.add_tzintuk_campaign("צינתוק קלאסי — א", "2026-10-07", "1117319", "", 2,
+                             status="sending")
+tab._start_callback_tracking(gA, {"0521111111": "א", "0522222222": "ב"},
+                             _time.time() + 1800)
+cbA = tab._cb_worker
+cbA.tracker.update([{"phone": "0521111111", "path": "", "duration": 4.0}], "2026-10-07T10:00:00+00:00")
+cbA._snapshot(False)
+ok("מעקב קלאסי פעיל עם snapshot", cbA is not None and cbA.last_snapshot["returned"] == 1)
+gB = db.add_tzintuk_campaign("חלוקה ב", "2026-10-07", "1117319", "camp-B", 3)
+tab._active_guid = gB
+tab._start_tracking("camp-B", 3, "")
+wB = tab._worker
+ok("שליחה רגילה מפטרת מעקב קלאסי שרץ", tab._cb_worker is None and cbA._stop and wB is not None)
+rA, rB = _camp(gA), _camp(gB)
+ok("מה שהמעקב הקלאסי אסף נשמר ברשומה שלו (sending, לחידוש)",
+   rA["status"] == "sending" and rA["delivered"] == 1
+   and any(e.get("status") == "callback" and e["phone"] == "0521111111"
+           for e in json.loads(rA["report_json"])), str(rA))
+ok("הרשומה של השליחה החדשה לא נגעה", rB["status"] == "sending" and rB["delivered"] == 0)
+# tick מאוחר של המעקב שפוטר — מתעלמים
+tab._on_cb_tick({"done": True, "returned": 2, "entries": [], "answers": {}, "remaining": 0}, cbA)
+ok("tick מאוחר של מעקב שפוטר לא נכתב לשום רשומה",
+   _camp(gA)["delivered"] == 1 and _camp(gB)["delivered"] == 0)
+fin = {"finished": True, "total": 3, "delivered": 2, "failed": 1, "pending": 0,
+       "entries": [{"phone": "0521111111", "ok": True, "status": "done"},
+                   {"phone": "0523333333", "failed": True, "status": "no_answer"}]}
+tab._on_tick(fin, wB)
+ok("tick של המעקב הנוכחי נכתב לרשומה הנכונה",
+   _camp(gB)["status"] == "done" and _camp(gB)["delivered"] == 2
+   and _camp(gA)["status"] == "sending")
+# (ב) ההפך: סקר-קמפיין רץ, ואז צינתוק קלאסי — הסקר נסגר ו-tick מאוחר שלו
+#     לא נכתב לרשומת הקלאסי.
+gC = db.add_tzintuk_campaign("חלוקה ג", "2026-10-14", "1117319", "camp-C", 2)
+tab._active_guid = gC
+tab._start_tracking("camp-C", 2, "")
+wC = tab._worker
+gD = db.add_tzintuk_campaign("צינתוק קלאסי — ד", "2026-10-14", "1117319", "", 1,
+                             status="sending")
+tab._start_callback_tracking(gD, {"0529999999": "ד"}, _time.time() + 1800)
+ok("צינתוק קלאסי מפטר סקר-קמפיין שרץ", tab._worker is None and wC._stop
+   and tab._cb_worker is not None and tab._cb_worker.guid == gD)
+tab._on_tick(dict(fin, delivered=1), wC)
+ok("tick מאוחר של הסקר לא נכתב לרשומת הקלאסי",
+   _camp(gD)["status"] == "sending" and _camp(gD)["delivered"] == 0
+   and _camp(gC)["status"] == "sending")
+# מעקב קלאסי שני מחליף את הראשון (עד עכשיו נבלע בשקט)
+gE = db.add_tzintuk_campaign("צינתוק קלאסי — ה", "2026-10-14", "1117319", "", 1,
+                             status="sending")
+cbD = tab._cb_worker
+tab._start_callback_tracking(gE, {"0528888888": "ה"}, _time.time() + 1800)
+ok("מעקב קלאסי שני מחליף את הראשון ולא נבלע",
+   tab._cb_worker is not None and tab._cb_worker.guid == gE and cbD._stop)
+tab._retire_trackers()
+
+# (ג) "רשימת החלוקה הנוכחית" יוצאת מחלוקה קודמת / רשימה עצמאית ומנקה תוצאות
+tab.load_batch({"id": 424242, "dist_name": "חלוקת פסח", "dist_date": "2026-04-01"})
+ok("חלוקה קודמת נטענת (רצועת מקור גלויה)",
+   tab._batch is not None and not tab.batch_frame.isHidden()
+   and tab._dist_date_iso() == "2026-04-01")
+tab._last_entries = [{"phone": "0521111111", "ok": True}]
+tab._last_final = True
+tab._load_week_list()
+ok("'רשימת החלוקה הנוכחית' עוזבת את החלוקה הקודמת",
+   tab._batch is None and tab._free is None and tab._list_loaded
+   and tab.batch_frame.isHidden()
+   and tab._dist_date_iso() == db.next_wednesday().isoformat())
+ok("תוצאות הרשימה הקודמת לא זולגות לרשימה החדשה",
+   tab._last_entries == [] and not tab._last_final)
+tab._free = [("0521111111", "x")]
+tab.refresh()
+tab._clear_batch()
+ok("'נקה את הרשימה' (רשימה עצמאית) → מצב לא-טעון", not tab._list_loaded and tab._free is None)
+tab.load_batch({"id": 424242, "dist_name": "חלוקת פסח", "dist_date": "2026-04-01"})
+tab._clear_batch()
+ok("'חזור לרשימת השבוע' (חלוקה קודמת) → רשימת השבוע טעונה",
+   tab._list_loaded and tab._batch is None and tab.batch_frame.isHidden())
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")
