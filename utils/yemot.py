@@ -1443,16 +1443,30 @@ def _parse_since(since_iso):
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
 
 
-def merge_survey_answers(entries: list, rows: list, since_iso: str = "") -> tuple:
+def merge_survey_answers(entries: list, rows: list, since_iso: str = "",
+                         until_by_phone: dict | None = None) -> tuple:
     """Stamp each report entry with the person's LATEST survey answer given
     after `since_iso` (the campaign's send time — last week's answers must not
     leak into this week): entry['answer'] = '1'/'2'/'3', or '' = the survey was
     checked and the person did not answer ("לא הגיב"); entry['answer_at'] =
-    UTC iso. Returns (entries, changed)."""
+    UTC iso. Returns (entries, changed).
+
+    until_by_phone (v3.20): {phone: UTC iso} — the moment a LATER campaign
+    rang that number. An answer given after it belongs to that later campaign,
+    not to this one (until now this week's answers were also stamped onto
+    last week's campaign, rewriting its history and its "אישר הגעה" tags)."""
     since = _parse_since(since_iso)
+    until = {}
+    for p, iso in (until_by_phone or {}).items():
+        dt = _parse_since(iso) if isinstance(iso, str) else iso
+        if dt is not None:
+            until[p] = dt
     latest = {}
     for r in rows or []:
         if since is not None and r["at"] < since:
+            continue
+        stop = until.get(r["phone"])
+        if stop is not None and r["at"] >= stop:
             continue
         cur = latest.get(r["phone"])
         if cur is None or r["at"] >= cur[0]:
@@ -1469,6 +1483,27 @@ def merge_survey_answers(entries: list, rows: list, since_iso: str = "") -> tupl
         e["answer"] = answer
         e["answer_at"] = at
     return entries, changed
+
+
+def answer_windows(camps: list) -> dict:
+    """{guid: {phone: sent_at iso of the NEXT campaign that rang this phone}}
+    for a newest-first campaign list — the per-phone upper bound handed to
+    merge_survey_answers, so every survey answer is credited to the most
+    recent campaign that rang the number (canceled / failed / still-future
+    schedules ring nobody and are ignored). Pure — unit-tested."""
+    out = {}
+    latest = {}                       # phone → sent_at of the nearest LATER campaign
+    for camp in camps or []:
+        if camp.get("status") not in ("sending", "done"):
+            continue
+        sent = camp.get("sent_at") or ""
+        phones = {normalize_phone(e.get("phone")) for e in _report_entries(camp)}
+        phones.discard("")
+        out[camp.get("guid") or ""] = {p: latest[p] for p in phones if p in latest}
+        if sent:
+            for p in phones:
+                latest[p] = sent
+    return out
 
 
 def survey_checked(entries) -> bool:

@@ -50,10 +50,12 @@ class _PollWorker(QThread):
     campaign finishes (or ~15 minutes pass)."""
     tick = pyqtSignal(object)          # status dict | Exception
 
-    def __init__(self, campaign_id: str, parent=None, since_iso: str = ""):
+    def __init__(self, campaign_id: str, parent=None, since_iso: str = "",
+                 until_by_phone: dict | None = None):
         super().__init__(parent)
         self.campaign_id = campaign_id
         self.since_iso = since_iso        # campaign send time — survey answers before it don't count
+        self.until_by_phone = until_by_phone   # v3.20 — per number, when a LATER campaign rang it
         self._rows = None                 # last survey rows fetched (v3.02)
         self._n = 0
         self._stop = False
@@ -74,7 +76,8 @@ class _PollWorker(QThread):
             except Exception:
                 pass
         if self._rows is not None:
-            yemot.merge_survey_answers(st.get("entries") or [], self._rows, self.since_iso)
+            yemot.merge_survey_answers(st.get("entries") or [], self._rows, self.since_iso,
+                                       self.until_by_phone)
             st["answers"] = yemot.answer_counts(st.get("entries") or [])
 
     def run(self):
@@ -2553,7 +2556,11 @@ class TzintukimTab(QWidget):
         self.lbl_done.setText("הצליחו 0")
         self.lbl_fail.setText("נכשלו 0")
         self.lbl_wait.setText(f"ממתינים {total}")
-        w = _PollWorker(campaign_id, self, since_iso)
+        # A resumed OLDER campaign (retired by a second send, tracked after it)
+        # must not absorb answers given after the newer one rang the number.
+        windows = yemot.answer_windows(db.get_tzintuk_campaigns(limit=200))
+        w = _PollWorker(campaign_id, self, since_iso,
+                        windows.get(self._active_guid or ""))
         w.guid = self._active_guid                      # the record it writes to
         w.dist_date = self._campaign_dist_date(self._active_guid)
         self._worker = w
@@ -2595,9 +2602,12 @@ class TzintukimTab(QWidget):
             if self._results_belong_here(worker):
                 self._last_final = True
                 # A smart send / resend = several campaigns on the SAME list —
-                # keep the earlier groups' results, the newest wins per number.
-                self._last_entries = self._merge_entries(
-                    self._last_entries, st.get("entries") or [])
+                # the table shows every finished campaign of this list merged,
+                # the newest CAMPAIGN winning per number (v3.20: by send time,
+                # not by the order the trackers happened to finish — a tracker
+                # retired by a second send and resumed afterwards used to
+                # overwrite the second send's results with the first's).
+                self._last_entries = self._list_results()
                 # "Resend to the failed" covers EVERY group of this list (a smart
                 # send finishes hour by hour); a number that succeeded in a later
                 # group is no longer failed (newest wins in the merge).
@@ -2618,6 +2628,19 @@ class TzintukimTab(QWidget):
                     pass
 
     _ANSWER_STYLE = {"1": ("✓", "#166534"), "2": ("✗", "#b91c1c"), "3": ("?", "#b45309")}
+
+    def _list_results(self) -> list:
+        """The per-number results of EVERY finished campaign of the list on
+        screen, merged oldest → newest so the most recent campaign wins per
+        number — whatever order their trackers finished in (a poll retired by
+        a second send resumes only after that send is done)."""
+        camps = [c for c in db.get_tzintuk_campaigns(limit=200)
+                 if c.get("status") == "done"
+                 and self._belongs_here(c.get("dist_date") or "", c.get("guid") or "")]
+        merged = []
+        for c in reversed(camps):          # newest-first → oldest-first
+            merged = self._merge_entries(merged, yemot._report_entries(c))
+        return merged
 
     @staticmethod
     def _merge_entries(older, newer) -> list:
@@ -3021,29 +3044,33 @@ class TzintukimTab(QWidget):
         the ones that changed (each write is a sync-journal entry). Repaints
         the loaded list when it belongs to the newest of them."""
         changed_any = False
-        mine = []                        # entries of every campaign of the loaded list's date
+        # v3.20 — an answer is credited to the NEWEST campaign that rang the
+        # number: each campaign's window closes when a later one rings the
+        # same phone (until now this week's answers were also written onto
+        # last week's campaign — its history, export and "אישר הגעה" tags
+        # kept changing after the fact).
+        windows = yemot.answer_windows(db.get_tzintuk_campaigns(limit=200))
         for camp in self._answer_campaigns():
             entries = yemot._report_entries(camp)
             if not entries:
                 continue
-            entries, changed = yemot.merge_survey_answers(entries, rows, camp.get("sent_at") or "")
+            entries, changed = yemot.merge_survey_answers(
+                entries, rows, camp.get("sent_at") or "",
+                windows.get(camp.get("guid") or ""))
             if changed:
                 db.update_tzintuk_campaign(
                     camp["guid"], int(camp.get("delivered") or 0),
                     int(camp.get("failed") or 0), "done",
                     json.dumps(entries, ensure_ascii=False))
                 changed_any = True
-            if self._belongs_here(camp.get("dist_date") or "", camp.get("guid") or ""):
-                mine.append(entries)
-        if mine and self._is_loaded():
+        if self._is_loaded():
             # Every campaign of this list (smart-send hour groups, a resend)
             # feeds the table — oldest first, so the newest wins per number.
-            merged = []
-            for entries in reversed(mine):
-                merged = self._merge_entries(merged, entries)
-            self._last_entries = merged
-            self._last_final = True
-            self._apply_results_to_table(merged, final=True)
+            merged = self._list_results()
+            if merged:
+                self._last_entries = merged
+                self._last_final = True
+                self._apply_results_to_table(merged, final=True)
         self._refresh_history()
         gt = getattr(self.main, "group_tab", None)
         if gt is not None and changed_any:

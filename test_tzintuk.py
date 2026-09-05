@@ -1709,6 +1709,88 @@ for _i in range(40):
 ok("קמפיין מהשבועיים האחרונים נשאר ברענון התשובות גם אחרי 40 שליחות חדשות",
    any(c["guid"] == _gOld for c in tab._answer_campaigns()))
 
+# ── 19. סקירה 5/9/2026 (ד) — תשובות סקר זולגות אחורה; מעקב ישן שמסתיים אחרון דורס את החדש ──
+print("— סקירה 5/9 (ד): חלון תשובות לכל קמפיין / סדר סיום המעקבים —")
+_close_all(); _calls.clear(); _msgs.clear()
+tzmod._SendModeDialog.exec = _exec_plain
+_now = datetime.now(_tz.utc)
+_P = "0527777777"
+
+# (א) answer_windows — טהור: לכל קמפיין, מתי קמפיין מאוחר יותר צלצל לאותו מספר
+_wins = yemot.answer_windows([
+    {"guid": "n", "status": "done", "sent_at": "2026-09-03T10:00:00+00:00",
+     "report_json": json.dumps([{"phone": _P}, {"phone": "0521111111"}])},
+    {"guid": "s", "status": "scheduled", "sent_at": "2026-09-02T10:00:00+00:00",
+     "report_json": json.dumps([{"phone": _P}])},              # לא צלצל — לא חוסם
+    {"guid": "o", "status": "done", "sent_at": "2026-08-27T10:00:00+00:00",
+     "report_json": json.dumps([{"phone": "972527777777"}, {"phone": "0529999999"}])},
+])
+ok("answer_windows: הקמפיין הישן נחסם ברגע שהחדש צלצל לאותו מספר (972 מנורמל)",
+   _wins["o"].get(_P) == "2026-09-03T10:00:00+00:00" and "0529999999" not in _wins["o"], str(_wins))
+ok("answer_windows: הקמפיין החדש ביותר בלי חסם; תזמון שטרם רץ לא נחשב",
+   _wins["n"] == {} and "s" not in _wins, str(_wins))
+
+# (ב) merge עם חסם עליון: תשובה אחרי הקמפיין החדש לא נכנסת לישן
+_rows19 = [{"phone": _P, "at": _now - _td(days=3), "answer": "1"},
+           {"phone": _P, "at": _now - _td(minutes=30), "answer": "2"}]
+_gOld19 = db.add_tzintuk_campaign("שבוע שעבר", "2026-08-26", "1117319", "c-o19", 1,
+                                  sent_at=(_now - _td(days=6)).isoformat())
+db.update_tzintuk_campaign(_gOld19, 1, 0, "done", json.dumps([{"phone": _P, "ok": True, "status": "done"}]))
+_gNew19 = db.add_tzintuk_campaign("השבוע", week, "1117319", "c-n19", 1,
+                                  sent_at=(_now - _td(hours=1)).isoformat())
+db.update_tzintuk_campaign(_gNew19, 1, 0, "done", json.dumps([{"phone": _P, "ok": True, "status": "done"}]))
+tab._apply_answer_rows(_rows19)
+_eo = yemot._report_entries(_camp(_gOld19))[0]
+_en = yemot._report_entries(_camp(_gNew19))[0]
+ok("תשובת השבוע (2) לא נכתבת על קמפיין שבוע שעבר — הוא שומר את התשובה שניתנה בזמנו (1)",
+   _eo.get("answer") == "1", str(_eo))
+ok("הקמפיין החדש מקבל את תשובת השבוע (2)", _en.get("answer") == "2", str(_en))
+ok("answers_for_date — כל תאריך עם התשובה שלו",
+   yemot.answers_for_date("2026-08-26").get(_P) == "1"
+   and yemot.answers_for_date(week).get(_P) == "2")
+ok("confirmed_phones של שבוע שעבר לא משתנה בגלל תשובת השבוע",
+   _P in yemot.confirmed_phones("2026-08-26") and _P not in yemot.confirmed_phones(week))
+
+# (ג) שני מעקבים על אותה רשימה שמסתיימים בסדר הפוך: שליחה A רצה, המפעיל שולח שוב (B),
+#     A מפוטר, B נגמר (X קיבל), A מתחדש ונגמר אחרון (X נכשל אצלו) — עד עכשיו התוצאה
+#     של A דרסה את B על המסך ו"שלח שוב לנכשלים" הציע את X שכבר קיבל את ההודעה.
+_close_all(); _calls.clear(); _msgs.clear()
+tab.load_batch({"id": 1912, "dist_name": "חלוקת חנוכה", "dist_date": "2026-12-09"})
+tab._rows = [{"rec": {"id": 7101, "full_name": "משפחה X"}, "phones": ["0521111111"],
+              "send": ["0521111111"], "checked": True, "why": "", "manual": False},
+             {"rec": {"id": 7102, "full_name": "משפחה Y"}, "phones": ["0522222222"],
+              "send": ["0522222222"], "checked": True, "why": "", "manual": False}]
+tab._populate()
+tab._send()
+_gA19, _wA19 = tab._active_guid, tab._worker
+ok("שליחה A במעקב", _wA19 is not None and _camp(_gA19)["status"] == "sending")
+db.update_tzintuk_campaign(_gA19, 0, 0, "sending")     # חותמת ישנה יותר מ-B
+import time as _t19; _t19.sleep(0.01)
+tab._send()                                            # B (אזהרת "כבר נשלח" מאושרת)
+_gB19, _wB19 = tab._active_guid, tab._worker
+ok("שליחה B מפטרת את מעקב A", _gB19 != _gA19 and _wA19._stop and _wB19 is not _wA19)
+tab._on_tick({"finished": True, "total": 2, "delivered": 2, "failed": 0, "pending": 0,
+              "entries": [{"phone": "0521111111", "ok": True, "status": "done"},
+                          {"phone": "0522222222", "ok": True, "status": "done"}]}, _wB19)
+tab._on_worker_done()
+ok("B הסתיים — אין נכשלים", _camp(_gB19)["status"] == "done" and tab._last_failed == [])
+tab._maybe_resume_tracking()                           # A (עדיין 'sending') מתחדש
+_wA2 = tab._worker
+ok("מעקב A מתחדש אחרי ש-B נגמר", _wA2 is not None and _wA2.guid == _gA19, str(getattr(_wA2, "guid", None)))
+tab._on_tick({"finished": True, "total": 2, "delivered": 1, "failed": 1, "pending": 0,
+              "entries": [{"phone": "0521111111", "failed": True, "status": "no_answer"},
+                          {"phone": "0522222222", "ok": True, "status": "done"}]}, _wA2)
+tab._on_worker_done()
+ok("A נשמר בהיסטוריה עם התוצאה שלו (X נכשל אצלו)",
+   _camp(_gA19)["status"] == "done" and _camp(_gA19)["failed"] == 1)
+ok("על המסך התוצאה של השליחה המאוחרת (B) גוברת — X קיבל, אין נכשלים לשליחה חוזרת",
+   tab._last_failed == [] and tab.btn_resend.isHidden()
+   and (tab.table.item(0, 3).text() if tab.table.item(0, 3) else "") == "קיבל את ההודעה",
+   f"failed={tab._last_failed} cell={tab.table.item(0, 3).text() if tab.table.item(0, 3) else None}")
+tab._retire_trackers()
+tab._clear_batch()
+_close_all(); _calls.clear(); _msgs.clear()
+
 for k, v in _orig.items():
     if k in ("info", "warn", "question"):
         setattr(tzmod.QMessageBox, {"info": "information", "warn": "warning", "question": "question"}[k], v)
