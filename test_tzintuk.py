@@ -1202,6 +1202,7 @@ yemot._TRANSPORT = fake_transport
 print("— v3.15: פקודות חיוג יוצאות פעם אחת —")
 import urllib.error as _uerr
 import time as _time
+from utils import timefmt
 _real_sleep = _time.sleep
 yemot.time.sleep = lambda s: None          # the transient-retry pause
 attempts = []
@@ -1353,6 +1354,121 @@ tab.load_batch({"id": 424242, "dist_name": "חלוקת פסח", "dist_date": "20
 tab._clear_batch()
 ok("'חזור לרשימת השבוע' (חלוקה קודמת) → רשימת השבוע טעונה",
    tab._list_loaded and tab._batch is None and tab.batch_frame.isHidden())
+
+# ── 15. סקירה 5/9/2026 — שליחה חוזרת אחרי החלפת רשימה, תזמון בלי מזהה, מעקב שנפל ──
+print("— סקירה 5/9: שליחה חוזרת / תזמון בלי מזהה / מעקב שנפל —")
+# (א) קמפיין נגמר עם נכשלים על חלוקה קודמת → המפעיל עובר לרשימת השבוע:
+#     כפתור "שלח שוב לנכשלים" חייב להיעלם — אחרת השליחה החוזרת יוצאת לאנשי
+#     הרשימה הקודמת ונרשמת על תאריך החלוקה של הרשימה החדשה.
+tab.load_batch({"id": 424242, "dist_name": "חלוקת פסח", "dist_date": "2026-04-01"})
+gF = db.add_tzintuk_campaign("חלוקה פסח", "2026-04-01", "1117319", "camp-F", 2)
+tab._active_guid = gF
+tab._start_tracking("camp-F", 2, "")
+tab._on_tick({"finished": True, "total": 2, "delivered": 1, "failed": 1, "pending": 0,
+              "entries": [{"phone": "0521111111", "ok": True, "status": "done"},
+                          {"phone": "0523333333", "failed": True, "status": "no_answer"}]},
+             tab._worker)
+tab._on_worker_done()
+ok("אחרי סיום עם נכשלים — כפתור שליחה חוזרת גלוי",
+   tab._last_failed and not tab.btn_resend.isHidden())
+tab._load_week_list()
+ok("מעבר לרשימת השבוע מנקה את רשימת הנכשלים של הרשימה הקודמת",
+   tab._last_failed == [] and tab.btn_resend.isHidden())
+# (א2) שיגור חכם: הנכשלים של *כל* הקבוצות נשמרים לשליחה חוזרת (לא רק האחרונה)
+gG = db.add_tzintuk_campaign("קבוצה 10", "2026-10-21", "T10", "camp-G", 1)
+tab._active_guid = gG
+tab._start_tracking("camp-G", 1, "")
+tab._on_tick({"finished": True, "total": 1, "delivered": 0, "failed": 1, "pending": 0,
+              "entries": [{"phone": "0524444444", "failed": True, "status": "no_answer"}]},
+             tab._worker)
+tab._on_worker_done()
+gH = db.add_tzintuk_campaign("קבוצה 12", "2026-10-21", "T12", "camp-H", 1)
+tab._active_guid = gH
+tab._start_tracking("camp-H", 1, "")
+tab._on_tick({"finished": True, "total": 1, "delivered": 0, "failed": 1, "pending": 0,
+              "entries": [{"phone": "0525555555", "failed": True, "status": "no_answer"}]},
+             tab._worker)
+tab._on_worker_done()
+ok("שיגור חכם — הנכשלים של כל הקבוצות נצברים לשליחה חוזרת",
+   {e["phone"] for e in tab._last_failed} == {"0524444444", "0525555555"},
+   str(tab._last_failed))
+tab._retire_trackers()
+
+# (ב) תזמון שהשרת לא החזיר לו schedId (campaign_id ריק) ורץ בינתיים:
+#     עד עכשיו find_scheduled("") = "לא קיים" → אחרי שעה סומן "התזמון נכשל"
+#     בזמן שהשרת כבר חייג, והתוצאות מעולם לא נעקבו. האיתור לפי התבנית+השעה.
+from datetime import timedelta as _td, timezone as _tz
+_planned = datetime.now(_tz.utc) - _td(hours=2)
+_planned_local = _planned.astimezone(timefmt._israel_zone()).strftime("%Y-%m-%d %H:%M:%S")
+gS = db.add_tzintuk_campaign("צינתוק מתוזמן — בלי מזהה", "2026-11-04", "T-H09", "", 3,
+                             sent_at=_planned.isoformat(), status="scheduled")
+def sched_by_type_transport(url, data):
+    q = urllib.parse.urlparse(url)
+    command = q.path.rsplit("/", 1)[-1]
+    params = {k: v[0] for k, v in urllib.parse.parse_qs(q.query).items()}
+    if command == "GetScheduledCampaigns":
+        items = []
+        if params.get("type") == "SUCCESSFUL":
+            items = [{"schedId": 900, "templateId": "T-H09", "campaignId": "camp-old",
+                      "startTime": "2026-01-01 09:00:00"},        # ריצה ישנה של אותה תבנית
+                     {"schedId": 901, "templateId": "T-H09", "campaignId": "camp-901",
+                      "startTime": _planned_local}]
+        return json.dumps({"responseStatus": "OK", "scheduled": items}).encode("utf-8")
+    return fake_transport(url, data)
+yemot._TRANSPORT = sched_by_type_transport
+tab._check_scheduled()
+ok("בודק-התזמונים יצא לדרך", tab._sched_checker is not None)
+tab._sched_checker.run()          # start() מנוטרל — מריצים את הבדיקה כאן
+recS = _camp(gS)
+ok("תזמון בלי מזהה שרץ — מזוהה לפי התבנית והשעה (לא 'נכשל')",
+   recS["status"] == "sending" and recS["campaign_id"] == "camp-901", str(recS))
+ok("…והמעקב אחרי התוצאות מתחיל", tab._worker is not None
+   and tab._worker.campaign_id == "camp-901")
+tab._retire_trackers()
+# תזמון בלי מזהה שעדיין ממתין בשרת (פורמט `time` של PENDING) — המזהה נשמר
+# ברשומה כדי ש"בטל תזמון" ידע למי לפנות; הסטטוס נשאר "מתוזמן"
+_soon = datetime.now(_tz.utc) - _td(minutes=2)
+_soon_local = _soon.astimezone(timefmt._israel_zone()).strftime("%Y-%m-%d %H:%M")
+gP = db.add_tzintuk_campaign("צינתוק מתוזמן — ממתין בלי מזהה", "2026-11-18", "T-H10", "", 2,
+                             sent_at=_soon.isoformat(), status="scheduled")
+def pending_by_time_transport(url, data):
+    q = urllib.parse.urlparse(url)
+    command = q.path.rsplit("/", 1)[-1]
+    params = {k: v[0] for k, v in urllib.parse.parse_qs(q.query).items()}
+    if command == "GetScheduledCampaigns":
+        items = ([{"schedId": 910, "templateId": "T-H10", "time": _soon_local}]
+                 if params.get("type") == "PENDING" else [])
+        return json.dumps({"responseStatus": "OK", "scheduled": items}).encode("utf-8")
+    return fake_transport(url, data)
+yemot._TRANSPORT = pending_by_time_transport
+tab._check_scheduled()
+tab._sched_checker.run()
+recP = _camp(gP)
+ok("תזמון ממתין בלי מזהה — המזהה מאותר ונשמר, הסטטוס נשאר מתוזמן",
+   recP["status"] == "scheduled" and recP["campaign_id"] == "910", str(recP))
+db.update_tzintuk_campaign(gP, 0, 0, "canceled")
+db.update_tzintuk_campaign(gS, 0, 0, "done")
+yemot._TRANSPORT = fake_transport
+
+# (ג) מעקב חי שנפל (5 כשלי רשת) — הרשומה נשארת 'sending' והמסך "המעקב נכשל"
+#     עד ביקור מקרי בלשונית. עכשיו: ניסיון חידוש אוטומטי אחרי דקה.
+_shots = []
+_orig_single = tzmod.QTimer.singleShot
+tzmod.QTimer.singleShot = staticmethod(lambda ms, fn: _shots.append((ms, fn)))
+try:
+    gX = db.add_tzintuk_campaign("חלוקה X", "2026-11-11", "1117319", "camp-X", 1)
+    tab._active_guid = gX
+    tab._start_tracking("camp-X", 1, "")
+    wX = tab._worker
+    wX.failed = True
+    tab._on_tick(RuntimeError("net"), wX)
+    tab._on_worker_done()
+    ok("מעקב שנפל מתזמן חידוש אוטומטי (~דקה)",
+       any(ms >= 30000 and getattr(fn, "__name__", "") == "_maybe_resume_tracking"
+           for ms, fn in _shots), str([(ms, getattr(fn, "__name__", fn)) for ms, fn in _shots]))
+finally:
+    tzmod.QTimer.singleShot = _orig_single
+tab._retire_trackers()
 
 print()
 if fails:

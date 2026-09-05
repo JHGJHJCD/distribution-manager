@@ -58,6 +58,7 @@ class _PollWorker(QThread):
         self._n = 0
         self._stop = False
         self.timed_out = False            # poll budget ran out before the campaign ended
+        self.failed = False               # gave up on repeated network errors
 
     def stop(self):
         self._stop = True
@@ -86,6 +87,7 @@ class _PollWorker(QThread):
             except Exception as e:
                 errors += 1
                 if errors >= 5:
+                    self.failed = True
                     self.tick.emit(e)
                     return
                 time.sleep(8)
@@ -1420,10 +1422,15 @@ class TzintukimTab(QWidget):
         return ("id", rid) if rid is not None else ("ph", tuple(row["phones"]))
 
     def _reset_results(self):
-        """Forget the per-row results of the last campaign (list changed)."""
+        """Forget the per-row results of the last campaign (list changed).
+        The "resend to the failed" list goes with them: it belongs to the
+        PREVIOUS list, and a resend from here would ring last week's people
+        and be recorded under the new list's distribution date."""
         self._rows = []
         self._last_entries = []
         self._last_final = False
+        self._last_failed = []
+        self.btn_resend.setVisible(False)
 
     def load_batch(self, batch: dict):
         """Show a PAST distribution's recipients as the call list — entry point
@@ -2322,7 +2329,20 @@ class TzintukimTab(QWidget):
             return
 
         def probe(items=due):
-            return [(c, yemot.find_scheduled(c.get("campaign_id"))) for c in items]
+            out = []
+            for c in items:
+                sid = str(c.get("campaign_id") or "").strip()
+                if sid:
+                    out.append((c, yemot.find_scheduled(sid)))
+                else:
+                    # The server never echoed a schedId (and none was found
+                    # pending at the time): locate the run by its template +
+                    # planned hour. Until now "" → "missing" → 'sched_failed'
+                    # after an hour, while the server had actually dialed —
+                    # and its results were never tracked.
+                    out.append((c, yemot.find_scheduled_by_template(
+                        c.get("template_id"), c.get("sent_at") or "")))
+            return out
 
         self._sched_checker = _TaskWorker(probe, self)
         self._sched_checker.done.connect(self._on_sched_checked)
@@ -2338,6 +2358,13 @@ class TzintukimTab(QWidget):
         now = datetime.now(zone) if zone is not None else datetime.now().astimezone()
         for camp, (state, rec) in res:
             if state == "pending":
+                # Remember a schedId recovered by template lookup, so "בטל
+                # תזמון" and the next probe can address it directly.
+                if not str(camp.get("campaign_id") or "").strip() and rec:
+                    sid = str(yemot._dig(rec, "schedId") or yemot._dig(rec, "id") or "").strip()
+                    if sid:
+                        db.update_tzintuk_campaign(camp["guid"], 0, 0, "scheduled",
+                                                   campaign_id=sid)
                 continue                 # the server is a little behind — wait
             if state == "successful":
                 cid = ""
@@ -2457,17 +2484,21 @@ class TzintukimTab(QWidget):
         if st.get("finished"):
             self._chain_next = True      # a smart send has more hour groups to track
             self._last_final = True
-            self._last_failed = [e for e in st.get("entries") or [] if e.get("failed")]
             self.lbl_prog.setText(
                 f"הקמפיין הסתיים ✓ — {st['delivered']} קיבלו את ההודעה, "
                 f"{st['failed']} נכשלו. התשובות בסקר (הקשה {yemot.SURVEY_EXT}) "
                 "ממשיכות להתעדכן — כפתור \"רענן תשובות\" בהיסטוריה.")
-            self.btn_resend.setText(f"🔄 שלח שוב ל-{len(self._last_failed)} שנכשלו")
-            self.btn_resend.setVisible(bool(self._last_failed))
             # A smart send / resend = several campaigns on the SAME list —
             # keep the earlier groups' results, the newest wins per number.
             self._last_entries = self._merge_entries(
                 self._last_entries, st.get("entries") or [])
+            # "Resend to the failed" covers EVERY group of this list (a smart
+            # send finishes hour by hour); a number that succeeded in a later
+            # group is no longer failed (newest wins in the merge).
+            self._last_failed = [e for e in self._last_entries
+                                 if e.get("failed") and not e.get("ok")]
+            self.btn_resend.setText(f"🔄 שלח שוב ל-{len(self._last_failed)} שנכשלו")
+            self.btn_resend.setVisible(bool(self._last_failed))
             self._apply_results_to_table(self._last_entries, final=True)
             self._refresh_history()
             # The confirmation badges on the "חלוקה ורישום" list come from the
@@ -2536,6 +2567,12 @@ class TzintukimTab(QWidget):
         w = self._worker
         self._worker = None
         self._update_metrics()
+        if w is not None and getattr(w, "failed", False):
+            # The poll gave up on repeated network errors; the record is still
+            # 'sending'. Try again in a minute instead of leaving "המעקב נכשל"
+            # on screen until the operator happens to revisit the tab.
+            QTimer.singleShot(60_000, self._maybe_resume_tracking)
+            return
         if w is not None and getattr(w, "timed_out", False):
             self.lbl_prog.setText("הקמפיין עדיין רץ בימות — ממשיך לעקוב…")
             self._chain_next = True      # re-pick the still-'sending' record

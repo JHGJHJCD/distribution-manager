@@ -1206,6 +1206,48 @@ def find_scheduled(sched_id) -> tuple:
     return "missing", None
 
 
+def _sched_time_local(rec) -> datetime | None:
+    """The run/planned time of a scheduled-campaign record as naive Israel
+    local time — PENDING rows carry `time` ('YYYY-MM-DD HH:MM'), SUCCESSFUL/
+    FAILED rows carry `startTime` ('YYYY-MM-DD HH:MM:SS')."""
+    raw = str(_dig(rec, "startTime") or _dig(rec, "time") or "").strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(raw[:19], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def find_scheduled_by_template(template_id, planned_iso: str,
+                               tolerance_min: int = 20) -> tuple:
+    """Locate a scheduled campaign whose schedId we never got: the run of
+    `template_id` closest to the planned time (UTC iso, within `tolerance_min`)
+    → ('pending'|'successful'|'failed'|'missing', record|None). A template is
+    reused week after week, so the time — not the template alone — picks the
+    right run."""
+    tid = str(template_id or "").strip()
+    planned = _parse_since(planned_iso)
+    if not tid or planned is None:
+        return "missing", None
+    zone = timefmt._israel_zone()
+    local = (planned.astimezone(zone) if zone is not None
+             else planned.astimezone()).replace(tzinfo=None)
+    best = None                                   # (delta, word, rec)
+    for typ, word in (("PENDING", "pending"), ("SUCCESSFUL", "successful"),
+                      ("FAILED", "failed")):
+        for c in get_scheduled_campaigns(typ):
+            if str(_dig(c, "templateId") or "") != tid:
+                continue
+            at = _sched_time_local(c)
+            if at is None:
+                continue
+            delta = abs((at - local).total_seconds())
+            if delta <= tolerance_min * 60 and (best is None or delta < best[0]):
+                best = (delta, word, c)
+    return (best[1], best[2]) if best else ("missing", None)
+
+
 def find_pending_sched_id(template_id) -> str:
     """The schedId of the PENDING run of `template_id` on the server ('' when
     none) — recovers a record whose ScheduleCampaign answer carried no id."""
