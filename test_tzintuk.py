@@ -1566,6 +1566,163 @@ tab._retire_trackers()
 db.update_tzintuk_campaign(gQ, 0, 0, "done")
 db.update_tzintuk_campaign(gR, 0, 0, "done")
 
+# ── 18. סקירה 5/9/2026 (ג) — שינוי מהמחשב השני בזמן חלון האישור; רשימות עצמאיות; תקרת רענון ──
+print("— סקירה 5/9 (ג): מרוץ בזמן חלון האישור / רשימות עצמאיות / תקרת רענון תשובות —")
+tab._retire_trackers()
+for _c in db.get_tzintuk_campaigns():
+    if _c.get("status") in ("sending", "scheduled"):
+        db.update_tzintuk_campaign(_c["guid"], 0, 0, "done")
+tab._load_week_list()
+tab._rows = [{"rec": {"id": 7001, "full_name": "משפחה א"}, "phones": ["0521111111"],
+              "send": ["0521111111"], "checked": True, "why": "", "manual": False}]
+_calls = []
+_orig = {"run_campaign": yemot.run_campaign, "ensure_template": yemot.ensure_template,
+         "schedule_campaign": yemot.schedule_campaign, "run_test": yemot.run_test,
+         "info": tzmod.QMessageBox.information, "warn": tzmod.QMessageBox.warning,
+         "question": tzmod.QMessageBox.question,
+         "send_exec": tzmod._SendModeDialog.exec, "sched_exec": tzmod._ScheduleDialog.exec,
+         "getText": tzmod.QInputDialog.getText, "run_blocking": tab._run_blocking}
+yemot.ensure_template = lambda: "1117319"
+yemot.run_campaign = lambda phones, *a, **k: (_calls.append(("run", dict(phones), k))
+                                              or {"campaignId": "c-race", "entriesCount": len(phones)})
+yemot.schedule_campaign = lambda when, phones, tid=None: (_calls.append(("sched", dict(phones)))
+                                                          or {"schedId": "s-race", "count": len(phones)})
+yemot.run_test = lambda phone, store=True: (_calls.append(("test", phone, store)) or {"campaignId": ""})
+_msgs = []
+tzmod.QMessageBox.information = staticmethod(lambda *a, **k: _msgs.append(str(a[2]) if len(a) > 2 else "") or 0)
+tzmod.QMessageBox.warning = staticmethod(lambda *a, **k: _msgs.append(str(a[2]) if len(a) > 2 else "") or 0)
+tzmod.QMessageBox.question = staticmethod(lambda *a, **k: tzmod.QMessageBox.StandardButton.Yes)
+tab._run_blocking = lambda fn, text="": fn()
+_future = (datetime.now(_tz.utc) + _td(hours=3)).isoformat()
+
+
+def _peer_schedules():
+    """מה שקורה בסנכרון בזמן שחלון מודאלי פתוח: המחשב השני תזמן צינתוק."""
+    return db.add_tzintuk_campaign("תזמון מהמחשב השני", week, "1117319", "s-peer", 5,
+                                   sent_at=_future, device="אחר", status="scheduled")
+
+
+def _close_all():
+    for _c in db.get_tzintuk_campaigns():
+        if _c.get("status") == "scheduled":
+            db.update_tzintuk_campaign(_c["guid"], 0, 0, "canceled")
+        elif _c.get("status") == "sending":
+            db.update_tzintuk_campaign(_c["guid"], 0, 0, "done")
+
+
+# (א) שליחה מיידית: בזמן חלון האישור נקלט תזמון ממתין מהמחשב השני — עד עכשיו
+#     השליחה יצאה (store_list=True) והחליפה את רשימת התבנית שהתזמון של המחשב
+#     השני עומד לחייג אליה.
+def _exec_peer_sched(self):
+    _peer_schedules(); self.mode = "voice"; return 1
+tzmod._SendModeDialog.exec = _exec_peer_sched
+tab._send()
+ok("תזמון שנקלט בזמן חלון האישור — השליחה לא יוצאת",
+   not any(c[0] == "run" for c in _calls), str(_calls))
+ok("…והמפעיל מקבל הסבר", any("תזמון" in m for m in _msgs), str(_msgs[-1:]))
+_close_all(); _calls.clear(); _msgs.clear()
+# (ב) בזמן חלון האישור המחשב השני *שלח* צינתוק לאותה חלוקה — האזהרה "כבר נשלח"
+#     שהמפעיל ראה (או לא ראה) כבר לא נכונה: לא שולחים, מבקשים לפתוח מחדש.
+def _exec_peer_sent(self):
+    db.add_tzintuk_campaign("שליחה מהמחשב השני", week, "1117319", "c-peer", 5, device="אחר")
+    self.mode = "voice"; return 1
+tzmod._SendModeDialog.exec = _exec_peer_sent
+tab._send()
+ok("צינתוק שנשלח מהמחשב השני בזמן חלון האישור — השליחה נעצרת",
+   not any(c[0] == "run" for c in _calls), str(_calls))
+_close_all(); _calls.clear(); _msgs.clear()
+# (ג) בלי שינוי בזמן החלון — השליחה יוצאת כרגיל (התיקון לא חוסם יותר מדי)
+def _exec_plain(self):
+    self.mode = "voice"; return 1
+tzmod._SendModeDialog.exec = _exec_plain
+tab._send()
+ok("בלי שינוי בזמן החלון — השליחה יוצאת פעם אחת",
+   [c[0] for c in _calls] == ["run"] and tab._worker is not None, str(_calls))
+_race_guid = tab._active_guid
+ok("הקמפיין נרשם על תאריך השבוע", _camp(_race_guid)["dist_date"] == week)
+tab._retire_trackers()
+_close_all(); _calls.clear(); _msgs.clear()
+# (ד) תזמון: אותו מרוץ בזמן דיאלוג בחירת השעה
+def _sched_exec_peer(self):
+    _peer_schedules(); self.when = datetime.now() + _td(days=1); return 1
+tzmod._ScheduleDialog.exec = _sched_exec_peer
+tab._schedule()
+ok("תזמון שנקלט בזמן דיאלוג התזמון — לא נקבע תזמון שני",
+   not any(c[0] == "sched" for c in _calls), str(_calls))
+_close_all(); _calls.clear(); _msgs.clear()
+# (ה) שיחת בדיקה: ההחלטה "לשמור את המספר ברשימת התבנית" נלקחת אחרי חלון ההזנה
+def _get_text_peer(*a, **k):
+    _peer_schedules(); return "0521111111", True
+tzmod.QInputDialog.getText = staticmethod(_get_text_peer)
+tab._send_test()
+ok("תזמון שנקלט בזמן חלון מספר-הבדיקה — המספר לא נכנס לרשימת התבנית",
+   bool(_calls) and _calls[-1][0] == "test" and _calls[-1][2] is False, str(_calls))
+_close_all(); _calls.clear(); _msgs.clear()
+
+# (ו) רשימות עצמאיות: לכולן dist_date="" — תוצאות של רשימה עצמאית א' נצבעו על
+#     רשימה עצמאית ב' (ו"שלח שוב לנכשלים" הציע את נכשלי א' בזמן ש-ב' על המסך).
+tab._free = [("0521111111", "א"), ("0523333333", "ב")]
+tab._batch = None
+tab._reset_results()
+tab.refresh()
+tab._send()                                   # רשימה א' נשלחת (תחבורה מדומה)
+_gFree = tab._active_guid
+ok("שליחה מרשימה עצמאית נרשמת בלי תאריך", _camp(_gFree)["dist_date"] == "")
+tab._free = [("0523333333", "ב"), ("0525555555", "ג")]     # רשימה עצמאית ב'
+tab._reset_results()
+tab.refresh()
+tab._on_tick({"finished": True, "total": 2, "delivered": 1, "failed": 1, "pending": 0,
+              "entries": [{"phone": "0521111111", "ok": True, "status": "done"},
+                          {"phone": "0523333333", "failed": True, "status": "no_answer"}]},
+             tab._worker)
+tab._on_worker_done()
+ok("תוצאות רשימה עצמאית א' נכתבו לרשומה שלה", _camp(_gFree)["status"] == "done")
+ok("…אבל לא צובעות רשימה עצמאית ב' ולא מציעות שליחה חוזרת",
+   tab._last_entries == [] and tab._last_failed == [] and tab.btn_resend.isHidden(),
+   f"entries={tab._last_entries} failed={tab._last_failed}")
+tab._apply_answer_rows([])
+ok("רענון תשובות לא מושך קמפיין של רשימה עצמאית אחרת", tab._last_entries == [])
+# רשימה עצמאית שנשלחה מכאן — התוצאות שלה כן מוצגות
+tab._send()
+_gFree2 = tab._active_guid
+tab._on_tick({"finished": True, "total": 2, "delivered": 1, "failed": 1, "pending": 0,
+              "entries": [{"phone": "0523333333", "ok": True, "status": "done"},
+                          {"phone": "0525555555", "failed": True, "status": "no_answer"}]},
+             tab._worker)
+tab._on_worker_done()
+ok("רשימה עצמאית שנשלחה מכאן — התוצאות שלה מוצגות ומציעות שליחה חוזרת",
+   len(tab._last_entries) == 2 and len(tab._last_failed) == 1 and not tab.btn_resend.isHidden())
+tab._retire_trackers()
+tab._clear_batch()
+_close_all(); _calls.clear(); _msgs.clear()
+
+# (ז) תקרת 30 רשומות ברענון התשובות — שיגור חכם (עד 24 קבוצות) + שליחות נוספות
+#     דחפו קמפיינים מהשבועיים האחרונים מחוץ לרענון.
+_recent = (datetime.now(_tz.utc) - _td(days=3)).isoformat()
+_gOld = db.add_tzintuk_campaign("קמפיין ישן-אבל-בטווח", "2026-08-05", "1117319", "c-old", 1,
+                                sent_at=_recent)
+db.update_tzintuk_campaign(_gOld, 1, 0, "done", json.dumps([{"phone": "0529999999", "ok": True}]))
+for _i in range(40):
+    _g = db.add_tzintuk_campaign(f"שיגור חכם {_i}", "2026-08-12", "1117319", f"c-sm-{_i}", 1,
+                                 sent_at=(datetime.now(_tz.utc) - _td(days=1, minutes=_i)).isoformat())
+    db.update_tzintuk_campaign(_g, 1, 0, "done", "[]")
+ok("קמפיין מהשבועיים האחרונים נשאר ברענון התשובות גם אחרי 40 שליחות חדשות",
+   any(c["guid"] == _gOld for c in tab._answer_campaigns()))
+
+for k, v in _orig.items():
+    if k in ("info", "warn", "question"):
+        setattr(tzmod.QMessageBox, {"info": "information", "warn": "warning", "question": "question"}[k], v)
+    elif k == "send_exec":
+        tzmod._SendModeDialog.exec = v
+    elif k == "sched_exec":
+        tzmod._ScheduleDialog.exec = v
+    elif k == "getText":
+        tzmod.QInputDialog.getText = v
+    elif k == "run_blocking":
+        tab._run_blocking = v
+    else:
+        setattr(yemot, k, v)
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")

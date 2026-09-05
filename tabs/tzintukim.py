@@ -930,6 +930,10 @@ class TzintukimTab(QWidget):
         self._last_failed_date = ""  # …and the distribution date they belong to
         self._last_entries = []   # per-number results shown in the table (survive refresh)
         self._last_final = False  # …and whether they are the campaign's FINAL results
+        # v3.19 — campaigns SENT from the list on screen. A standalone list has
+        # no distribution date (""), so every standalone campaign ever sent
+        # would otherwise "belong" to whatever standalone list is loaded now.
+        self._list_guids = set()
         self._chain_next = False  # the poll worker finished cleanly → look for the next due send
         self._sched_checker = None   # worker probing the server for due schedules
         self._batch = None        # #9hgvi: past-distribution batch loaded as list
@@ -1432,6 +1436,7 @@ class TzintukimTab(QWidget):
         self._last_final = False
         self._last_failed = []
         self._last_failed_date = ""
+        self._list_guids = set()
         self.btn_resend.setVisible(False)
 
     def load_batch(self, batch: dict):
@@ -1521,7 +1526,45 @@ class TzintukimTab(QWidget):
         date — polluting the double-send guard and the survey answers."""
         if not self._is_loaded():
             return False
-        return getattr(worker, "dist_date", None) == self._dist_date_iso()
+        return self._belongs_here(getattr(worker, "dist_date", None),
+                                  getattr(worker, "guid", ""))
+
+    def _belongs_here(self, dist_date, guid: str) -> bool:
+        """Does a campaign (its distribution date + record guid) belong to the
+        list on screen? Dated lists match by date (both computers' sends of
+        that distribution count). A standalone list has no date — there only
+        the campaigns sent from THIS list (v3.19, `_list_guids`) belong."""
+        mine = self._dist_date_iso()
+        if mine:
+            return (dist_date or "") == mine
+        return bool(guid) and guid in self._list_guids
+
+    def _changed_meanwhile(self, dist_date: str, pending_before, prev_before) -> str:
+        """v3.19 — the confirmation dialogs are modal, but the sync timer keeps
+        running inside them: the other computer may schedule or send a
+        tzintuk while the operator reads the dialog. The checks made BEFORE
+        the dialog (pending schedule / "already sent for this date") are then
+        stale — an immediate send would replace the template list the peer's
+        schedule is about to dial, or ring everyone a second time without
+        the warning. Returns a Hebrew reason to abort, or ""."""
+        pending = self._pending_sched()
+        if pending is not None and (pending_before is None
+                                    or pending.get("guid") != pending_before.get("guid")):
+            when = timefmt.datetime_str(pending.get("sent_at") or "")
+            src = pending.get("device") or "המחשב השני"
+            return (f"בזמן שהחלון היה פתוח נקלט תזמון ממתין ({when}, מ{src}).\n"
+                    "הפעולה בוטלה כדי לא לשבש את התזמון — בדוק את רצועת התזמון "
+                    "ונסה שוב.")
+        prev = db.tzintuk_campaign_for_date(dist_date)
+        if prev is not None and (prev_before is None
+                                 or prev.get("guid") != prev_before.get("guid")):
+            when = timefmt.datetime_str(prev.get("sent_at") or "")
+            src = prev.get("device") or "המחשב השני"
+            return (f"בזמן שהחלון היה פתוח נקלט צינתוק לחלוקה של תאריך זה "
+                    f"({when}, מ{src}).\n"
+                    "הפעולה בוטלה — פתח שוב את החלון כדי לראות את האזהרה "
+                    "המעודכנת לפני שליחה נוספת.")
+        return ""
 
     def _campaign_name(self) -> str:
         if self._free is not None:
@@ -1902,6 +1945,10 @@ class TzintukimTab(QWidget):
         if not dlg.exec() or not dlg.mode:
             return
         classic = dlg.mode == "classic"
+        reason = self._changed_meanwhile(dist_date, pending, prev)
+        if reason:
+            QMessageBox.information(self, "צינתוקים", reason)
+            return
         self.btn_send.setEnabled(False)      # locked until the campaign ends
         self.btn_send.setText("שולח…")
         def _do_send():
@@ -1938,6 +1985,7 @@ class TzintukimTab(QWidget):
                 guid, 0, 0, "sending",
                 json.dumps(tracker.entries(), ensure_ascii=False))
             self._active_guid = guid
+            self._list_guids.add(guid)
             self._refresh_history()
             if res.get("classic_fallback"):
                 ring_line = ("⚠ שירות הצינתוק אינו פעיל בקו, לכן נשלח צלצול קצר "
@@ -1959,6 +2007,7 @@ class TzintukimTab(QWidget):
             str(res.get("campaignId") or ""),
             int(res.get("entriesCount") or len(phones)),
             device=sync.device_name() or "")
+        self._list_guids.add(self._active_guid)
         self._refresh_history()
         self._start_tracking(str(res.get("campaignId") or ""), len(phones), sent_iso)
 
@@ -2020,6 +2069,7 @@ class TzintukimTab(QWidget):
             f"שליחה חוזרת לנכשלים ({len(phones)})", dist_date, template_id,
             str(res.get("campaignId") or ""), len(phones),
             device=sync.device_name() or "")
+        self._list_guids.add(self._active_guid)
         self._refresh_history()
         self._start_tracking(str(res.get("campaignId") or ""), len(phones), sent_iso)
 
@@ -2086,12 +2136,12 @@ class TzintukimTab(QWidget):
                 "אפשר לתזמן רק צינתוק אחד בכל פעם — בטל אותו קודם "
                 "(כפתור \"בטל תזמון\") ואז תזמן מחדש.")
             return
+        dist_date = self._dist_date_iso()
+        prev = db.tzintuk_campaign_for_date(dist_date)
         dlg = _ScheduleDialog(len(phones), self, smart_hint=self._smart_hint(phones))
         if not dlg.exec() or dlg.when is None:
             return
         when = dlg.when
-        dist_date = self._dist_date_iso()
-        prev = db.tzintuk_campaign_for_date(dist_date)
         extra = ""
         if prev:
             prev_when = timefmt.datetime_str(prev.get("sent_at") or "")
@@ -2112,6 +2162,10 @@ class TzintukimTab(QWidget):
             QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes:
             return
+        reason = self._changed_meanwhile(dist_date, pending, prev)
+        if reason:
+            QMessageBox.information(self, "תזמון שליחה", reason)
+            return
         try:
             template_id, res = self._run_blocking(
                 lambda: (lambda t: (t, yemot.schedule_campaign(when, phones, t)))(yemot.ensure_template()),
@@ -2123,12 +2177,12 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "תזמון שליחה", f"התזמון נכשל: {e}")
             return
         from utils import sync
-        db.add_tzintuk_campaign(
+        self._list_guids.add(db.add_tzintuk_campaign(
             f"צינתוק מתוזמן — {self._campaign_name()}",
             dist_date, template_id, str(res.get("schedId") or ""),
             int(res.get("count") or len(phones)),
             sent_at=self._to_utc_iso(when),
-            device=sync.device_name() or "", status="scheduled")
+            device=sync.device_name() or "", status="scheduled"))
         self._refresh_history()
         self._refresh_sched_banner()     # the strip shows up right away
         QMessageBox.information(
@@ -2166,7 +2220,8 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "שיגור חכם",
                                 "אין אף נמען מסומן עם מספר תקין.")
             return
-        if self._pending_scheds():
+        pending = self._pending_sched()
+        if pending is not None:
             QMessageBox.information(
                 self, "שיגור חכם",
                 "כבר קיים תזמון ממתין. בטל אותו קודם (\"בטל תזמון\") "
@@ -2185,12 +2240,12 @@ class TzintukimTab(QWidget):
         n_personal = sum(1 for p in phones
                          if (stats.get(p) or {}).get("best_hour") is not None)
         n_fallback = len(phones) - n_personal
+        dist_date = self._dist_date_iso()
+        prev = db.tzintuk_campaign_for_date(dist_date)
         dlg = _SmartScheduleDialog(buckets, fallback, n_personal, n_fallback, self)
         if not dlg.exec() or dlg.date is None:
             return
         date = dlg.date
-        dist_date = self._dist_date_iso()
-        prev = db.tzintuk_campaign_for_date(dist_date)
         extra = ""
         if prev:
             prev_when = timefmt.datetime_str(prev.get("sent_at") or "")
@@ -2217,6 +2272,10 @@ class TzintukimTab(QWidget):
             QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes:
             return
+        reason = self._changed_meanwhile(dist_date, pending, prev)
+        if reason:
+            QMessageBox.information(self, "שיגור חכם", reason)
+            return
         error = None
         try:
             results = self._run_blocking(
@@ -2232,12 +2291,12 @@ class TzintukimTab(QWidget):
         name = self._campaign_name()
         pushed = False
         for r in results:
-            db.add_tzintuk_campaign(
+            self._list_guids.add(db.add_tzintuk_campaign(
                 f"שיגור חכם {r['hour']:02d}:00 — {name}",
                 dist_date, r["template_id"], str(r.get("schedId") or ""),
                 int(r.get("count") or 0),
                 sent_at=self._to_utc_iso(r["when"]),
-                device=dev, status="scheduled")
+                device=dev, status="scheduled"))
             pushed = pushed or bool(r.get("pushed"))
         self._refresh_history()
         self._refresh_sched_banner()
@@ -2833,7 +2892,10 @@ class TzintukimTab(QWidget):
         """Finished campaigns from the last 14 days — the ones whose survey
         answers can still change."""
         out = []
-        for c in db.get_tzintuk_campaigns(limit=30):
+        # limit 200 (was 30): a smart send alone makes up to 24 records, and
+        # the scheduled ones sort first — 30 cut last week's campaigns out of
+        # the refresh (their late survey answers were never picked up).
+        for c in db.get_tzintuk_campaigns(limit=200):
             if c.get("status") != "done":
                 continue
             sent = timefmt.to_israel(c.get("sent_at") or "")
@@ -2971,7 +3033,7 @@ class TzintukimTab(QWidget):
                     int(camp.get("failed") or 0), "done",
                     json.dumps(entries, ensure_ascii=False))
                 changed_any = True
-            if (camp.get("dist_date") or "") == self._dist_date_iso():
+            if self._belongs_here(camp.get("dist_date") or "", camp.get("guid") or ""):
                 mine.append(entries)
         if mine and self._is_loaded():
             # Every campaign of this list (smart-send hour groups, a resend)
