@@ -1375,6 +1375,7 @@ tab._load_week_list()
 ok("מעבר לרשימת השבוע מנקה את רשימת הנכשלים של הרשימה הקודמת",
    tab._last_failed == [] and tab.btn_resend.isHidden())
 # (א2) שיגור חכם: הנכשלים של *כל* הקבוצות נשמרים לשליחה חוזרת (לא רק האחרונה)
+tab.load_batch({"id": 4343, "dist_name": "חלוקת סוכות", "dist_date": "2026-10-21"})
 gG = db.add_tzintuk_campaign("קבוצה 10", "2026-10-21", "T10", "camp-G", 1)
 tab._active_guid = gG
 tab._start_tracking("camp-G", 1, "")
@@ -1469,6 +1470,77 @@ try:
 finally:
     tzmod.QTimer.singleShot = _orig_single
 tab._retire_trackers()
+
+# ── 16. סקירה 5/9/2026 (ב) — תוצאות של קמפיין מרשימה אחרת; רשומה תקועה; שעות שעברו ──
+print("— סקירה 5/9 (ב): קמפיין של רשימה אחרת / רשומה בלי מזהה / שעות שעברו —")
+# (א) המפעיל עובד על רשימת השבוע; מעקב שהתחדש (למשל קמפיין של המחשב השני על
+#     חלוקה קודמת) מסתיים עם נכשלים. עד עכשיו התוצאות נצבעו על רשימת השבוע לפי
+#     מספר, וכפתור "שלח שוב לנכשלים" הציע שליחה שהייתה נרשמת על תאריך השבוע.
+tab._retire_trackers()
+tab._load_week_list()
+week = db.next_wednesday().isoformat()
+gK = db.add_tzintuk_campaign("חלוקה ישנה", "2026-04-01", "1117319", "camp-K", 2)
+tab._active_guid = gK
+tab._start_tracking("camp-K", 2, "")
+wK = tab._worker
+ok("המעקב נושא את תאריך החלוקה של הקמפיין שלו",
+   getattr(wK, "dist_date", None) == "2026-04-01" and getattr(wK, "guid", "") == gK)
+tab._on_tick({"finished": True, "total": 2, "delivered": 1, "failed": 1, "pending": 0,
+              "entries": [{"phone": "0521111111", "ok": True, "status": "done"},
+                          {"phone": "0523333333", "failed": True, "status": "no_answer"}]},
+             wK)
+tab._on_worker_done()
+ok("התוצאות נכתבו לרשומה של הקמפיין", _camp(gK)["status"] == "done"
+   and _camp(gK)["delivered"] == 1)
+ok("תוצאות של חלוקה אחרת לא צובעות את רשימת השבוע ולא מציעות שליחה חוזרת",
+   tab._last_entries == [] and tab._last_failed == [] and tab.btn_resend.isHidden(),
+   f"entries={tab._last_entries} failed={tab._last_failed}")
+# אותו תאריך → כן נצבע, וכפתור השליחה החוזרת זוכר את תאריך הקמפיין
+gL = db.add_tzintuk_campaign("חלוקת השבוע", week, "1117319", "camp-L", 1)
+tab._active_guid = gL
+tab._start_tracking("camp-L", 1, "")
+tab._on_tick({"finished": True, "total": 1, "delivered": 0, "failed": 1, "pending": 0,
+              "entries": [{"phone": "0523333333", "failed": True, "status": "no_answer"}]},
+             tab._worker)
+tab._on_worker_done()
+ok("קמפיין של הרשימה הטעונה — כן מוצג ומציע שליחה חוזרת על התאריך שלו",
+   len(tab._last_failed) == 1 and not tab.btn_resend.isHidden()
+   and tab._last_failed_date == week)
+# (ב) מעקב-חזרה של צינתוק קלאסי על חלוקה אחרת שמסתיים — לא נוגע בטבלה של השבוע
+gM = db.add_tzintuk_campaign("צינתוק קלאסי — ישן", "2026-04-01", "1117319", "", 1,
+                             status="sending")
+tab._start_callback_tracking(gM, {"0529999999": "מ"}, _time.time() + 1800)
+cbM = tab._cb_worker
+tab._on_cb_tick({"done": True, "returned": 1, "answers": {}, "remaining": 0,
+                 "entries": [{"phone": "0529999999", "ok": True, "status": "callback"}]}, cbM)
+ok("סיום מעקב קלאסי של חלוקה אחרת נכתב לרשומה שלו בלבד",
+   _camp(gM)["status"] == "done" and _camp(gM)["delivered"] == 1
+   and all(e.get("phone") != "0529999999" for e in tab._last_entries))
+tab._retire_trackers()
+# (ג) רשומת 'sending' רגילה בלי campaignId (השרת לא החזיר מזהה) — עד עכשיו
+#     נשארה "בתהליך" לנצח (המעקב מדלג עליה). אחרי שעה נסגרת כ"הסתיים".
+for _c in db.get_tzintuk_campaigns():          # leftovers of earlier sections
+    if _c.get("status") == "sending":
+        db.update_tzintuk_campaign(_c["guid"], 0, 0, "done")
+_old = (datetime.now(_tz.utc) - _td(hours=2)).isoformat()
+gN = db.add_tzintuk_campaign("שליחה בלי מזהה", "2026-05-06", "1117319", "", 3,
+                             sent_at=_old)
+gO = db.add_tzintuk_campaign("שליחה טרייה בלי מזהה", "2026-05-06", "1117319", "", 3)
+tab._maybe_resume_tracking()
+ok("רשומה תקועה בלי מזהה (שעתיים) נסגרת כ'הסתיים'", _camp(gN)["status"] == "done")
+ok("רשומה טרייה בלי מזהה נשארת בתהליך", _camp(gO)["status"] == "sending")
+ok("…ולא התחיל מעקב עליהן", tab._worker is None)
+db.update_tzintuk_campaign(gO, 0, 0, "done")
+# (ד) שיגור חכם להיום עם שעות שכבר עברו — האישור מזהיר מראש
+from datetime import date as _date
+_today = _date.today()
+_now_h = datetime.now(timefmt._israel_zone()).hour
+_b = {max(0, _now_h - 2): {"0521111111": "a", "0522222222": "b"},
+      min(23, _now_h + 2): {"0523333333": "c"}}
+n_past = tzmod.TzintukimTab._past_hour_count(_today, _b)
+ok("ספירת נמענים בשעות שכבר עברו היום", n_past == (2 if _now_h >= 2 else 0), str(n_past))
+ok("מחר — אף שעה לא עברה",
+   tzmod.TzintukimTab._past_hour_count(_today + _td(days=1), _b) == 0)
 
 print()
 if fails:

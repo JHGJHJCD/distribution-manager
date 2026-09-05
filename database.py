@@ -1876,6 +1876,16 @@ def get_tzintuk_campaigns(limit: int | None = None):
         return [dict(r) for r in conn.execute(q, args)]
 
 
+def get_tzintuk_campaign(guid: str):
+    """One campaign record by guid (None when unknown)."""
+    if not guid:
+        return None
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM tzintuk_campaigns WHERE guid=?",
+                           (guid,)).fetchone()
+        return dict(row) if row else None
+
+
 def tzintuk_campaign_for_date(dist_date: str):
     """The newest campaign already sent for this distribution date — the
     double-send guard across both computers. None when nothing was sent."""
