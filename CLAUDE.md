@@ -247,5 +247,9 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 - לוגו הקופה (`org_logo.png`): כותרת הדפסה, splash, רצועת מיתוג. אייקון EXE/taskbar נשאר `icon.ico`.
 - משוב: `utils/feedback.py` → Google Form + JSONL מקומי.
 
+## פקודות (slash commands) של הפרויקט — `.claude/commands/`
+- `/תקן-דוח <דוח HTML>` — טיפול בדוח תקלות: תיקון, אימות, שחרור.
+- `/בדוק-צינתוקים [מיקוד]` (5/9/2026) — סקירת באגים ובדיקת תרחישים למסך ולוגיקת הצינתוקים: גדרות בטיחות (אין חיוג אמיתי, אין כתיבה לשורש הקו, MCP קריאה-בלבד, צילומים רק דרך Gemini), מפת 9 זרימות, רשימת תרחישים (מצב/workers, נתונים, רשת, UI), כלל "אין בדיקה נכשלת = אין באג", תיעוד ב-pitfalls ושחרור. ארגומנט אופציונלי = אזור למיקוד.
+
 ## בדיקות
 סקריפטים עצמאיים (לא pytest): `test_all`, `test_deep`, `test_selection` (4 הכללים העסקיים — עדיפות/ניקוד/רזרבה/חוסר-נתונים), `test_data_safety`, `test_scenarios`, `test_search`, `test_priority_import`, `test_volunteer_flow`, `test_updater`. `dev/stress_test.py [rounds]` (offscreen, `PYTHONUTF8=1`). כל הקבצים UTF-8 (טרמינל מציג mojibake אך הנתונים תקינים).
