@@ -2732,6 +2732,11 @@ class TzintukimTab(QWidget):
         self.btn_stop_track.setVisible(False)
         self._update_metrics()
 
+    @staticmethod
+    def _is_own_campaign(camp: dict) -> bool:
+        from utils import sync
+        return (camp.get("device") or "") == (sync.device_name() or "")
+
     def _resume_classic(self, camp: dict):
         """A classic tzintuk is still 'sending' (the app closed mid-window, or
         the other computer sent it): reopen the watch if the window is still
@@ -2780,6 +2785,12 @@ class TzintukimTab(QWidget):
             if sent is not None and sent < cutoff:
                 break
             classic = (c.get("name") or "").startswith("צינתוק קלאסי")
+            if classic and not self._is_own_campaign(c):
+                # v3.18 (user decision 5/9/2026): only the computer that SENT a
+                # classic tzintuk watches who calls back. A second watcher
+                # wrote competing snapshots into the same record (LWW) and
+                # could erase the sender's observations — and never touch it.
+                continue
             if classic or c.get("campaign_id"):
                 camp = c
                 break

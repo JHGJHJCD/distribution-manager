@@ -1542,6 +1542,30 @@ ok("ספירת נמענים בשעות שכבר עברו היום", n_past == (2
 ok("מחר — אף שעה לא עברה",
    tzmod.TzintukimTab._past_hour_count(_today + _td(days=1), _b) == 0)
 
+# ── 17. הכרעת המשתמש 5/9/2026 — רק המחשב ששלח צינתוק קלאסי עוקב אחרי מי שחזר ──
+print("— רק המחשב השולח עוקב אחרי צינתוק קלאסי —")
+tab._retire_trackers()
+for _c in db.get_tzintuk_campaigns():
+    if _c.get("status") == "sending":
+        db.update_tzintuk_campaign(_c["guid"], 0, 0, "done")
+_mine = sync.device_name() or ""
+gQ = db.add_tzintuk_campaign("צינתוק קלאסי — של המחשב השני", "2026-06-03", "1117319", "", 1,
+                             device=_mine + "-אחר", status="sending")
+db.update_tzintuk_campaign(gQ, 0, 0, "sending",
+                           json.dumps([{"phone": "0521111111", "name": "א"}]))
+tab._maybe_resume_tracking()
+ok("צינתוק קלאסי של המחשב השני — לא נפתח כאן מעקב-חזרה", tab._cb_worker is None)
+ok("…והרשומה שלו לא נגעה (נשארת שלו)", _camp(gQ)["status"] == "sending")
+gR = db.add_tzintuk_campaign("צינתוק קלאסי — שלי", "2026-06-03", "1117319", "", 1,
+                             device=_mine, status="sending")
+db.update_tzintuk_campaign(gR, 0, 0, "sending",
+                           json.dumps([{"phone": "0522222222", "name": "ב"}]))
+tab._maybe_resume_tracking()
+ok("צינתוק קלאסי שלי — המעקב מתחדש", tab._cb_worker is not None and tab._cb_worker.guid == gR)
+tab._retire_trackers()
+db.update_tzintuk_campaign(gQ, 0, 0, "done")
+db.update_tzintuk_campaign(gR, 0, 0, "done")
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")
