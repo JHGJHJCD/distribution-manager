@@ -400,6 +400,16 @@ class _FreeListDialog(QDialog):
         self.accept()
 
 
+def _safe_default(ok: QPushButton, cancel: QPushButton) -> None:
+    """v3.26 — in a QDialog the FIRST push button becomes the default, so a
+    stray Enter in the confirmation window used to fire the dial command.
+    The irreversible button is never the default; Enter = cancel."""
+    ok.setAutoDefault(False)
+    ok.setDefault(False)
+    cancel.setAutoDefault(True)
+    cancel.setDefault(True)
+
+
 class _SendModeDialog(QDialog):
     """אישור שליחה + בחירת סוג הצינתוק (#1/9): רגיל (משמיע הודעה למי שעונה)
     או קלאסי (צלצול קצר בלי מענה — מי שמתקשר חזרה שומע את ההודעה)."""
@@ -430,15 +440,16 @@ class _SendModeDialog(QDialog):
         note.setWordWrap(True)
         lay.addWidget(note)
         btns = QHBoxLayout()
-        ok = QPushButton("שלח עכשיו »")
+        self.btn_ok = ok = QPushButton("שלח עכשיו »")
         ok.setObjectName("primary")
         ok.clicked.connect(self._accept)
-        cancel = QPushButton("ביטול")
+        self.btn_cancel = cancel = QPushButton("ביטול")
         cancel.clicked.connect(self.reject)
         btns.addWidget(ok)
         btns.addWidget(cancel)
         btns.addStretch()
         lay.addLayout(btns)
+        _safe_default(ok, cancel)      # v3.26 — Enter never dials 360 people
 
     def _accept(self):
         self.mode = "classic" if self.rb_classic.isChecked() else "voice"
@@ -565,15 +576,16 @@ class _ScheduleDialog(QDialog):
             hint.setWordWrap(True)
             lay.addWidget(hint)
         btns = QHBoxLayout()
-        ok = QPushButton("תזמן »")
+        self.btn_ok = ok = QPushButton("תזמן »")
         ok.setObjectName("primary")
         ok.clicked.connect(self._accept)
-        cancel = QPushButton("ביטול")
+        self.btn_cancel = cancel = QPushButton("ביטול")
         cancel.clicked.connect(self.reject)
         btns.addWidget(ok)
         btns.addWidget(cancel)
         btns.addStretch()
         lay.addLayout(btns)
+        _safe_default(ok, cancel)
 
     def _accept(self):
         when = self.dt_edit.dateTime().toPyDateTime().replace(second=0,
@@ -650,15 +662,16 @@ class _SmartScheduleDialog(QDialog):
         lay.addWidget(note)
 
         btns = QHBoxLayout()
-        ok = QPushButton("המשך »")
+        self.btn_ok = ok = QPushButton("המשך »")
         ok.setObjectName("primary")
         ok.clicked.connect(self._accept)
-        cancel = QPushButton("ביטול")
+        self.btn_cancel = cancel = QPushButton("ביטול")
         cancel.clicked.connect(self.reject)
         btns.addWidget(ok)
         btns.addWidget(cancel)
         btns.addStretch()
         lay.addLayout(btns)
+        _safe_default(ok, cancel)
 
     def _accept(self):
         self.date = self.dt_edit.dateTime().toPyDateTime().date()
@@ -1999,6 +2012,59 @@ class TzintukimTab(QWidget):
                     "המעודכנת לפני שליחה נוספת.")
         return ""
 
+    def _recording_ready(self, title: str) -> bool:
+        """v3.26 — no message on the template = no dialing (used to be checked
+        only by the schedule buttons; an immediate send would have rung the
+        whole list with silence)."""
+        if yemot.has_recording():
+            return True
+        QMessageBox.information(
+            self, title,
+            "עדיין לא הוגדרה הודעה מוקלטת — אין מה להשמיע.\n"
+            "צור הקלטה מטקסט / הקלט במיקרופון / העלה קובץ, שלח בדיקה "
+            "למספר שלך, ורק אז שלח.")
+        return False
+
+    def _prev_campaign(self, dist_date: str):
+        """The newest campaign already sent to THIS list (double-send guard):
+        by distribution date, or — for a standalone list, which has no date —
+        the newest campaign sent from this very list (v3.26; until now a
+        second click sent a standalone list again without any warning)."""
+        prev = db.tzintuk_campaign_for_date(dist_date)
+        if prev is not None or dist_date or not self._list_guids:
+            return prev
+        mine = [c for c in db.get_tzintuk_campaigns(limit=200)
+                if c.get("guid") in self._list_guids
+                and c.get("status") not in ("canceled", "sched_failed")]
+        return mine[0] if mine else None
+
+    @staticmethod
+    def _already_sent_line(prev) -> str:
+        if not prev:
+            return ""
+        when = timefmt.datetime_str(prev.get("sent_at") or "")
+        src = prev.get("device") or "מחשב אחר"
+        verb = ("כבר מתוזמן צינתוק"
+                if prev.get("status") == "scheduled" else "כבר נשלח צינתוק")
+        return (f"\n\n⚠ שים לב: {verb} לרשימה הזו "
+                f"({when}, מ{src}). שליחה נוספת תצלצל לאנשים פעם שנייה!")
+
+    @staticmethod
+    def _recording_lines() -> str:
+        """Which message will play + a warning when it is older than the last
+        send (the classic embarrassment: last week's message, or the test
+        recording, ringing 360 homes)."""
+        text = "\n" + yemot.recording_line()
+        old = yemot.recording_older_than_last_send()
+        if old is not None:
+            when = timefmt.datetime_str(old.get("sent_at") or "")
+            text += (f"\n⚠ ההקלטה הזו כבר הושמעה בצינתוק של {when} — "
+                     "ודא שזו ההודעה הנכונה ולא ההודעה של הפעם הקודמת.")
+        elif yemot.recording_info() is None and yemot.has_recording():
+            text += ("\n⚠ לא ידוע איזו הקלטה נמצאת בשרת — שלח בדיקה למספר שלך "
+                     "לפני שליחה לכולם.")
+        return text
+
     def _campaign_name(self) -> str:
         if self._free is not None:
             return f"רשימה עצמאית — {len(self._free)} מספרים"
@@ -2263,14 +2329,12 @@ class TzintukimTab(QWidget):
 
     def _refresh_recording_label(self):
         tid = (db.get_setting(yemot.SET_TEMPLATE) or "").strip()
-        confirm_tip = ("\n💡 כדאי לומר בסוף ההקלטה: \"לאישור הגעה — התקשרו "
-                       f"חזרה לקו והקישו {yemot.SURVEY_EXT}\". התשובה "
-                       "(1 מגיע / 2 לא מגיע / 3 לא יודע) נרשמת בתוכנה.")
+        confirm_tip = ""      # v3.26 — the standing 💡 label under the row says it once
         if not yemot.is_configured():
             self.lbl_rec.setText("ההודעה המושמעת: תוגדר אחרי חיבור המערכת (בהגדרות).")
         elif tid:
             self.lbl_rec.setText(
-                f"ההודעה המושמעת שמורה בימות המשיח (תבנית {tid}). "
+                yemot.recording_line() + " "
                 "להחלפה — צור הקלטה מטקסט / העלה קובץ / בחר מהמאגר, "
                 "ואז \"שלח בדיקה\" כדי לשמוע אותה." + confirm_tip)
         else:
@@ -2288,11 +2352,16 @@ class TzintukimTab(QWidget):
         self._goto_settings()
         return False
 
-    def _upload_path(self, path: str, title: str) -> bool:
+    def _upload_path(self, path: str, title: str, name: str = "",
+                     source: str = "file") -> bool:
         """מעלה קובץ שמע לתבנית הקמפיין בימות; מציג הודעה. True = הצליח."""
+        name = (name or os.path.splitext(os.path.basename(path))[0]).strip()
         try:
-            self._run_blocking(lambda: yemot.upload_message_wav(path), "מעלה את ההקלטה לשרת…")
-            ok, msg = True, ("ההקלטה הועלתה בהצלחה ✓\n"
+            self._run_blocking(lambda: yemot.upload_message_wav(path, name=name, source=source),
+                               "מעלה את ההקלטה לשרת…")
+            ok, msg = True, (f"ההקלטה «{name}» הועלתה בהצלחה ✓\n"
+                             "מעכשיו זו ההודעה שתושמע בכל שליחה ובדיקה "
+                             "(תזמונים שכבר נקבעו ממשיכים עם ההקלטה הקודמת).\n"
                              "שלח בדיקה למספר שלך כדי לשמוע אותה בטלפון.")
         except yemot.YemotError as e:
             ok, msg = False, str(e)
@@ -2309,10 +2378,10 @@ class TzintukimTab(QWidget):
             self, "בחר קובץ הקלטה", "", "קובצי שמע (*.wav *.mp3);;כל הקבצים (*.*)")
         if not path:
             return
-        if self._upload_path(path, "העלאת הקלטה"):
+        name = os.path.splitext(os.path.basename(path))[0]
+        if self._upload_path(path, "העלאת הקלטה", name=name):
             # נשמר גם במאגר (#kgmcw) — שלא יצטרכו לחפש את הקובץ שוב בפעם הבאה.
             try:
-                name = os.path.splitext(os.path.basename(path))[0]
                 tts.library_add(path, name, source="file")
             except OSError:
                 pass
@@ -2324,8 +2393,9 @@ class TzintukimTab(QWidget):
         dlg = TtsDialog(self)
         if not dlg.exec() or not dlg.result_path:
             return
+        name = tts.suggest_name(dlg.result_text)
         try:
-            item = tts.library_add(dlg.result_path, tts.suggest_name(dlg.result_text),
+            item = tts.library_add(dlg.result_path, name,
                                    text=dlg.result_text, voice=dlg.result_voice,
                                    source="tts")
             path = tts.library_path(item)
@@ -2334,14 +2404,15 @@ class TzintukimTab(QWidget):
             path = dlg.result_path
         if dlg.result_note:
             QMessageBox.information(self, "יצירת הקלטה", dlg.result_note)
-        self._upload_path(path, "יצירת הקלטה")
+        self._upload_path(path, "יצירת הקלטה", name=name, source="tts")
 
     def _open_library(self):
         dlg = LibraryDialog(self)
         if dlg.exec() and dlg.picked_path:
             if not self._require_config():
                 return
-            self._upload_path(dlg.picked_path, "מאגר הקלטות")
+            self._upload_path(dlg.picked_path, "מאגר הקלטות", name=dlg.picked_name,
+                              source="library")
 
     def _record_message(self):
         """v3.22 — record the message on the computer's microphone, keep it in
@@ -2358,7 +2429,7 @@ class TzintukimTab(QWidget):
         except OSError as e:
             QMessageBox.warning(self, "הקלטה", f"שמירת ההקלטה במאגר נכשלה: {e}")
             path = dlg.result_path
-        self._upload_path(path, "הקלטה מהמיקרופון")
+        self._upload_path(path, "הקלטה מהמיקרופון", name=name, source="mic")
 
     # ── History details (v3.22) ──────────────────────────────────────────────
 
@@ -2438,9 +2509,12 @@ class TzintukimTab(QWidget):
         # the saved one) and remembered; no settings-screen field any more.
         if not self._require_config():
             return
+        if not self._recording_ready("שליחת בדיקה"):
+            return
         saved = (db.get_setting(yemot.SET_TEST_PHONE) or "").strip()
         phone, okd = QInputDialog.getText(
             self, "שליחת בדיקה",
+            yemot.recording_line() + "\n"
             "לאיזה מספר לצלצל? (המספר שלך — נשמר לפעם הבאה)", text=saved)
         if not okd:
             return
@@ -2481,6 +2555,8 @@ class TzintukimTab(QWidget):
         if not phones:
             QMessageBox.warning(self, "צינתוקים", "אין אף נמען מסומן עם מספר תקין.")
             return
+        if not self._recording_ready("צינתוקים"):
+            return
         # A pending schedule that dials the MAIN template's stored list (a
         # record made before v3.22) would be re-targeted by an immediate send,
         # which replaces that list. Refuse instead. v3.22 schedules live on
@@ -2497,20 +2573,14 @@ class TzintukimTab(QWidget):
                 "ואז תזמן מחדש — תזמון חדש כבר לא יחסום שליחה.")
             return
         dist_date = self._dist_date_iso()
-        prev = db.tzintuk_campaign_for_date(dist_date)
-        extra = ""
-        if prev:
-            when = timefmt.datetime_str(prev.get("sent_at") or "")
-            src = prev.get("device") or "מחשב אחר"
-            verb = ("כבר מתוזמן צינתוק"
-                    if prev.get("status") == "scheduled" else "כבר נשלח צינתוק")
-            extra = (f"\n\n⚠ שים לב: {verb} לחלוקה של תאריך זה "
-                     f"({when}, מ{src}). שליחה נוספת תצלצל לאנשים פעם שנייה!")
+        prev = self._prev_campaign(dist_date)
+        extra = self._already_sent_line(prev)
         bad = sum(1 for r in self._rows if r["why"])
         summary = (f"{self._campaign_name()}\n\n"
                    f"עומד לשלוח צינתוק ל-{len(rows)} משפחות "
                    f"({len(phones)} מספרי טלפון — כל המספרים של כל משפחה).\n"
-                   f"חריגים שלא יישלחו: {bad}.\n"
+                   f"חריגים שלא יישלחו: {bad}."
+                   + self._recording_lines() + "\n"
                    + self._callback_line() + "\n"
                    f"מי שיחייג חזרה ויקיש {yemot.SURVEY_EXT} יסומן בתוכנה לפי "
                    "תשובתו: 1 מגיע / 2 לא מגיע / 3 לא יודע; "
@@ -2621,10 +2691,19 @@ class TzintukimTab(QWidget):
                   if e.get("phone")}
         if not phones:
             return
+        if not self._recording_ready("שליחה חוזרת"):
+            return
+        n_unrung = sum(1 for e in self._last_failed if e.get("stopped"))
+        who = (f"{len(phones)} מספרים שלא צולצלו או נכשלו בסבב הקודם" if n_unrung
+               else f"{len(phones)} מספרים שנכשלו בסבב הקודם (לא ענו / תפוס / שגיאה)")
         ans = QMessageBox.question(
             self, "שליחה חוזרת",
-            f"לשלוח שוב ל-{len(phones)} שנכשלו בסבב הקודם?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            f"{self._campaign_name()}\n\nלשלוח שוב ל-{who}?\n"
+            f"עלות משוערת: כ-{len(phones)} יחידות.\n"
+            "מי שכבר קיבל את ההודעה לא יצולצל שוב."
+            + self._recording_lines(),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
         if ans != QMessageBox.StandardButton.Yes:
             return
         self.btn_resend.setVisible(False)
@@ -2771,25 +2850,15 @@ class TzintukimTab(QWidget):
         # waiting next to a newer dedicated one aborted every new schedule with
         # a false "נקלט תזמון ממתין" (review 6/9, finding 2).
         pending = self._pending_main_sched()
-        if not (db.get_setting(yemot.SET_TEMPLATE) or "").strip():
-            QMessageBox.information(
-                self, "תזמון שליחה",
-                "עדיין לא הוגדרה הודעה מוקלטת. צור או העלה הקלטה קודם — "
-                "התזמון שומר את ההקלטה הנוכחית.")
+        if not self._recording_ready("תזמון שליחה"):
             return
         dist_date = self._dist_date_iso()
-        prev = db.tzintuk_campaign_for_date(dist_date)
+        prev = self._prev_campaign(dist_date)
         dlg = _ScheduleDialog(len(phones), self, smart_hint=self._smart_hint(phones))
         if not dlg.exec() or dlg.when is None:
             return
         when = dlg.when
-        extra = ""
-        if prev:
-            prev_when = timefmt.datetime_str(prev.get("sent_at") or "")
-            verb = ("כבר מתוזמן צינתוק"
-                    if prev.get("status") == "scheduled" else "כבר נשלח צינתוק")
-            extra = (f"\n\n⚠ שים לב: {verb} לחלוקה של תאריך זה ({prev_when}). "
-                     "שליחה נוספת תצלצל לאנשים פעם שנייה!")
+        extra = self._already_sent_line(prev)
         bad = sum(1 for r in self._rows if r["why"])
         n_pending = len(self._pending_scheds())
         if n_pending:
@@ -2800,7 +2869,8 @@ class TzintukimTab(QWidget):
             f"הצינתוק יישלח ל-{len(phones)} נמענים "
             f"ביום {when.strftime('%d/%m/%Y')} בשעה {when.strftime('%H:%M')}.\n"
             f"חריגים שלא יישלחו: {bad}.\n"
-            f"עלות משוערת: כ-{len(phones)} יחידות.\n"
+            f"עלות משוערת: כ-{len(phones)} יחידות."
+            + self._recording_lines() + "\n"
             "ההקלטה הנוכחית נשמרת לתזמון הזה (החלפת הקלטה אחר כך לא תשפיע עליו).\n"
             "השליחה תצא מהשרת של ימות המשיח גם אם המחשב יהיה כבוי; "
             f"התוצאות ייקלטו בתוכנה בהפעלה הבאה.{extra}\n\nלתזמן?",
@@ -2886,10 +2956,7 @@ class TzintukimTab(QWidget):
                 "כבר ממתין שיגור חכם (קבוצות שעה בשרת). כדי לא לדרוס את "
                 "הרשימות שלו — בטל אותו קודם (\"בטל\" ברצועת התזמון) ואז שגר מחדש.")
             return
-        if not (db.get_setting(yemot.SET_TEMPLATE) or "").strip():
-            QMessageBox.information(
-                self, "שיגור חכם",
-                "עדיין לא הוגדרה הודעה מוקלטת. צור או העלה הקלטה קודם.")
+        if not self._recording_ready("שיגור חכם"):
             return
         stats = self._stats or {}
         fallback = yemot.list_best_hour(phones, stats)
@@ -2900,18 +2967,12 @@ class TzintukimTab(QWidget):
                          if (stats.get(p) or {}).get("best_hour") is not None)
         n_fallback = len(phones) - n_personal
         dist_date = self._dist_date_iso()
-        prev = db.tzintuk_campaign_for_date(dist_date)
+        prev = self._prev_campaign(dist_date)
         dlg = _SmartScheduleDialog(buckets, fallback, n_personal, n_fallback, self)
         if not dlg.exec() or dlg.date is None:
             return
         date = dlg.date
-        extra = ""
-        if prev:
-            prev_when = timefmt.datetime_str(prev.get("sent_at") or "")
-            verb = ("כבר מתוזמן צינתוק"
-                    if prev.get("status") == "scheduled" else "כבר נשלח צינתוק")
-            extra = (f"\n\n⚠ שים לב: {verb} לחלוקה של תאריך זה ({prev_when}). "
-                     "שליחה נוספת תצלצל לאנשים פעם שנייה!")
+        extra = self._already_sent_line(prev)
         bad = sum(1 for r in self._rows if r["why"])
         total = len(phones)
         n_past = self._past_hour_count(date, buckets)
@@ -2924,7 +2985,8 @@ class TzintukimTab(QWidget):
             f"ביום {date.strftime('%d/%m/%Y')} — כל אחד בשעה שבה הכי קל "
             "להשיג אותו.\n"
             f"חריגים שלא יישלחו: {bad}.\n"
-            f"עלות משוערת: כ-{total} יחידות.\n"
+            f"עלות משוערת: כ-{total} יחידות."
+            + self._recording_lines() + "\n"
             "השליחה יוצאת מהשרת של ימות המשיח, גם אם המחשב יהיה כבוי."
             f"{extra}\n\nלשגר?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -3038,8 +3100,8 @@ class TzintukimTab(QWidget):
             q = f"לבטל את השיגור החכם ({len(scheds)} קבוצות שעה מתוזמנות)?"
         if QMessageBox.question(
                 self, "ביטול תזמון", q,
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                ) != QMessageBox.StandardButton.Yes:
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
 
         def work(items=scheds):

@@ -1547,7 +1547,8 @@ _now_h = datetime.now(timefmt._israel_zone()).hour
 _b = {max(0, _now_h - 2): {"0521111111": "a", "0522222222": "b"},
       min(23, _now_h + 2): {"0523333333": "c"}}
 n_past = tzmod.TzintukimTab._past_hour_count(_today, _b)
-ok("ספירת נמענים בשעות שכבר עברו היום", n_past == (2 if _now_h >= 2 else 0), str(n_past))
+_exp_past = sum(len(v) for h, v in _b.items() if h <= _now_h)   # robust near 00:00/23:00
+ok("ספירת נמענים בשעות שכבר עברו היום", n_past == _exp_past, f"{n_past}/{_exp_past}")
 ok("מחר — אף שעה לא עברה",
    tzmod.TzintukimTab._past_hour_count(_today + _td(days=1), _b) == 0)
 
@@ -2278,6 +2279,96 @@ ok("…ובהיסטוריה 'לא הגיבו' לא סופר אותו",
 tab._rows = _rows_bak24
 tab._retire_trackers()
 _close_all(); _calls.clear(); _msgs.clear()
+
+# ── 25. סקירה 6/9/2026 (ה) — "פדיחות": איזו הקלטה תושמע · שליחה בלי הקלטה · Enter · רשימה עצמאית פעמיים ──
+print("— סקירה 6/9 (ה): מניעת פדיחות בחלונות האישור —")
+_close_all(); _calls.clear(); _msgs.clear()
+tab._retire_trackers()
+# (א) Enter בחלון האישור לא שולח: "ביטול" הוא ברירת-המחדל, "שלח עכשיו" לא
+_dlg25 = tzmod._SendModeDialog("סיכום", None)
+_dlg25.show(); _app.processEvents()
+ok("חלון אישור השליחה: Enter = ביטול, לא שליחה",
+   _dlg25.btn_cancel.isDefault() and not _dlg25.btn_ok.isDefault()
+   and not _dlg25.btn_ok.autoDefault())
+_dlg25.close()
+_dlg25b = tzmod._ScheduleDialog(3, None)
+_dlg25b.show(); _app.processEvents()
+ok("חלון התזמון: Enter = ביטול", _dlg25b.btn_cancel.isDefault() and not _dlg25b.btn_ok.isDefault())
+_dlg25b.close()
+# (ב) בלי הקלטה — שליחה מיידית / בדיקה / שליחה חוזרת נעצרות עם הסבר (עד עכשיו רק התזמון בדק)
+_tpl_bak = db.get_setting(yemot.SET_TEMPLATE) or ""
+db.set_setting(yemot.SET_TEMPLATE, "")
+db.set_setting(yemot.SET_REC_INFO, "")
+tab._rows = [{"rec": {"id": 1, "full_name": "א"}, "phones": ["0521111111"], "send": ["0521111111"],
+              "checked": True, "why": "", "manual": False}]
+tab._send()
+ok("שליחה מיידית בלי הקלטה — לא יוצאת, עם הסבר",
+   not any(c[0] == "run" for c in _calls) and any("לא הוגדרה הודעה" in m for m in _msgs), str(_msgs[-1:]))
+_msgs.clear()
+tab._last_failed = [{"phone": "0521111111", "name": "א", "failed": True}]
+tab._last_failed_date = week
+tab._resend_failed()
+ok("שליחה חוזרת בלי הקלטה — לא יוצאת", not any(c[0] == "run" for c in _calls)
+   and any("לא הוגדרה הודעה" in m for m in _msgs))
+_msgs.clear()
+tab._send_test()
+ok("שליחת בדיקה בלי הקלטה — לא יוצאת", not any(c[0] == "test" for c in _calls)
+   and any("לא הוגדרה הודעה" in m for m in _msgs))
+_msgs.clear()
+tab._last_failed = []
+db.set_setting(yemot.SET_TEMPLATE, _tpl_bak or "1117319")
+# (ג) זהות ההקלטה: העלאה רושמת שם+זמן+מחשב (מסונכרן), והשורה מופיעה בסיכום השליחה
+_upl_bak = yemot._upload_multipart
+yemot._upload_multipart = lambda path, content, convert="1": {"responseStatus": "OK"}
+_tmpwav = os.path.join(tempfile.gettempdir(), "פרשת נצבים.wav")
+open(_tmpwav, "wb").write(b"RIFF" + b"\0" * 40)
+yemot.upload_message_wav(_tmpwav, "1117319", name="פרשת נצבים")
+yemot._upload_multipart = _upl_bak
+_info25 = yemot.recording_info()
+ok("העלאת הקלטה רושמת את שמה ומועדה", _info25 and _info25["name"] == "פרשת נצבים" and _info25.get("at"), _info25)
+ok("recording_line נוקב בשם ההקלטה", "פרשת נצבים" in yemot.recording_line(), yemot.recording_line())
+# ההקלטה טרייה מכל שליחה ⇒ אין אזהרה
+ok("הקלטה חדשה מהשליחה האחרונה — בלי אזהרה", yemot.recording_older_than_last_send() is None)
+_seen25 = []
+def _exec_capture25(self):
+    _seen25.append(self.findChild(tzmod.QLabel).text()); self.mode = "voice"; return 1
+tzmod._SendModeDialog.exec = _exec_capture25
+tab._send()
+ok("חלון אישור השליחה נוקב באיזו הקלטה תושמע",
+   _seen25 and "פרשת נצבים" in _seen25[-1] and any(c[0] == "run" for c in _calls), _seen25[-1:] if _seen25 else "")
+_close_all(); _calls.clear(); _msgs.clear(); tab._retire_trackers()
+# (ד) ההקלטה כבר הושמעה בצינתוק קודם (שליחה מאוחרת מההעלאה) ⇒ אזהרה "הפעם הקודמת"
+_gOld = db.add_tzintuk_campaign("שליחה של שבוע שעבר", "2026-01-07", "1117319", "c-old", 5,
+                                sent_at=(datetime.now(_tz.utc) + _td(seconds=1)).isoformat())
+db.update_tzintuk_campaign(_gOld, 5, 0, "done")
+_time.sleep(1.2)
+ok("הקלטה שכבר נשלחה — מזוהה", (yemot.recording_older_than_last_send() or {}).get("guid") == _gOld)
+_seen25.clear()
+tab._send()
+ok("…והחלון מזהיר 'ההודעה של הפעם הקודמת'",
+   _seen25 and "הפעם הקודמת" in _seen25[-1], _seen25[-1:] if _seen25 else "")
+_close_all(); _calls.clear(); _msgs.clear(); tab._retire_trackers()
+# הקלטה שהועלתה אחרי השליחה ⇒ האזהרה נעלמת
+yemot.set_recording_info("פרשת וילך", source="tts", device="PC-A")
+ok("הקלטה חדשה יותר מהשליחה — האזהרה נעלמת", yemot.recording_older_than_last_send() is None)
+# (ה) רשימה עצמאית: שליחה שנייה לאותה רשימה מזהירה "כבר נשלח" (dist_date ריק — השומר לפי תאריך לא חל)
+tab._free = {"0527777777": "עצמאי"}
+tab._list_guids = set()
+tab._rows = [{"rec": {"id": 9, "full_name": "עצמאי"}, "phones": ["0527777777"], "send": ["0527777777"],
+              "checked": True, "why": "", "manual": False}]
+ok("רשימה עצמאית טרייה — בלי אזהרה", tab._prev_campaign("") is None)
+_seen25.clear()
+tab._send()
+ok("שליחה ראשונה לרשימה עצמאית — בלי אזהרת כפילות",
+   _seen25 and "פעם שנייה" not in _seen25[-1] and tab._list_guids, _seen25[-1:] if _seen25 else "")
+tab._retire_trackers()
+_seen25.clear()
+tab._send()
+ok("שליחה שנייה לאותה רשימה עצמאית — מזהירה 'כבר נשלח … פעם שנייה'",
+   _seen25 and "פעם שנייה" in _seen25[-1], _seen25[-1:] if _seen25 else "")
+tab._free = None; tab._list_guids = set()
+_close_all(); _calls.clear(); _msgs.clear(); tab._retire_trackers()
+tzmod._SendModeDialog.exec = lambda self: 0
 
 for k, v in _orig.items():
     if k in ("info", "warn", "question"):

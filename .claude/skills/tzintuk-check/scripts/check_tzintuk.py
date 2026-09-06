@@ -225,6 +225,20 @@ def _(y, t, test, rel):
     return okk and "was_rung" in _func_body(xl, "_tzintuk_entry_state"), ""
 
 
+@lint("I39", "v3.26 — חלונות האישור: Enter לא מחייג (_safe_default ב-3 הדיאלוגים), כל שליחה בודקת _recording_ready, הסיכום נוקב בהקלטה (_recording_lines), רשימה עצמאית עם שומר-כפילות (_prev_campaign)")
+def _(y, t, test, rel):
+    okk = (t.count("_safe_default(ok, cancel)") >= 3
+           and "def set_recording_info(" in y and "def recording_older_than_last_send(" in y
+           and "set_recording_info(" in _func_body(y, "upload_message_wav"))
+    for fn in ("_send", "_send_test", "_resend_failed", "_schedule", "_smart_schedule"):
+        okk = okk and "_recording_ready(" in _func_body(t, fn)
+    for fn in ("_send", "_resend_failed", "_schedule", "_smart_schedule"):
+        okk = okk and "_recording_lines()" in _func_body(t, fn)
+    for fn in ("_send", "_schedule", "_smart_schedule"):
+        okk = okk and "_prev_campaign(" in _func_body(t, fn)
+    return okk, ""
+
+
 @lint("I37", "v3.24 — עצירה נשמרת ברשומה ('stopping') ומכובדת בחידוש (_maybe_resume_tracking → stopped_at); answer_windows סופר 'stopping'")
 def _(y, t, test, rel):
     stop = _func_body(t, "_stop_campaign")

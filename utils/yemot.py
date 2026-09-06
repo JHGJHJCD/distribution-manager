@@ -32,6 +32,10 @@ SET_PASSWORD = "yemot_password"
 SET_TEMPLATE = "yemot_template_id"
 SET_CALLER_ID = "yemot_caller_id"
 SET_TEST_PHONE = "yemot_test_phone"
+# v3.26 — WHICH recording is on the template right now (synced JSON
+# {"name","at","device","source"}): the confirmation dialogs name it, so the
+# operator never rings 360 people with last week's (or a test) message.
+SET_REC_INFO = "tzintuk_rec_info"
 # The number recipients see when the line dials them. The line's main DID is an
 # 079 number that kosher phones block, so a caller-back is impossible. Default to
 # the line's 04 landline DID (048691834 — verified approved for outgoing on this
@@ -854,11 +858,14 @@ def ensure_callback_extension(template_id: str | None = None) -> dict:
     return result
 
 
-def upload_message_wav(file_path: str, template_id: str | None = None) -> dict:
+def upload_message_wav(file_path: str, template_id: str | None = None,
+                       name: str = "", source: str = "file") -> dict:
     """Attach a recording file to the campaign template (converted to the
     telephony WAV format server-side). The campaign-file path uses the
     documented ``tpl:`` prefix; older servers may want ``ivr2:``, so a path
-    error triggers one retry with that form."""
+    error triggers one retry with that form.
+    `name` (v3.26) — the human name of the recording; remembered in a synced
+    setting so every confirmation dialog can say WHICH message will play."""
     template_id = template_id or ensure_template()
     with open(file_path, "rb") as f:
         content = f.read()
@@ -868,11 +875,83 @@ def upload_message_wav(file_path: str, template_id: str | None = None) -> dict:
         if e.code not in (107, 109, 110):   # path not accepted — try the other form
             raise
         res = _upload_multipart(f"ivr2:{template_id}.wav", content)
+    set_recording_info(name or os.path.splitext(os.path.basename(file_path))[0],
+                       source=source)
     try:
         publish_callback_message(template_id)   # the caller-back hears the NEW message
     except YemotError:
         pass                                    # repaired again at the next send
     return res
+
+
+def set_recording_info(name: str, source: str = "file", device: str = "") -> dict:
+    """Remember which recording sits on the campaign template (synced, so the
+    other computer sees the same name)."""
+    if not device:
+        try:
+            from utils import sync
+            device = sync.device_name() or ""
+        except Exception:                                    # noqa: BLE001
+            device = ""
+    info = {"name": (name or "הקלטה").strip()[:80],
+            "at": datetime.now(timezone.utc).isoformat(),
+            "device": device, "source": source or "file"}
+    db.set_setting(SET_REC_INFO, json.dumps(info, ensure_ascii=False))
+    return info
+
+
+def recording_info() -> dict | None:
+    """{'name','at','device','source'} of the recording on the template, or
+    None when nothing was uploaded through this version yet."""
+    raw = (db.get_setting(SET_REC_INFO) or "").strip()
+    if not raw:
+        return None
+    try:
+        info = json.loads(raw)
+    except ValueError:
+        return None
+    return info if isinstance(info, dict) and info.get("name") else None
+
+
+def has_recording() -> bool:
+    """A message exists on the template (uploaded ever). Sending without one
+    would ring everybody with silence."""
+    return bool((db.get_setting(SET_TEMPLATE) or "").strip())
+
+
+def recording_line() -> str:
+    """One Hebrew line for the confirmation dialogs: WHICH message will play."""
+    from utils import timefmt
+    info = recording_info()
+    if info:
+        when = timefmt.datetime_str(info.get("at") or "")
+        src = info.get("device") or ""
+        return (f"🔊 ההודעה שתושמע: «{info['name']}» (הועלתה {when}"
+                + (f" מ{src}" if src else "") + ").")
+    if has_recording():
+        return "🔊 ההודעה שתושמע: ההקלטה שהועלתה לפני גרסה 3.26 (שמה לא ידוע)."
+    return "🔊 עדיין לא הועלתה הודעה."
+
+
+def recording_older_than_last_send(camps=None) -> dict | None:
+    """The newest campaign that already PLAYED the current recording — i.e. a
+    campaign sent after the recording was uploaded. When such a campaign
+    exists the operator is probably about to resend last week's message;
+    the dialogs warn. None when the recording is newer than every send (or
+    when nothing is known about it)."""
+    info = recording_info()
+    if not info or not info.get("at"):
+        return None
+    if camps is None:
+        camps = db.get_tzintuk_campaigns(limit=60)
+    now = datetime.now(timezone.utc).isoformat()
+    for c in camps or []:
+        if c.get("status") not in ("done", "sending", "stopping"):
+            continue
+        sent = c.get("sent_at") or ""
+        if sent and info["at"] < sent <= now:
+            return c
+    return None
 
 
 def _upload_multipart(path: str, content: bytes, convert: str = "1") -> dict:
