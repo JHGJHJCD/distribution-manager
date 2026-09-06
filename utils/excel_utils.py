@@ -1031,6 +1031,8 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
             return "לא חזר לשיחה"
         if e.get("failed"):
             return "לא נענה / נכשל"
+        if st == "pending":                # v3.21 — seeded before the server report
+            return "טרם צולצל"
         return st or "לא ידוע"
 
     # ── גיליון סיכום ──────────────────────────────────────────────────────────

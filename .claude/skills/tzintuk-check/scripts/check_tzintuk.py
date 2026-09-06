@@ -214,6 +214,32 @@ def _(y, t, test, rel):
     return not missing, ", ".join(missing)
 
 
+@lint("I26", "כל רשומת קמפיין נזרעת במספרים שלה (_seed_json); _on_sched_checked משמר report_json")
+def _(y, t, test, rel):
+    n_add = len(re.findall(r"db\.add_tzintuk_campaign\(", t))
+    n_seed = len(re.findall(r"self\._seed_json\(", t))
+    keep = _func_body(t, "_on_sched_checked").count('camp.get("report_json") or ""')
+    # classic sends seed through tracker.entries(); every other creation site → _seed_json
+    return n_seed >= n_add - 1 and keep >= 2, f"add={n_add} seed={n_seed} keep={keep}"
+
+
+@lint("I27", "סיום מעקב-חזרה (קלאסי) מחדש מעקב שפוטר; _resume_classic מחזיר bool והלולאה ממשיכה")
+def _(y, t, test, rel):
+    return ("_maybe_resume_tracking()" in _func_body(t, "_on_cb_worker_done")
+            and "if self._resume_classic(c):" in _func_body(t, "_maybe_resume_tracking")
+            and "-> bool" in re.search(r"def _resume_classic\([^\n]*", t).group(0)), ""
+
+
+@lint("I28", "_start_tracking מסרב למזהה קמפיין ריק (אין מה לסקור)")
+def _(y, t, test, rel):
+    return 'if not str(campaign_id or "").strip():' in _func_body(t, "_start_tracking"), ""
+
+
+@lint("I29", "until_by_phone גם ב-_CallbackWorker (חלון v3.20 חל על מעקב קלאסי)")
+def _(y, t, test, rel):
+    return "until_by_phone" in _class_body(t, "_CallbackWorker"), ""
+
+
 def run_lints() -> bool:
     y = _read("utils/yemot.py")
     t = _read("tabs/tzintukim.py")

@@ -30,6 +30,10 @@
 | I23 | `test_tzintuk.py` מפנה `call_history.cache_path` לתיקייה זמנית **לפני** ייבוא `yemot` (3.11) | `test_tzintuk.py` | ✓ |
 | I24 | בדיקות ה-Qt מחליפות `start` של כל 3 ה-workers ב-no-op (3.15) | `test_tzintuk.py` | ✓ |
 | I25 | `test_tzintuk.py` ו-`test_sync.py` ברשימת `TESTS` של `release.py` | `release.py` | ✓ |
+| I26 | כל רשומת קמפיין (שליחה/חוזרת/תזמון/קבוצת שיגור חכם) נזרעת במספרים שלה מרגע היצירה (`_seed_json`, entries `status=pending`) כדי ש-`answer_windows` יסגור את חלון הקודם גם בזמן שהחדש רץ; `_on_sched_checked` משמר `report_json` (3.21) | `tzintukim.py` | ✓ |
+| I27 | סיום מעקב-חזרה של קלאסי (`_on_cb_worker_done`) מחדש מעקב שפוטר; `_resume_classic` מחזיר bool והלולאה ממשיכה על קלאסי שלא פתח מעקב (3.21) | `tzintukim.py` | ✓ |
+| I28 | `_start_tracking` עם מזהה ריק לא פותח poll — הודעה ברצועה, בלי "החיבור נכשל" (3.21) | `tzintukim.py` | ✓ |
+| I29 | `until_by_phone` גם ב-`_CallbackWorker`, לא רק ב-`_PollWorker` (3.21) | `tzintukim.py` | ✓ |
 
 כללים שאינם ניתנים ללינט סטטי (לבדוק בקריאה/בדיקה מדומה): `.get` סלחני על `report_json` ישן ·
 כל סטטוס מטופל בכל צרכן · LWW עם חותמת עתידית · מיזוג קמפיינים לפי זמן שליחה · "לא הגיב" רק בסיום.

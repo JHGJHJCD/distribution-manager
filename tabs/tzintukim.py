@@ -118,13 +118,15 @@ class _CallbackWorker(QThread):
     tick = pyqtSignal(object)          # snapshot dict | Exception
 
     def __init__(self, targets: dict, deadline: float,
-                 seed_entries=None, parent=None, since_iso: str = ""):
+                 seed_entries=None, parent=None, since_iso: str = "",
+                 until_by_phone: dict | None = None):
         super().__init__(parent)
         self.tracker = yemot.CallbackTracker(targets)
         if seed_entries:
             self.tracker.seed(seed_entries)
         self.deadline = float(deadline)
         self.since_iso = since_iso
+        self.until_by_phone = until_by_phone   # v3.21 — same per-number window as the poll
         self.guid = ""                    # the DB record this watch writes to (v3.15)
         self.last_snapshot = None         # …and what it collected so far
         self._rows = None
@@ -148,7 +150,8 @@ class _CallbackWorker(QThread):
             except Exception:
                 pass
         if self._rows is not None:
-            _, ans_changed = yemot.merge_survey_answers(entries, self._rows, self.since_iso)
+            _, ans_changed = yemot.merge_survey_answers(entries, self._rows, self.since_iso,
+                                                        self.until_by_phone)
             changed = changed or ans_changed
         snap = {"returned": returned, "answers": yemot.answer_counts(entries),
                 "entries": entries, "changed": changed,
@@ -1718,6 +1721,18 @@ class TzintukimTab(QWidget):
     def _ready_rows(self):
         return [r for r in self._rows if r["checked"] and r["send"]]
 
+    @staticmethod
+    def _seed_json(phones: dict) -> str:
+        """v3.21 — the numbers a campaign is about to ring, stored on its record
+        from the moment it is created (status 'pending' until the server's
+        report replaces them). Until the report arrived the record carried no
+        numbers at all, so answer_windows could not close the PREVIOUS
+        campaign's survey window for these numbers — a "רענן תשובות" (or the
+        other computer's 10-minute auto refresh) while this one was still
+        ringing credited this week's answers to last week's campaign."""
+        return json.dumps([{"phone": p, "name": n or "", "status": "pending"}
+                           for p, n in (phones or {}).items()], ensure_ascii=False)
+
     def _phones_map(self, rows) -> dict:
         """{'0501234567': 'שם', …} — every number of every checked row (#gaira);
         cross-row duplicates were already removed by _flag_duplicates."""
@@ -2010,6 +2025,8 @@ class TzintukimTab(QWidget):
             str(res.get("campaignId") or ""),
             int(res.get("entriesCount") or len(phones)),
             device=sync.device_name() or "")
+        db.update_tzintuk_campaign(self._active_guid, 0, 0, "sending",
+                                   self._seed_json(phones))
         self._list_guids.add(self._active_guid)
         self._refresh_history()
         self._start_tracking(str(res.get("campaignId") or ""), len(phones), sent_iso)
@@ -2072,6 +2089,8 @@ class TzintukimTab(QWidget):
             f"שליחה חוזרת לנכשלים ({len(phones)})", dist_date, template_id,
             str(res.get("campaignId") or ""), len(phones),
             device=sync.device_name() or "")
+        db.update_tzintuk_campaign(self._active_guid, 0, 0, "sending",
+                                   self._seed_json(phones))
         self._list_guids.add(self._active_guid)
         self._refresh_history()
         self._start_tracking(str(res.get("campaignId") or ""), len(phones), sent_iso)
@@ -2180,12 +2199,14 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "תזמון שליחה", f"התזמון נכשל: {e}")
             return
         from utils import sync
-        self._list_guids.add(db.add_tzintuk_campaign(
+        sched_guid = db.add_tzintuk_campaign(
             f"צינתוק מתוזמן — {self._campaign_name()}",
             dist_date, template_id, str(res.get("schedId") or ""),
             int(res.get("count") or len(phones)),
             sent_at=self._to_utc_iso(when),
-            device=sync.device_name() or "", status="scheduled"))
+            device=sync.device_name() or "", status="scheduled")
+        db.update_tzintuk_campaign(sched_guid, 0, 0, "scheduled", self._seed_json(phones))
+        self._list_guids.add(sched_guid)
         self._refresh_history()
         self._refresh_sched_banner()     # the strip shows up right away
         QMessageBox.information(
@@ -2294,12 +2315,16 @@ class TzintukimTab(QWidget):
         name = self._campaign_name()
         pushed = False
         for r in results:
-            self._list_guids.add(db.add_tzintuk_campaign(
+            g = db.add_tzintuk_campaign(
                 f"שיגור חכם {r['hour']:02d}:00 — {name}",
                 dist_date, r["template_id"], str(r.get("schedId") or ""),
                 int(r.get("count") or 0),
                 sent_at=self._to_utc_iso(r["when"]),
-                device=dev, status="scheduled"))
+                device=dev, status="scheduled")
+            db.update_tzintuk_campaign(
+                g, 0, 0, "scheduled",
+                self._seed_json(buckets.get(r["hour"]) or buckets.get(str(r["hour"])) or {}))
+            self._list_guids.add(g)
             pushed = pushed or bool(r.get("pushed"))
         self._refresh_history()
         self._refresh_sched_banner()
@@ -2469,6 +2494,7 @@ class TzintukimTab(QWidget):
                     sid = str(yemot._dig(rec, "schedId") or yemot._dig(rec, "id") or "").strip()
                     if sid:
                         db.update_tzintuk_campaign(camp["guid"], 0, 0, "scheduled",
+                                                   camp.get("report_json") or "",
                                                    campaign_id=sid)
                 continue                 # the server is a little behind — wait
             if state == "successful":
@@ -2481,6 +2507,7 @@ class TzintukimTab(QWidget):
                 # dialed, not the moment this app happened to notice.
                 if cid:
                     db.update_tzintuk_campaign(camp["guid"], 0, 0, "sending",
+                                               camp.get("report_json") or "",
                                                campaign_id=cid)
                     track = (camp["guid"], cid, int(camp.get("total") or 0))
                 else:
@@ -2548,6 +2575,21 @@ class TzintukimTab(QWidget):
     def _start_tracking(self, campaign_id: str, total: int, since_iso: str = ""):
         self._retire_trackers()
         self.prog_frame.setVisible(True)
+        if not str(campaign_id or "").strip():
+            # v3.21 — the server answered without a campaignId: there is
+            # nothing to poll. A poll on "" used to fail 5 times, show
+            # "החיבור למעקב נכשל", lock the send buttons and retry every
+            # minute for an hour (until _maybe_resume_tracking closed the
+            # id-less record as done).
+            self.btn_resend.setVisible(False)
+            self.lbl_prog.setText(
+                "השליחה יצאה, אבל השרת לא החזיר מזהה קמפיין — אין מעקב תוצאות "
+                "לשליחה זו. הרשומה תיסגר בהיסטוריה תוך שעה; תשובות הסקר "
+                f"(הקשה {yemot.SURVEY_EXT}) ייקלטו ב\"רענן תשובות\".")
+            self.progress.setRange(0, 1)
+            self.progress.setValue(1)
+            self._update_metrics()
+            return
         self.btn_resend.setVisible(False)
         self.lbl_prog.setText("שולח בזמן אמת… אפשר להמשיך לעבוד, אל תסגור את התוכנה")
         self.progress.setRange(0, max(1, total))
@@ -2716,7 +2758,8 @@ class TzintukimTab(QWidget):
 
     def _start_callback_tracking(self, guid: str, targets: dict,
                                  deadline: float, seed_entries=None,
-                                 since_iso: str = ""):
+                                 since_iso: str = "",
+                                 until_by_phone: dict | None = None):
         """Open the live watch window after a classic tzintuk: who calls the
         line back is caught in real time (Yemot keeps no call log, so this
         works only while the window is open); what they answered on the
@@ -2733,7 +2776,8 @@ class TzintukimTab(QWidget):
         self.lbl_done.setText("📞 חזרו לשיחה 0")
         self.lbl_wait.setText(f"טרם חזרו {len(targets)}")
         self._cb_last_persist = time.time()
-        cb = _CallbackWorker(targets, deadline, seed_entries, self, since_iso)
+        cb = _CallbackWorker(targets, deadline, seed_entries, self, since_iso,
+                             until_by_phone)
         cb.guid = guid
         cb.dist_date = self._campaign_dist_date(guid)
         self._cb_worker = cb
@@ -2813,16 +2857,20 @@ class TzintukimTab(QWidget):
         self.btn_extend_track.setVisible(False)
         self.btn_stop_track.setVisible(False)
         self._update_metrics()
+        # v3.21 — a poll retired by this classic send is still 'sending':
+        # pick it back up now (it used to wait for a tab switch / sync).
+        self._maybe_resume_tracking()
 
     @staticmethod
     def _is_own_campaign(camp: dict) -> bool:
         from utils import sync
         return (camp.get("device") or "") == (sync.device_name() or "")
 
-    def _resume_classic(self, camp: dict):
+    def _resume_classic(self, camp: dict) -> bool:
         """A classic tzintuk is still 'sending' (the app closed mid-window, or
         the other computer sent it): reopen the watch if the window is still
-        open; otherwise freeze what was collected as the final result."""
+        open; otherwise freeze what was collected as the final result.
+        Returns True when a watch was started."""
         try:
             entries = json.loads(camp.get("report_json") or "[]")
         except ValueError:
@@ -2834,9 +2882,12 @@ class TzintukimTab(QWidget):
         deadline = (sent.timestamp() + yemot.CLASSIC_TRACK_SECONDS
                     if sent is not None else 0.0)
         if targets and deadline > time.time() + 5:
+            windows = yemot.answer_windows(db.get_tzintuk_campaigns(limit=200))
             self._start_callback_tracking(camp["guid"], targets, deadline,
                                           seed_entries=entries,
-                                          since_iso=camp.get("sent_at") or "")
+                                          since_iso=camp.get("sent_at") or "",
+                                          until_by_phone=windows.get(camp["guid"]))
+            return True
         elif deadline and time.time() - deadline > 600:
             # long past (10-min grace for the sender's own finalize) — close it
             returned = sum(1 for e in entries if e.get("ok"))
@@ -2844,6 +2895,7 @@ class TzintukimTab(QWidget):
                 camp["guid"], returned, 0, "done",
                 json.dumps(entries, ensure_ascii=False))
             self._refresh_history()
+        return False
 
     def _maybe_resume_tracking(self):
         """The app (or the tab) was closed mid-campaign: the newest record is
@@ -2873,7 +2925,14 @@ class TzintukimTab(QWidget):
                 # wrote competing snapshots into the same record (LWW) and
                 # could erase the sender's observations — and never touch it.
                 continue
-            if classic or c.get("campaign_id"):
+            if classic:
+                # v3.21 — a classic whose window is over (closed here) or in
+                # its grace period starts nothing: keep looking for an older
+                # 'sending' record (a poll retired by that classic send).
+                if self._resume_classic(c):
+                    return
+                continue
+            if c.get("campaign_id"):
                 camp = c
                 break
             # A plain send whose server answer carried no campaignId: nothing
@@ -2887,9 +2946,6 @@ class TzintukimTab(QWidget):
                 self._refresh_history()
         if camp is None:
             self._auto_refresh_answers()   # v3.02 — late survey answers
-            return
-        if (camp.get("name") or "").startswith("צינתוק קלאסי"):
-            self._resume_classic(camp)   # v2.96 — callback watch, not polling
             return
         self._active_guid = camp["guid"]
         self._start_tracking(camp["campaign_id"],

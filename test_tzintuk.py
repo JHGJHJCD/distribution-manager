@@ -1791,6 +1791,105 @@ tab._retire_trackers()
 tab._clear_batch()
 _close_all(); _calls.clear(); _msgs.clear()
 
+# ── 20. סקירה 6/9/2026 — מעקב קלאסי שנגמר לא מחדש מעקב שפוטר; מזהה ריק; חלון תשובות בזמן שליחה חיה ──
+print("— סקירה 6/9: אחרי מעקב קלאסי / מזהה ריק / חלון תשובות לקמפיין שעוד רץ —")
+_close_all(); _calls.clear(); _msgs.clear()
+tzmod._SendModeDialog.exec = _exec_plain
+_now = datetime.now(_tz.utc)
+from utils import sync as _sync20
+_dev20 = _sync20.device_name() or ""
+
+# (א) שליחה רגילה A במעקב → המפעיל שולח קלאסי B (A מפוטר, נשאר 'sending') →
+#     חלון המעקב של B נגמר. עד עכשיו A לא התחדש עד רענון מקרי (מעבר לשונית/סנכרון).
+tab._load_week_list()
+tab._rows = [{"rec": {"id": 7201, "full_name": "משפחה X"}, "phones": ["0521111111"],
+              "send": ["0521111111"], "checked": True, "why": "", "manual": False}]
+tab._populate()
+_gA20 = db.add_tzintuk_campaign("חלוקה A", week, "1117319", "camp-A20", 1, device=_dev20)
+tab._active_guid = _gA20
+tab._start_tracking("camp-A20", 1, _now.isoformat())
+_gB20 = db.add_tzintuk_campaign("צינתוק קלאסי — B", week, "1117319", "camp-B20", 1,
+                                device=_dev20, status="sending")
+tab._start_callback_tracking(_gB20, {"0521111111": "X"}, _time.time() + 1800,
+                             since_iso=_now.isoformat())
+_cb20 = tab._cb_worker
+ok("קלאסי B מפטר את מעקב A (A נשאר 'sending')",
+   _cb20 is not None and tab._worker is None and _camp(_gA20)["status"] == "sending")
+tab._on_cb_tick({"returned": 0, "answers": {}, "entries": [{"phone": "0521111111", "name": "X"}],
+                 "changed": False, "remaining": 0, "done": True, "error": ""}, _cb20)
+tab._on_cb_worker_done()
+ok("B נסגר כ-done", _camp(_gB20)["status"] == "done")
+ok("אחרי שמעקב קלאסי נגמר — מעקב A שפוטר מתחדש מיד (בלי לחכות לרענון)",
+   tab._worker is not None and getattr(tab._worker, "guid", "") == _gA20,
+   str(getattr(tab._worker, "guid", None)))
+tab._retire_trackers()
+# (א2) חלון קלאסי שפג בזמן שהתוכנה הייתה סגורה: נסגר — וממשיכים לרשומת ה-'sending' הבאה
+_gC20 = db.add_tzintuk_campaign("צינתוק קלאסי — C", week, "1117319", "camp-C20", 1,
+                                device=_dev20, status="sending",
+                                sent_at=(_now - _td(hours=2)).isoformat())
+db.update_tzintuk_campaign(_gC20, 0, 0, "sending", json.dumps([{"phone": "0521111111", "name": "X"}]))
+db.update_tzintuk_campaign(_gA20, 0, 0, "sending", sent_at=(_now - _td(hours=3)).isoformat())
+tab._maybe_resume_tracking()
+ok("קלאסי שפג נסגר, ומעקב A (הישן יותר) מתחדש באותה פעולה",
+   _camp(_gC20)["status"] == "done" and tab._worker is not None
+   and getattr(tab._worker, "guid", "") == _gA20, str(getattr(tab._worker, "guid", None)))
+tab._retire_trackers()
+_close_all(); _calls.clear(); _msgs.clear()
+
+# (ב) השרת לא החזיר campaignId לשליחה: עד עכשיו נפתח מעקב על מזהה ריק — 5 שגיאות,
+#     "החיבור למעקב נכשל", וניסיון חוזר כל דקה במשך שעה (הכפתורים נעולים בינתיים).
+_gE20 = db.add_tzintuk_campaign("חלוקה בלי מזהה", week, "1117319", "", 1, device=_dev20)
+tab._active_guid = _gE20
+tab._start_tracking("", 1, _now.isoformat())
+ok("בלי מזהה קמפיין — לא נפתח מעקב (אין מה לסקור)", tab._worker is None)
+ok("…והמפעיל רואה הסבר ברצועה, לא 'החיבור נכשל'",
+   "מזהה" in tab.lbl_prog.text() and "נכשל" not in tab.lbl_prog.text(), tab.lbl_prog.text())
+ok("…והכפתורים לא נעולים", tab.btn_send.isEnabled())
+_close_all(); _calls.clear(); _msgs.clear()
+
+# (ג) קמפיין A של שבוע שעבר (done, ענה 1). השבוע נשלח B לאותו מספר ועוד *רץ* (sending).
+#     "רענן תשובות" (או הרענון האוטומטי במחשב השני) בזמן ש-B רץ: עד עכשיו B לא
+#     ידע אילו מספרים חייג (report_json ריק עד הסיום) ⇒ תשובת השבוע נכתבה על A.
+_P20 = "0528888888"
+_gOld20 = db.add_tzintuk_campaign("שבוע שעבר", "2026-08-19", "1117319", "c-o20", 1,
+                                  sent_at=(_now - _td(days=7)).isoformat())
+db.update_tzintuk_campaign(_gOld20, 1, 0, "done",
+                           json.dumps([{"phone": _P20, "ok": True, "status": "done",
+                                        "answer": "1", "answer_at": (_now - _td(days=6)).isoformat()}]))
+_att_before = (yemot.answer_stats().get(_P20) or {}).get("attempts", 0)
+tab._rows = [{"rec": {"id": 7202, "full_name": "משפחה Z"}, "phones": [_P20],
+              "send": [_P20], "checked": True, "why": "", "manual": False}]
+tab._populate()
+tab._send()                                            # B — 'sending', עדיין בלי תוצאות
+_gB2 = tab._active_guid
+ok("B נשלח ובמעקב", tab._worker is not None and _camp(_gB2)["status"] == "sending")
+_w20 = yemot.answer_windows(db.get_tzintuk_campaigns(limit=200))
+ok("קמפיין שרץ כבר חוסם את חלון-התשובות של הקמפיין הקודם לאותו מספר",
+   _w20.get(_gOld20, {}).get(_P20) == _camp(_gB2)["sent_at"], str(_w20.get(_gOld20)))
+tab._apply_answer_rows([{"phone": _P20, "at": _now - _td(days=6), "answer": "1"},
+                        {"phone": _P20, "at": datetime.now(_tz.utc) + _td(seconds=2), "answer": "2"}])
+_eo20 = yemot._report_entries(_camp(_gOld20))[0]
+ok("תשובת השבוע לא נכתבת על קמפיין שבוע שעבר גם כשהחדש עוד רץ",
+   _eo20.get("answer") == "1", str(_eo20))
+ok("הרשומה של B מציגה '—' בהיסטוריה (אין תשובות עדיין)", tab._answers_text(_camp(_gB2)) == "—")
+ok("סטטיסטיקת מענה לא סופרת מספרים שטרם צולצלו כניסיון",
+   (yemot.answer_stats().get(_P20) or {}).get("attempts", 0) == _att_before,
+   str(yemot.answer_stats().get(_P20)))
+tab._retire_trackers()
+_close_all(); _calls.clear(); _msgs.clear()
+
+# (ד) מעקב-חזרה של צינתוק קלאסי מכבד את החסם העליון פר-מספר (v3.20 חל רק על ה-poll)
+_cbw = tzmod._CallbackWorker({_P20: "Z"}, _time.time() + 1800,
+                             since_iso=(_now - _td(hours=2)).isoformat(),
+                             until_by_phone={_P20: (_now - _td(minutes=30)).isoformat()})
+_cbw._rows = [{"phone": _P20, "at": _now - _td(minutes=90), "answer": "3"},
+              {"phone": _P20, "at": _now - _td(minutes=5), "answer": "2"}]
+_cbw._rows_at = _time.time()
+_snap = _cbw._snapshot(False)
+ok("מעקב קלאסי: תשובה שניתנה אחרי שקמפיין מאוחר צלצל — לא נזקפת לו",
+   [e.get("answer") for e in _snap["entries"]] == ["3"], str(_snap["entries"]))
+_close_all(); _calls.clear(); _msgs.clear()
+
 for k, v in _orig.items():
     if k in ("info", "warn", "question"):
         setattr(tzmod.QMessageBox, {"info": "information", "warn": "warning", "question": "question"}[k], v)
