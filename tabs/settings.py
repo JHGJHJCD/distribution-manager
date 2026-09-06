@@ -1302,12 +1302,27 @@ class SettingsTab(QWidget):
             return
         db.set_setting(yemot.SET_SYSTEM, system)
         db.set_setting(yemot.SET_PASSWORD, password)
-        db.set_setting(yemot.SET_CALLER_ID, self.ym_caller.text().strip())
+        caller = self.ym_caller.text().strip()
+        prev_caller = (db.get_setting(yemot.SET_CALLER_ID) or "").strip()
+        note = ""
+        if caller and caller != prev_caller and yemot.is_configured():
+            # v3.22 — the server honours only numbers approved for this line;
+            # a stranger's number would fail every send with error 120. Check
+            # it now (best effort) and keep the previous value when rejected.
+            with busy_cursor():
+                problem = yemot.caller_id_problem(caller)
+            if problem:
+                self.ym_caller.setText(prev_caller)
+                caller = prev_caller
+                QMessageBox.warning(self, "מספר מזוהה ביוצא",
+                                    problem + "\n\nהמספר לא נשמר; נשאר הערך הקודם.")
+                note = " (המספר המזוהה לא נשמר)"
+        db.set_setting(yemot.SET_CALLER_ID, caller)
         db.set_setting("gemini_api_key", self.ym_gemini_key.text().strip())
         self._save_survey_settings()      # v3.02 — labels + question text
         self._refresh_header_chips()
         if not silent:
-            self.lbl_ym_status.setText("הפרטים נשמרו ✓ — עכשיו לחץ \"בדוק חיבור\"")
+            self.lbl_ym_status.setText("הפרטים נשמרו ✓ — עכשיו לחץ \"בדוק חיבור\"" + note)
 
     def _test_yemot_connection(self):
         from utils import yemot
@@ -1327,6 +1342,12 @@ class SettingsTab(QWidget):
                 ok, msg = True, "החיבור לימות המשיח תקין ✓"
                 if balance is not None:
                     msg += f"\nיתרת יחידות במערכת: {balance:,.1f}"
+                try:                      # v3.22 — which caller-ids the line allows
+                    allowed = yemot.allowed_caller_ids()
+                    if allowed:
+                        msg += "\nמספרים מאושרים למספר מזוהה: " + ", ".join(allowed)
+                except Exception:
+                    pass
             except yemot.YemotError as e:
                 ok, msg = False, str(e)
             except Exception as e:
@@ -1364,8 +1385,11 @@ class SettingsTab(QWidget):
     def _on_checked(self, result):
         self.btn_check_update.setEnabled(True)
         if isinstance(result, Exception):
+            from utils import netblock
             self.lbl_update_status.setStyleSheet("color:#dc2626;")
-            self.lbl_update_status.setText("בדיקת העדכונים נכשלה — ודא חיבור לאינטרנט ונסה שוב.")
+            self.lbl_update_status.setText(
+                netblock.explain(result).replace("\n", " ")
+                or "בדיקת העדכונים נכשלה — ודא חיבור לאינטרנט ונסה שוב.")
             return
         if not result or not result.get("url"):
             self.lbl_update_status.setText("לא נמצאה גרסה זמינה.")
@@ -1410,8 +1434,10 @@ class SettingsTab(QWidget):
             if isinstance(result, InterruptedError):
                 self.lbl_update_status.setText("העדכון בוטל.")
             else:
+                from utils import netblock
                 QMessageBox.critical(self, "שגיאת עדכון",
-                                     f"הורדת העדכון נכשלה:\n{result}")
+                                     netblock.explain(result)
+                                     or f"הורדת העדכון נכשלה:\n{result}")
             return
         # Release the single-instance lock BEFORE relaunching, otherwise the new
         # (updated) child process would see the lock still held and refuse to start.

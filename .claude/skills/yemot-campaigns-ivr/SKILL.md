@@ -270,3 +270,22 @@ checking_units_mail=aaa@ccc.com
 - מי שרוצה ללמוד מהיומן "מתי אדם זמין" ולתזמן לפי זה — **זהירות ממעגל סגור**: אם הקו כמעט תמיד שולח באותה שעה (למשל 13:00), *כל* אות ההיסטוריה נערם שם — אנשים מתקשרים **חזרה** בתגובה ב-13:00, ואפשר לענות לצינתוק רק בשעה שבה **חייגנו** (13:00). לכן "השעה השכיחה" של כמעט כל מספר תצא שעת-השליחה, לא הזמינות האמיתית. אומת על קו הר-יונה: 34K אירועים ב-13:00 מול ~13–25K בשעות סמוכות, ושליש מהמספרים "שיאם" ב-13:00.
 - **מה עובד:** לחשב **חריגה** — כמה מספר בולט באותה שעה **יחסית לכלל הקו** (personal_share ÷ global_share, עם מסה מינימלית כדי ששיחת-לילה אקראית לא תנצח), ולהשתמש **רק בשיחות הנכנסות היזומות** — לא בניסיונות-החיוג שלנו (הם מלמדים רק מתי אנחנו חייגנו). זה מפזר את האנשים על פני היום ולא תלוי בשעת השליחה. במנהל חלוקה: `yemot.personal_hour(by_call_hour, gshare)` (v3.12).
 - **תזמון פר-שעה בצד השרת:** תזמון מחייג את רשימת התבנית, וכל `ScheduleCampaign` על אותה תבנית דורס את הרשימה ⇒ לשלוח לכל שעה בשעה שונה צריך **תבנית נפרדת לכל שעה** (אימוץ-לפי-תיאור כדי שהמחשב השני לא ייצר תאומות). ההקלטה מועתקת server-side (`DownloadFile tpl:<main>` → `UploadFile tpl:<hour>`). מומש ב-`yemot.schedule_smart` (v3.12).
+
+## נלמד 6/9/2026 — עצירת קמפיין, מספרים מזוהים, תבנית לכל תזמון (v3.22 של התוכנה)
+- **`CampaignAction`** (Management API, f2 post/32048): `campaignId` + `action` ∈ stop / setPaused (value 0/1) /
+  setMaxActiveChannels / setMaxBridgedChannels / add / block / hangup. `stop` = מי שטרם צולצל לא יצולצל; שיחות
+  פעילות מסתיימות כרגיל. אידמפוטנטי (בטוח ל-retry). בתוכנה: `yemot.stop_campaign` + כפתור "עצור שליחה".
+  ⚠ טרם אומת חי על הקו.
+- **מספרים מזוהים ליוצא** — `GetCustomerData` מחזיר `mainDid`, `secondary_dids[{did,usage}]`, `callerIds[]`; ו-`GetApprovedCallerIDs`
+  מחזיר `call`/`sms`. בקו שלנו (אומת חי דרך MCP 6/9): ראשי 0795378810, משניים 033060315/048691834/023130652/0773019787,
+  מאושרים 0548434668/048021113, ו-call מאושר +972795378810. מספר שאינו ברשימות ⇒ שגיאה 120 בשליחה.
+  בתוכנה: `yemot.allowed_caller_ids()` / `caller_id_problem()`, "שמור" בהגדרות דוחה מספר זר.
+- **`UpdateTemplate`** — 17 פרמטרים (f2 post/32034): description, callerId, incomingPolicy, maxActiveChannels,
+  maxBridgedChannels, `originateTimeout` (float, שניות), vmDetect, filterEnabled, `maxDialAttempts`, `redialWait`
+  (float), `redialPolicy` ∈ NONE/CONGESTIONS/FAILED, yemotContext (REPEAT נדחה בקו שלנו), bridgeTo, playPrivateMsg,
+  removeRequest. התבנית הראשית 1430692 נשאה בטעות את תיאור/הגדרות הקלאסי (8 שנ'/ניסיון 1) — מ-3.22 מוגדרת 30/2.
+- **תזמון = הרשימה השמורה בתבנית ⇒ תבנית לכל תזמון ממתין.** `ScheduleCampaign` מחייג את הרשימה של התבנית
+  בזמן הריצה, לכן שני תזמונים על תבנית אחת = השני דורס את הראשון. הפתרון בתוכנה: מאגר תבניות "מנהל חלוקה — תזמון N"
+  (`ensure_sched_template`), תבנית פנויה כשאין עליה תזמון ממתין; ההקלטה מועתקת server-side (DownloadFile `tpl:`
+  → UploadFile `tpl:` בלי המרה) בזמן התזמון. `get_campaign_template_details` (MCP) מציג לכל תבנית
+  `scheduledCampaigns`/`activeCampaigns` — שימושי לאימות.

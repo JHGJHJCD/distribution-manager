@@ -31,8 +31,16 @@ from PyQt6.QtWidgets import (
 )
 
 import database as db
-from utils import call_history, timefmt, tts, yemot
+from utils import call_history, netblock, timefmt, tts, yemot
 from utils.ui import busy_cursor, enable_touch_scroll, line_icon
+# v3.22 — microphone recording (RecordDialog). Imported at module level so
+# PyInstaller bundles the QtMultimedia backend; the dialog itself degrades to a
+# clear message when the module is missing.
+try:
+    from PyQt6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
+    _HAS_MULTIMEDIA = True
+except Exception:                                    # noqa: BLE001
+    _HAS_MULTIMEDIA = False
 # The design language (cards, glossy buttons, chips, page background) is shared
 # with the main "חלוקה ורישום" screen so both read as one app.
 from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _CHIP_AMBER,
@@ -43,6 +51,18 @@ _BTN_LINK = ("QPushButton{background:transparent; color:#b45309; border:none;"
              " font-weight:700; font-size:13px; padding:0 8px; min-height:38px;"
              " text-decoration:underline;}"
              "QPushButton:hover{color:#92400e;}")
+# v3.22 — the live connection chip's "no contact" state.
+_CHIP_RED = ("QLabel{background:#fde2e2; color:#991b1b; border:none; border-radius:16px;"
+             " padding:6px 14px; font-weight:700; font-size:13px;}")
+_CHIP_GREY = ("QLabel{background:#e5e7eb; color:#374151; border:none; border-radius:16px;"
+              " padding:6px 14px; font-weight:700; font-size:13px;}")
+_BTN_STOP = ("QPushButton{background:#fee2e2; color:#991b1b; border:1px solid #fca5a5;"
+             " border-radius:10px; font-weight:800; font-size:13px; padding:0 14px;"
+             " min-height:36px;}"
+             "QPushButton:hover{background:#fecaca;}"
+             "QPushButton:disabled{color:#b91c1c; background:#fff1f2;}")
+CONN_PROBE_MS = 5 * 60 * 1000        # live chip re-check while the app runs
+CONN_PROBE_MIN_GAP_S = 120           # …and at most once per 2 minutes on refresh
 
 
 class _PollWorker(QThread):
@@ -862,7 +882,8 @@ class LibraryDialog(QDialog):
         items = tts.library_list()
         for it in items:
             when = (it.get("created") or "")[:16]
-            src = "נוצרה מטקסט" if it.get("source") == "tts" else "קובץ שהועלה"
+            src = {"tts": "נוצרה מטקסט", "mic": "הוקלטה במיקרופון"}.get(
+                it.get("source"), "קובץ שהועלה")
             li = QListWidgetItem(f"🎵 {it.get('name')}   ·   {when}   ·   {src}")
             if it.get("text"):
                 li.setToolTip(it["text"])
@@ -921,6 +942,340 @@ class LibraryDialog(QDialog):
         self.accept()
 
 
+class RecordDialog(QDialog):
+    """v3.22 — הקלטת ההודעה ישירות במיקרופון של המחשב (הכרעת המשתמש 6/9/2026):
+    התחל / עצור / השמע / אשר. ההקלטה נשמרת כ-WAV (16 kHz, מונו) — השרת של
+    ימות ממיר לפורמט הטלפוני בהעלאה (convertAudio=1), כמו קובץ שהועלה."""
+
+    SAMPLE_RATE = 16000
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("הקלטת הודעה במיקרופון")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumWidth(460)
+        self.result_path = ""          # ה-WAV המאושר
+        self._source = None
+        self._io = None
+        self._buf = bytearray()
+        self._started = 0.0
+        self._timer = QTimer(self)
+        self._timer.setInterval(250)
+        self._timer.timeout.connect(self._tick)
+        self._out_path = os.path.join(tts.recordings_dir(), "_mic_preview.wav")
+
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        intro = QLabel("לחץ \"התחל הקלטה\", אמור את ההודעה למיקרופון, ולחץ \"עצור\". "
+                       "אפשר להשמיע ולהקליט שוב עד שמרוצים — ואז \"אשר\".")
+        intro.setObjectName("subtitle")
+        intro.setWordWrap(True)
+        lay.addWidget(intro)
+        self.lbl_device = QLabel("")
+        self.lbl_device.setStyleSheet("color:#64748b; font-size:12px; " + _LBL)
+        self.lbl_device.setWordWrap(True)
+        lay.addWidget(self.lbl_device)
+        self.lbl_status = QLabel("מוכן להקלטה")
+        self.lbl_status.setStyleSheet(_LBL + " font-size:16px; font-weight:700; color:#0f4c81;")
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(self.lbl_status)
+        self.level = QProgressBar()
+        self.level.setRange(0, 100)
+        self.level.setTextVisible(False)
+        self.level.setFixedHeight(10)
+        self.level.setToolTip("עוצמת הקול הנקלטת במיקרופון")
+        lay.addWidget(self.level)
+
+        row = QHBoxLayout()
+        self.btn_rec = QPushButton("⏺  התחל הקלטה")
+        self.btn_rec.setObjectName("primary")
+        self.btn_rec.clicked.connect(self._toggle)
+        row.addWidget(self.btn_rec)
+        self.btn_play = QPushButton("🔊 השמע")
+        self.btn_play.setObjectName("neutral")
+        self.btn_play.setEnabled(False)
+        self.btn_play.clicked.connect(self._play)
+        row.addWidget(self.btn_play)
+        row.addStretch()
+        lay.addLayout(row)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        self.btn_ok = QPushButton("אשר — שמור במאגר והעלה לצינתוק")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setEnabled(False)
+        self.btn_ok.clicked.connect(self._accept)
+        btns.addWidget(self.btn_ok)
+        cancel = QPushButton("ביטול")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        lay.addLayout(btns)
+        self._describe_device()
+
+    # ── device ────────────────────────────────────────────────────────────────
+
+    def _describe_device(self):
+        if not _HAS_MULTIMEDIA:
+            self.lbl_device.setText("⚠ רכיב ההקלטה חסר בגרסה זו — העלה קובץ הקלטה במקום.")
+            self.btn_rec.setEnabled(False)
+            return
+        dev = QMediaDevices.defaultAudioInput()
+        if dev.isNull():
+            self.lbl_device.setText("⚠ לא נמצא מיקרופון במחשב. חבר מיקרופון ופתח שוב את החלון.")
+            self.btn_rec.setEnabled(False)
+            return
+        self.lbl_device.setText(f"מיקרופון: {dev.description()}")
+
+    def _format(self):
+        fmt = QAudioFormat()
+        fmt.setSampleRate(self.SAMPLE_RATE)
+        fmt.setChannelCount(1)
+        fmt.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        dev = QMediaDevices.defaultAudioInput()
+        if not dev.isFormatSupported(fmt):
+            fmt = dev.preferredFormat()
+            fmt.setChannelCount(1)
+        return fmt
+
+    # ── recording ─────────────────────────────────────────────────────────────
+
+    def _toggle(self):
+        if self._source is None:
+            self._start()
+        else:
+            self._stop()
+
+    def _start(self):
+        self._buf = bytearray()
+        try:
+            fmt = self._format()
+            self._fmt = fmt
+            self._source = QAudioSource(QMediaDevices.defaultAudioInput(), fmt, self)
+            self._io = self._source.start()
+            if self._io is None:
+                raise RuntimeError(self._source.error())
+            self._io.readyRead.connect(self._read)
+        except Exception as e:                       # noqa: BLE001
+            self._source = None
+            QMessageBox.warning(self, "הקלטה", f"פתיחת המיקרופון נכשלה:\n{e}")
+            return
+        self._started = time.time()
+        self._timer.start()
+        self.btn_rec.setText("⏹  עצור")
+        self.btn_play.setEnabled(False)
+        self.btn_ok.setEnabled(False)
+        self.lbl_status.setText("🔴 מקליט… 0 שניות")
+        self.lbl_status.setStyleSheet(_LBL + " font-size:16px; font-weight:700; color:#b91c1c;")
+
+    def _read(self):
+        if self._io is None:
+            return
+        data = bytes(self._io.readAll().data())
+        if data:
+            self._buf.extend(data)
+            self.level.setValue(self._peak(data[-4000:]))
+
+    @staticmethod
+    def _peak(chunk: bytes) -> int:
+        """0–100 — the loudest 16-bit sample in the chunk (a simple VU meter)."""
+        if len(chunk) < 2:
+            return 0
+        import array
+        a = array.array("h")
+        a.frombytes(chunk[: len(chunk) - (len(chunk) % 2)])
+        peak = max((abs(v) for v in a), default=0)
+        return min(100, int(peak * 100 / 32768))
+
+    def _tick(self):
+        secs = int(time.time() - self._started)
+        self.lbl_status.setText(f"🔴 מקליט… {secs} שניות")
+
+    def _stop(self):
+        self._timer.stop()
+        src, self._source = self._source, None
+        if src is not None:
+            try:
+                self._read()
+                src.stop()
+            except Exception:
+                pass
+        self._io = None
+        self.level.setValue(0)
+        self.btn_rec.setText("⏺  הקלט שוב")
+        if len(self._buf) < self.SAMPLE_RATE:      # < ~0.5 s of audio
+            self.lbl_status.setText("ההקלטה קצרה מדי — נסה שוב")
+            self.lbl_status.setStyleSheet(_LBL + " font-size:16px; font-weight:700; color:#a35b00;")
+            return
+        try:
+            self._write_wav()
+        except OSError as e:
+            QMessageBox.warning(self, "הקלטה", f"שמירת ההקלטה נכשלה: {e}")
+            return
+        secs = len(self._buf) / (2 * max(1, self._fmt.channelCount()) * max(1, self._fmt.sampleRate()))
+        self.lbl_status.setText(f"✓ הוקלטו {secs:.0f} שניות — השמע לבדיקה, או אשר")
+        self.lbl_status.setStyleSheet(_LBL + " font-size:16px; font-weight:700; color:#166534;")
+        self.btn_play.setEnabled(True)
+        self.btn_ok.setEnabled(True)
+
+    def _write_wav(self):
+        import wave
+        with wave.open(self._out_path, "wb") as w:
+            w.setnchannels(max(1, self._fmt.channelCount()))
+            w.setsampwidth(2)
+            w.setframerate(max(8000, self._fmt.sampleRate()))
+            w.writeframes(bytes(self._buf))
+
+    def _play(self):
+        try:
+            os.startfile(self._out_path)
+        except OSError as e:
+            QMessageBox.warning(self, "השמעה", f"פתיחת הנגן נכשלה: {e}")
+
+    def _accept(self):
+        if self._source is not None:
+            self._stop()
+        if not os.path.exists(self._out_path) or len(self._buf) < self.SAMPLE_RATE:
+            return
+        self.result_path = self._out_path
+        self.accept()
+
+    def closeEvent(self, ev):
+        if self._source is not None:
+            self._stop()
+        super().closeEvent(ev)
+
+    def reject(self):
+        if self._source is not None:
+            self._stop()
+        super().reject()
+
+
+class _HistoryDetailDialog(QDialog):
+    """v3.22 — פירוט צינתוק אחד לפי שם ומספר (הכרעת המשתמש 6/9/2026): לכל מספר
+    שצולצל — השם, מה קרה בשיחה, מה ענה בסקר ומתי. נבנה מהדוח השמור
+    (report_json, מסונכרן) — אין פנייה לשרת."""
+
+    _STATUS_HE = {"done": "קיבל את ההודעה", "up": "קיבל את ההודעה",
+                  "bridged": "קיבל את ההודעה", "accepted": "קיבל את ההודעה",
+                  "amd": "תא קולי", "no_answer": "לא נענה", "busy": "תפוס",
+                  "failed": "נכשל", "canceled": "בוטל", "error": "שגיאה",
+                  "blocked": "חסום", "remove_request": "ביקש הסרה",
+                  "callback": "חזר לשיחה ושמע", "no_callback": "לא חזר לשיחה",
+                  "pending": "טרם צולצל"}
+
+    def __init__(self, camp: dict, name_by_phone: dict | None = None, parent=None):
+        super().__init__(parent)
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.resize(820, 560)
+        title = camp.get("name") or "צינתוק"
+        self.setWindowTitle(f"פירוט — {title}")
+        lay = QVBoxLayout(self)
+        lay.setSpacing(8)
+        head = QLabel(f"<b>{title}</b> · {timefmt.datetime_str(camp.get('sent_at') or '')}"
+                      + (f" · {camp.get('device')}" if camp.get("device") else ""))
+        head.setTextFormat(Qt.TextFormat.RichText)
+        head.setStyleSheet("font-size:15px; " + _LBL)
+        lay.addWidget(head)
+        rows = self.rows_for(camp, name_by_phone)
+        counts = yemot.answer_counts(yemot._report_entries(camp))
+        labels = yemot.answer_labels()
+        summary = (f"נשלחו {camp.get('total') or len(rows)} · הצליחו {camp.get('delivered') or 0} · "
+                   f"נכשלו {camp.get('failed') or 0}")
+        if yemot.survey_checked(yemot._report_entries(camp)):
+            summary += (f" · בסקר: {labels['1']} {counts['1']}, {labels['2']} {counts['2']}, "
+                        f"{labels['3']} {counts['3']}, לא הגיבו {counts['']}")
+        sub = QLabel(summary)
+        sub.setObjectName("subtitle")
+        sub.setWordWrap(True)
+        lay.addWidget(sub)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("סינון לפי שם / מספר…")
+        self.search.textChanged.connect(self._filter)
+        lay.addWidget(self.search)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["שם", "טלפון", "השיחה", "תשובה בסקר", "מתי ענה"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for c in (1, 2, 3, 4):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        lay.addWidget(self.table, 1)
+        self._rows = rows
+        self._fill(rows)
+        btns = QHBoxLayout()
+        btns.addStretch()
+        close = QPushButton("סגור")
+        close.clicked.connect(self.accept)
+        btns.addWidget(close)
+        lay.addLayout(btns)
+
+    @classmethod
+    def rows_for(cls, camp: dict, name_by_phone: dict | None = None) -> list:
+        """[{'name','phone','status_he','answer_he','answer_at','color'}] — pure,
+        unit-tested. A row's name comes from the report, else from the
+        recipients (name_by_phone)."""
+        labels = yemot.answer_labels()
+        checked = yemot.survey_checked(yemot._report_entries(camp))
+        final = camp.get("status") == "done"
+        out = []
+        for e in yemot._report_entries(camp):
+            phone = yemot.normalize_phone(e.get("phone")) or str(e.get("phone") or "")
+            status = str(e.get("status") or "").lower()
+            if e.get("ok") and status not in cls._STATUS_HE:
+                status_he = "קיבל את ההודעה"
+            elif e.get("failed") and status not in cls._STATUS_HE:
+                status_he = "לא נענה / נכשל"
+            else:
+                status_he = cls._STATUS_HE.get(status, status or "—")
+            ans = str(e.get("answer") or "")
+            if ans in labels:
+                answer_he = f"{TzintukimTab._ANSWER_STYLE[ans][0]} {labels[ans]}"
+                color = TzintukimTab._ANSWER_STYLE[ans][1]
+            elif e.get("confirmed") or status == "accepted":
+                answer_he, color = f"✓ {labels['1']}", "#166534"
+            elif checked and "answer" in e and final:
+                answer_he, color = "לא הגיב", "#6b7280"
+            else:
+                answer_he, color = "", ""
+            out.append({"name": e.get("name") or (name_by_phone or {}).get(phone, ""),
+                        "phone": phone, "status_he": status_he,
+                        "answer_he": answer_he,
+                        "answer_at": timefmt.datetime_str(e.get("answer_at") or "")
+                        if e.get("answer_at") else "",
+                        "color": color, "ok": bool(e.get("ok")),
+                        "failed": bool(e.get("failed"))})
+        # answered first, then delivered, then failed — then by name
+        out.sort(key=lambda r: (0 if r["answer_he"] and not r["answer_he"].startswith("לא") else 1,
+                                0 if r["ok"] else (2 if r["failed"] else 1),
+                                r["name"] or "￿"))
+        return out
+
+    def _fill(self, rows):
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            self.table.setItem(i, 0, QTableWidgetItem(r["name"] or "—"))
+            self.table.setItem(i, 1, QTableWidgetItem(r["phone"]))
+            st = QTableWidgetItem(r["status_he"])
+            st.setForeground(QColor("#0f6e56" if r["ok"] else ("#a32d2d" if r["failed"] else "#475569")))
+            self.table.setItem(i, 2, st)
+            an = QTableWidgetItem(r["answer_he"])
+            if r["color"]:
+                an.setForeground(QColor(r["color"]))
+            self.table.setItem(i, 3, an)
+            self.table.setItem(i, 4, QTableWidgetItem(r["answer_at"]))
+
+    def _filter(self, text):
+        t = (text or "").strip()
+        digits = "".join(ch for ch in t if ch.isdigit())
+        if not t:
+            self._fill(self._rows)
+            return
+        self._fill([r for r in self._rows
+                    if t in (r["name"] or "") or (digits and digits in r["phone"])])
+
+
 class TzintukimTab(QWidget):
     """מסך הצינתוקים — ראו docstring של המודול."""
 
@@ -948,7 +1303,16 @@ class TzintukimTab(QWidget):
         # #ifc70 — the week list is NOT loaded automatically; the operator loads
         # it with an explicit button (a past batch via #9hgvi counts as loaded).
         self._list_loaded = False
+        # v3.22 — live connection chip: a real GetSession in the background
+        # (the chip used to turn green as soon as credentials were typed).
+        self._conn_worker = None
+        self._conn_last = 0.0
+        self._conn_state = None     # None = unknown, True/False = last probe
         self._build_ui()
+        self._conn_timer = QTimer(self)
+        self._conn_timer.setInterval(CONN_PROBE_MS)
+        self._conn_timer.timeout.connect(lambda: self._probe_connection(force=True))
+        self._conn_timer.start()
         # Due schedules / an interrupted campaign are picked up shortly after
         # launch even if nobody opens this tab (the message promised "results
         # on the next start").
@@ -1000,9 +1364,12 @@ class TzintukimTab(QWidget):
         sub.setStyleSheet("color:#64748b; font-size:13px; " + _LBL)
         head.addWidget(sub)
         head.addStretch()
-        # Connected chip (shown when credentials exist) …
-        self.lbl_ok = QLabel("●  מחובר לימות המשיח")
-        self.lbl_ok.setStyleSheet(_CHIP_GREEN)
+        # Live connection chip (v3.22: a real server probe, not "credentials
+        # typed") — grey while checking, green when the server answered, red
+        # when it did not. Shown only when credentials exist.
+        self.lbl_ok = QLabel("●  בודק חיבור לימות המשיח…")
+        self.lbl_ok.setStyleSheet(_CHIP_GREY)
+        self.lbl_ok.setToolTip("נבדק מול השרת של ימות המשיח בכניסה ללשונית ופעם בכמה דקות")
         head.addWidget(self.lbl_ok)
         # … or the not-configured chip + a way in (hidden once configured).
         self.banner = QWidget()
@@ -1144,6 +1511,12 @@ class TzintukimTab(QWidget):
         c_lay.addWidget(self.lbl_rec)
         rec_row = QHBoxLayout()
         rec_row.setSpacing(8)
+        btn_mic = QPushButton("🎤  הקלט במיקרופון…")
+        btn_mic.setStyleSheet(_BTN_GHOST)
+        btn_mic.setToolTip("מקליטים את ההודעה בקול שלך דרך המיקרופון של המחשב. "
+                           "ההקלטה נשמרת במאגר ומועלית לצינתוק.")
+        btn_mic.clicked.connect(self._record_message)
+        rec_row.addWidget(btn_mic)
         btn_tts = QPushButton("🎙  צור הקלטה מטקסט…")
         btn_tts.setStyleSheet(_BTN_GHOST)
         btn_tts.setToolTip("כותבים את ההודעה — והמחשב מקריא אותה בקול טבעי "
@@ -1209,6 +1582,14 @@ class TzintukimTab(QWidget):
                            "רץ לבד פעם ביום ברקע; הכפתור מרענן עכשיו.")
         btn_srv.clicked.connect(lambda: self._sync_history(manual=True))
         self.btn_hist_sync = btn_srv
+        btn_detail = QPushButton("  פירוט לפי שם ומספר")
+        btn_detail.setStyleSheet(_BTN_GHOST)
+        btn_detail.setIcon(QIcon(line_icon("users", 18, "#475569")))
+        btn_detail.setToolTip("פותח את הצינתוק המסומן בהיסטוריה: לכל שם ומספר — "
+                              "מה קרה בשיחה ומה ענה בסקר (גם לחיצה כפולה על שורה)")
+        btn_detail.clicked.connect(self._open_history_details)
+        self.btn_hist_detail = btn_detail
+        c_head.addWidget(btn_detail)
         c_head.addWidget(btn_srv)
         c_head.addWidget(btn_ans)
         c_head.addWidget(btn_hist_xls)
@@ -1233,6 +1614,8 @@ class TzintukimTab(QWidget):
         self.hist.verticalHeader().setDefaultSectionSize(34)
         self.hist.setMinimumHeight(150)
         self.hist.setMaximumHeight(260)
+        self.hist.setToolTip("לחיצה כפולה על שורה — פירוט לפי שם ומספר")
+        self.hist.cellDoubleClicked.connect(lambda _r, _c: self._open_history_details())
         c_lay.addWidget(self.hist)
         lay.addWidget(card)
         lay.addStretch()
@@ -1255,16 +1638,25 @@ class TzintukimTab(QWidget):
         self.sched_frame = QFrame()
         self.sched_frame.setStyleSheet(
             "QFrame{background:#fdf7e7; border:1px solid #efdead; border-radius:9px;}")
-        sc_lay = QHBoxLayout(self.sched_frame)
-        sc_lay.setContentsMargins(12, 5, 12, 5)
+        sc_v = QVBoxLayout(self.sched_frame)
+        sc_v.setContentsMargins(12, 5, 12, 5)
+        sc_v.setSpacing(3)
+        sc_lay = QHBoxLayout()
         self.lbl_sched = QLabel("")
         self.lbl_sched.setStyleSheet("color:#8a6410; font-weight:600; " + _LBL)
         self.lbl_sched.setWordWrap(True)
         sc_lay.addWidget(self.lbl_sched, 1)
         self.btn_cancel_sched = QPushButton("בטל תזמון")
         self.btn_cancel_sched.setStyleSheet(_BTN_GHOST)
-        self.btn_cancel_sched.clicked.connect(self._cancel_sched)
+        self.btn_cancel_sched.clicked.connect(lambda: self._cancel_sched())
         sc_lay.addWidget(self.btn_cancel_sched)
+        sc_v.addLayout(sc_lay)
+        # v3.22 — several schedules can wait at once: one row per schedule
+        # (or per smart-send group) with its own cancel button.
+        self.sched_rows = QVBoxLayout()
+        self.sched_rows.setSpacing(2)
+        sc_v.addLayout(self.sched_rows)
+        self._sched_row_widgets = []
         self.sched_frame.setVisible(False)
         bar.addWidget(self.sched_frame)
 
@@ -1309,6 +1701,16 @@ class TzintukimTab(QWidget):
         self.btn_stop_track.clicked.connect(self._stop_tracking_now)
         self.btn_stop_track.setVisible(False)
         counters.addWidget(self.btn_stop_track)
+        # v3.22 — stop a running campaign on the server (numbers not yet
+        # dialed are skipped). Visible only while a campaign is being polled.
+        self.btn_stop_send = QPushButton("⛔ עצור שליחה")
+        self.btn_stop_send.setStyleSheet(_BTN_STOP)
+        self.btn_stop_send.setToolTip("עוצר בשרת של ימות את השליחה שרצה עכשיו — "
+                                      "מי שעוד לא צולצל לא יצולצל. שיחות שכבר "
+                                      "מצלצלות מסתיימות כרגיל.")
+        self.btn_stop_send.clicked.connect(self._stop_campaign)
+        self.btn_stop_send.setVisible(False)
+        counters.addWidget(self.btn_stop_send)
         self.btn_resend = QPushButton("🔄 שלח שוב לנכשלים")
         self.btn_resend.setStyleSheet(_BTN_ACCENT)
         self.btn_resend.clicked.connect(self._resend_failed)
@@ -1365,6 +1767,7 @@ class TzintukimTab(QWidget):
         configured = yemot.is_configured()
         self.banner.setVisible(not configured)
         self.lbl_ok.setVisible(configured)
+        self._probe_connection()          # v3.22 — real server check (throttled)
         self._refresh_batch_banner()
         # #ifc70 — nothing is loaded until the operator asks for a list.
         loaded = (self._batch is not None or self._free is not None
@@ -1553,7 +1956,10 @@ class TzintukimTab(QWidget):
         stale — an immediate send would replace the template list the peer's
         schedule is about to dial, or ring everyone a second time without
         the warning. Returns a Hebrew reason to abort, or ""."""
-        pending = self._pending_sched()
+        # v3.22 — only a schedule that dials the MAIN template's list (a
+        # pre-v3.22 record) is disturbed by a send; schedules on their own
+        # templates may appear meanwhile without harm.
+        pending = self._pending_main_sched()
         if pending is not None and (pending_before is None
                                     or pending.get("guid") != pending_before.get("guid")):
             when = timefmt.datetime_str(pending.get("sent_at") or "")
@@ -1777,6 +2183,40 @@ class TzintukimTab(QWidget):
         if self.main and hasattr(self.main, "navigate_to_tab"):
             self.main.navigate_to_tab(self.main.settings_tab)
 
+    # ── Live connection chip (v3.22) ─────────────────────────────────────────
+
+    def _probe_connection(self, force: bool = False):
+        """Ask the server (GetSession) off the UI thread and paint the chip.
+        Throttled to CONN_PROBE_MIN_GAP_S between refreshes; the tab's timer
+        forces one every CONN_PROBE_MS. Never while a probe is running."""
+        if not yemot.is_configured() or self._conn_worker is not None:
+            return
+        if not force and time.time() - self._conn_last < CONN_PROBE_MIN_GAP_S:
+            return
+        self._conn_last = time.time()
+        self._conn_worker = _TaskWorker(yemot.session_info, self)
+        self._conn_worker.done.connect(self._apply_conn_state)
+        self._conn_worker.start()
+
+    def _apply_conn_state(self, res):
+        """res = session_info() dict | Exception → chip text/color."""
+        self._conn_worker = None
+        when = datetime.now().strftime("%H:%M")
+        if isinstance(res, Exception):
+            self._conn_state = False
+            self.lbl_ok.setText("●  אין תקשורת עם ימות המשיח")
+            self.lbl_ok.setStyleSheet(_CHIP_RED)
+            self.lbl_ok.setToolTip(f"נבדק ב-{when}:\n{res}")
+            return
+        self._conn_state = True
+        units = (res or {}).get("units") if isinstance(res, dict) else None
+        txt = "●  מחובר לימות המשיח"
+        if units is not None:
+            txt += f"  ·  יתרה {units:,.0f} יח'"
+        self.lbl_ok.setText(txt)
+        self.lbl_ok.setStyleSheet(_CHIP_GREEN)
+        self.lbl_ok.setToolTip(f"השרת ענה ב-{when}. נבדק שוב אוטומטית כל כמה דקות.")
+
     def _add_person(self):
         dlg = _AddPersonDialog({r["rec"].get("id") for r in self._rows}, self)
         if dlg.exec() and dlg.picked:
@@ -1879,6 +2319,81 @@ class TzintukimTab(QWidget):
                 return
             self._upload_path(dlg.picked_path, "מאגר הקלטות")
 
+    def _record_message(self):
+        """v3.22 — record the message on the computer's microphone, keep it in
+        the library and upload it to the campaign template."""
+        if not self._require_config():
+            return
+        dlg = RecordDialog(self)
+        if not dlg.exec() or not dlg.result_path:
+            return
+        name = "הקלטה מהמיקרופון " + datetime.now().strftime("%d/%m %H:%M")
+        try:
+            item = tts.library_add(dlg.result_path, name, source="mic")
+            path = tts.library_path(item)
+        except OSError as e:
+            QMessageBox.warning(self, "הקלטה", f"שמירת ההקלטה במאגר נכשלה: {e}")
+            path = dlg.result_path
+        self._upload_path(path, "הקלטה מהמיקרופון")
+
+    # ── History details (v3.22) ──────────────────────────────────────────────
+
+    def _name_by_phone(self) -> dict:
+        out = {}
+        try:
+            for rec in db.get_all_recipients():
+                nm = rec.get("full_name") or ""
+                for p in yemot.pick_phones(rec):
+                    out.setdefault(p, nm)
+        except Exception:
+            pass
+        return out
+
+    def _open_history_details(self):
+        row = self.hist.currentRow()
+        it = self.hist.item(row, 0) if row >= 0 else None
+        guid = it.data(Qt.ItemDataRole.UserRole) if it is not None else ""
+        camp = db.get_tzintuk_campaign(guid) if guid else None
+        if camp is None:
+            QMessageBox.information(self, "היסטוריית צינתוקים",
+                                    "בחר קודם שורה בהיסטוריה (או לחץ עליה לחיצה כפולה).")
+            return
+        if not yemot._report_entries(camp):
+            QMessageBox.information(
+                self, "היסטוריית צינתוקים",
+                "לצינתוק הזה אין עדיין פירוט לפי מספר "
+                "(תזמון שטרם יצא, או שליחה ישנה בלי דוח).")
+            return
+        _HistoryDetailDialog(camp, self._name_by_phone(), self).exec()
+
+    # ── Stop a running campaign (v3.22) ──────────────────────────────────────
+
+    def _stop_campaign(self):
+        w = self._worker
+        cid = str(getattr(w, "campaign_id", "") or "").strip() if w is not None else ""
+        if not cid:
+            self.btn_stop_send.setVisible(False)
+            return
+        ans = QMessageBox.question(
+            self, "עצירת שליחה",
+            "לעצור את השליחה שרצה עכשיו בשרת של ימות?\n"
+            "מי שעוד לא צולצל — לא יצולצל. שיחות שכבר מצלצלות מסתיימות כרגיל.\n"
+            "התוצאות של מי שכבר צולצל יישמרו בהיסטוריה.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        self.btn_stop_send.setEnabled(False)
+        try:
+            self._run_blocking(lambda: yemot.stop_campaign(cid), "עוצר את השליחה בשרת…")
+        except Exception as e:                               # noqa: BLE001
+            self.btn_stop_send.setEnabled(True)
+            QMessageBox.warning(self, "עצירת שליחה", f"העצירה נכשלה:\n{e}")
+            return
+        self.lbl_prog.setText("⛔ השליחה נעצרה בשרת — ממתין לתוצאות של מי שכבר צולצל…")
+        QMessageBox.information(self, "עצירת שליחה",
+                                "השליחה נעצרה ✓ — מי שטרם צולצל לא יצולצל.")
+
     def _send_test(self):
         # #dx28e — the test number is entered/edited right here (pre-filled with
         # the saved one) and remembered; no settings-screen field any more.
@@ -1895,9 +2410,10 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "שליחת בדיקה", "המספר שהוזן אינו תקין.")
             return
         db.set_setting(yemot.SET_TEST_PHONE, phone)
-        # A pending schedule dials the list STORED in the template — a test
-        # must not add the operator's number to it (open finding #2, 2/9).
-        store = self._pending_sched() is None
+        # A pending schedule on the MAIN template (pre-v3.22 records) dials the
+        # list STORED there — a test must not add the operator's number to it
+        # (open finding #2, 2/9). v3.22 schedules use their own templates.
+        store = self._pending_main_sched() is None
         try:
             res = self._run_blocking(lambda: yemot.run_test(phone, store=store),
                                      "שולח שיחת בדיקה…")
@@ -1926,19 +2442,20 @@ class TzintukimTab(QWidget):
         if not phones:
             QMessageBox.warning(self, "צינתוקים", "אין אף נמען מסומן עם מספר תקין.")
             return
-        # A pending schedule dials the list STORED in the template — and an
-        # immediate send replaces that list. Refuse instead of silently
-        # re-targeting the scheduled campaign at these people.
-        pending = self._pending_sched()
+        # A pending schedule that dials the MAIN template's stored list (a
+        # record made before v3.22) would be re-targeted by an immediate send,
+        # which replaces that list. Refuse instead. v3.22 schedules live on
+        # their own templates, so they never block a send (user request).
+        pending = self._pending_main_sched()
         if pending:
             when = timefmt.datetime_str(pending.get("sent_at") or "")
             QMessageBox.information(
                 self, "צינתוקים",
-                f"קיים צינתוק מתוזמן ({when}).\n"
+                f"קיים צינתוק מתוזמן מגרסה קודמת ({when}) שמשתמש באותה רשימה.\n"
                 "שליחה עכשיו הייתה מחליפה את רשימת הנמענים של התזמון — "
                 "והצינתוק המתוזמן היה יוצא לאנשים האלה במקום לרשימה המקורית.\n\n"
                 "בטל קודם את התזמון (כפתור \"בטל תזמון\"), שלח, "
-                "ואז תזמן מחדש אם צריך.")
+                "ואז תזמן מחדש — תזמון חדש כבר לא יחסום שליחה.")
             return
         dist_date = self._dist_date_iso()
         prev = db.tzintuk_campaign_for_date(dist_date)
@@ -2119,6 +2636,64 @@ class TzintukimTab(QWidget):
         scheds = self._pending_scheds()
         return scheds[0] if scheds else None
 
+    def _pending_main_sched(self):
+        """v3.22 — a pending schedule that dials the MAIN template's stored
+        list (records from before v3.22, when every schedule used it). Only
+        such a schedule is disturbed by an immediate send / a stored test."""
+        main = (db.get_setting(yemot.SET_TEMPLATE) or "").strip()
+        for c in self._pending_scheds():
+            if not main or str(c.get("template_id") or "").strip() == main:
+                return c
+        return None
+
+    def _busy_templates(self) -> set:
+        """Template ids the pending schedules dial (both computers')."""
+        return {str(c.get("template_id") or "").strip()
+                for c in self._pending_scheds() if c.get("template_id")}
+
+    @staticmethod
+    def _sched_group_key(camp: dict):
+        """Smart-send hour groups of one send collapse into one strip row."""
+        name = camp.get("name") or ""
+        if name.startswith("שיגור חכם"):
+            day = (timefmt.to_israel(camp.get("sent_at") or "") or datetime.now()).date()
+            return ("smart", camp.get("dist_date") or "", camp.get("device") or "", str(day))
+        return ("one", camp.get("guid") or "")
+
+    def _sched_groups(self) -> list:
+        """[(label, [records])] for the pending schedules, oldest planned first."""
+        groups, order = {}, []
+        for c in sorted(self._pending_scheds(), key=lambda c: c.get("sent_at") or ""):
+            k = self._sched_group_key(c)
+            if k not in groups:
+                groups[k] = []
+                order.append(k)
+            groups[k].append(c)
+        out = []
+        for k in order:
+            items = groups[k]
+            src = items[0].get("device") or ""
+            if k[0] == "smart":
+                total = sum(int(c.get("total") or 0) for c in items)
+                hrs = sorted({w.hour for c in items
+                              for w in [timefmt.to_israel(c.get("sent_at") or "")]
+                              if w is not None})
+                rng = f"{hrs[0]:02d}:00–{hrs[-1]:02d}:00" if hrs else ""
+                day = (timefmt.to_israel(items[0].get("sent_at") or "") or datetime.now())
+                label = (f"🕒 שיגור חכם {day.strftime('%d/%m')} — {len(items)} קבוצות שעה "
+                         f"({rng}), {total} נמענים")
+            else:
+                c = items[0]
+                when = timefmt.datetime_str(c.get("sent_at") or "")
+                label = f"🕒 {when} — {c.get('total') or 0} נמענים"
+                nm = (c.get("name") or "").replace("צינתוק מתוזמן — ", "")
+                if nm:
+                    label += f" · {nm}"
+            if src:
+                label += f" (נקבע מ{src})"
+            out.append((label, items))
+        return out
+
     def _smart_hint(self, phones) -> str:
         """#y7jr0 שלב 1 — ההמלצה בדיאלוג התזמון: השעה עם אחוז המענה הגבוה
         ביותר על פני כל המספרים שברשימה (רק ממי שכבר יש עליו היסטוריה)."""
@@ -2149,14 +2724,15 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "תזמון שליחה",
                                 "אין אף נמען מסומן עם מספר תקין.")
             return
+        # v3.22 — several schedules may wait at once (each on its own
+        # template); the recording is copied into the template NOW, so it
+        # must already exist.
         pending = self._pending_sched()
-        if pending:
-            when = timefmt.datetime_str(pending.get("sent_at") or "")
+        if not (db.get_setting(yemot.SET_TEMPLATE) or "").strip():
             QMessageBox.information(
                 self, "תזמון שליחה",
-                f"כבר קיים צינתוק מתוזמן ({when}).\n"
-                "אפשר לתזמן רק צינתוק אחד בכל פעם — בטל אותו קודם "
-                "(כפתור \"בטל תזמון\") ואז תזמן מחדש.")
+                "עדיין לא הוגדרה הודעה מוקלטת. צור או העלה הקלטה קודם — "
+                "התזמון שומר את ההקלטה הנוכחית.")
             return
         dist_date = self._dist_date_iso()
         prev = db.tzintuk_campaign_for_date(dist_date)
@@ -2172,12 +2748,17 @@ class TzintukimTab(QWidget):
             extra = (f"\n\n⚠ שים לב: {verb} לחלוקה של תאריך זה ({prev_when}). "
                      "שליחה נוספת תצלצל לאנשים פעם שנייה!")
         bad = sum(1 for r in self._rows if r["why"])
+        n_pending = len(self._pending_scheds())
+        if n_pending:
+            extra = (f"\n\nכבר ממתינים {n_pending} תזמונים — התזמון הזה מצטרף אליהם "
+                     "(כל אחד ברשימה משלו).") + extra
         ans = QMessageBox.question(
             self, "אישור תזמון",
             f"הצינתוק יישלח ל-{len(phones)} נמענים "
             f"ביום {when.strftime('%d/%m/%Y')} בשעה {when.strftime('%H:%M')}.\n"
             f"חריגים שלא יישלחו: {bad}.\n"
             f"עלות משוערת: כ-{len(phones)} יחידות.\n"
+            "ההקלטה הנוכחית נשמרת לתזמון הזה (החלפת הקלטה אחר כך לא תשפיע עליו).\n"
             "השליחה תצא מהשרת של ימות המשיח גם אם המחשב יהיה כבוי; "
             f"התוצאות ייקלטו בתוכנה בהפעלה הבאה.{extra}\n\nלתזמן?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -2188,9 +2769,10 @@ class TzintukimTab(QWidget):
         if reason:
             QMessageBox.information(self, "תזמון שליחה", reason)
             return
+        busy = self._busy_templates()
         try:
-            template_id, res = self._run_blocking(
-                lambda: (lambda t: (t, yemot.schedule_campaign(when, phones, t)))(yemot.ensure_template()),
+            res = self._run_blocking(
+                lambda: yemot.schedule_campaign_dedicated(when, phones, busy),
                 "שומר את התזמון בשרת…")
         except yemot.YemotError as e:
             QMessageBox.warning(self, "תזמון שליחה", str(e))
@@ -2198,6 +2780,7 @@ class TzintukimTab(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "תזמון שליחה", f"התזמון נכשל: {e}")
             return
+        template_id = str(res.get("template_id") or "")
         from utils import sync
         sched_guid = db.add_tzintuk_campaign(
             f"צינתוק מתוזמן — {self._campaign_name()}",
@@ -2244,12 +2827,21 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "שיגור חכם",
                                 "אין אף נמען מסומן עם מספר תקין.")
             return
+        # v3.22 — plain schedules (own templates) never block a smart send;
+        # only a pending smart send whose HOUR templates would be reused does
+        # (each hour template holds one list — a second send for the same
+        # hour would overwrite it).
         pending = self._pending_sched()
-        if pending is not None:
+        try:
+            hour_map = json.loads(db.get_setting(yemot.SET_HOUR_TEMPLATES) or "{}")
+        except ValueError:
+            hour_map = {}
+        busy_hours = self._busy_templates() & {str(v) for v in (hour_map or {}).values()}
+        if busy_hours:
             QMessageBox.information(
                 self, "שיגור חכם",
-                "כבר קיים תזמון ממתין. בטל אותו קודם (\"בטל תזמון\") "
-                "ואז שגר מחדש.")
+                "כבר ממתין שיגור חכם (קבוצות שעה בשרת). כדי לא לדרוס את "
+                "הרשימות שלו — בטל אותו קודם (\"בטל\" ברצועת התזמון) ואז שגר מחדש.")
             return
         if not (db.get_setting(yemot.SET_TEMPLATE) or "").strip():
             QMessageBox.information(
@@ -2297,6 +2889,10 @@ class TzintukimTab(QWidget):
         if ans != QMessageBox.StandardButton.Yes:
             return
         reason = self._changed_meanwhile(dist_date, pending, prev)
+        if not reason and (self._busy_templates()
+                           & {str(v) for v in (hour_map or {}).values()}):
+            reason = ("בזמן שהחלון היה פתוח נקלט שיגור חכם ממתין מהמחשב השני — "
+                      "הפעולה בוטלה כדי לא לדרוס את הרשימות שלו.")
         if reason:
             QMessageBox.information(self, "שיגור חכם", reason)
             return
@@ -2344,41 +2940,57 @@ class TzintukimTab(QWidget):
             msg += "\n(שעות שכבר עברו היום יישלחו בעוד כמה דקות.)"
         QMessageBox.information(self, "שיגור חכם", msg)
 
+    def _clear_sched_rows(self):
+        for w in self._sched_row_widgets:
+            w.setParent(None)
+            w.deleteLater()
+        self._sched_row_widgets = []
+
     def _refresh_sched_banner(self):
-        scheds = self._pending_scheds()
-        if not scheds:
+        """v3.22 — one summary line + (when more than one schedule waits) a row
+        per schedule / smart-send group, each with its own cancel button."""
+        self._clear_sched_rows()
+        groups = self._sched_groups()
+        if not groups:
             self.sched_frame.setVisible(False)
             return
-        if len(scheds) == 1:
-            camp = scheds[0]
-            when = timefmt.datetime_str(camp.get("sent_at") or "")
-            src = camp.get("device") or ""
-            self.lbl_sched.setText(
-                f"🕒 צינתוק מתוזמן ל-{when} — ל-{camp.get('total') or 0} נמענים"
-                + (f" (נקבע מ{src})" if src else "")
-                + ". המחשב לא חייב להיות דלוק בשעת השליחה.")
-            self.btn_cancel_sched.setText("בטל תזמון")
+        if len(groups) == 1:
+            label, items = groups[0]
+            self.lbl_sched.setText(label + ". המחשב לא חייב להיות דלוק בשעת השליחה.")
+            self.btn_cancel_sched.setText("בטל שיגור חכם" if len(items) > 1 else "בטל תזמון")
         else:
-            total = sum(int(c.get("total") or 0) for c in scheds)
-            hrs = sorted({w.hour for c in scheds
-                          for w in [timefmt.to_israel(c.get("sent_at") or "")]
-                          if w is not None})
-            rng = f"{hrs[0]:02d}:00–{hrs[-1]:02d}:00" if hrs else ""
+            total = sum(int(c.get("total") or 0) for _l, items in groups for c in items)
             self.lbl_sched.setText(
-                f"🕒 שיגור חכם מתוזמן — {len(scheds)} קבוצות שעה ({rng}), "
-                f"ל-{total} נמענים בסך הכול, כל אחד בשעה שלו. "
-                "המחשב לא חייב להיות דלוק.")
-            self.btn_cancel_sched.setText("בטל שיגור חכם")
+                f"🕒 {len(groups)} צינתוקים מתוזמנים ממתינים ({total} נמענים בסך הכול). "
+                "המחשב לא חייב להיות דלוק — אפשר לבטל כל אחד בנפרד:")
+            self.btn_cancel_sched.setText("בטל את כולם")
+            for label, items in groups:
+                row = QWidget()
+                rl = QHBoxLayout(row)
+                rl.setContentsMargins(18, 0, 0, 0)
+                rl.setSpacing(8)
+                lbl = QLabel(label)
+                lbl.setStyleSheet("color:#8a6410; " + _LBL)
+                lbl.setWordWrap(True)
+                rl.addWidget(lbl, 1)
+                btn = QPushButton("בטל")
+                btn.setStyleSheet(_BTN_GHOST)
+                btn.clicked.connect(lambda _c=False, items=items: self._cancel_sched(items))
+                rl.addWidget(btn)
+                self.sched_rows.addWidget(row)
+                self._sched_row_widgets.append(row)
         self.sched_frame.setVisible(True)
 
-    def _cancel_sched(self):
-        scheds = self._pending_scheds()
+    def _cancel_sched(self, items=None):
+        scheds = list(items) if items else self._pending_scheds()
         if not scheds:
             self.sched_frame.setVisible(False)
             return
         if len(scheds) == 1:
             when = timefmt.datetime_str(scheds[0].get("sent_at") or "")
             q = f"לבטל את הצינתוק המתוזמן ל-{when}?"
+        elif items is None and len(self._sched_groups()) > 1:
+            q = f"לבטל את כל {len(self._sched_groups())} התזמונים הממתינים?"
         else:
             q = f"לבטל את השיגור החכם ({len(scheds)} קבוצות שעה מתוזמנות)?"
         if QMessageBox.question(
@@ -2433,6 +3045,7 @@ class TzintukimTab(QWidget):
             QMessageBox.information(self, "ביטול תזמון",
                                     "התזמון בוטל — לא יישלח צינתוק.")
         self._refresh_history()
+        self._refresh_sched_banner()
         self._maybe_resume_tracking()
 
     def _check_scheduled(self):
@@ -2571,6 +3184,7 @@ class TzintukimTab(QWidget):
                 self._persist_callback(snap, final=False, guid=cb.guid)
             self.btn_extend_track.setVisible(False)
             self.btn_stop_track.setVisible(False)
+        self.btn_stop_send.setVisible(False)
 
     def _start_tracking(self, campaign_id: str, total: int, since_iso: str = ""):
         self._retire_trackers()
@@ -2611,6 +3225,8 @@ class TzintukimTab(QWidget):
         w.tick.connect(lambda st, w=w: self._on_tick(st, w))
         w.finished.connect(self._on_worker_done)
         w.start()
+        self.btn_stop_send.setEnabled(True)
+        self.btn_stop_send.setVisible(True)          # v3.22 — stop on the server
         self._update_metrics()
 
     def _on_tick(self, st, worker=None):
@@ -2637,6 +3253,7 @@ class TzintukimTab(QWidget):
                 json.dumps(st.get("entries") or [], ensure_ascii=False))
         if st.get("finished"):
             self._chain_next = True      # a smart send has more hour groups to track
+            self.btn_stop_send.setVisible(False)
             self.lbl_prog.setText(
                 f"הקמפיין הסתיים ✓ — {st['delivered']} קיבלו את ההודעה, "
                 f"{st['failed']} נכשלו. התשובות בסקר (הקשה {yemot.SURVEY_EXT}) "
@@ -3147,7 +3764,9 @@ class TzintukimTab(QWidget):
         for i, c in enumerate(camps):
             when = timefmt.datetime_str(c.get("sent_at") or "")
             src = c.get("device") or ""
-            self.hist.setItem(i, 0, QTableWidgetItem(when + (f"  ({src})" if src else "")))
+            first = QTableWidgetItem(when + (f"  ({src})" if src else ""))
+            first.setData(Qt.ItemDataRole.UserRole, c.get("guid") or "")   # v3.22 details
+            self.hist.setItem(i, 0, first)
             name = c.get("name") or ""
             st = status_he.get(c.get("status") or "", c.get("status") or "")
             self.hist.setItem(i, 1, QTableWidgetItem(f"{name} — {st}"))

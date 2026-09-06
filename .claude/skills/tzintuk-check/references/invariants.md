@@ -21,7 +21,7 @@
 | I14 | `_answer_campaigns` סורק ≥200 רשומות (3.19) | `tzintukim.py` | ✓ |
 | I15 | `merge_survey_answers` מקבל חסם-עליון מ-`answer_windows` (3.20) | `yemot.py`/workers | ✓ |
 | I16 | `status_ts` של רשומת צינתוק = עכשיו, לעולם לא `sent_at` (2.97) | `database.py` | ידני |
-| I17 | שליחה מיידית חסומה כשיש תזמון ממתין (`_pending_sched`) (2.97) | `_send` | ✓ |
+| I17 | שליחה מיידית חסומה כשיש תזמון ממתין **על התבנית הראשית** (`_pending_main_sched` — רשומות מלפני 3.22; תזמון 3.22 יושב על תבנית ייעודית ולא חוסם) (2.97/3.22) | `_send` | ✓ |
 | I18 | `run_test` לא מנקה את רשימת התבנית (`add_template_entry`, בלי Clear) (2.94) | `yemot.py` | ✓ |
 | I19 | אין פרסום אוטומטי בשלוחה 1 — `publish_to_extension` נקרא רק מהכפתור הידני (2.89) | `tzintukim.py` | ✓ |
 | I20 | קריאות חוסמות לשרת דרך `_run_blocking` (המסך לא קופא) (2.98) | `tzintukim.py` | ✓ |
@@ -34,6 +34,10 @@
 | I27 | סיום מעקב-חזרה של קלאסי (`_on_cb_worker_done`) מחדש מעקב שפוטר; `_resume_classic` מחזיר bool והלולאה ממשיכה על קלאסי שלא פתח מעקב (3.21) | `tzintukim.py` | ✓ |
 | I28 | `_start_tracking` עם מזהה ריק לא פותח poll — הודעה ברצועה, בלי "החיבור נכשל" (3.21) | `tzintukim.py` | ✓ |
 | I29 | `until_by_phone` גם ב-`_CallbackWorker`, לא רק ב-`_PollWorker` (3.21) | `tzintukim.py` | ✓ |
+| I30 | תזמון רגיל יוצא על תבנית ייעודית (`schedule_campaign_dedicated`/`ensure_sched_template(busy)`), לעולם לא על הראשית — כך תזמונים לא דורסים זה את זה ושליחה מיידית לא דורסת תזמון (3.22) | `_schedule`/`yemot.py` | ✓ |
+| I31 | כפתור "עצור שליחה" גלוי רק בזמן poll: נעלם ב-`_retire_trackers` ובסיום קמפיין (3.22) | `tzintukim.py` | ✓ |
+| I32 | חסימת נטפרי (418 / "Blocked by NetFree") מזוהה ב-`_http`/`_upload_multipart` דרך `utils.netblock` → `YemotError(code=-3)` בלי retry ובלי שרת תאום; ‎-3 ≠ ‎-1 (חסימה מקומית — הפקודה בוודאות לא הגיעה) (3.22) | `yemot.py` | ✓ |
+| I33 | `ensure_template` מאשר פעם אחת לכל tid (`SET_TEMPLATE_READY`) תיאור + 30 שנ' + 2 ניסיונות, בלי `yemotContext` (3.22) | `yemot.py` | ✓ |
 
 כללים שאינם ניתנים ללינט סטטי (לבדוק בקריאה/בדיקה מדומה): `.get` סלחני על `report_json` ישן ·
 כל סטטוס מטופל בכל צרכן · LWW עם חותמת עתידית · מיזוג קמפיינים לפי זמן שליחה · "לא הגיב" רק בסיום.

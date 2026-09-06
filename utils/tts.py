@@ -142,9 +142,9 @@ def _edge_synthesize(text: str, voice: str, out_path: str, rate: str = "+0%"):
                     pass
             break
     detail = str(last_err) or type(last_err).__name__
-    if "netfree" in detail.lower():
-        raise TtsError("שירות ההקראה נחסם ע\"י הסינון — יש לבקש מנטפרי לפתוח "
-                       "את speech.platform.bing.com")
+    from utils import netblock
+    if netblock.is_blocked(last_err):
+        raise TtsError(netblock.NETFREE_MSG + "\n(הכתובת: speech.platform.bing.com)")
     raise TtsError("יצירת ההקלטה נכשלה — בדוק את חיבור האינטרנט.\n"
                    f"פרטים טכניים: {detail}")
 
@@ -179,6 +179,9 @@ def _gemini_synthesize(text: str, voice_name: str, out_path: str,
                 raw = resp.read()
             break
         except urllib.error.HTTPError as e:
+            from utils import netblock
+            if netblock.is_blocked(e):
+                raise TtsError(netblock.NETFREE_MSG)
             if e.code == 429:
                 raise TtsError("המכסה החינמית היומית של גמיני נוצלה")
             if e.code in (400, 403):

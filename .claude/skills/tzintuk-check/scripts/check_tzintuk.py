@@ -153,9 +153,36 @@ def _(y, t, test, rel):
             and "yemot.answer_windows(" in t and "until_by_phone" in _class_body(t, "_PollWorker")), ""
 
 
-@lint("I17", "_send חסום כשיש תזמון ממתין (_pending_sched)")
+@lint("I17", "_send חסום כשיש תזמון ממתין על התבנית הראשית (_pending_main_sched)")
 def _(y, t, test, rel):
-    return "_pending_sched()" in _func_body(t, "_send"), ""
+    return "_pending_main_sched()" in _func_body(t, "_send"), ""
+
+
+@lint("I30", "v3.22 — תזמון רגיל על תבנית ייעודית (schedule_campaign_dedicated), לא על הראשית")
+def _(y, t, test, rel):
+    body = _func_body(t, "_schedule")
+    return ("schedule_campaign_dedicated(" in body
+            and "yemot.schedule_campaign(" not in body), ""
+
+
+@lint("I31", "v3.22 — כפתור העצירה נעלם ב-_retire_trackers ובסיום קמפיין")
+def _(y, t, test, rel):
+    return ("btn_stop_send.setVisible(False)" in _func_body(t, "_retire_trackers")
+            and "btn_stop_send.setVisible(False)" in _func_body(t, "_on_tick", sig_hint="worker")), ""
+
+
+@lint("I32", "v3.22 — חסימת נטפרי (418) מזוהה ב-_http/_upload_multipart דרך netblock, בלי שרת תאום")
+def _(y, t, test, rel):
+    return ("netblock.is_blocked(" in _func_body(y, "_http")
+            and "netblock.is_blocked(" in _func_body(y, "_upload_multipart")
+            and "code=-3" in _func_body(y, "_http")), ""
+
+
+@lint("I33", "v3.22 — ensure_template מאשר מדיניות חיוג פעם אחת (SET_TEMPLATE_READY, בלי yemotContext)")
+def _(y, t, test, rel):
+    body = _func_body(y, "ensure_template")
+    return ("SET_TEMPLATE_READY" in body and "maxDialAttempts" in body
+            and "yemotContext" not in body), ""
 
 
 @lint("I18", "run_test לא מנקה את רשימת התבנית (בלי ClearTemplateEntries)")

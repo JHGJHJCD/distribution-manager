@@ -2705,7 +2705,9 @@ class GroupUpdateTab(QWidget):
                     inline_logo_path=logo_path if os.path.exists(logo_path) else None,
                 )
         except Exception as e:
-            QMessageBox.critical(self, "שגיאת שליחה", f"השליחה נכשלה:\n{e}")
+            from utils import netblock
+            QMessageBox.critical(self, "שגיאת שליחה",
+                                 netblock.explain(e) or f"השליחה נכשלה:\n{e}")
             return False
 
         self._push_history("volunteer_emails_history", to_addr)

@@ -137,7 +137,16 @@ ok("ensure_template יוצר ושומר", tid == "1117319"
    and db.get_setting(yemot.SET_TEMPLATE) == "1117319")
 upd = [c for c in calls if c[0] == "UpdateTemplate"]
 ok("v3.02: אין יותר ניסיון REPEAT (השרת דוחה; האישור עבר לסקר בשלוחה 77)",
-   len(upd) == 0)
+   all("yemotContext" not in c[1] for c in upd))
+# v3.22 — התבנית הראשית מקבלת פעם אחת מדיניות חיוג: 30 שנ', 2 ניסיונות
+ok("v3.22: התבנית הראשית מוגדרת פעם אחת (30 שנ' / 2 ניסיונות / תיאור)",
+   len(upd) == 1 and upd[0][1].get("templateId") == "1117319"
+   and upd[0][1].get("originateTimeout") == str(yemot.VOICE_RING_SECONDS)
+   and upd[0][1].get("maxDialAttempts") == str(yemot.VOICE_DIAL_ATTEMPTS)
+   and upd[0][1].get("description") == yemot.TEMPLATE_DESCRIPTION, str(upd))
+n_upd = len(calls)
+yemot.ensure_template()
+ok("…ולא שוב בקריאה הבאה", len(calls) == n_upd)
 n_before = len(calls)
 ok("ensure_template לא פונה שוב לשרת",
    yemot.ensure_template() == "1117319" and len(calls) == n_before)
@@ -1888,6 +1897,203 @@ _cbw._rows_at = _time.time()
 _snap = _cbw._snapshot(False)
 ok("מעקב קלאסי: תשובה שניתנה אחרי שקמפיין מאוחר צלצל — לא נזקפת לו",
    [e.get("answer") for e in _snap["entries"]] == ["3"], str(_snap["entries"]))
+_close_all(); _calls.clear(); _msgs.clear()
+
+# ── 21. v3.22 — נטפרי · עצירת שליחה · מזוהה מאושר · תזמונים מרובים · צ'יפ חי · פירוט היסטוריה ──
+print("— v3.22: נטפרי / עצירה / מזוהה / תזמונים מרובים / צ'יפ / פירוט —")
+from utils import netblock
+import urllib.error as _ue
+_close_all(); _calls.clear(); _msgs.clear()
+
+# (א) זיהוי חסימת נטפרי — HTTP 418 / גוף "Blocked by NetFree" → הודעה אחידה, בלי שרת תאום
+_e418 = _ue.HTTPError("https://x", 418, "I'm a teapot", {}, None)
+ok("netblock מזהה HTTP 418", netblock.is_blocked(_e418))
+ok("netblock מזהה גוף NetFree", netblock.is_blocked(b"<html>Blocked by NetFree</html>"))
+ok("netblock לא מזהה שגיאת רשת רגילה", not netblock.is_blocked(OSError("timed out")))
+ok("explain מחזיר את ההודעה האחידה", netblock.explain(_e418) == netblock.NETFREE_MSG
+   and netblock.explain(OSError("x"), "ברירת מחדל") == "ברירת מחדל")
+_n_urls = []
+def _blocked_transport(url, data):
+    _n_urls.append(url)
+    raise _ue.HTTPError(url, 418, "Blocked by NetFree", {}, None)
+_saved_tr = yemot._TRANSPORT
+yemot._TRANSPORT = _blocked_transport
+try:
+    yemot.check_connection()
+    ok("418 → YemotError עם הודעת נטפרי", False)
+except yemot.YemotError as e:
+    ok("418 → YemotError עם הודעת נטפרי", "נטפרי" in str(e) and e.code == -3, str(e))
+ok("חסימה: ניסיון אחד, בלי שרת תאום", len(_n_urls) == 1
+   and all("private." not in u for u in _n_urls), str(_n_urls))
+yemot._TRANSPORT = _saved_tr
+
+# (ב) עצירת קמפיין רץ — CampaignAction stop
+canned["CampaignAction"] = {"responseStatus": "OK", "action": "stop"}
+_n0 = len(calls)
+yemot.stop_campaign("camp-run-1")
+ok("stop_campaign שולח CampaignAction/stop", calls[-1][0] == "CampaignAction"
+   and calls[-1][1].get("action") == "stop" and calls[-1][1].get("campaignId") == "camp-run-1")
+try:
+    yemot.stop_campaign("")
+    ok("עצירה בלי מזהה נחסמת", False)
+except yemot.YemotError:
+    ok("עצירה בלי מזהה נחסמת", True)
+
+# (ג) מספר מזוהה — רק מספרים מאושרים בקו
+canned["GetCustomerData"] = {"responseStatus": "OK", "mainDid": "0795378810",
+                             "secondary_dids": [{"did": "048691834"}, {"did": "033060315"}],
+                             "callerIds": ["0548434668"]}
+canned["GetApprovedCallerIDs"] = {"responseStatus": "OK", "call": ["+972795378810"], "sms": []}
+_allowed = yemot.allowed_caller_ids()
+ok("allowed_caller_ids מאחד ראשי/משניים/מאושרים (מנורמל, בלי כפולים)",
+   _allowed == ["0795378810", "048691834", "033060315", "0548434668"], str(_allowed))
+ok("מספר מאושר — בלי בעיה", yemot.caller_id_problem("04-8691834") == "")
+ok("מספר זר — הסבר עם המאושרים", "048691834" in yemot.caller_id_problem("0501234567")
+   and "120" in yemot.caller_id_problem("0501234567"))
+ok("ריק — בלי בעיה", yemot.caller_id_problem("") == "")
+ok("session_info קורא יתרה", (canned.__setitem__("GetSession", {"responseStatus": "OK", "units": 77})
+                               or yemot.session_info()) == {"ok": True, "units": 77.0})
+
+# (ד) תזמון על תבנית ייעודית — כל תזמון ממתין על תבנית משלו; תבנית פנויה משוחזרת
+_line_msg = {f"tpl:1117319": make_wav(300)}
+def _sched_transport(url, data):
+    q = urllib.parse.urlparse(url)
+    cmd = q.path.rsplit("/", 1)[-1]
+    if cmd == "DownloadFile":
+        p = {k: v[0] for k, v in urllib.parse.parse_qs(q.query).items()}
+        calls.append(("DownloadFile", {"path": p.get("path")}))
+        return _line_msg.get(p.get("path")) or json.dumps({"responseStatus": "ERROR"}).encode()
+    if cmd == "UploadFile":
+        calls.append(("UploadFile", {"_raw": data}))
+        return json.dumps({"responseStatus": "OK"}).encode()
+    return fake_transport(url, data)
+yemot._TRANSPORT = _sched_transport
+yemot.schedule_campaign = _orig["schedule_campaign"]      # the real one, for (ד)
+db.set_setting(yemot.SET_TEMPLATE, "1117319")
+db.set_setting(yemot.SET_SCHED_TEMPLATES, "")
+canned["GetTemplates"] = {"responseStatus": "OK", "templates": [
+    {"templateId": 1117319, "description": yemot.TEMPLATE_DESCRIPTION}]}
+_created = iter([5001, 5002, 5003])
+canned["CreateTemplate"] = {"responseStatus": "OK", "templateId": 5001}
+canned["ScheduleCampaign"] = {"responseStatus": "OK", "schedId": 9001}
+_r1 = yemot.schedule_campaign_dedicated(datetime(2026, 9, 20, 9, 0), {"0521111111": "א"}, set())
+ok("תזמון ראשון — תבנית ייעודית חדשה, לא הראשית",
+   _r1["template_id"] == "5001" and _r1["schedId"] == "9001", str(_r1))
+_sc = [c for c in calls if c[0] == "ScheduleCampaign"][-1]
+ok("ScheduleCampaign על התבנית הייעודית", _sc[1].get("templateId") == "5001")
+ok("ההקלטה הועתקה מהתבנית הראשית לייעודית",
+   any(c[0] == "DownloadFile" and c[1]["path"] == "tpl:1117319" for c in calls)
+   and any(c[0] == "UploadFile" for c in calls))
+ok("הרשימה נשמרה בתבנית הייעודית (לא בראשית)",
+   [c for c in calls if c[0] == "ClearTemplateEntries"][-1][1].get("templateId") == "5001")
+canned["CreateTemplate"] = {"responseStatus": "OK", "templateId": 5002}
+_r2 = yemot.schedule_campaign_dedicated(datetime(2026, 9, 21, 9, 0), {"0522222222": "ב"}, {"5001"})
+ok("תזמון שני בזמן שהראשון ממתין — תבנית נוספת", _r2["template_id"] == "5002", str(_r2))
+ok("המאגר נשמר ב-setting מסונכרן",
+   json.loads(db.get_setting(yemot.SET_SCHED_TEMPLATES)) == ["5001", "5002"])
+_r3 = yemot.schedule_campaign_dedicated(datetime(2026, 9, 22, 9, 0), {"0523333333": "ג"}, {"5002"})
+ok("תבנית שהתזמון שלה יצא חוזרת לשימוש (בלי ליצור חדשה)", _r3["template_id"] == "5001")
+# אימוץ לפי תיאור: המחשב השני כבר יצר "תזמון 3"
+db.set_setting(yemot.SET_SCHED_TEMPLATES, json.dumps(["5001", "5002"]))
+canned["GetTemplates"] = {"responseStatus": "OK", "templates": [
+    {"templateId": 1117319, "description": yemot.TEMPLATE_DESCRIPTION},
+    {"templateId": 5003, "description": yemot.SCHED_TEMPLATE_DESC.format(3)}]}
+canned["CreateTemplate"] = {"responseStatus": "OK", "templateId": 5999}
+ok("תבנית תזמון שהמחשב השני יצר מאומצת לפי תיאור",
+   yemot.ensure_sched_template({"5001", "5002"}) == "5003")
+yemot._TRANSPORT = fake_transport
+yemot.schedule_campaign = lambda when, phones, tid=None: (_calls.append(("sched", dict(phones)))
+                                                          or {"schedId": "s-race", "count": len(phones)})
+
+# (ה) המסך: שני תזמונים ממתינים, שליחה מיידית לא נחסמת, ביטול של אחד בלבד
+_sched_ids = iter(["5001", "5002"])
+yemot.schedule_campaign_dedicated = lambda when, phones, busy: (
+    _calls.append(("dsched", dict(phones), set(busy)))
+    or {"schedId": "s-" + str(len(_calls)), "count": len(phones),
+        "template_id": next(_sched_ids)})
+tab._load_week_list()
+tab._rows = [{"rec": {"id": 7301, "full_name": "משפחה א"}, "phones": ["0521111111"],
+              "send": ["0521111111"], "checked": True, "why": "", "manual": False}]
+tab._populate()
+def _sched_exec_plain(self):
+    self.when = datetime.now() + _td(days=1); return 1
+tzmod._ScheduleDialog.exec = _sched_exec_plain
+tab._schedule()
+ok("תזמון ראשון נקבע", len(tab._pending_scheds()) == 1 and _calls[-1][0] == "dsched", str(_calls))
+tab._schedule()
+ok("תזמון שני נקבע בזמן שהראשון ממתין (בלי חסימה)",
+   len(tab._pending_scheds()) == 2, str(_msgs[-2:]))
+ok("התזמון השני יודע שהתבנית של הראשון תפוסה", _calls[-1][2] == {"5001"}, str(_calls[-1]))
+ok("שני התזמונים על תבניות שונות",
+   {c["template_id"] for c in tab._pending_scheds()} == {"5001", "5002"})
+tab._refresh_sched_banner()
+ok("רצועת התזמון מציגה שורה לכל תזמון", len(tab._sched_row_widgets) == 2
+   and "2 צינתוקים" in tab.lbl_sched.text(), tab.lbl_sched.text())
+ok("אין תזמון על התבנית הראשית ⇒ שליחה מיידית מותרת", tab._pending_main_sched() is None)
+_calls.clear()
+tab._send()
+ok("שליחה מיידית יוצאת למרות 2 תזמונים ממתינים",
+   [c[0] for c in _calls] == ["run"] and tab._worker is not None, str(_calls) + str(_msgs[-1:]))
+# (ו) כפתור עצירה — גלוי רק בזמן מעקב
+ok("כפתור 'עצור שליחה' גלוי בזמן מעקב", not tab.btn_stop_send.isHidden())
+_w21 = tab._worker
+tab._on_tick({"finished": True, "total": 1, "delivered": 1, "failed": 0, "pending": 0,
+              "entries": [{"phone": "0521111111", "ok": True, "status": "done"}]}, _w21)
+ok("…ונעלם כשהקמפיין הסתיים", tab.btn_stop_send.isHidden())
+tab._retire_trackers()
+_saved_stop = yemot.stop_campaign
+yemot.stop_campaign = lambda cid: _calls.append(("stop", cid)) or {"responseStatus": "OK"}
+_gS = db.add_tzintuk_campaign("שליחה לעצירה", week, "1117319", "camp-stop", 3, device=_dev20)
+tab._active_guid = _gS
+tab._start_tracking("camp-stop", 3, _now.isoformat())
+_calls.clear()
+tab._stop_campaign()
+ok("לחיצה על עצירה שולחת stop למזהה הקמפיין שבמעקב", _calls == [("stop", "camp-stop")], str(_calls))
+ok("…והמעקב ממשיך (התוצאות של מי שכבר צולצל ייקלטו)", tab._worker is not None)
+yemot.stop_campaign = _saved_stop
+tab._retire_trackers()
+ok("פיטור מעקב מסתיר את כפתור העצירה", tab.btn_stop_send.isHidden())
+# ביטול של תזמון אחד בלבד
+_saved_del = yemot.delete_scheduled_campaign
+yemot.delete_scheduled_campaign = lambda sid: _calls.append(("del", str(sid)))
+_one = [c for c in tab._pending_scheds() if c["template_id"] == "5001"]
+_calls.clear()
+tab._cancel_sched(_one)
+_left = tab._pending_scheds()
+ok("ביטול תזמון אחד משאיר את השני", len(_left) == 1 and _left[0]["template_id"] == "5002"
+   and _calls == [("del", _one[0]["campaign_id"])], str(_left) + str(_calls))
+yemot.delete_scheduled_campaign = _saved_del
+# תזמון ישן (מגרסה קודמת, על התבנית הראשית) עדיין חוסם שליחה מיידית
+_legacy = db.add_tzintuk_campaign("תזמון ישן", week, "1117319", "s-legacy", 2,
+                                  sent_at=_future, device=_dev20, status="scheduled")
+ok("תזמון מגרסה קודמת על התבנית הראשית מזוהה", (tab._pending_main_sched() or {}).get("guid") == _legacy)
+_calls.clear(); _msgs.clear()
+tab._send()
+ok("…וחוסם שליחה מיידית עם הסבר", not _calls and any("גרסה קודמת" in m for m in _msgs), str(_msgs[-1:]))
+_close_all(); _calls.clear(); _msgs.clear()
+
+# (ז) צ'יפ החיבור — מצב חי
+tab._apply_conn_state({"ok": True, "units": 512})
+ok("צ'יפ ירוק עם יתרה כשהשרת ענה", "מחובר" in tab.lbl_ok.text() and "512" in tab.lbl_ok.text())
+tab._apply_conn_state(yemot.YemotError("אין חיבור", -1))
+ok("צ'יפ אדום כשאין תשובה", "אין תקשורת" in tab.lbl_ok.text() and tab._conn_state is False)
+
+# (ח) פירוט היסטוריה לפי שם ומספר
+_gH21 = db.add_tzintuk_campaign("חלוקה לפירוט", week, "1117319", "camp-det", 3, device=_dev20)
+db.update_tzintuk_campaign(_gH21, 1, 1, "done", json.dumps([
+    {"phone": "0521111111", "name": "כהן", "ok": True, "status": "done", "answer": "1",
+     "answer_at": _now.isoformat()},
+    {"phone": "0522222222", "name": "", "failed": True, "status": "no_answer", "answer": ""},
+    {"phone": "0523333333", "name": "לוי", "ok": True, "status": "amd", "answer": ""}]))
+_rows = tzmod._HistoryDetailDialog.rows_for(_camp(_gH21), {"0522222222": "ממאגר המקבלים"})
+_by = {r["phone"]: r for r in _rows}
+ok("פירוט: תשובה בסקר לפי שם", _by["0521111111"]["name"] == "כהן"
+   and _by["0521111111"]["answer_he"].endswith(yemot.answer_labels()["1"]))
+ok("פירוט: שם חסר מושלם מהמקבלים", _by["0522222222"]["name"] == "ממאגר המקבלים"
+   and _by["0522222222"]["status_he"] == "לא נענה")
+ok("פירוט: תא קולי + לא הגיב", _by["0523333333"]["status_he"] == "תא קולי"
+   and _by["0523333333"]["answer_he"] == "לא הגיב")
+ok("פירוט: מי שענה ראשון", _rows[0]["phone"] == "0521111111")
 _close_all(); _calls.clear(); _msgs.clear()
 
 for k, v in _orig.items():

@@ -214,4 +214,5 @@ def email_to_dev(message: str, name: str = "") -> tuple[bool, str]:
                                html_body=body)
         return True, ""
     except Exception as e:
-        return False, str(e)
+        from utils import netblock
+        return False, netblock.explain(e) or str(e)

@@ -18,7 +18,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 import database as db
-from utils import timefmt
+from utils import netblock, timefmt
 
 BASE_URL = "https://www.call2all.co.il/ym/api"
 # Official twin endpoint (f2.freeivr.co.il/topic/55) — tried automatically when
@@ -60,8 +60,23 @@ CLASSIC_DESCRIPTION = "מנהל חלוקה — צינתוק קלאסי"
 # each hour's list never overwrites another's. Synced JSON {str(hour): id}.
 SET_HOUR_TEMPLATES = "yemot_hour_templates"
 HOUR_TEMPLATE_DESC = "מנהל חלוקה — צינתוק חכם שעה {:02d}"
+# v3.22 — several plain schedules at once: every pending schedule gets its own
+# template from a small pool (adopted by description, synced JSON list of ids),
+# so scheduling a second list never overwrites the first one's stored numbers
+# and an immediate send (main template) never touches a waiting schedule.
+SET_SCHED_TEMPLATES = "yemot_sched_templates"
+SCHED_TEMPLATE_DESC = "מנהל חלוקה — תזמון {}"
 CLASSIC_RING_SECONDS = 8          # ~2 rings, then give up (no answer = no cost)
 TZINTUK_RING_SECONDS = 16         # RunTzintuk ring length — unanswerable anyway
+# v3.22 — the MAIN (voice) template's dial policy, asserted once per template
+# id (SET_TEMPLATE_READY). The live template had inherited the classic 8 s /
+# one-attempt settings, so a "with message" send rang 8 seconds once and
+# nobody was ever retried (user decision 6/9/2026: ring longer, try twice).
+VOICE_RING_SECONDS = 30
+VOICE_DIAL_ATTEMPTS = 2
+VOICE_REDIAL_WAIT_SECONDS = 600   # 10 minutes between the two attempts
+SET_TEMPLATE_READY = "yemot_template_ready"
+_TEMPLATE_READY_STAMP = "v2"
 
 
 class YemotError(Exception):
@@ -103,6 +118,13 @@ def _http(url: str, data: bytes | None = None, retry: bool = True) -> bytes:
                                              headers={"User-Agent": "ManhalHaluka"})
             with urllib.request.urlopen(req, timeout=40) as resp:
                 return resp.read()
+        except urllib.error.HTTPError as e:
+            # v3.22 — the filter (NetFree) answers 418 itself: the request never
+            # reached Yemot, so no retry and no twin host (blocked there too).
+            # code -3 = blocked by the filter (distinct from -1 = no answer).
+            if netblock.is_blocked(e):
+                raise YemotError(netblock.NETFREE_MSG, code=-3) from e
+            last_err = e
         except urllib.error.URLError as e:
             reason = getattr(e, "reason", None)
             # NetFree machines may need the Windows cert store (truststore) —
@@ -126,6 +148,9 @@ def _http(url: str, data: bytes | None = None, retry: bool = True) -> bytes:
         # Surface the real cause — "check the internet" alone hides whether it
         # was DNS, SSL, a timeout or a filter block (learned in the v2.82 E2E).
         detail = str(last_err) or type(last_err).__name__
+        if netblock.is_blocked(last_err):
+            raise YemotError(netblock.NETFREE_MSG, code=-3) from (
+                last_err if isinstance(last_err, BaseException) else None)
         msg = (_DIAL_LOST_MSG.format(detail=detail) if not retry else
                "אין חיבור לשרת ימות המשיח — בדוק את האינטרנט.\n"
                f"פרטים טכניים: {detail}")
@@ -186,7 +211,9 @@ def _call(command: str, params: dict | None = None, post: bool = False) -> dict:
     except ValueError:
         body = raw[:200].decode("utf-8", errors="replace")
         # NetFree blocks answer with an HTML page, not JSON — surface that clearly.
-        if "NetFree" in body or "<html" in body.lower():
+        if netblock.is_blocked(body):
+            raise YemotError(netblock.NETFREE_MSG, code=-3)
+        if "<html" in body.lower():
             raise YemotError("החיבור נחסם בדרך (ייתכן ע\"י הסינון) — נסה שוב או פנה לנטפרי")
         raise YemotError("תשובה לא מובנת משרת ימות המשיח")
     if data.get("responseStatus") != "OK":
@@ -384,7 +411,10 @@ def _dig(obj, key):
 
 def ensure_template() -> str:
     """The campaign template the app sends with. Created once via the API and
-    remembered in settings; the recording is then attached to this template."""
+    remembered in settings; the recording is then attached to this template.
+    v3.22: its dial policy (description, 30 s ring, 2 attempts) is asserted
+    once per template id — the live template had inherited the classic
+    8-second/one-attempt settings (the "באג דחוי" of v3.02)."""
     tid = (db.get_setting(SET_TEMPLATE) or "").strip()
     if not tid:
         data = _call("CreateTemplate", {"description": TEMPLATE_DESCRIPTION}, post=True)
@@ -392,7 +422,110 @@ def ensure_template() -> str:
         if not tid:
             raise YemotError("יצירת תבנית קמפיין נכשלה — לא התקבל מזהה")
         db.set_setting(SET_TEMPLATE, tid)
+    stamp = f"{_TEMPLATE_READY_STAMP}:{tid}"
+    if (db.get_setting(SET_TEMPLATE_READY) or "").strip() != stamp:
+        try:
+            _call("UpdateTemplate",
+                  {"templateId": tid, "description": TEMPLATE_DESCRIPTION,
+                   "originateTimeout": str(VOICE_RING_SECONDS),
+                   "maxDialAttempts": str(VOICE_DIAL_ATTEMPTS),
+                   "redialWait": str(VOICE_REDIAL_WAIT_SECONDS),
+                   "redialPolicy": "FAILED"}, post=True)
+            db.set_setting(SET_TEMPLATE_READY, stamp)
+        except YemotError as e:
+            if e.code in (-1, -3):
+                raise                     # no server — the send would fail too
+            # a server that rejects one of the fields must not block sending;
+            # retried at the next send (the flag stays unset)
     return tid
+
+
+def stop_campaign(campaign_id: str) -> dict:
+    """v3.22 — stop a RUNNING campaign on the server (CampaignAction stop):
+    numbers not yet dialed are not dialed; calls in progress end normally.
+    Idempotent (a stopped campaign stays stopped), so the usual retries are
+    fine. Raises YemotError with a clear Hebrew text when the id is unknown /
+    already finished."""
+    cid = str(campaign_id or "").strip()
+    if not cid:
+        raise YemotError("אין מזהה קמפיין לעצור")
+    try:
+        return _call("CampaignAction", {"campaignId": cid, "action": "stop"}, post=True)
+    except YemotError as e:
+        if e.code in (-1, -3):
+            raise
+        raise YemotError("העצירה לא התקבלה בשרת — ייתכן שהקמפיין כבר הסתיים. "
+                         f"({e})", e.code) from e
+
+
+def session_info() -> dict:
+    """v3.22 — one cheap GetSession for the live connection chip:
+    {'ok': True, 'units': float|None}. Raises YemotError on any failure."""
+    data = _call("GetSession")
+    units = None
+    for key in ("units", "customerUnits", "money", "balance"):
+        val = _dig(data, key)
+        if val is not None:
+            try:
+                units = float(val)
+                break
+            except (TypeError, ValueError):
+                pass
+    return {"ok": True, "units": units}
+
+
+def allowed_caller_ids() -> list:
+    """v3.22 — every number the line may show as the outgoing caller-id
+    (GetCustomerData: the main DID, the secondary DIDs, the approved ids;
+    plus GetApprovedCallerIDs.call when that command exists). Normalized
+    (0X…) and deduped, main number first. Raises YemotError on no server."""
+    data = _call("GetCustomerData")
+    out = []
+
+    def _add(v):
+        p = normalize_phone(v)
+        if p and p not in out:
+            out.append(p)
+
+    _add(_dig(data, "mainDid"))
+    for key in ("secondary_dids", "secondaryDids"):
+        for d in _dig(data, key) or []:
+            _add(d.get("did") if isinstance(d, dict) else d)
+    for c in _dig(data, "callerIds") or []:
+        _add(c.get("callerId") or c.get("number") or c.get("phone")
+             if isinstance(c, dict) else c)
+    try:
+        appr = _call("GetApprovedCallerIDs")
+        call = _dig(appr, "call")
+        items = call if isinstance(call, list) else (
+            _dig(call, "callerIds") or _dig(call, "numbers") or [])
+        for c in items or []:
+            _add(c.get("callerId") or c.get("number") if isinstance(c, dict) else c)
+    except YemotError as e:
+        if e.code in (-1, -3):
+            raise
+    return out
+
+
+def caller_id_problem(caller_id: str) -> str:
+    """'' when `caller_id` is empty or approved for this line, else a Hebrew
+    explanation listing the approved numbers. Network trouble → '' as well
+    (the operator is not blocked by a hiccup; the server rejects a bad id at
+    send time with error 120 anyway)."""
+    p = normalize_phone(caller_id)
+    if not (caller_id or "").strip():
+        return ""
+    if not p:
+        return "המספר שהוזן אינו מספר טלפון ישראלי תקין."
+    try:
+        allowed = allowed_caller_ids()
+    except YemotError:
+        return ""
+    if not allowed or p in allowed:
+        return ""
+    return ("המספר {} אינו מאושר בקו כמספר מזוהה — ימות ידחו שליחה איתו "
+            "(שגיאה 120).\nהמספרים המאושרים בקו: {}").format(
+        p, ", ".join(allowed))
 
 
 def ensure_classic_template() -> str:
@@ -769,9 +902,18 @@ def _upload_multipart(path: str, content: bytes, convert: str = "1") -> dict:
         if e.code != -1:
             raise
         raw = _post(ALT_URL)
+    except urllib.error.HTTPError as e:
+        if netblock.is_blocked(e):          # v3.22 — the filter, not the server
+            raise YemotError(netblock.NETFREE_MSG, code=-3) from e
+        raw = _post(ALT_URL)
     except (urllib.error.URLError, TimeoutError, OSError):
         raw = _post(ALT_URL)
-    data = json.loads(raw.decode("utf-8", errors="replace"))
+    try:
+        data = json.loads(raw.decode("utf-8", errors="replace"))
+    except ValueError:
+        if netblock.is_blocked(raw):
+            raise YemotError(netblock.NETFREE_MSG, code=-3)
+        raise YemotError("תשובה לא מובנת משרת ימות המשיח (העלאה)")
     if data.get("responseStatus") != "OK":
         raise YemotError(_hebrew_error(data), int(data.get("messageCode") or 0))
     return data
@@ -1110,6 +1252,67 @@ def ensure_hour_template(hour: int) -> str:
     mapping[str(hour)] = tid
     db.set_setting(SET_HOUR_TEMPLATES, json.dumps(mapping))
     return tid
+
+
+def _sched_pool() -> list:
+    raw = (db.get_setting(SET_SCHED_TEMPLATES) or "").strip()
+    try:
+        pool = json.loads(raw) if raw else []
+    except ValueError:
+        pool = []
+    return [str(t) for t in pool if str(t or "").strip()] if isinstance(pool, list) else []
+
+
+def ensure_sched_template(busy_templates) -> str:
+    """v3.22 — a template for ONE plain schedule that no other pending
+    schedule uses. The pool (synced setting) is reused week after week: a
+    template is "busy" while a schedule that dials it is still pending
+    (`busy_templates` = template ids of the 'scheduled' records, both
+    computers'). Adopts a same-named template from the server first (the
+    other computer may have created it before the setting synced), creates
+    "תזמון N" only when every pool template is busy."""
+    busy = {str(t) for t in (busy_templates or []) if str(t or "").strip()}
+    pool = _sched_pool()
+    for tid in pool:
+        if tid not in busy:
+            return tid
+    taken = set(pool) | busy
+    taken.add((db.get_setting(SET_TEMPLATE) or "").strip())
+    taken.add((db.get_setting(SET_CLASSIC_TEMPLATE) or "").strip())
+    n = len(pool) + 1
+    desc = SCHED_TEMPLATE_DESC.format(n)
+    tid = ""
+    data = _call("GetTemplates")
+    for t in (data.get("templates") or []):
+        cand = str(t.get("templateId") or "").strip()
+        if cand and cand not in taken and str(t.get("description") or "") == desc:
+            tid = cand
+            break
+    if not tid:
+        created = _call("CreateTemplate", {"description": desc}, post=True)
+        tid = str(_dig(created, "templateId") or "").strip()
+        if not tid:
+            raise YemotError("יצירת תבנית לתזמון נכשלה — לא התקבל מזהה")
+    pool.append(tid)
+    db.set_setting(SET_SCHED_TEMPLATES, json.dumps(pool))
+    return tid
+
+
+def schedule_campaign_dedicated(when: datetime, phones: dict,
+                                busy_templates) -> dict:
+    """v3.22 — schedule on a DEDICATED template (see ensure_sched_template):
+    the current recording is copied server-side from the main template, the
+    list is stored on the dedicated one, and ScheduleCampaign is issued for
+    it. Several schedules can therefore wait at once, and an immediate send
+    (main template) never disturbs them. Returns
+    {'schedId', 'count', 'template_id', 'raw'}."""
+    main = ensure_template()
+    message = _download_template_message(main)      # raises: no recording yet
+    tid = ensure_sched_template(busy_templates)
+    _attach_message_bytes(tid, message)
+    res = schedule_campaign(when, phones, tid)
+    res["template_id"] = tid
+    return res
 
 
 def _attach_message_bytes(template_id: str, content: bytes) -> None:
