@@ -2130,7 +2130,10 @@ class TzintukimTab(QWidget):
         _set_metric(self.m_total, total)
         _set_metric(self.m_ready, ready)
         _set_metric(self.m_bad, bad)
-        busy = self._worker is not None or self._cb_worker is not None
+        # A poll that only waits out a STOPPED campaign's grace period does not
+        # lock the buttons: the operator stopped it to fix and resend (v3.24).
+        busy = ((self._worker is not None and not getattr(self._worker, "stopped_at", 0.0))
+                or self._cb_worker is not None)
         if not self._rows:
             self.lbl_summary.setText("שליחה — טען קודם רשימת נמענים")
         elif ready:
@@ -2411,6 +2414,19 @@ class TzintukimTab(QWidget):
             return
         if self._worker is w and w is not None:
             w.stopped_at = time.time()       # the poll finalizes after STOP_GRACE_S
+        # v3.24 — the stop lives on the RECORD too (status 'stopping'): the
+        # worker's stopped_at died with the app. A restart (or the other
+        # computer) resumed the still-'sending' record with a fresh poll that
+        # knew nothing of the stop — 60 minutes, time-out, chain, again, for a
+        # week (the server does not report a stopped campaign as finished).
+        guid = getattr(w, "guid", "") or self._active_guid
+        camp = db.get_tzintuk_campaign(guid) if guid else None
+        if camp and camp.get("status") == "sending":
+            db.update_tzintuk_campaign(guid, int(camp.get("delivered") or 0),
+                                       int(camp.get("failed") or 0), "stopping",
+                                       camp.get("report_json") or "")
+            self._refresh_history()
+        self._update_metrics()               # a stopped send no longer locks the buttons
         self.lbl_prog.setText("⛔ השליחה נעצרה בשרת — ממתין לתוצאות של מי שכבר צולצל…")
         QMessageBox.information(self, "עצירת שליחה",
                                 "השליחה נעצרה ✓ — מי שטרם צולצל לא יצולצל.")
@@ -3217,7 +3233,8 @@ class TzintukimTab(QWidget):
             self.btn_stop_track.setVisible(False)
         self.btn_stop_send.setVisible(False)
 
-    def _start_tracking(self, campaign_id: str, total: int, since_iso: str = ""):
+    def _start_tracking(self, campaign_id: str, total: int, since_iso: str = "",
+                        stopped_at: float = 0.0):
         self._retire_trackers()
         self.prog_frame.setVisible(True)
         if not str(campaign_id or "").strip():
@@ -3250,6 +3267,9 @@ class TzintukimTab(QWidget):
                         windows.get(self._active_guid or ""))
         w.guid = self._active_guid                      # the record it writes to
         w.dist_date = self._campaign_dist_date(self._active_guid)
+        w.stopped_at = float(stopped_at or 0.0)         # resumed 'stopping' record (v3.24)
+        if w.stopped_at:
+            self.lbl_prog.setText("⛔ השליחה נעצרה בשרת — ממתין לתוצאות של מי שכבר צולצל…")
         self._worker = w
         # The worker rides along with its tick: a tick already queued by a
         # worker retired a moment ago must not land on the new campaign.
@@ -3562,7 +3582,9 @@ class TzintukimTab(QWidget):
         cutoff = datetime.now(timezone.utc) - timedelta(days=7)
         camp = None
         for c in db.get_tzintuk_campaigns(limit=60):
-            if c.get("status") != "sending":
+            # 'stopping' (v3.24) = a send stopped on the server, still
+            # collecting the calls that were already ringing
+            if c.get("status") not in ("sending", "stopping"):
                 continue
             sent = timefmt.to_israel(c.get("sent_at") or "")
             if sent is not None and sent < cutoff:
@@ -3597,9 +3619,15 @@ class TzintukimTab(QWidget):
             self._auto_refresh_answers()   # v3.02 — late survey answers
             return
         self._active_guid = camp["guid"]
+        stopped_at = 0.0
+        if camp.get("status") == "stopping":
+            # when the stop was accepted (status_ts) → the resumed poll
+            # finalizes on its first tick once the grace period is over
+            at = yemot._parse_since(camp.get("status_ts") or "")
+            stopped_at = at.timestamp() if at is not None else time.time() - STOP_GRACE_S - 1
         self._start_tracking(camp["campaign_id"],
                              int(camp.get("total") or 0),
-                             camp.get("sent_at") or "")
+                             camp.get("sent_at") or "", stopped_at=stopped_at)
 
     # ── Survey answers (v3.02) ────────────────────────────────────────────────
 
@@ -3791,6 +3819,7 @@ class TzintukimTab(QWidget):
         camps = db.get_tzintuk_campaigns(limit=100)
         self.hist.setRowCount(len(camps))
         status_he = {"sending": "בתהליך", "done": "הסתיים",
+                     "stopping": "נעצר ⛔ — ממתין לתוצאות",
                      "scheduled": "מתוזמן ⏳", "canceled": "בוטל",
                      "sched_failed": "התזמון נכשל"}
         for i, c in enumerate(camps):

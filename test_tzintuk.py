@@ -1615,7 +1615,7 @@ def _close_all():
     for _c in db.get_tzintuk_campaigns():
         if _c.get("status") == "scheduled":
             db.update_tzintuk_campaign(_c["guid"], 0, 0, "canceled")
-        elif _c.get("status") == "sending":
+        elif _c.get("status") in ("sending", "stopping"):
             db.update_tzintuk_campaign(_c["guid"], 0, 0, "done")
 
 
@@ -2157,6 +2157,49 @@ tab._on_tick(_fin, _w22)
 ok("הרשומה נסגרת 'הסתיים' עם מה שנאסף וכפתור העצירה נעלם",
    _camp(_gS22)["status"] == "done" and tab.btn_stop_send.isHidden()
    and "נעצר" in tab.lbl_prog.text(), tab.lbl_prog.text())
+tab._retire_trackers()
+_close_all(); _calls.clear(); _msgs.clear()
+
+# ── 23. סקירה 6/9/2026 (ג) — עצירת שליחה שורדת סגירת התוכנה / מעבר למחשב השני ──
+print("— סקירה 6/9 (ג): עצירה נשמרת ברשומה ומכובדת בחידוש המעקב —")
+_close_all(); _calls.clear(); _msgs.clear()
+tab._retire_trackers()
+_saved_stop23 = yemot.stop_campaign
+yemot.stop_campaign = lambda cid: _calls.append(("stop", cid)) or {"responseStatus": "OK"}
+_gS23 = db.add_tzintuk_campaign("שליחה לעצירה 2", week, "1117319", "camp-stop23", 3, device=_dev20)
+db.update_tzintuk_campaign(_gS23, 0, 0, "sending",
+                           tab._seed_json({"0521111111": "א", "0522222222": "ב", "0523333333": "ג"}))
+tab._active_guid = _gS23
+tab._start_tracking("camp-stop23", 3, _now.isoformat())
+tab._stop_campaign()
+ok("העצירה נרשמת ברשומה (סטטוס 'stopping') כדי לשרוד סגירה של התוכנה",
+   _camp(_gS23)["status"] == "stopping", _camp(_gS23)["status"])
+_rows_bak23 = tab._rows
+tab._rows = [{"rec": {"id": 1, "full_name": "א"}, "phones": ["0521111111"],
+              "send": ["0521111111"], "checked": True, "why": "", "manual": False}]
+tab._update_metrics()
+ok("אחרי העצירה כפתורי השליחה משוחררים (לא צריך לחכות 10 דקות)", tab.btn_send.isEnabled())
+tab._rows = _rows_bak23
+tab._retire_trackers()                       # התוכנה נסגרה
+tab._maybe_resume_tracking()                 # …והופעלה מחדש
+_wr23 = tab._worker
+ok("חידוש המעקב אחרי הפעלה מחדש יודע שהקמפיין נעצר",
+   _wr23 is not None and _wr23.campaign_id == "camp-stop23" and _wr23.stopped_at > 0,
+   f"worker={_wr23 and _wr23.campaign_id} stopped_at={_wr23 and _wr23.stopped_at}")
+if _wr23 is not None:
+    _wr23.stopped_at = _time.time() - tzmod.STOP_GRACE_S - 5
+    tab._on_tick(_wr23._apply_stop({"finished": False, "total": 3, "delivered": 1, "failed": 0,
+                                    "pending": 2, "entries": [{"phone": "0521111111", "ok": True,
+                                                               "status": "done"}]}), _wr23)
+ok("…ונסגר 'הסתיים' בטיק הראשון אחרי תקופת החסד — לא שבוע של מעקב",
+   _camp(_gS23)["status"] == "done", _camp(_gS23)["status"])
+ok("answer_windows סופר גם קמפיין 'stopping' (המספרים שלו סוגרים חלון קודם)",
+   "0521111111" in (yemot.answer_windows([
+       {"guid": "old", "status": "done", "sent_at": "2026-01-01T00:00:00+00:00",
+        "report_json": json.dumps([{"phone": "0521111111"}])},
+       {"guid": "new", "status": "stopping", "sent_at": "2026-02-01T00:00:00+00:00",
+        "report_json": json.dumps([{"phone": "0521111111"}])}][::-1]).get("old") or {}))
+yemot.stop_campaign = _saved_stop23
 tab._retire_trackers()
 _close_all(); _calls.clear(); _msgs.clear()
 

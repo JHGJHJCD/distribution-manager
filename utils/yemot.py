@@ -1697,7 +1697,7 @@ def answer_windows(camps: list) -> dict:
     out = {}
     latest = {}                       # phone → sent_at of the nearest LATER campaign
     for camp in camps or []:
-        if camp.get("status") not in ("sending", "done"):
+        if camp.get("status") not in ("sending", "stopping", "done"):
             continue
         sent = camp.get("sent_at") or ""
         phones = {normalize_phone(e.get("phone")) for e in _report_entries(camp)}

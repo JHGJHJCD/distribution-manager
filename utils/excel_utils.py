@@ -994,6 +994,7 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
     NO_ANSWER = "לא הגיב"
 
     status_he = {"sending": "בתהליך", "done": "הסתיים", "scheduled": "מתוזמן",
+                 "stopping": "נעצר — ממתין לתוצאות",
                  "canceled": "בוטל", "sched_failed": "התזמון נכשל"}
 
     def _style_header(ws, headers):

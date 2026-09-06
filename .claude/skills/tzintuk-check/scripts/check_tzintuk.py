@@ -211,6 +211,19 @@ def _(y, t, test, rel):
             and "st = self._apply_stop(st)" in cls), ""
 
 
+@lint("I37", "v3.24 — עצירה נשמרת ברשומה ('stopping') ומכובדת בחידוש (_maybe_resume_tracking → stopped_at); answer_windows סופר 'stopping'")
+def _(y, t, test, rel):
+    stop = _func_body(t, "_stop_campaign")
+    resume = _func_body(t, "_maybe_resume_tracking")
+    start = _func_body(t, "_start_tracking")
+    okk = ('"stopping"' in stop and "update_tzintuk_campaign" in stop
+           and '("sending", "stopping")' in resume and "stopped_at=stopped_at" in resume
+           and "w.stopped_at = float(stopped_at" in start)
+    okk = okk and '"stopping"' in _func_body(y, "answer_windows")
+    okk = okk and "stopped_at" in _func_body(t, "_update_metrics")
+    return okk, ""
+
+
 @lint("I18", "run_test לא מנקה את רשימת התבנית (בלי ClearTemplateEntries)")
 def _(y, t, test, rel):
     body = _func_body(y, "run_test")

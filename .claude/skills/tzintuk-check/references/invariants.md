@@ -41,6 +41,7 @@
 | I34 | `_on_sched_checked` שומר את `report_json` (המספרים שנזרעו) בכל סגירה — `done` בלי מזהה / `sched_failed`; מחיקה איבדה את תשובות הסקר של השליחה (3.23) | `tzintukim.py` | ✓ |
 | I35 | `_schedule`/`_smart_schedule` מוסרים ל-`_changed_meanwhile` את `_pending_main_sched()` — אותו דבר שהיא משווה; `_pending_sched()` (הכללי) גרם ל"נקלט תזמון ממתין" מדומה כשתזמון ישן וחדש ממתינים יחד (3.23) | `tzintukim.py` | ✓ |
 | I36 | אחרי "עצור שליחה" ה-poll מסתיים לבד: `stopped_at` + `_apply_stop` + `STOP_GRACE_S` — לא סומכים על `finished` של השרת אחרי stop (3.23) | `_PollWorker` | ✓ |
+| I37 | העצירה נשמרת **ברשומה** (סטטוס `stopping`, מסונכרן) ולא רק ב-worker: `_maybe_resume_tracking` מחדש `sending`/`stopping`, ול-`stopping` מוסר `stopped_at` מ-`status_ts` ⇒ סגירה בטיק הראשון אחרי החסד; `answer_windows` סופר `stopping`; `_update_metrics` לא נועל כפתורים על poll עצור (3.24) | `tzintukim.py`/`yemot.py` | ✓ |
 
 כללים שאינם ניתנים ללינט סטטי (לבדוק בקריאה/בדיקה מדומה): `.get` סלחני על `report_json` ישן ·
 כל סטטוס מטופל בכל צרכן · LWW עם חותמת עתידית · מיזוג קמפיינים לפי זמן שליחה · "לא הגיב" רק בסיום.
