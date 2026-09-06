@@ -1517,7 +1517,11 @@ def get_campaign_status(campaign_id: str) -> dict:
             "status": status,
             "ok": status in _DELIVERED,
             "confirmed": status == "accepted",
-            "failed": status in _FAILED,
+            # v3.25 — 'canceled' without any dial time / redial = the stop
+            # came before the first ring: not a failure, nobody was called
+            "failed": status in _FAILED and not (
+                status == "canceled" and not e.get("startTime")
+                and not [r for r in (e.get("redials") or []) if isinstance(r, dict)]),
             # v3.09 — the real dial time of THIS number (Israel clock on the
             # server → UTC iso) and how long they listened, in seconds; feeds
             # the per-person hour statistics (answer_stats)
@@ -1715,14 +1719,46 @@ def survey_checked(entries) -> bool:
     return any(isinstance(e, dict) and "answer" in e for e in entries or [])
 
 
+# Entry statuses that mean "the server has not dialed this number (yet)":
+# the app's own seed ('pending', v3.21) and what a stopped campaign may
+# report for the numbers it never reached (the exact wording after
+# CampaignAction stop is undocumented — anything not terminal counts).
+_NOT_RUNG = {"pending", "waiting", "queued", "new", "scheduled", "idle", ""}
+
+
+def was_rung(e) -> bool:
+    """v3.25 — True when the server actually dialed this number (answered or
+    failed), or a classic tzintuk rang it (callback/no_callback — RunTzintuk
+    rings everyone). False for the seeded 'pending' rows and for the numbers
+    a STOPPED campaign never reached: those people got no call, so "לא הגיב"
+    (did not call back = non-cooperation) must not be said about them."""
+    if not isinstance(e, dict):
+        return False
+    st = str(e.get("status") or "").lower()
+    if st == "canceled":
+        # seen live (31/8/2026): 'canceled' = the pending (re)dial was
+        # canceled — rung before only when a startTime or a redial exists
+        return bool(e.get("at") or e.get("redials"))
+    if e.get("ok") or e.get("failed"):
+        return True
+    if st in ("callback", "no_callback"):
+        return True
+    if e.get("at"):                      # a real dial time from the report
+        return True
+    return st not in _NOT_RUNG
+
+
 def answer_counts(entries) -> dict:
-    """{'1': n, '2': n, '3': n, '': n} — '' = checked, did not answer."""
+    """{'1': n, '2': n, '3': n, '': n} — '' = checked, was rung, did not
+    answer (a number the campaign never reached is not "did not respond")."""
     out = {k: 0 for k in ANSWER_KEYS}
     out[""] = 0
     for e in entries or []:
         if not isinstance(e, dict) or "answer" not in e:
             continue
         a = str(e.get("answer") or "")
+        if a == "" and not was_rung(e):
+            continue
         if a in out:
             out[a] += 1
     return out
@@ -1854,8 +1890,15 @@ def answer_stats() -> dict:
             hour = _entry_hour(e.get("at") or "")
             if hour is None:
                 hour = camp_hour
-            if (answered or failed) and hour is not None:
+            # v3.25 — a number the campaign never reached (seed / stopped
+            # before dialing / 'canceled' without a ring) is no attempt; a
+            # 'canceled'/'redial' row itself is not one either — only its
+            # redials are (they are the real "rang at that hour" events)
+            if not was_rung(e):
+                continue
+            if (answered or failed) and hour is not None and status != "canceled":
                 _attempt(p, hour, answered)
+            if hour is not None or status in ("canceled", "redial"):
                 for r in e.get("redials") or []:
                     rh = _entry_hour((r or {}).get("at") or "")
                     if rh is not None:

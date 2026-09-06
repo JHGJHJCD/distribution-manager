@@ -2203,6 +2203,82 @@ yemot.stop_campaign = _saved_stop23
 tab._retire_trackers()
 _close_all(); _calls.clear(); _msgs.clear()
 
+# ── 24. סקירה 6/9/2026 (ד) — אחרי עצירה מי שלא צולצל אינו "לא הגיב" ──
+print("— סקירה 6/9 (ד): מי שלא צולצל בכלל אינו 'לא הגיב' —")
+_close_all(); _calls.clear(); _msgs.clear()
+tab._retire_trackers()
+_ents24 = [{"phone": "0521111111", "name": "א", "status": "done", "ok": True, "failed": False},
+           {"phone": "0522222222", "name": "ב", "status": "no_answer", "ok": False, "failed": True},
+           {"phone": "0523333333", "name": "ג", "status": "pending", "ok": False, "failed": False,
+            "stopped": True}]
+yemot.merge_survey_answers(_ents24, [], _now.isoformat())
+ok("was_rung: הצליח/נכשל/קלאסי = צולצל; seed 'pending' = לא",
+   yemot.was_rung(_ents24[0]) and yemot.was_rung(_ents24[1]) and not yemot.was_rung(_ents24[2])
+   and yemot.was_rung({"status": "no_callback", "ok": False, "failed": False}))
+ok("was_rung: 'canceled' בלי שעת-חיוג ובלי redial = לא צולצל; עם redial = צולצל",
+   not yemot.was_rung({"status": "canceled", "failed": True, "at": "", "redials": []})
+   and yemot.was_rung({"status": "canceled", "failed": True, "at": "",
+                       "redials": [{"status": "no_answer", "at": "2026-08-31T16:33:13+00:00"}]}))
+canned["GetCampaignStatus"] = {"responseStatus": "OK", "campaignStatus": "STOPPED",
+    "totalEntries": 2, "pendingEntries": 0, "activeEntries": 0, "entries": [
+        {"phone": "0521111111", "entryStatus": "done", "startTime": "2026-09-06 10:00:00", "duration": 4000},
+        {"phone": "0522222222", "entryStatus": "canceled", "startTime": "", "duration": 0}]}
+_st24c = yemot.get_campaign_status("camp-canceled")
+canned.pop("GetCampaignStatus", None)
+ok("get_campaign_status: 'canceled' בלי צלצול אינו 'נכשל' (נכשלו 0, ממתין 1)",
+   _st24c["failed"] == 0 and _st24c["pending"] == 1 and not _st24c["entries"][1]["failed"], _st24c)
+ok("answer_counts: 'לא הגיבו' סופר רק את מי שצולצל",
+   yemot.answer_counts(_ents24)[""] == 2, yemot.answer_counts(_ents24))
+_c24 = {"status": "done", "report_json": json.dumps(_ents24, ensure_ascii=False)}
+_r24 = {r["phone"]: r for r in tzmod._HistoryDetailDialog.rows_for(_c24)}
+ok("פירוט היסטוריה: מי שנכשל = 'לא הגיב'; מי שלא צולצל = ריק + 'טרם צולצל'",
+   _r24["0522222222"]["answer_he"] == "לא הגיב" and _r24["0523333333"]["answer_he"] == ""
+   and _r24["0523333333"]["status_he"] == "טרם צולצל", _r24)
+_rows_bak24 = tab._rows
+tab._rows = [{"rec": {"id": i, "full_name": n}, "phones": [p], "send": [p], "checked": True,
+              "why": "", "manual": False} for i, (p, n) in
+             enumerate([("0521111111", "א"), ("0522222222", "ב"), ("0523333333", "ג")])]
+tab.table.setRowCount(3)
+tab._apply_results_to_table(_ents24, final=True)
+_t24 = [tab.table.item(i, 3).text() if tab.table.item(i, 3) else "" for i in range(3)]
+ok("טבלת הנמענים: 'לא הגיב' רק למי שצולצל; מי שלא צולצל = 'לא צולצל'",
+   _t24[1].startswith("לא הגיב") and _t24[2] == "לא צולצל (השליחה נעצרה)", _t24)
+tab._rows = _rows_bak24
+from utils import excel_utils as _xl24
+_st24 = _xl24._tzintuk_entry_state(_ents24[2], yemot.answer_labels())
+ok("אקסל: מי שלא צולצל = 'טרם צולצל' ולא 'לא הגיב'", _st24 == "טרם צולצל", _st24)
+# עצירה חיה: הטיק הסופי מסמן את מי שלא צולצל ומציע אותו לשליחה חוזרת
+tab._retire_trackers()
+_gS24 = db.add_tzintuk_campaign("שליחה לעצירה 3", week, "1117319", "camp-stop24", 2, device=_dev20)
+db.update_tzintuk_campaign(_gS24, 0, 0, "sending",
+                           tab._seed_json({"0524444444": "ד", "0525555555": "ה"}))
+tab._active_guid = _gS24
+tab._rows = [{"rec": {"id": i, "full_name": n}, "phones": [p], "send": [p], "checked": True,
+              "why": "", "manual": False} for i, (p, n) in
+             enumerate([("0524444444", "ד"), ("0525555555", "ה")])]
+tab.table.setRowCount(2)
+tab._start_tracking("camp-stop24", 2, _now.isoformat(),
+                    stopped_at=_time.time() - tzmod.STOP_GRACE_S - 5)
+_w24 = tab._worker
+tab._on_tick(_w24._apply_stop({"finished": False, "total": 2, "delivered": 1, "failed": 0,
+                               "pending": 1, "entries": [
+                                   {"phone": "0524444444", "ok": True, "failed": False, "status": "done"},
+                                   {"phone": "0525555555", "ok": False, "failed": False, "status": "pending"}]}),
+             _w24)
+_e24 = {e["phone"]: e for e in yemot._report_entries(_camp(_gS24))}
+ok("הרשומה של שליחה שנעצרה מסמנת את מי שלא צולצל (stopped)",
+   _e24.get("0525555555", {}).get("stopped") is True and not _e24["0524444444"].get("stopped"), _e24)
+ok("…והוא מוצע ב'שלח שוב' (זו הסיבה שעוצרים)",
+   "0525555555" in [e["phone"] for e in tab._last_failed] and "לא צולצלו" in tab.btn_resend.text(),
+   (tab._last_failed, tab.btn_resend.text()))
+_ents24b = yemot._report_entries(_camp(_gS24))
+yemot.merge_survey_answers(_ents24b, [], _now.isoformat())
+ok("…ובהיסטוריה 'לא הגיבו' לא סופר אותו",
+   yemot.answer_counts(_ents24b)[""] == 1, yemot.answer_counts(_ents24b))
+tab._rows = _rows_bak24
+tab._retire_trackers()
+_close_all(); _calls.clear(); _msgs.clear()
+
 for k, v in _orig.items():
     if k in ("info", "warn", "question"):
         setattr(tzmod.QMessageBox, {"info": "information", "warn": "warning", "question": "question"}[k], v)

@@ -211,6 +211,20 @@ def _(y, t, test, rel):
             and "st = self._apply_stop(st)" in cls), ""
 
 
+@lint("I38", "v3.25 — 'לא הגיב' רק למי שצולצל: yemot.was_rung קיים ומשמש את answer_counts / rows_for / _apply_results_to_table / אקסל; 'stopped' מסומן בטיק העצירה")
+def _(y, t, test, rel):
+    okk = ("def was_rung(" in y and "was_rung(e)" in _func_body(y, "answer_counts")
+           and "was_rung" in _func_body(t, "rows_for")
+           and "was_rung" in _func_body(t, "_apply_results_to_table")
+           and 'e["stopped"] = True' in _func_body(t, "_on_tick", "worker=None")
+           and "was_rung" in _func_body(y, "answer_stats"))
+    try:
+        xl = open(os.path.join(ROOT, "utils", "excel_utils.py"), encoding="utf-8").read()
+    except OSError:
+        xl = ""
+    return okk and "was_rung" in _func_body(xl, "_tzintuk_entry_state"), ""
+
+
 @lint("I37", "v3.24 — עצירה נשמרת ברשומה ('stopping') ומכובדת בחידוש (_maybe_resume_tracking → stopped_at); answer_windows סופר 'stopping'")
 def _(y, t, test, rel):
     stop = _func_body(t, "_stop_campaign")

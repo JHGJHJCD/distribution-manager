@@ -1254,7 +1254,9 @@ class _HistoryDetailDialog(QDialog):
                 color = TzintukimTab._ANSWER_STYLE[ans][1]
             elif e.get("confirmed") or status == "accepted":
                 answer_he, color = f"✓ {labels['1']}", "#166534"
-            elif checked and "answer" in e and final:
+            elif checked and "answer" in e and final and yemot.was_rung(e):
+                # v3.25 — only someone who was actually rung can "not respond";
+                # a number a stopped send never reached shows no verdict
                 answer_he, color = "לא הגיב", "#6b7280"
             else:
                 answer_he, color = "", ""
@@ -3298,6 +3300,12 @@ class TzintukimTab(QWidget):
         # every 4-second tick would spam the shared Drive folder for nothing;
         # the live numbers live in this strip until then.
         guid = getattr(worker, "guid", "") or self._active_guid
+        if st.get("finished") and st.get("stopped"):
+            # v3.25 — mark the numbers the stopped send never reached: they
+            # are offered for the resend, and never judged "לא הגיב"
+            for e in st.get("entries") or []:
+                if isinstance(e, dict) and not yemot.was_rung(e):
+                    e["stopped"] = True
         if st.get("finished") and guid:
             db.update_tzintuk_campaign(
                 guid, st["delivered"], st["failed"], "done",
@@ -3322,10 +3330,16 @@ class TzintukimTab(QWidget):
                 # "Resend to the failed" covers EVERY group of this list (a smart
                 # send finishes hour by hour); a number that succeeded in a later
                 # group is no longer failed (newest wins in the merge).
+                # v3.25 — after "עצור שליחה" the numbers never reached are
+                # offered for the resend too (that is why the operator stopped)
                 self._last_failed = [e for e in self._last_entries
-                                     if e.get("failed") and not e.get("ok")]
+                                     if not e.get("ok")
+                                     and (e.get("failed") or e.get("stopped"))]
                 self._last_failed_date = getattr(worker, "dist_date", "") or ""
-                self.btn_resend.setText(f"🔄 שלח שוב ל-{len(self._last_failed)} שנכשלו")
+                n_unrung = sum(1 for e in self._last_failed if e.get("stopped"))
+                self.btn_resend.setText(
+                    f"🔄 שלח שוב ל-{len(self._last_failed)} שנכשלו"
+                    + (f" / לא צולצלו" if n_unrung else ""))
                 self.btn_resend.setVisible(bool(self._last_failed))
                 self._apply_results_to_table(self._last_entries, final=True)
             self._refresh_history()
@@ -3382,11 +3396,19 @@ class TzintukimTab(QWidget):
             answer = next((str(e.get("answer")) for e in mine
                            if str(e.get("answer") or "") in self._ANSWER_STYLE), "")
             checked = any("answer" in e for e in mine)
+            rung = any(yemot.was_rung(e) for e in mine)
             if answer:
                 mark, col = self._ANSWER_STYLE[answer]
                 txt, color = f"{mark} {labels.get(answer, '')}", QColor(col)
             elif any(e.get("confirmed") for e in mine):    # legacy key-7 reports
                 txt, color = f"✓ {labels['1']}", QColor("#166534")
+            elif final and not rung:
+                # v3.25 — nobody called this family (the send was stopped
+                # first, or the results are unknown): no "לא הגיב" verdict —
+                # that label means "was called and did not cooperate"
+                if not any(e.get("stopped") for e in mine):
+                    continue
+                txt, color = "לא צולצל (השליחה נעצרה)", QColor("#6b7280")
             elif final and checked:
                 txt, color = f"לא הגיב (לא הקיש {yemot.SURVEY_EXT})", QColor("#6b7280")
             elif "callback" in statuses:     # v2.96 — classic: called back

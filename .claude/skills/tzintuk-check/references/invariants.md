@@ -42,6 +42,7 @@
 | I35 | `_schedule`/`_smart_schedule` מוסרים ל-`_changed_meanwhile` את `_pending_main_sched()` — אותו דבר שהיא משווה; `_pending_sched()` (הכללי) גרם ל"נקלט תזמון ממתין" מדומה כשתזמון ישן וחדש ממתינים יחד (3.23) | `tzintukim.py` | ✓ |
 | I36 | אחרי "עצור שליחה" ה-poll מסתיים לבד: `stopped_at` + `_apply_stop` + `STOP_GRACE_S` — לא סומכים על `finished` של השרת אחרי stop (3.23) | `_PollWorker` | ✓ |
 | I37 | העצירה נשמרת **ברשומה** (סטטוס `stopping`, מסונכרן) ולא רק ב-worker: `_maybe_resume_tracking` מחדש `sending`/`stopping`, ול-`stopping` מוסר `stopped_at` מ-`status_ts` ⇒ סגירה בטיק הראשון אחרי החסד; `answer_windows` סופר `stopping`; `_update_metrics` לא נועל כפתורים על poll עצור (3.24) | `tzintukim.py`/`yemot.py` | ✓ |
+| I38 | "לא הגיב" (= אי-שיתוף-פעולה) נאמר **רק על מי שצולצל בפועל** (`yemot.was_rung`): seed `pending`, מי ששליחה שנעצרה לא הגיעה אליו (`stopped`), ו-`canceled` בלי שעת-חיוג/redial — לא נספרים ב-`answer_counts`, לא מקבלים "לא הגיב" בטבלה/פירוט/אקסל, לא נספרים כניסיון-חיוג ב-`answer_stats`; אחרי עצירה הם מוצעים ב"שלח שוב" (3.25) | `yemot.py`/`tzintukim.py`/`excel_utils.py` | ✓ |
 
 כללים שאינם ניתנים ללינט סטטי (לבדוק בקריאה/בדיקה מדומה): `.get` סלחני על `report_json` ישן ·
 כל סטטוס מטופל בכל צרכן · LWW עם חותמת עתידית · מיזוג קמפיינים לפי זמן שליחה · "לא הגיב" רק בסיום.

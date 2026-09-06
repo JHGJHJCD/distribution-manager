@@ -966,6 +966,36 @@ def export_history_to_excel(rows: List[Dict], title: str,
     return path
 
 
+TZINTUK_NO_ANSWER = "לא הגיב"
+
+
+def _tzintuk_entry_state(e: dict, labels: dict) -> str:
+    """One Hebrew word for a campaign-report entry (pure — unit-tested):
+    the survey answer, else what happened in the call. v3.25: a number the
+    campaign never reached (seed / stopped send) is "טרם צולצל", never
+    "לא הגיב" — that label means "was called and did not respond"."""
+    from utils import yemot as _yemot
+    st = str(e.get("status") or "").lower()
+    ans = str(e.get("answer") or "")
+    if ans in labels:                  # v3.02 — survey answer (1/2/3)
+        return labels[ans]
+    if e.get("confirmed") or st == "accepted":
+        return labels["1"]             # legacy key-7 reports
+    if not _yemot.was_rung(e):         # v3.21 seed / v3.25 stopped before dialing
+        return "טרם צולצל"
+    if "answer" in e:                  # survey checked, no answer given
+        return TZINTUK_NO_ANSWER
+    if st == "callback":               # v2.96 — צינתוק קלאסי: חזר לשיחה
+        return "חזר לשיחה ושמע"
+    if e.get("ok"):
+        return "קיבל את ההודעה"
+    if st == "no_callback":
+        return "לא חזר לשיחה"
+    if e.get("failed"):
+        return "לא נענה / נכשל"
+    return st or "לא ידוע"
+
+
 def export_tzintuk_history_to_excel(campaigns: List[Dict],
                                     name_by_phone: Dict[str, str] | None = None) -> str:
     """#67rdi — ייצוא היסטוריית הצינתוקים: גיליון 'סיכום' (שורה לקמפיין) +
@@ -991,7 +1021,7 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
     unsure_fill = PatternFill("solid", fgColor="FEF3C7")  # ענבר — לא יודע
     from utils import yemot as _yemot
     labels = _yemot.answer_labels()
-    NO_ANSWER = "לא הגיב"
+    NO_ANSWER = TZINTUK_NO_ANSWER
 
     status_he = {"sending": "בתהליך", "done": "הסתיים", "scheduled": "מתוזמן",
                  "stopping": "נעצר — ממתין לתוצאות",
@@ -1016,25 +1046,7 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
         return [e for e in ents or [] if isinstance(e, dict)]
 
     def _entry_state(e):
-        st = str(e.get("status") or "").lower()
-        ans = str(e.get("answer") or "")
-        if ans in labels:                  # v3.02 — survey answer (1/2/3)
-            return labels[ans]
-        if e.get("confirmed") or st == "accepted":
-            return labels["1"]             # legacy key-7 reports
-        if "answer" in e:                  # survey checked, no answer given
-            return NO_ANSWER
-        if st == "callback":               # v2.96 — צינתוק קלאסי: חזר לשיחה
-            return "חזר לשיחה ושמע"
-        if e.get("ok"):
-            return "קיבל את ההודעה"
-        if st == "no_callback":
-            return "לא חזר לשיחה"
-        if e.get("failed"):
-            return "לא נענה / נכשל"
-        if st == "pending":                # v3.21 — seeded before the server report
-            return "טרם צולצל"
-        return st or "לא ידוע"
+        return _tzintuk_entry_state(e, labels)
 
     # ── גיליון סיכום ──────────────────────────────────────────────────────────
     ws = wb.active
