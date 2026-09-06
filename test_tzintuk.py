@@ -2096,6 +2096,70 @@ ok("פירוט: תא קולי + לא הגיב", _by["0523333333"]["status_he"] =
 ok("פירוט: מי שענה ראשון", _rows[0]["phone"] == "0521111111")
 _close_all(); _calls.clear(); _msgs.clear()
 
+# ── 22. סקירה 6/9/2026 (ב) — תזמון בלי מזהה שומר את המספרים; תזמון ישן + חדש; מעקב אחרי עצירה ──
+print("— סקירה 6/9 (ב): seed של תזמון בלי מזהה / תזמון ישן+חדש / עצירה —")
+_close_all(); _calls.clear(); _msgs.clear()
+tab._retire_trackers()
+
+# (א) תזמון שרץ בשרת בלי campaignId — נסגר 'done' אבל חייב לשמור את רשימת המספרים שנזרעה
+_gN = db.add_tzintuk_campaign("תזמון בלי מזהה", week, "5001", "s-noid", 2,
+                              sent_at=(_now - _td(minutes=30)).isoformat(),
+                              device=_dev20, status="scheduled")
+db.update_tzintuk_campaign(_gN, 0, 0, "scheduled",
+                           tab._seed_json({"0521111111": "א", "0522222222": "ב"}))
+tab._on_sched_checked([(_camp(_gN), ("successful", {"schedId": "s-noid", "campaignId": ""}))])
+_cN = _camp(_gN)
+ok("תזמון שרץ בלי מזהה קמפיין נסגר 'הסתיים' ושומר את המספרים שנזרעו",
+   _cN["status"] == "done" and len(yemot._report_entries(_cN)) == 2, str(_cN))
+_gF = db.add_tzintuk_campaign("תזמון שנכשל", week, "5001", "s-fail", 1,
+                              sent_at=(_now - _td(minutes=30)).isoformat(),
+                              device=_dev20, status="scheduled")
+db.update_tzintuk_campaign(_gF, 0, 0, "scheduled", tab._seed_json({"0523333333": "ג"}))
+tab._on_sched_checked([(_camp(_gF), ("failed", {}))])
+ok("תזמון שנכשל בשרת שומר את המספרים (לפירוט ההיסטוריה)",
+   _camp(_gF)["status"] == "sched_failed" and len(yemot._report_entries(_camp(_gF))) == 1)
+ok("תזמון בלי מזהה לא פתח מעקב", tab._worker is None)
+
+# (ב) תזמון ישן (תבנית ראשית) + תזמון חדש (תבנית ייעודית) ממתינים יחד — תזמון נוסף לא נכשל בטעות
+_legacy22 = db.add_tzintuk_campaign("תזמון ישן", week, "1117319", "s-legacy22", 2,
+                                    sent_at=_future, device=_dev20, status="scheduled")
+_ded22 = db.add_tzintuk_campaign("צינתוק מתוזמן — חדש", week, "5002", "s-ded22", 2,
+                                 sent_at=(datetime.now(_tz.utc) + _td(hours=4)).isoformat(),
+                                 device=_dev20, status="scheduled")
+ok("הרשומה החדשה ראשונה ברשימת הממתינים והישנה מזוהה כתזמון על התבנית הראשית",
+   tab._pending_sched()["guid"] == _ded22 and tab._pending_main_sched()["guid"] == _legacy22)
+_sched_ids22 = iter(["5003"])
+yemot.schedule_campaign_dedicated = lambda when, phones, busy: (
+    _calls.append(("dsched", dict(phones), set(busy)))
+    or {"schedId": "s-22", "count": len(phones), "template_id": next(_sched_ids22)})
+_calls.clear(); _msgs.clear()
+tab._schedule()
+ok("תזמון שלישי נקבע (בלי 'נקלט תזמון ממתין' מדומה)",
+   [c[0] for c in _calls] == ["dsched"] and len(tab._pending_scheds()) == 3,
+   str(_calls) + str(_msgs[-1:]))
+ok("…והוא יודע ששתי התבניות תפוסות", _calls[-1][2] == {"1117319", "5002"}, str(_calls[-1]))
+_close_all(); _calls.clear(); _msgs.clear()
+
+# (ג) אחרי "עצור שליחה" המעקב לא רץ לנצח — חסד של כמה דקות ואז סיום עם מה שנאסף
+_gS22 = db.add_tzintuk_campaign("שליחה לעצירה", week, "1117319", "camp-stop22", 3, device=_dev20)
+tab._active_guid = _gS22
+tab._start_tracking("camp-stop22", 3, _now.isoformat())
+_w22 = tab._worker
+_st22 = {"finished": False, "total": 3, "delivered": 1, "failed": 0, "pending": 2,
+         "entries": [{"phone": "0521111111", "ok": True, "status": "done"}]}
+_w22.stopped_at = _time.time() - 30
+ok("רגע אחרי העצירה — המעקב ממשיך (שיחות פעילות מסתיימות)",
+   not _w22._apply_stop(dict(_st22)).get("finished"))
+_w22.stopped_at = _time.time() - tzmod.STOP_GRACE_S - 5
+_fin = _w22._apply_stop(dict(_st22))
+ok("אחרי תקופת החסד — הסטטוס נחשב סופי", _fin.get("finished") and _fin.get("stopped"))
+tab._on_tick(_fin, _w22)
+ok("הרשומה נסגרת 'הסתיים' עם מה שנאסף וכפתור העצירה נעלם",
+   _camp(_gS22)["status"] == "done" and tab.btn_stop_send.isHidden()
+   and "נעצר" in tab.lbl_prog.text(), tab.lbl_prog.text())
+tab._retire_trackers()
+_close_all(); _calls.clear(); _msgs.clear()
+
 for k, v in _orig.items():
     if k in ("info", "warn", "question"):
         setattr(tzmod.QMessageBox, {"info": "information", "warn": "warning", "question": "question"}[k], v)

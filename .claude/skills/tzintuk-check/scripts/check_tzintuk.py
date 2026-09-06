@@ -185,6 +185,32 @@ def _(y, t, test, rel):
             and "yemotContext" not in body), ""
 
 
+@lint("I34", "v3.23 — _on_sched_checked שומר את report_json (המספרים שנזרעו) בכל סגירה: done/sched_failed")
+def _(y, t, test, rel):
+    body = _func_body(t, "_on_sched_checked")
+    calls = body.count("update_tzintuk_campaign(")
+    keeps = body.count('camp.get("report_json")')
+    return calls > 0 and keeps >= calls, f"{keeps}/{calls} קריאות עם report_json"
+
+
+@lint("I35", "v3.23 — _schedule/_smart_schedule מוסרים ל-_changed_meanwhile את _pending_main_sched (לא _pending_sched)")
+def _(y, t, test, rel):
+    okk = True
+    for name in ("_schedule", "_smart_schedule"):
+        body = _func_body(t, name)
+        okk = okk and ("pending = self._pending_main_sched()" in body
+                       and "pending = self._pending_sched()" not in body)
+    return okk, ""
+
+
+@lint("I36", "v3.23 — אחרי 'עצור שליחה' ה-poll מסתיים לבד (stopped_at + _apply_stop + STOP_GRACE_S)")
+def _(y, t, test, rel):
+    cls = _class_body(t, "_PollWorker")
+    return ("_apply_stop" in cls and "STOP_GRACE_S" in cls
+            and "stopped_at = time.time()" in _func_body(t, "_stop_campaign")
+            and "st = self._apply_stop(st)" in cls), ""
+
+
 @lint("I18", "run_test לא מנקה את רשימת התבנית (בלי ClearTemplateEntries)")
 def _(y, t, test, rel):
     body = _func_body(y, "run_test")

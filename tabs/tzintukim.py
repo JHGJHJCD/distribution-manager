@@ -65,9 +65,12 @@ CONN_PROBE_MS = 5 * 60 * 1000        # live chip re-check while the app runs
 CONN_PROBE_MIN_GAP_S = 120           # …and at most once per 2 minutes on refresh
 
 
+STOP_GRACE_S = 10 * 60             # after "עצור שליחה": wait this long for the live calls, then finalize
+
+
 class _PollWorker(QThread):
     """Polls the campaign status off the UI thread every few seconds until the
-    campaign finishes (or ~15 minutes pass)."""
+    campaign finishes (or ~60 minutes pass)."""
     tick = pyqtSignal(object)          # status dict | Exception
 
     def __init__(self, campaign_id: str, parent=None, since_iso: str = "",
@@ -81,9 +84,24 @@ class _PollWorker(QThread):
         self._stop = False
         self.timed_out = False            # poll budget ran out before the campaign ended
         self.failed = False               # gave up on repeated network errors
+        self.stopped_at = 0.0             # v3.23 — when "עצור שליחה" was accepted by the server
 
     def stop(self):
         self._stop = True
+
+    def _apply_stop(self, st: dict) -> dict:
+        """v3.23 — a campaign stopped on the server (CampaignAction stop) may
+        never report 'finished' the way a completed one does (the wording of
+        campaignStatus after a stop is undocumented). Calls already ringing end
+        within minutes; after STOP_GRACE_S treat the status as final so the
+        record closes with what was collected instead of polling for an hour,
+        chaining and polling again for a week."""
+        if (self.stopped_at and not st.get("finished")
+                and time.time() - self.stopped_at > STOP_GRACE_S):
+            st = dict(st)
+            st["finished"] = True
+            st["stopped"] = True
+        return st
 
     def _merge_survey(self, st: dict, force: bool = False):
         """v3.02 — every ~5th tick (and at the end) read the survey extension's
@@ -116,6 +134,7 @@ class _PollWorker(QThread):
                 time.sleep(8)
                 continue
             errors = 0
+            st = self._apply_stop(st)
             self._merge_survey(st, force=bool(st.get("finished")))
             self.tick.emit(st)
             if st.get("finished"):
@@ -2390,6 +2409,8 @@ class TzintukimTab(QWidget):
             self.btn_stop_send.setEnabled(True)
             QMessageBox.warning(self, "עצירת שליחה", f"העצירה נכשלה:\n{e}")
             return
+        if self._worker is w and w is not None:
+            w.stopped_at = time.time()       # the poll finalizes after STOP_GRACE_S
         self.lbl_prog.setText("⛔ השליחה נעצרה בשרת — ממתין לתוצאות של מי שכבר צולצל…")
         QMessageBox.information(self, "עצירת שליחה",
                                 "השליחה נעצרה ✓ — מי שטרם צולצל לא יצולצל.")
@@ -2727,7 +2748,11 @@ class TzintukimTab(QWidget):
         # v3.22 — several schedules may wait at once (each on its own
         # template); the recording is copied into the template NOW, so it
         # must already exist.
-        pending = self._pending_sched()
+        # _changed_meanwhile compares against the pending schedule on the MAIN
+        # template — hand it that same record, or a legacy (pre-3.22) schedule
+        # waiting next to a newer dedicated one aborted every new schedule with
+        # a false "נקלט תזמון ממתין" (review 6/9, finding 2).
+        pending = self._pending_main_sched()
         if not (db.get_setting(yemot.SET_TEMPLATE) or "").strip():
             QMessageBox.information(
                 self, "תזמון שליחה",
@@ -2831,7 +2856,7 @@ class TzintukimTab(QWidget):
         # only a pending smart send whose HOUR templates would be reused does
         # (each hour template holds one list — a second send for the same
         # hour would overwrite it).
-        pending = self._pending_sched()
+        pending = self._pending_main_sched()     # what _changed_meanwhile compares
         try:
             hour_map = json.loads(db.get_setting(yemot.SET_HOUR_TEMPLATES) or "{}")
         except ValueError:
@@ -3126,16 +3151,22 @@ class TzintukimTab(QWidget):
                 else:
                     # No campaign id to poll → close it as done (unknown
                     # results) rather than leaving a 'sending' record that
-                    # polls a schedId forever.
-                    db.update_tzintuk_campaign(camp["guid"], 0, 0, "done")
+                    # polls a schedId forever. The seeded numbers stay on
+                    # the record (report_json): they are what answer_windows
+                    # and the survey refresh use — dropping them lost every
+                    # survey answer of this send (review 6/9, finding 1).
+                    db.update_tzintuk_campaign(camp["guid"], 0, 0, "done",
+                                               camp.get("report_json") or "")
                 changed = True
             elif state == "failed":
-                db.update_tzintuk_campaign(camp["guid"], 0, 0, "sched_failed")
+                db.update_tzintuk_campaign(camp["guid"], 0, 0, "sched_failed",
+                                           camp.get("report_json") or "")
                 changed = True
             else:                        # missing on the server
                 dt = self._sched_dt(camp)
                 if dt is not None and now - dt > timedelta(hours=1):
-                    db.update_tzintuk_campaign(camp["guid"], 0, 0, "sched_failed")
+                    db.update_tzintuk_campaign(camp["guid"], 0, 0, "sched_failed",
+                                               camp.get("report_json") or "")
                     changed = True
         if changed:
             self._refresh_history()
@@ -3254,8 +3285,9 @@ class TzintukimTab(QWidget):
         if st.get("finished"):
             self._chain_next = True      # a smart send has more hour groups to track
             self.btn_stop_send.setVisible(False)
+            head = ("השליחה נעצרה ⛔ —" if st.get("stopped") else "הקמפיין הסתיים ✓ —")
             self.lbl_prog.setText(
-                f"הקמפיין הסתיים ✓ — {st['delivered']} קיבלו את ההודעה, "
+                f"{head} {st['delivered']} קיבלו את ההודעה, "
                 f"{st['failed']} נכשלו. התשובות בסקר (הקשה {yemot.SURVEY_EXT}) "
                 "ממשיכות להתעדכן — כפתור \"רענן תשובות\" בהיסטוריה.")
             if self._results_belong_here(worker):
