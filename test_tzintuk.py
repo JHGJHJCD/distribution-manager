@@ -2450,6 +2450,53 @@ db.reset_all_data(tzintuk=True)
 ok("'אפס נתונים' מוחק גם את היסטוריית הצינתוקים", db.get_tzintuk_campaign(_gr26) is None)
 _close_all(); _calls.clear(); _msgs.clear()
 
+# ── 27. סקירה 7/9/2026 (ב) — עצירה שהשרת סוגר לפני תקופת החסד; אקסל עם שני מספרים בתא ──
+print("— סקירה 7/9 (ב): עצירה מהירה בשרת · שני מספרים בתא אקסל —")
+_close_all(); _calls.clear(); _msgs.clear()
+tab._retire_trackers()
+# (א) אחרי "עצור שליחה" השרת סימן finished מיד (לפני 10 דק' החסד) — הדגל stopped חייב להישאר,
+#     אחרת מי שלא צולצל לא מסומן, לא מוצע ב"שלח שוב", והרצועה אומרת "הסתיים ✓"
+_gS27 = db.add_tzintuk_campaign("שליחה לעצירה מהירה", week, "1117319", "camp-stop27", 2, device=_dev20)
+db.update_tzintuk_campaign(_gS27, 0, 0, "sending",
+                           tab._seed_json({"0526666666": "ו", "0527777777": "ז"}))
+tab._active_guid = _gS27
+_rows_bak27 = tab._rows
+tab._rows = [{"rec": {"id": i, "full_name": n}, "phones": [p], "send": [p], "checked": True,
+              "why": "", "manual": False} for i, (p, n) in
+             enumerate([("0526666666", "ו"), ("0527777777", "ז")])]
+tab.table.setRowCount(2)
+tab.table.clearContents()
+tab._start_tracking("camp-stop27", 2, _now.isoformat(), stopped_at=_time.time() - 30)
+_w27 = tab._worker
+_st27 = _w27._apply_stop({"finished": True, "total": 2, "delivered": 1, "failed": 0, "pending": 1,
+                          "entries": [{"phone": "0526666666", "ok": True, "failed": False, "status": "done"},
+                                      {"phone": "0527777777", "ok": False, "failed": False,
+                                       "status": "canceled"}]})
+ok("עצירה שהשרת סגר מיד — הסטטוס נושא stopped", _st27.get("stopped") is True, _st27)
+tab._on_tick(_st27, _w27)
+_e27 = {e["phone"]: e for e in yemot._report_entries(_camp(_gS27))}
+ok("…מי שלא צולצל מסומן stopped ברשומה", _e27.get("0527777777", {}).get("stopped") is True, _e27)
+ok("…ומוצע ב'שלח שוב'", "0527777777" in [e["phone"] for e in tab._last_failed], tab._last_failed)
+ok("…והרצועה אומרת שהשליחה נעצרה", "נעצרה" in tab.lbl_prog.text(), tab.lbl_prog.text())
+_t27 = tab.table.item(1, 3).text() if tab.table.item(1, 3) else ""
+ok("…ובטבלה 'לא צולצל (השליחה נעצרה)'", _t27 == "לא צולצל (השליחה נעצרה)", _t27)
+tab._rows = _rows_bak27
+tab._retire_trackers()
+# (ב) רשימה עצמאית מאקסל — תא עם שני מספרים ("050-1234567, 052-9876543") נזרק בשקט
+#     (ההדבקה כטקסט כן מזהה); ותא עם ספרות בשם ("דירה 5") נעלם מהשם
+_ln27 = _FreeListDialog._excel_row_line(("050-1234567, 052-9876543", "כהן"))
+_ents27, _bad27 = _FreeListDialog._parse_text(_ln27)
+ok("אקסל: שני מספרים בתא אחד — שניהם נשלחים",
+   [p for p, _n in _ents27] == ["0501234567", "0529876543"] and all(n == "כהן" for _p, n in _ents27),
+   (_ln27, _ents27))
+_ln27b = _FreeListDialog._excel_row_line((501234567.0, "לוי", "דירה 5"))
+_ents27b, _bad27b = _FreeListDialog._parse_text(_ln27b)
+ok("אקסל: מספר בלי אפס מוביל + שם עם ספרה קטנה",
+   _ents27b == [("0501234567", "לוי דירה 5")] and _bad27b == [], (_ln27b, _ents27b, _bad27b))
+ok("אקסל: שורה בלי מספר בכלל — ריקה", _FreeListDialog._excel_row_line(("כהן", None)) == "",
+   _FreeListDialog._excel_row_line(("כהן", None)))
+_close_all(); _calls.clear(); _msgs.clear()
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")

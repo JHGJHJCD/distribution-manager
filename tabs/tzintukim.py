@@ -66,6 +66,10 @@ CONN_PROBE_MIN_GAP_S = 120           # …and at most once per 2 minutes on refr
 
 
 STOP_GRACE_S = 10 * 60             # after "עצור שליחה": wait this long for the live calls, then finalize
+# v3.28 — the campaigns that actually rang somebody (answer windows, results,
+# survey refresh): filtered in SQL so the (future-dated, first-sorted)
+# scheduled records and the canceled ones never eat the 200-record cap.
+_RUNG_STATUSES = ("sending", "stopping", "done")
 
 
 class _PollWorker(QThread):
@@ -96,8 +100,16 @@ class _PollWorker(QThread):
         within minutes; after STOP_GRACE_S treat the status as final so the
         record closes with what was collected instead of polling for an hour,
         chaining and polling again for a week."""
-        if (self.stopped_at and not st.get("finished")
-                and time.time() - self.stopped_at > STOP_GRACE_S):
+        if not self.stopped_at:
+            return st
+        if st.get("finished"):
+            # v3.28 — the server DID close the campaign after the stop (before
+            # the grace period ran out): it is still a STOPPED send. Without
+            # the flag the un-dialed numbers were not marked, not offered in
+            # "שלח שוב", and the strip said "הקמפיין הסתיים ✓".
+            st = dict(st)
+            st["stopped"] = True
+        elif time.time() - self.stopped_at > STOP_GRACE_S:
             st = dict(st)
             st["finished"] = True
             st["stopped"] = True
@@ -365,24 +377,9 @@ class _FreeListDialog(QDialog):
             lines = []
             for ws in wb.worksheets:
                 for row in ws.iter_rows(values_only=True):
-                    phones, words = [], []
-                    for cell in row:
-                        if cell is None:
-                            continue
-                        # A number-typed cell lost its leading zero / gained
-                        # ".0" — normalize_phone_loose restores both.
-                        if isinstance(cell, float) and cell.is_integer():
-                            cell = int(cell)
-                        val = str(cell).strip()
-                        if not val:
-                            continue
-                        p = yemot.normalize_phone_loose(val)
-                        if p:
-                            phones.append(p)
-                        elif not any(ch.isdigit() for ch in val):
-                            words.append(val)
-                    for p in phones:
-                        lines.append(f"{p}\t{' '.join(words)}".rstrip())
+                    line = self._excel_row_line(row)
+                    if line:
+                        lines.append(line)
             wb.close()
         except Exception as e:
             QMessageBox.warning(self, "טעינת אקסל", f"קריאת הקובץ נכשלה:\n{e}")
@@ -393,6 +390,41 @@ class _FreeListDialog(QDialog):
             return
         # ההדבקה לתיבה — כך המפעיל רואה בעיניים בדיוק מה נטען מהאקסל.
         self.text.setPlainText("\n".join(lines))
+
+    @staticmethod
+    def _excel_row_line(row) -> str:
+        """One Excel row → one text line for _parse_text ('phone phone\\tname'),
+        or '' when the row holds no phone. v3.28: a cell with TWO numbers
+        ("050-1234567, 052-9876543") used to be dropped silently — the whole
+        row vanished from the list — because it does not normalize as one
+        phone; and a name cell with a small number ("דירה 5") was dropped
+        from the name. Now every cell goes through yemot.find_phones (the
+        same tokenizer the pasted text uses); a number-typed cell that lost
+        its leading zero / gained '.0' still goes through normalize_phone_loose."""
+        phones, words = [], []
+        for cell in row or ():
+            if cell is None:
+                continue
+            if isinstance(cell, float) and cell.is_integer():
+                cell = int(cell)
+            val = str(cell).strip()
+            if not val:
+                continue
+            p = yemot.normalize_phone_loose(val)
+            if p:
+                phones.append(p)
+                continue
+            found, rest, _bad = yemot.find_phones(
+                val.replace(";", " ").replace(",", " ").replace("/", " "))
+            if found:
+                phones.extend(found)
+                if rest:
+                    words.append(rest)
+            else:
+                words.append(val)      # a name cell ("דירה 5") — keep it whole
+        if not phones:
+            return ""
+        return f"{' '.join(phones)}\t{' '.join(words)}".rstrip()
 
     def _accept(self):
         if not self.entries:
@@ -2033,9 +2065,9 @@ class TzintukimTab(QWidget):
         prev = db.tzintuk_campaign_for_date(dist_date)
         if prev is not None or dist_date or not self._list_guids:
             return prev
-        mine = [c for c in db.get_tzintuk_campaigns(limit=200)
-                if c.get("guid") in self._list_guids
-                and c.get("status") not in ("canceled", "sched_failed")]
+        mine = [c for c in db.get_tzintuk_campaigns(
+                    limit=200, statuses=("scheduled", "sending", "stopping", "done"))
+                if c.get("guid") in self._list_guids]
         return mine[0] if mine else None
 
     @staticmethod
@@ -3327,7 +3359,7 @@ class TzintukimTab(QWidget):
         self.lbl_wait.setText(f"ממתינים {total}")
         # A resumed OLDER campaign (retired by a second send, tracked after it)
         # must not absorb answers given after the newer one rang the number.
-        windows = yemot.answer_windows(db.get_tzintuk_campaigns(limit=200))
+        windows = yemot.answer_windows(db.get_tzintuk_campaigns(limit=200, statuses=_RUNG_STATUSES))
         w = _PollWorker(campaign_id, self, since_iso,
                         windows.get(self._active_guid or ""))
         w.guid = self._active_guid                      # the record it writes to
@@ -3422,9 +3454,8 @@ class TzintukimTab(QWidget):
         screen, merged oldest → newest so the most recent campaign wins per
         number — whatever order their trackers finished in (a poll retired by
         a second send resumes only after that send is done)."""
-        camps = [c for c in db.get_tzintuk_campaigns(limit=200)
-                 if c.get("status") == "done"
-                 and self._belongs_here(c.get("dist_date") or "", c.get("guid") or "")]
+        camps = [c for c in db.get_tzintuk_campaigns(limit=200, statuses=("done",))
+                 if self._belongs_here(c.get("dist_date") or "", c.get("guid") or "")]
         merged = []
         for c in reversed(camps):          # newest-first → oldest-first
             merged = self._merge_entries(merged, yemot._report_entries(c))
@@ -3636,7 +3667,7 @@ class TzintukimTab(QWidget):
         deadline = (sent.timestamp() + yemot.CLASSIC_TRACK_SECONDS
                     if sent is not None else 0.0)
         if targets and deadline > time.time() + 5:
-            windows = yemot.answer_windows(db.get_tzintuk_campaigns(limit=200))
+            windows = yemot.answer_windows(db.get_tzintuk_campaigns(limit=200, statuses=_RUNG_STATUSES))
             self._start_callback_tracking(camp["guid"], targets, deadline,
                                           seed_entries=entries,
                                           since_iso=camp.get("sent_at") or "",
@@ -3735,9 +3766,7 @@ class TzintukimTab(QWidget):
         # limit 200 (was 30): a smart send alone makes up to 24 records, and
         # the scheduled ones sort first — 30 cut last week's campaigns out of
         # the refresh (their late survey answers were never picked up).
-        for c in db.get_tzintuk_campaigns(limit=200):
-            if c.get("status") != "done":
-                continue
+        for c in db.get_tzintuk_campaigns(limit=200, statuses=("done",)):
             sent = timefmt.to_israel(c.get("sent_at") or "")
             if sent is None or time.time() - sent.timestamp() > 14 * 86400:
                 continue
@@ -3866,7 +3895,7 @@ class TzintukimTab(QWidget):
         # same phone (until now this week's answers were also written onto
         # last week's campaign — its history, export and "אישר הגעה" tags
         # kept changing after the fact).
-        windows = yemot.answer_windows(db.get_tzintuk_campaigns(limit=200))
+        windows = yemot.answer_windows(db.get_tzintuk_campaigns(limit=200, statuses=_RUNG_STATUSES))
         for camp in self._answer_campaigns():
             entries = yemot._report_entries(camp)
             if not entries:

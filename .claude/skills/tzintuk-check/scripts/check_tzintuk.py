@@ -144,7 +144,7 @@ def _(y, t, test, rel):
 
 @lint("I14", "_answer_campaigns סורק limit=200 (לא 30)")
 def _(y, t, test, rel):
-    return "get_tzintuk_campaigns(limit=200)" in _func_body(t, "_answer_campaigns"), ""
+    return "get_tzintuk_campaigns(limit=200, statuses=(\"done\",))" in _func_body(t, "_answer_campaigns"), ""
 
 
 @lint("I15", "merge_survey_answers מקבל until_by_phone; answer_windows בשימוש ב-tzintukim")
@@ -255,6 +255,21 @@ def _(y, t, test, rel):
     okk = okk and "if tzintuk:" in _func_body(dbs, "reset_all_data")
     st = _read("tabs/settings.py")
     okk = okk and "db.reset_all_data(tzintuk=True)" in st
+    return okk, ""
+
+
+@lint("I41", "v3.28 — _apply_stop: כש-stopped_at קיים, גם finished מהשרת נושא stopped=True (עצירה שהשרת סגר לפני החסד); רשימה עצמאית מאקסל דרך _excel_row_line/find_phones (שני מספרים בתא); מסנני statuses ב-SQL ליד limit=200")
+def _(y, t, test, rel):
+    stop = _func_body(t, "_apply_stop")
+    okk = ('if st.get("finished"):' in stop and 'st["stopped"] = True' in stop
+           and "STOP_GRACE_S" in stop)
+    xl = _func_body(t, "_excel_row_line")
+    okk = okk and "yemot.find_phones(" in xl and "normalize_phone_loose" in xl
+    okk = okk and "self._excel_row_line(row)" in _func_body(t, "_load_excel")
+    okk = okk and "_RUNG_STATUSES" in t
+    bare = re.findall(r"get_tzintuk_campaigns\(limit=200\)", t)
+    okk = okk and not bare
+    okk = okk and "_excel_row_line" in test and "camp-stop27" in test
     return okk, ""
 
 
