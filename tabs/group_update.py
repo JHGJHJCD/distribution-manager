@@ -445,17 +445,25 @@ class _ManualAddDialog(QDialog):
 
     _PRIORITY_TXT = {4: "קבוע", 3: "ראשונה", 2: "שנייה"}
 
-    def __init__(self, parent=None, exclude_ids: set = None):
+    # Regular frequencies that are NOT part of a 'בלי קבועים' distribution
+    # (#lsyyv, 7/9/2026): in that mode the weekly/bi-weekly regulars are hidden
+    # from the picker altogether; monthly regulars and everyone else stay.
+    HIDE_FREQ_NO_REGULARS = frozenset({"שבועי", "דו-שבועי"})
+
+    def __init__(self, parent=None, exclude_ids: set = None,
+                 hide_frequencies: set = None):
         super().__init__(parent)
         self.setWindowTitle("הוספת מקבל ידנית לחלוקה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.setMinimumSize(760, 620)
         self._exclude = exclude_ids or set()
+        self._hide_freq = set(hide_frequencies or ())
         self._checked = set()
         # EVERYONE — active and inactive alike (#6gcqq: "אני מעוניין שיופיע שם
         # כל האנשים"). Inactive rows are tagged and stay inactive when added.
         self._all = [r for r in db.get_all_recipients()
-                     if r.get("id") not in self._exclude]
+                     if r.get("id") not in self._exclude
+                     and not self._hidden_regular(r)]
         # Need-score every row on one common scale so the ניקוד column means
         # the same thing for everyone (whole numbers only, per the operator).
         for r in self._all:
@@ -471,11 +479,20 @@ class _ManualAddDialog(QDialog):
                                       r.get("full_name") or ""))
         self._build()
 
+    def _hidden_regular(self, rec) -> bool:
+        """A regular (priority 4) whose frequency this distribution mode leaves out."""
+        return (self._hide_freq and rec.get("priority") == 4
+                and (rec.get("frequency") or "").strip() in self._hide_freq)
+
     def _build(self):
         outer = QVBoxLayout(self)
-        intro = QLabel("סמן את מי להוסיף לחלוקה. כברירת מחדל מוצגים בעלי עדיפות "
-                       "(קבוע / ראשונה / שנייה) — כולל מי שאינו בתור השבוע או אינו "
-                       "פעיל. לבחירת מי שאין לו עדיפות, בחר «ללא עדיפות» בסינון.")
+        # Default = EVERYONE (#bsv8c, 7/9/2026): the whole roster — with or without
+        # priority, active or not. The priority filter only narrows it.
+        txt = ("סמן את מי להוסיף לחלוקה. מוצגים כל המקבלים — עם ובלי עדיפות, "
+               "כולל מי שאינו בתור השבוע או אינו פעיל. אפשר לצמצם בסינון לפי עדיפות.")
+        if self._hide_freq:
+            txt += " במצב 'בלי קבועים' הקבועים השבועיים והדו-שבועיים אינם מוצגים."
+        intro = QLabel(txt)
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#475569; font-size:12.5px;")
         outer.addWidget(intro)
@@ -490,8 +507,10 @@ class _ManualAddDialog(QDialog):
 
         # Quick filters (#4v4gt): by priority tier and by frequency.
         self._prio_filter = QComboBox()
-        for label in ("כל העדיפויות", "קבוע", "ראשונה", "שנייה", "ללא עדיפות"):
+        for label in ("כולם", "כל העדיפויות", "קבוע", "ראשונה", "שנייה", "ללא עדיפות"):
             self._prio_filter.addItem(label)
+        self._prio_filter.setToolTip("«כולם» = כל הרשימה · «כל העדיפויות» = רק "
+                                     "קבוע / ראשונה / שנייה")
         self._prio_filter.currentIndexChanged.connect(self._refill)
         self._prio_filter.currentIndexChanged.connect(self._sync_freq_filter)
         top.addWidget(self._prio_filter)
@@ -548,7 +567,9 @@ class _ManualAddDialog(QDialog):
     def _passes_filters(self, rec) -> bool:
         p = self._prio_filter.currentText()
         pr = rec.get("priority")
-        if p == "כל העדיפויות":
+        if p == "כולם":
+            pass                       # the whole roster, no priority gate
+        elif p == "כל העדיפויות":
             # 'All priorities' means the real priority tiers only — קבוע(4) +
             # ראשונה(3) + שנייה(2). Data-only people (priority 1/0/בירור/empty) are
             # NOT distribution recipients, so they're hidden by default; the
@@ -2905,7 +2926,11 @@ class GroupUpdateTab(QWidget):
         the list via the existing one-time-picks mechanism (as MAIN, not reserve),
         arrive ticked, and are recorded like any other pick when the operator saves."""
         already = {r.get("id") for r in self._rows_data}
-        dlg = _ManualAddDialog(self, exclude_ids=already)
+        # 'בלי קבועים' (#lsyyv): weekly/bi-weekly regulars are not part of this
+        # distribution, so they're left out of the picker; everyone else appears.
+        hide = (_ManualAddDialog.HIDE_FREQ_NO_REGULARS
+                if self._current_mode() == "none" else None)
+        dlg = _ManualAddDialog(self, exclude_ids=already, hide_frequencies=hide)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         ids = dlg.selected_ids()
