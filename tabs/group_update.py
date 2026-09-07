@@ -461,9 +461,11 @@ class _ManualAddDialog(QDialog):
         self._checked = set()
         # EVERYONE — active and inactive alike (#6gcqq: "אני מעוניין שיופיע שם
         # כל האנשים"). Inactive rows are tagged and stay inactive when added.
-        self._all = [r for r in db.get_all_recipients()
-                     if r.get("id") not in self._exclude
-                     and not self._hidden_regular(r)]
+        roster = [r for r in db.get_all_recipients() if r.get("id") not in self._exclude]
+        self._all = [r for r in roster if not self._hidden_regular(r)]
+        # How many regulars this mode left out — shown in the count line, so
+        # "503 מתוך 503" doesn't read as "the regulars are still there" (7/9/2026).
+        self._hidden_count = len(roster) - len(self._all)
         # Need-score every row on one common scale so the ניקוד column means
         # the same thing for everyone (whole numbers only, per the operator).
         for r in self._all:
@@ -638,7 +640,9 @@ class _ManualAddDialog(QDialog):
                 t.item(i, 0).setToolTip("מקבל לא פעיל — הוספתו לחלוקה לא תחזיר "
                                         "אותו לסטטוס פעיל")
         t.blockSignals(False)
-        self._lbl_count.setText(f"מוצגים {len(rows)} מתוך {len(self._all)} מקבלים · "
+        hidden = (f" (בלי {self._hidden_count} קבועים שבועיים/דו-שבועיים — "
+                  f"מוסתרים במצב 'בלי קבועים')" if self._hidden_count else "")
+        self._lbl_count.setText(f"מוצגים {len(rows)} מתוך {len(self._all)} מקבלים{hidden} · "
                                 f"נבחרו {len(self._checked)}")
 
     def _on_item_changed(self, item):
