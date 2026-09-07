@@ -239,6 +239,25 @@ def _(y, t, test, rel):
     return okk, ""
 
 
+@lint("I40", "v3.27 — היסטוריה מלאה: בלי LIMIT ב-_refresh_history/_pending_scheds/_check_scheduled/_maybe_resume_tracking (סינון statuses ב-SQL); 'לא הגיבו' בהיסטוריה/אקסל רק ל-done; תאריך אקסל בשעון ישראל; reset_all_data(tzintuk=True) רק מ'אפס נתונים'")
+def _(y, t, test, rel):
+    okk = "get_tzintuk_campaigns()" in _func_body(t, "_refresh_history") and "_hist_text_cache" in _func_body(t, "_refresh_history")
+    okk = okk and 'statuses=("scheduled",)' in _func_body(t, "_pending_scheds")
+    okk = okk and 'statuses=("scheduled",)' in _func_body(t, "_check_scheduled")
+    okk = okk and 'statuses=("sending", "stopping")' in _func_body(t, "_maybe_resume_tracking")
+    okk = okk and 'if camp.get("status") == "done":' in _func_body(t, "_answers_text")
+    for n in ("_pending_scheds", "_check_scheduled", "_maybe_resume_tracking", "_refresh_history"):
+        okk = okk and "limit=" not in _func_body(t, n)
+    xl = _read("utils/excel_utils.py")
+    okk = okk and 'if "answer" in e and final:' in _func_body(xl, "_tzintuk_entry_state")
+    okk = okk and "_tf.to_israel(" in _func_body(xl, "export_tzintuk_history_to_excel")
+    dbs = _read("database.py")
+    okk = okk and "if tzintuk:" in _func_body(dbs, "reset_all_data")
+    st = _read("tabs/settings.py")
+    okk = okk and "db.reset_all_data(tzintuk=True)" in st
+    return okk, ""
+
+
 @lint("I37", "v3.24 — עצירה נשמרת ברשומה ('stopping') ומכובדת בחידוש (_maybe_resume_tracking → stopped_at); answer_windows סופר 'stopping'")
 def _(y, t, test, rel):
     stop = _func_body(t, "_stop_campaign")

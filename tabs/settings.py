@@ -954,7 +954,7 @@ class SettingsTab(QWidget):
 
         pulled = 0
         with busy_cursor():
-            db.reset_all_data()
+            db.reset_all_data(tzintuk=True)
             if synced:
                 pulled = sync.restart_from_peer()
             if self.main_win:

@@ -2747,8 +2747,11 @@ class TzintukimTab(QWidget):
     def _pending_scheds(self):
         """Every scheduled-but-not-yet-run campaign (a smart send makes one per
         hour bucket; a plain schedule makes one)."""
-        return [c for c in db.get_tzintuk_campaigns(limit=60)
-                if c.get("status") == "scheduled"]
+        # v3.27 — no LIMIT: scheduled records sort first (future sent_at) and
+        # a few smart sends alone can exceed 60; a pending schedule that
+        # fell off the cap was invisible to the banner, "בטל את כולם" and the
+        # busy-template check (its template could be handed out again).
+        return db.get_tzintuk_campaigns(statuses=("scheduled",))
 
     def _pending_sched(self):
         scheds = self._pending_scheds()
@@ -3167,9 +3170,7 @@ class TzintukimTab(QWidget):
         zone = timefmt._israel_zone()
         now = datetime.now(zone) if zone is not None else datetime.now().astimezone()
         due = []
-        for c in db.get_tzintuk_campaigns(limit=60):
-            if c.get("status") != "scheduled":
-                continue
+        for c in db.get_tzintuk_campaigns(statuses=("scheduled",)):
             dt = self._sched_dt(c)
             if dt is not None and now >= dt:
                 due.append(c)
@@ -3665,11 +3666,10 @@ class TzintukimTab(QWidget):
         # the other via _chain_next). Older stuck records are left alone.
         cutoff = datetime.now(timezone.utc) - timedelta(days=7)
         camp = None
-        for c in db.get_tzintuk_campaigns(limit=60):
-            # 'stopping' (v3.24) = a send stopped on the server, still
-            # collecting the calls that were already ringing
-            if c.get("status") not in ("sending", "stopping"):
-                continue
+        # 'stopping' (v3.24) = a send stopped on the server, still collecting
+        # the calls that were already ringing. v3.27: filtered in SQL — more
+        # than 60 pending schedules used to hide every running record.
+        for c in db.get_tzintuk_campaigns(statuses=("sending", "stopping")):
             sent = timefmt.to_israel(c.get("sent_at") or "")
             if sent is not None and sent < cutoff:
                 break
@@ -3900,7 +3900,14 @@ class TzintukimTab(QWidget):
     # ── History ───────────────────────────────────────────────────────────────
 
     def _refresh_history(self):
-        camps = db.get_tzintuk_campaigns(limit=100)
+        # v3.27 — the WHOLE history (the card says "כל השליחות"; a cap of 100
+        # hid anything older than ~4 weeks of smart sends). The per-row
+        # survey text parses report_json, and this runs on every poll tick —
+        # so it is memoized per record (status_ts changes with every update).
+        camps = db.get_tzintuk_campaigns()
+        cache = getattr(self, "_hist_text_cache", None)
+        if cache is None:
+            cache = self._hist_text_cache = {}
         self.hist.setRowCount(len(camps))
         status_he = {"sending": "בתהליך", "done": "הסתיים",
                      "stopping": "נעצר ⛔ — ממתין לתוצאות",
@@ -3917,7 +3924,13 @@ class TzintukimTab(QWidget):
             self.hist.setItem(i, 1, QTableWidgetItem(f"{name} — {st}"))
             self.hist.setItem(i, 2, QTableWidgetItem(str(c.get("total") or 0)))
             self.hist.setItem(i, 3, QTableWidgetItem(str(c.get("delivered") or 0)))
-            ans = QTableWidgetItem(self._answers_text(c))
+            key = (c.get("status_ts") or "", c.get("status") or "",
+                   len(c.get("report_json") or ""))
+            hit = cache.get(c.get("guid") or "")
+            if hit is None or hit[0] != key:
+                hit = (key, self._answers_text(c))
+                cache[c.get("guid") or ""] = hit
+            ans = QTableWidgetItem(hit[1])
             ans.setForeground(QColor("#166534"))
             self.hist.setItem(i, 4, ans)
             self.hist.setItem(i, 5, QTableWidgetItem(str(c.get("failed") or 0)))
@@ -3960,4 +3973,9 @@ class TzintukimTab(QWidget):
                          or str(e.get("status") or "").lower() == "accepted")
             return f"✓{legacy}" if legacy else "—"
         a = yemot.answer_counts(entries)
-        return f"✓{a['1']} ✗{a['2']} ?{a['3']} · {a['']} לא הגיבו"
+        text = f"✓{a['1']} ✗{a['2']} ?{a['3']}"
+        # v3.27 — "לא הגיבו" only once the campaign is over (the strip, the
+        # recipients table and the per-name detail already followed this rule)
+        if camp.get("status") == "done":
+            text += f" · {a['']} לא הגיבו"
+        return text

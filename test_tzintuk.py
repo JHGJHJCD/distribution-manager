@@ -2384,6 +2384,72 @@ for k, v in _orig.items():
     else:
         setattr(yemot, k, v)
 
+# ── 26. סקירה 7/9/2026 — היסטוריה מלאה: בלי תקרה, "לא הגיבו" רק בסיום, תאריך ישראל באקסל, איפוס, >60 תזמונים ──
+print("— סקירה 7/9: היסטוריה מלאה של הצינתוקים —")
+_close_all(); _calls.clear(); _msgs.clear()
+tab._retire_trackers()
+# (א) "לא הגיבו" בהיסטוריה ובאקסל רק כשהצינתוק הסתיים (בפירוט זה כבר היה כך)
+_ents26 = [{"phone": "0521111111", "name": "א", "status": "done", "ok": True, "failed": False},
+           {"phone": "0522222222", "name": "ב", "status": "no_answer", "ok": False, "failed": True}]
+yemot.merge_survey_answers(_ents26, [], _now.isoformat())
+_live26 = {"status": "sending", "report_json": json.dumps(_ents26, ensure_ascii=False)}
+_done26 = {"status": "done", "report_json": json.dumps(_ents26, ensure_ascii=False)}
+ok("היסטוריה: צינתוק שעדיין רץ — בלי 'לא הגיבו'",
+   "לא הגיבו" not in tab._answers_text(_live26), tab._answers_text(_live26))
+ok("היסטוריה: צינתוק שהסתיים — 'לא הגיבו 2'",
+   "2 לא הגיבו" in tab._answers_text(_done26), tab._answers_text(_done26))
+from utils import excel_utils as _xl26
+ok("אקסל: 'לא הגיב' רק לצינתוק שהסתיים",
+   _xl26._tzintuk_entry_state(_ents26[1], yemot.answer_labels(), final=False) == "לא נענה / נכשל"
+   and _xl26._tzintuk_entry_state(_ents26[1], yemot.answer_labels(), final=True) == "לא הגיב")
+# (ב) תאריך באקסל = שעון ישראל (שליחה ב-22:30 UTC = 01:30 למחרת בישראל), עם שעה
+import openpyxl as _oxl26
+_camps26 = [{"guid": "x26", "name": "לילה", "status": "sending", "sent_at": "2026-09-06T22:30:00+00:00",
+             "dist_date": week, "total": 2, "delivered": 1, "failed": 1, "device": "PC",
+             "report_json": json.dumps(_ents26, ensure_ascii=False)}]
+_xl26.export_dir = lambda kind: __import__("pathlib").Path(tempfile.mkdtemp())
+_path26 = _xl26.export_tzintuk_history_to_excel(_camps26, {})
+_wb26 = _oxl26.load_workbook(_path26)
+_sum26 = list(_wb26["סיכום"].iter_rows(values_only=True))
+_det26 = list(_wb26["פירוט"].iter_rows(values_only=True))
+ok("אקסל סיכום: התאריך בשעון ישראל וכולל שעה", _sum26[1][0] == "07/09/2026 01:30", _sum26[1][0])
+ok("אקסל פירוט: אותו תאריך", _det26[1][0] == "07/09/2026 01:30", _det26[1][0])
+ok("אקסל סיכום: 'לא הגיב' = 0 לצינתוק שעדיין רץ", _sum26[1][8] == 0, _sum26[1])
+ok("אקסל פירוט: מי שנכשל בצינתוק שרץ = 'לא נענה / נכשל'",
+   [r[4] for r in _det26[1:] if r[3] and "2222" in str(r[3])] == ["לא נענה / נכשל"], _det26)
+# (ג) טבלת ההיסטוריה מציגה הכל — בלי תקרה של 100
+_n_before26 = len(db.get_tzintuk_campaigns())
+_g26 = [db.add_tzintuk_campaign(f"ישן {i}", "2025-01-01", "1117319", f"old-{i}", 1,
+                                sent_at=f"2025-01-0{1 + i % 9}T10:00:00+00:00", status="done")
+        for i in range(120)]
+tab._refresh_history()
+ok("טבלת ההיסטוריה מציגה את כל הרשומות (גם מעבר ל-100)",
+   tab.hist.rowCount() == _n_before26 + 120, (tab.hist.rowCount(), _n_before26 + 120))
+# (ד) מעל 60 תזמונים ממתינים — כולם נראים (רצועה/ביטול/תבניות תפוסות)
+_gs26 = [db.add_tzintuk_campaign(f"תזמון {i}", "2027-01-01", str(900000 + i), f"sched-{i}", 1,
+                                 sent_at=f"2027-01-01T{8 + i % 12:02d}:{i % 60:02d}:00+00:00",
+                                 status="scheduled") for i in range(65)]
+ok("מעל 60 תזמונים ממתינים — _pending_scheds רואה את כולם",
+   len(tab._pending_scheds()) >= 65, len(tab._pending_scheds()))
+# רשומת 'sending' שמסתתרת מאחורי 65 מתוזמנים — עדיין מתחדשת
+_gsend26 = db.add_tzintuk_campaign("מאחורי התזמונים", week, "1117319", "camp-behind", 1, device=_dev20)
+db.update_tzintuk_campaign(_gsend26, 0, 0, "sending", tab._seed_json({"0521111111": "א"}))
+tab._maybe_resume_tracking()
+ok("מעקב על 'sending' מתחדש גם כשמעל 60 תזמונים לפניו ברשימה",
+   tab._worker is not None and tab._active_guid == _gsend26, (tab._active_guid, _gsend26))
+tab._retire_trackers()
+with db.get_connection() as _cn26:
+    _cn26.execute("DELETE FROM tzintuk_campaigns WHERE guid IN (%s)" % ",".join("?" * (len(_g26) + len(_gs26) + 1)),
+                  (*_g26, *_gs26, _gsend26))
+# (ה) "אפס נתונים" מוחק גם את היסטוריית הצינתוקים (טלפונים של מקבלים שנמחקו + שומר-הכפילות)
+_gr26 = db.add_tzintuk_campaign("לאיפוס", "2026-12-01", "1117319", "camp-reset", 1, status="done")
+db.reset_all_data()
+ok("ייבוא-בהחלפה של מקבלים (reset בלי tzintuk) שומר את היסטוריית הצינתוקים",
+   db.get_tzintuk_campaign(_gr26) is not None)
+db.reset_all_data(tzintuk=True)
+ok("'אפס נתונים' מוחק גם את היסטוריית הצינתוקים", db.get_tzintuk_campaign(_gr26) is None)
+_close_all(); _calls.clear(); _msgs.clear()
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")

@@ -1865,13 +1865,21 @@ def update_tzintuk_campaign(guid: str, delivered: int, failed: int,
     return True
 
 
-def get_tzintuk_campaigns(limit: int | None = None):
-    """Campaign history, newest first (both computers' sends)."""
-    q = "SELECT * FROM tzintuk_campaigns ORDER BY sent_at DESC, id DESC"
-    args = ()
+def get_tzintuk_campaigns(limit: int | None = None, statuses=None):
+    """Campaign history, newest first (both computers' sends). `statuses`
+    (v3.27) filters in SQL — the callers that look for pending schedules /
+    a running send must not be capped by a LIMIT that the (future-dated,
+    first-sorted) scheduled records can fill up on their own."""
+    q = "SELECT * FROM tzintuk_campaigns"
+    args: tuple = ()
+    if statuses:
+        st = tuple(str(s) for s in statuses)
+        q += " WHERE status IN (%s)" % ",".join("?" * len(st))
+        args = st
+    q += " ORDER BY sent_at DESC, id DESC"
     if limit:
         q += " LIMIT ?"
-        args = (int(limit),)
+        args = (*args, int(limit))
     with get_connection() as conn:
         return [dict(r) for r in conn.execute(q, args)]
 
@@ -2011,16 +2019,24 @@ def get_summary():
 
 # ─── Reset ───────────────────────────────────────────────────────────────────
 
-def reset_all_data():
+def reset_all_data(tzintuk: bool = False):
     """Delete ALL recipients, distributions, distribution batches, and change_log.
     Settings are kept. dist_batches must be cleared too — otherwise a reset leaves
     orphaned batch rows behind, so the 'חלוקות' tab keeps showing phantom
-    distributions whose per-recipient rows are already gone (bug H1)."""
+    distributions whose per-recipient rows are already gone (bug H1).
+    tzintuk=True (v3.27, the "אפס נתונים" button only) also wipes the
+    voice-call history; a replace-import of recipients keeps it."""
     with get_connection() as conn:
         conn.execute("DELETE FROM distributions")
         conn.execute("DELETE FROM dist_batches")
         conn.execute("DELETE FROM change_log")
         conn.execute("DELETE FROM recipients")
+        # v3.27 — the voice-call history goes too: it holds the phone numbers
+        # of the recipients just deleted and drives the "already sent for
+        # this date" guard (a reset used to keep test sends alive forever).
+        # With sync on, restart_from_peer brings the real history back.
+        if tzintuk:
+            conn.execute("DELETE FROM tzintuk_campaigns")
 
 
 # ─── Import helpers ───────────────────────────────────────────────────────────

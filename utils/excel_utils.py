@@ -969,11 +969,14 @@ def export_history_to_excel(rows: List[Dict], title: str,
 TZINTUK_NO_ANSWER = "לא הגיב"
 
 
-def _tzintuk_entry_state(e: dict, labels: dict) -> str:
+def _tzintuk_entry_state(e: dict, labels: dict, final: bool = True) -> str:
     """One Hebrew word for a campaign-report entry (pure — unit-tested):
     the survey answer, else what happened in the call. v3.25: a number the
     campaign never reached (seed / stopped send) is "טרם צולצל", never
-    "לא הגיב" — that label means "was called and did not respond"."""
+    "לא הגיב" — that label means "was called and did not respond".
+    v3.27: `final` = the campaign is over ('done'); while it still runs
+    nobody is "לא הגיב" yet — the call outcome is shown instead (the same
+    rule the recipients table and the per-name detail already followed)."""
     from utils import yemot as _yemot
     st = str(e.get("status") or "").lower()
     ans = str(e.get("answer") or "")
@@ -983,7 +986,7 @@ def _tzintuk_entry_state(e: dict, labels: dict) -> str:
         return labels["1"]             # legacy key-7 reports
     if not _yemot.was_rung(e):         # v3.21 seed / v3.25 stopped before dialing
         return "טרם צולצל"
-    if "answer" in e:                  # survey checked, no answer given
+    if "answer" in e and final:        # survey checked, no answer given
         return TZINTUK_NO_ANSWER
     if st == "callback":               # v2.96 — צינתוק קלאסי: חזר לשיחה
         return "חזר לשיחה ושמע"
@@ -1045,8 +1048,17 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
             return []
         return [e for e in ents or [] if isinstance(e, dict)]
 
-    def _entry_state(e):
-        return _tzintuk_entry_state(e, labels)
+    def _entry_state(e, final=True):
+        return _tzintuk_entry_state(e, labels, final)
+
+    def _when(camp):
+        # v3.27 — Israel clock with the hour (was the UTC date only: a send
+        # after midnight Israel time carried yesterday's date)
+        from utils import timefmt as _tf
+        dt = _tf.to_israel(str(camp.get("sent_at") or ""))
+        if dt is not None:
+            return dt.strftime("%d/%m/%Y %H:%M")
+        return _fmt_date(str(camp.get("sent_at") or "")[:10]) or (camp.get("sent_at") or "")
 
     # ── גיליון סיכום ──────────────────────────────────────────────────────────
     ws = wb.active
@@ -1056,8 +1068,9 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
                        "נכשלו", "מחשב"])
     for i, c in enumerate(campaigns, 1):
         ents = _entries(c)
-        states = [_entry_state(e) for e in ents]
-        ws.append([_fmt_date(str(c.get("sent_at") or "")[:10]) or (c.get("sent_at") or ""),
+        final = c.get("status") == "done"
+        states = [_entry_state(e, final) for e in ents]
+        ws.append([_when(c),
                    c.get("name") or "",
                    status_he.get(c.get("status") or "", c.get("status") or ""),
                    int(c.get("total") or 0), int(c.get("delivered") or 0),
@@ -1075,11 +1088,12 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
     _style_header(wd, ["תאריך", "שם הצינתוק", "שם המקבל", "טלפון", "סטטוס"])
     r = 1
     for c in campaigns:
-        cdate = _fmt_date(str(c.get("sent_at") or "")[:10]) or (c.get("sent_at") or "")
+        cdate = _when(c)
         cname = c.get("name") or ""
+        final = c.get("status") == "done"
         for e in _entries(c):
             phone = str(e.get("phone") or "")
-            state = _entry_state(e)
+            state = _entry_state(e, final)
             r += 1
             wd.append([cdate, cname,
                        e.get("name") or name_by_phone.get(phone, ""), phone, state])

@@ -943,7 +943,7 @@ def recording_older_than_last_send(camps=None) -> dict | None:
     if not info or not info.get("at"):
         return None
     if camps is None:
-        camps = db.get_tzintuk_campaigns(limit=60)
+        camps = db.get_tzintuk_campaigns(statuses=("done", "sending", "stopping"))
     now = datetime.now(timezone.utc).isoformat()
     for c in camps or []:
         if c.get("status") not in ("done", "sending", "stopping"):
