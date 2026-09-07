@@ -178,7 +178,7 @@ print("\n=== רובד 9: calculate_next_dist ===")
 from database import calculate_next_dist
 from datetime import date
 
-for freq in ["שבועי", "דו-שבועי", "חודשי", "חד-פעמי", ""]:
+for freq in ["שבועי", "דו-שבועי", "תלת-שבועי", "חודשי", "חד-פעמי", ""]:
     d = calculate_next_dist("2026-05-27", freq)
     check(f"next_dist({freq or 'ריק'}) = יום רביעי", d.weekday() == 2, f"({d})")
 
@@ -192,6 +192,9 @@ check("שבועי interval >= 7 days", (d_weekly - date(2026, 5, 27)).days >= 1)
 
 d_biweekly = calculate_next_dist("2026-05-27", "דו-שבועי")
 check("דו-שבועי interval >= 13 days", (d_biweekly - date(2026, 5, 27)).days >= 13)
+
+d_triweekly = calculate_next_dist("2026-05-27", "תלת-שבועי")
+check("תלת-שבועי = בדיוק 21 ימים", (d_triweekly - date(2026, 5, 27)).days == 21, f"({d_triweekly})")
 
 
 # ══════════════════════════════════════════════════════════════════════════════

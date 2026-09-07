@@ -896,6 +896,8 @@ def calculate_next_dist(last_date_str: str, frequency: str) -> date:
         return next_wednesday(last + timedelta(days=1))
     elif frequency == "דו-שבועי":
         return next_wednesday(last + timedelta(days=13))
+    elif frequency == "תלת-שבועי":
+        return next_wednesday(last + timedelta(days=20))
     elif frequency == "חודשי":
         return next_wednesday(last + timedelta(days=29))
     else:

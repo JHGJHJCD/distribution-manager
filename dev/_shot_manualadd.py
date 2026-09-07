@@ -15,6 +15,7 @@ seed = [
     ("קבוע שבועי", 4, "שבועי", "פעיל"),
     ("קבוע דו-שבועי", 4, "דו-שבועי", "פעיל"),
     ("קבוע חודשי", 4, "חודשי", "פעיל"),
+    ("קבוע תלת-שבועי", 4, "תלת-שבועי", "פעיל"),
     ("ראשונה חדפ", 3, "חד-פעמי", "פעיל"),
     ("שנייה חדפ", 2, "חד-פעמי", "פעיל"),
     ("נתונים בלבד 1", 1, "", "פעיל"),
@@ -65,9 +66,9 @@ dlg2.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
 dlg2.show(); app.processEvents()
 exp = sorted(n for n, pr, fr, _ in seed if not (pr == 4 and fr in ("שבועי", "דו-שבועי")))
 assert names(dlg2) == exp, names(dlg2)
-assert "קבוע חודשי" in names(dlg2)
+assert "קבוע חודשי" in names(dlg2) and "קבוע תלת-שבועי" in names(dlg2)
 dlg2._prio_filter.setCurrentText("קבוע"); app.processEvents()
-assert names(dlg2) == ["קבוע חודשי"], names(dlg2)
+assert names(dlg2) == ["קבוע חודשי", "קבוע תלת-שבועי"], names(dlg2)
 dlg2._prio_filter.setCurrentText("כולם"); app.processEvents()
 assert dlg2._hidden_count == 2 and "בלי 2 קבועים" in dlg2._lbl_count.text(), dlg2._lbl_count.text()
 assert dlg._hidden_count == 0 and "מוסתרים" not in dlg._lbl_count.text(), dlg._lbl_count.text()

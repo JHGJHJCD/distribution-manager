@@ -830,7 +830,7 @@ class RecipientDialog(QDialog):
         # for ללא/בירור it is '' — see _effective_frequency(). This removes the
         # confusing empty option (#fw5s2) and the frequency-without-קבוע case (#j6czs).
         self.f_freq = QComboBox()
-        self.f_freq.addItems(["שבועי", "דו-שבועי", "חודשי"])
+        self.f_freq.addItems(["שבועי", "דו-שבועי", "תלת-שבועי", "חודשי"])
         self.f_freq.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         self.f_status = QComboBox()

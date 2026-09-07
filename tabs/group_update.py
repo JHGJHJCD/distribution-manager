@@ -493,7 +493,8 @@ class _ManualAddDialog(QDialog):
         txt = ("סמן את מי להוסיף לחלוקה. מוצגים כל המקבלים — עם ובלי עדיפות, "
                "כולל מי שאינו בתור השבוע או אינו פעיל. אפשר לצמצם בסינון לפי עדיפות.")
         if self._hide_freq:
-            txt += " במצב 'בלי קבועים' הקבועים השבועיים והדו-שבועיים אינם מוצגים."
+            txt += (" במצב 'בלי קבועים' הקבועים השבועיים והדו-שבועיים אינם מוצגים "
+                    "(תלת-שבועיים וחודשיים — כן).")
         intro = QLabel(txt)
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#475569; font-size:12.5px;")
@@ -520,7 +521,7 @@ class _ManualAddDialog(QDialog):
         # Frequency is a REGULARS-only notion (#dy39u): the combo is enabled
         # only while the priority filter is 'קבוע'; otherwise it resets and greys out.
         self._freq_filter = QComboBox()
-        for label in ("כל התדירויות", "שבועי", "דו-שבועי", "חודשי"):
+        for label in ("כל התדירויות", "שבועי", "דו-שבועי", "תלת-שבועי", "חודשי"):
             self._freq_filter.addItem(label)
         self._freq_filter.currentIndexChanged.connect(self._refill)
         self._freq_filter.setToolTip("סינון לפי תדירות — רלוונטי רק לקבועים")
