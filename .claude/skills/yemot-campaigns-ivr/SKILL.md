@@ -289,3 +289,30 @@ checking_units_mail=aaa@ccc.com
   (`ensure_sched_template`), תבנית פנויה כשאין עליה תזמון ממתין; ההקלטה מועתקת server-side (DownloadFile `tpl:`
   → UploadFile `tpl:` בלי המרה) בזמן התזמון. `get_campaign_template_details` (MCP) מציג לכל תבנית
   `scheduledCampaigns`/`activeCampaigns` — שימושי לאימות.
+
+## נלמד 8/9/2026 — RunTzintuk לרשימה = חינם, ו-TzintukimListManagement (מהתיעוד הרשמי)
+- **ל-`RunTzintuk` יש פרמטר `method`** (f2 post/64941, סכמת ה-API): שני מצבים —
+  `method=phones` (רשימת מספרים אד-הוק, `phones=...`) = **0.1 יחידה למספר**; `method=tzintukLists`
+  (`tzintukLists=members`, שמות רשימות tzintuk) = **ללא עלות** (0 יחידות). כלומר צינתוק לרשימת-צינתוק
+  **בשם** הוא חינם גם דרך ה-API, לא רק מהטלפון. תשובה: `callerId/callsCount/verifyCode/bilingPerCall/biling/errors`
+  (+ לא-מתועד `campaignId`, `callsTimeout`). פרמטרים נוספים: `caller_id`, `tzintuk_time_out` (`TzintukTimeOut`).
+  ⚠ **השלכה למנהל חלוקה:** התוכנה משלמת 0.1/מספר על כל צינתוק (`phones`). אם המקבלים היו רשומים ברשימת
+  tzintuk בשם (שהתוכנה מתחזקת דרך ה-API), אפשר לשגר להם **חינם** ב-`tzintukLists`. **דורש הכרעת המשתמש** —
+  שינוי ארכיטקטוני (מי מנהל את מנוי הרשימה, איך מסירים מי שלא זכאי השבוע). טרם אומת חי שהשליחה-לרשימה חינמית בקו שלנו.
+- **`TzintukimListManagement`** (f2 post/65034) — ניהול רשימות tzintuk **דרך ה-API החיצוני** (לא רק מהטלפון):
+  `action` ∈ `getlists` (כל הרשימות) / `getlistEnteres` (רשומי רשימה: `listName`, `countSubscribers`,
+  `countsActive`/`countsBlocked`, `active[]`/`blocked[]`) / `getLogList` (יומן שינויים) / `resetList` (איפוס),
+  פרמטר `TzintukimList`=שם הרשימה. **⚠ אין דרך API להוסיף/להסיר מספר בודד לרשימת tzintuk** — רק המאזין עצמו
+  דרך שלוחת `type=tzintuk` (מספר מזוהה בלבד), או המנהל בשלוחת `tzintuk_admin=yes`; ה-API רק קורא/מאפס/מיומן.
+  ה-MCP חושף את זה: `list_tzintuk_lists` / `get_tzintuk_subscribers` / `list_tzintuk_history` / `reset_tzintuk_list`
+  / `tzintuk_return_report`.
+- **`go_to_from_tzintuk` — השמעת הודעה פר-סטטוס לפני הפילטר** (post/41323): `go_to_from_tzintuk_say_message_according_to_situation=yes`
+  משמיע `TzintukFound.wav` / `TzintukBlocked.wav` / `TzintukInvited.wav` / `TzintukNotFound.wav` לפי מצב המתקשר ברשימה.
+  ניתוב פר-רשימה-פר-סטטוס: `go_to_from_tzintuk_<שם>_<found|blocked|invited|not_found>=/N` (או `in_extension` בהטמעה),
+  עם fallback להגדרה הכללית. אפשר גם שער סיסמה פר-סטטוס (`..._found_enter_password=password_admin`).
+- **ארכיטקטורת-צינתוק "רשמית ונקייה" (סיכום — למקרה שנחזור לחזרה-לצינתוק):** רשימת tzintuk בשם ⇐ שיגור חינם
+  ב-`RunTzintuk method=tzintukLists` ⇐ פילטר-חזרה `go_to_from_tzintuk=yes`+`check_list_tzintuk=<שם>` **מוטמע בשלוחה**
+  (לא בשורש, לא תלוי במספור תבניות). זו החלופה הרשמית לכל הסטאק היד-רולד שנשבר (check_template_filter/‏78,
+  v3.06–v3.08, כיום `CALLBACK_ENABLED=False`). היתרון: רשימות מזוהות ב**שם** ⇒ אין את שבירות ה-0-based של
+  `check_template_filter`. החיסרון מול הפרויקט: המקבלים חייבים להיות **מנויים** ברשימת tzintuk (מזוהים), ולא כל
+  זכאי-שבוע רשום. **החלטה פתוחה — לא לממש בלי הכרעת המשתמש.**

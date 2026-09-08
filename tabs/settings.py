@@ -527,6 +527,36 @@ class SettingsTab(QWidget):
             _btn("עדכן את הסקר בקו", _BTN_GHOST, self._upload_survey_prompt,
                  "שומר את התוויות והשאלה, ומעלה את השאלה לשלוחת הסקר בקו"),
             self.lbl_survey_status))
+        # ── שרת המענה — חזרה-לצינתוק (v3.33): Cloudflare Worker משלנו ──
+        from utils import callback_server as _cb
+        body.addWidget(_desc(
+            "שרת המענה: מי שמחייג חזרה לקו ומגיע לשלוחת המענה שומע \"יש לך חלוקה "
+            "השבוע\" ומאשר הגעה במקש אחד (1 מגיע / 2 לא מגיע / 3 לא יודע). התשובות "
+            "נכנסות לאותם תגים והיסטוריה של הסקר. כבוי עד שיאומת בשטח."))
+        cform = _form()
+        self.cb_url = QLineEdit()
+        self.cb_url.setPlaceholderText(_cb.DEFAULT_URL)
+        self.cb_url.setAlignment(ALIGN_RIGHT)
+        self.cb_url.setText(db.get_setting(_cb.SET_URL) or "")
+        self.cb_secret = QLineEdit()
+        self.cb_secret.setEchoMode(QLineEdit.EchoMode.Password)
+        self.cb_secret.setPlaceholderText("הסוד APP_SECRET שהוגדר בשרת")
+        self.cb_secret.setAlignment(ALIGN_RIGHT)
+        self.cb_secret.setText(db.get_setting(_cb.SET_SECRET) or "")
+        self.cb_enabled = QCheckBox("הפעל את שרת המענה (דחיפת רשימת השבוע בשליחה וקריאת אישורים)")
+        self.cb_enabled.setChecked((db.get_setting(_cb.SET_ENABLED) or "") == "1")
+        _form_row(cform, "כתובת השרת", self.cb_url)
+        _form_row(cform, "סוד", self.cb_secret)
+        body.addLayout(cform)
+        body.addWidget(self.cb_enabled)
+        self.lbl_cb_status = QLabel("")
+        self.lbl_cb_status.setWordWrap(True)
+        self.lbl_cb_status.setStyleSheet("color:#334155; font-size:12.5px; " + _LBL)
+        body.addLayout(_btn_row(
+            _btn("שמור", _BTN_PRIMARY, self._save_callback_settings),
+            _btn("בדוק חיבור לשרת המענה", _BTN_GHOST, self._test_callback_server,
+                 "קורא מהשרת את התשובות שנאספו — מוודא שהכתובת והסוד נכונים"),
+            self.lbl_cb_status))
         _place(row, card, body)
 
         # ═════════════════════════ עבודה משני מחשבים ═════════════════════════
@@ -1320,9 +1350,35 @@ class SettingsTab(QWidget):
         db.set_setting(yemot.SET_CALLER_ID, caller)
         db.set_setting("gemini_api_key", self.ym_gemini_key.text().strip())
         self._save_survey_settings()      # v3.02 — labels + question text
+        self._save_callback_settings(silent=True)   # v3.33 — callback server
         self._refresh_header_chips()
         if not silent:
             self.lbl_ym_status.setText("הפרטים נשמרו ✓ — עכשיו לחץ \"בדוק חיבור\"" + note)
+
+    # ── שרת המענה — חזרה-לצינתוק (v3.33) ──────────────────────────────────
+
+    def _save_callback_settings(self, silent: bool = False):
+        from utils import callback_server as cb
+        db.set_setting(cb.SET_URL, self.cb_url.text().strip().rstrip("/"))
+        db.set_setting(cb.SET_SECRET, self.cb_secret.text().strip())
+        db.set_setting(cb.SET_ENABLED, "1" if self.cb_enabled.isChecked() else "0")
+        if not silent:
+            state = "דלוק" if self.cb_enabled.isChecked() else "כבוי"
+            self.lbl_cb_status.setText(f"נשמר ✓ (שרת המענה {state})")
+
+    def _test_callback_server(self):
+        from utils import callback_server as cb
+        self._save_callback_settings(silent=True)
+        if not cb.is_configured():
+            QMessageBox.warning(self, "שרת המענה", "יש למלא כתובת וסוד תחילה.")
+            return
+        with busy_cursor():
+            try:
+                n = cb.check_connection()
+            except cb.CallbackError as e:
+                self.lbl_cb_status.setText("✗ " + str(e))
+                return
+        self.lbl_cb_status.setText(f"החיבור לשרת המענה תקין ✓ — {n} תשובות שמורות בשרת")
 
     def _test_yemot_connection(self):
         from utils import yemot

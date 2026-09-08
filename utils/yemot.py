@@ -1712,11 +1712,28 @@ def parse_approval_rows(text: str) -> list:
 
 def fetch_survey_rows() -> list:
     """Download + parse the survey data file. No file yet (the server answers
-    JSON instead of bytes, or nothing) → []."""
+    JSON instead of bytes, or nothing) → [].
+
+    v3.33 — the answers collected by our own callback server (Cloudflare
+    Worker, ``utils.callback_server``) are appended in the very same row
+    shape, so every consumer (merge_survey_answers, tags, history, Excel)
+    sees both sources without knowing which line the person used."""
     raw = _download(f"ivr2:/{SURVEY_EXT}/ApprovalAll.ymgr")
-    if not raw or raw[:1] == b"{":
+    rows = [] if (not raw or raw[:1] == b"{") else \
+        parse_approval_rows(raw.decode("utf-8", errors="replace"))
+    return rows + _callback_server_rows()
+
+
+def _callback_server_rows() -> list:
+    """Rows from the callback server when it is switched on; any failure
+    (off, unconfigured, NetFree, server down) must never break the 77 path."""
+    try:
+        from utils import callback_server
+        if not callback_server.is_enabled() or not callback_server.is_configured():
+            return []
+        return callback_server.fetch_answer_rows()
+    except Exception:
         return []
-    return parse_approval_rows(raw.decode("utf-8", errors="replace"))
 
 
 def _parse_since(since_iso):

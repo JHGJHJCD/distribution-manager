@@ -2261,6 +2261,27 @@ class TzintukimTab(QWidget):
         return json.dumps([{"phone": p, "name": n or "", "status": "pending"}
                            for p, n in (phones or {}).items()], ensure_ascii=False)
 
+    @staticmethod
+    def _cb_server_on() -> bool:
+        from utils import callback_server
+        return callback_server.is_enabled() and callback_server.is_configured()
+
+    @staticmethod
+    def _push_week_list(dist_date: str, phones: dict) -> str:
+        """v3.33 — hand this week's list to the callback server so a family
+        that dials back hears "יש לך חלוקה" and can confirm 1/2/3. Runs on the
+        send worker thread (no widgets!). Returns "" on success or when the
+        server is switched off, else a plain-Hebrew reason — never raises:
+        the dial already went out and must not be reported as failed."""
+        from utils import callback_server
+        try:
+            if not callback_server.is_enabled() or not callback_server.is_configured():
+                return ""
+            callback_server.push_week_list(dist_date, phones)
+            return ""
+        except Exception as e:      # CallbackError carries a Hebrew message already
+            return str(e) or "שרת המענה לא הגיב."
+
     def _phones_map(self, rows) -> dict:
         """{'0501234567': 'שם', …} — every number of every checked row (#gaira);
         cross-row duplicates were already removed by _flag_duplicates."""
@@ -2644,6 +2665,17 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "צינתוקים", f"השליחה נכשלה: {e}")
             self._update_metrics()
             return
+        # v3.33 — the dial went out; now hand this week's list to our callback
+        # server (off the UI thread, best effort — _push_week_list never raises,
+        # the families were already rung and a push failure must not undo that).
+        cb_err = self._run_blocking(
+            lambda: self._push_week_list(dist_date, phones),
+            "מעדכן את שרת המענה ברשימת השבוע…") if self._cb_server_on() else ""
+        if cb_err:
+            QMessageBox.warning(
+                self, "שרת המענה",
+                "הצינתוק יצא, אבל רשימת השבוע לא הגיעה לשרת המענה — מי שיחייג "
+                "חזרה לשלוחת המענה ישמע \"לא רשומה עבורך חלוקה\".\n\n" + cb_err)
         from utils import sync
         name = self._campaign_name()
         sent_iso = datetime.now(timezone.utc).isoformat()   # survey answers count from now

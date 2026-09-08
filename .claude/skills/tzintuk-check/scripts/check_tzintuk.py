@@ -258,6 +258,22 @@ def _(y, t, test, rel):
     return okk, ""
 
 
+@lint("I42", "v3.33 — שרת המענה: callback_server בלי פקודות חיוג; fetch_survey_rows מצרף _callback_server_rows בתוך try; _push_week_list לא מעלה חריגה ורצה ב-_send דרך _run_blocking אחרי _do_send")
+def _(y, t, test, rel):
+    cbs = _read("utils/callback_server.py")
+    bad = [c for c in ("RunCampaign", "RunTzintuk", "ScheduleCampaign", "UploadPhoneList")
+           if c in cbs]
+    fs = _func_body(y, "fetch_survey_rows")
+    cr = _func_body(y, "_callback_server_rows")
+    push = _func_body(t, "_push_week_list")
+    send = _func_body(t, "_send")
+    ok = (not bad and "_callback_server_rows()" in fs and "except Exception" in cr
+          and "except Exception" in push
+          and "self._push_week_list(dist_date, phones)" in send
+          and "self._run_blocking(" in send.split("self._push_week_list")[0][-200:])
+    return ok, ", ".join(bad) or ("" if ok else "missing wiring")
+
+
 @lint("I41", "v3.28 — _apply_stop: כש-stopped_at קיים, גם finished מהשרת נושא stopped=True (עצירה שהשרת סגר לפני החסד); רשימה עצמאית מאקסל דרך _excel_row_line/find_phones (שני מספרים בתא); מסנני statuses ב-SQL ליד limit=200")
 def _(y, t, test, rel):
     stop = _func_body(t, "_apply_stop")
