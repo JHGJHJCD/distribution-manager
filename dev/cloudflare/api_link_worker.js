@@ -8,8 +8,13 @@
 //
 // שלושה סוגי פניות על אותה כתובת:
 //   • ברירת מחדל  → הקו של ימות (api_link): אם יש חלוקה למתקשר, אוסף אישור 1/2/3
-//   • POST /push   (מוגן בסוד) → התוכנה דוחפת את רשימת הזכאים של השבוע
-//                    body: {dist_date:"YYYY-MM-DD", phones:[{phone,name}]}
+//   • POST /push   (מוגן בסוד) → התוכנה דוחפת את רשימת הזכאים של חלוקה אחת
+//                    body: {dist_date:"YYYY-MM-DD", active_from?:"ISO-UTC",
+//                           phones:[{phone,name,active_from?}]}
+//                    v3.36: מחליפה **רק** את הרשימה של אותו dist_date (רשימות של
+//                    חלוקות אחרות נשארות), ו-active_from = מאיזה רגע השורה "חיה"
+//                    (תזמון: שעת השיגור; שיגור חכם: שעת הקבוצה של כל אחד) — לפני
+//                    הרגע הזה המתקשר לא נשאל (עוד לא צולצל אליו). רשימה ריקה = מחיקה.
 //   • GET  /answers (מוגן בסוד) → התוכנה קוראת מי אישר (?dist_date=... אופציונלי)
 //
 // חיווט בקו (הכרעת המשתמש 9/9/2026 — אותו קו, בלי DID ייעודי):
@@ -17,9 +22,10 @@
 //   • Did_Go_To.ini בשורש: 048691834=/76  ⇒ כל מי שמחייג ל-04 עובר קודם דרך השרת
 //   • השורש: check_did_and_go_to_folder_one_time=yes ⇒ החזרה ל-/ לא נכנסת שוב ל-76
 //
-// כלל ההתנהגות (9/9/2026): כל מתקשר ל-04 מגיע לכאן. מי שלא ברשימת השבוע, או שכבר
-// ענה השבוע — ממשיך **בשקט** לתפריט הראשי (go_to_folder=/), בלי שום הודעה.
-// רק זכאי שטרם ענה שומע את השאלה "מגיע? 1 / 2 / 3", פעם אחת.
+// כלל ההתנהגות (9/9/2026): כל מתקשר ל-04 מגיע לכאן. מי שלא ברשימה פעילה, או שכבר
+// ענה לאותה חלוקה — ממשיך **בשקט** לתפריט הראשי (go_to_folder=/), בלי שום הודעה.
+// רק זכאי שטרם ענה שומע את השאלה "מגיע? 1 / 2 / 3", פעם אחת לחלוקה.
+// כשיש לו כמה חלוקות פעילות (השבוע + חלוקה מיוחדת) — נשאל על החדשה ביותר שטרם ענה לה.
 //
 // ⚠ שגיאה בשרת/בקוד = ימות משמיעים "אין מענה" ויוצאים לשורש — לכן כל נתיב
 //   הקו עטוף ב-try/catch שמחזיר go_to_folder=/ (המתקשר לא ירגיש שיש שרת).
@@ -35,15 +41,29 @@ const norm = (p) => {
 
 const TO_MENU = 'go_to_folder=/';            // המשך שקט לתפריט הראשי
 const QUESTION = 'read=t-שלום, יש לך חלוקה השבוע, אם תגיע הקישו 1, אם לא תגיע הקישו 2, אם אינך יודע הקישו 3=Digits,,1,1,7,No,yes,no';
+const KEEP_DAYS = 45;                        // רשימות ישנות מזה נמחקות בדחיפה הבאה
+
+// 'YYYY-MM-DDTHH:MM:SS(.ffffff)(+00:00|Z)' → 'YYYY-MM-DD HH:MM:SS' (UTC, בר-השוואה
+// ל-datetime('now') של SQLite). ריק/לא תקין → null (= פעיל מיד).
+function toSqlUtc(v) {
+  if (!v) return null;
+  const d = new Date(String(v));
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
 
 async function ensureTables(env) {
   await env.DB.batch([
-    env.DB.prepare(`CREATE TABLE IF NOT EXISTS week_list (
-      phone TEXT PRIMARY KEY, name TEXT, dist_date TEXT)`),
+    // v3.36: שורה לכל (מספר, חלוקה) + מאיזה רגע היא פעילה. הטבלה הישנה week_list
+    // (מפתח = מספר בלבד) הוחלפה; מה שהיה בה נמחק בדחיפה הראשונה ממילא.
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS week_lists (
+      phone TEXT, dist_date TEXT, name TEXT, active_from TEXT,
+      PRIMARY KEY (phone, dist_date))`),
     env.DB.prepare(`CREATE TABLE IF NOT EXISTS answers (
       phone TEXT, dist_date TEXT, answer TEXT,
       at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (phone, dist_date))`),
+    env.DB.prepare('DROP TABLE IF EXISTS week_list'),
   ]);
 }
 
@@ -53,15 +73,23 @@ async function appApi(request, env, url) {
     return new Response('forbidden', { status: 403 });
 
   if (url.pathname === '/push') {
-    const body = await request.json(); // {dist_date, phones:[{phone,name}]}
-    await env.DB.prepare('DELETE FROM week_list').run();
+    const body = await request.json();
+    const distDate = body.dist_date || '';
+    const defaultFrom = toSqlUtc(body.active_from);
     const rows = (body.phones || []).filter(e => norm(e.phone));
-    if (rows.length) {
-      await env.DB.batch(rows.map(e =>
-        env.DB.prepare('INSERT OR REPLACE INTO week_list (phone,name,dist_date) VALUES (?,?,?)')
-          .bind(norm(e.phone), e.name || '', body.dist_date || '')));
+    const stmts = [
+      env.DB.prepare('DELETE FROM week_lists WHERE dist_date=?').bind(distDate),
+      // ניקוי רשימות של חלוקות ישנות (dist_date תאריכי בלבד; רשימה עצמאית '' נשארת)
+      env.DB.prepare(`DELETE FROM week_lists WHERE dist_date<>'' AND dist_date<date('now',?)`)
+        .bind(`-${KEEP_DAYS} days`),
+    ];
+    for (const e of rows) {
+      stmts.push(env.DB.prepare(
+        'INSERT OR REPLACE INTO week_lists (phone,dist_date,name,active_from) VALUES (?,?,?,?)')
+        .bind(norm(e.phone), distDate, e.name || '', toSqlUtc(e.active_from) || defaultFrom));
     }
-    return Response.json({ ok: true, count: rows.length });
+    await env.DB.batch(stmts);
+    return Response.json({ ok: true, count: rows.length, dist_date: distDate });
   }
 
   // /answers
@@ -82,19 +110,25 @@ async function lineCall(request, env) {
   const digits = params.get('Digits');
   if (!phone) return reply(TO_MENU);            // מספר חסוי — אין מה לשאול
 
-  const row = await env.DB.prepare('SELECT name,dist_date FROM week_list WHERE phone=?')
-    .bind(phone).first();
+  // הרשימות הפעילות של המתקשר, החדשה קודם; מדלגים על מה שכבר ענה לו.
+  const { results: rows } = await env.DB.prepare(
+    `SELECT dist_date FROM week_lists
+      WHERE phone=? AND (active_from IS NULL OR active_from<=datetime('now'))
+      ORDER BY dist_date DESC`).bind(phone).all();
   // מספר בדיקה (סוד TEST_PHONE ב"סודות (env)") נחשב זכאי גם בלי שורה ברשימה,
   // ונשאל בכל שיחה (בלי "פעם אחת") — לבדיקות בלבד; בלי הסוד הקוד הזה רדום.
   const isTest = !!env.TEST_PHONE && phone === norm(env.TEST_PHONE);
-  if (!row && !isTest) return reply(TO_MENU);   // לא זכאי השבוע — בשקט לתפריט
-  const distDate = row ? row.dist_date : 'test';
-
-  if (!isTest) {
-    const done = await env.DB.prepare('SELECT 1 FROM answers WHERE phone=? AND dist_date=?')
-      .bind(phone, distDate).first();
-    if (done) return reply(TO_MENU);            // כבר ענה השבוע — פעם אחת בלבד
+  let distDate = null;
+  if (isTest) {
+    distDate = 'test';
+  } else {
+    for (const r of rows || []) {
+      const done = await env.DB.prepare('SELECT 1 FROM answers WHERE phone=? AND dist_date=?')
+        .bind(phone, r.dist_date).first();
+      if (!done) { distDate = r.dist_date; break; }
+    }
   }
+  if (distDate === null) return reply(TO_MENU);   // לא זכאי / כבר ענה — בשקט לתפריט
 
   if (digits === null || digits === undefined || digits === '') return reply(QUESTION);
   const d = String(digits);

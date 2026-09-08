@@ -1521,6 +1521,15 @@ class TzintukimTab(QWidget):
         btn_uncheck_all.setStyleSheet(_BTN_GHOST)
         btn_uncheck_all.clicked.connect(lambda: self._set_all_checked(False))
         tools.addWidget(btn_uncheck_all)
+        # v3.36 — manual re-push to the callback server (visible only when on)
+        self.btn_push_server = QPushButton("עדכן את שרת המענה")
+        self.btn_push_server.setStyleSheet(_BTN_GHOST)
+        self.btn_push_server.setToolTip(
+            "שולח לשרת המענה את הרשימה המסומנת — מי שיחייג חזרה לקו יישאל אם הוא מגיע. "
+            "קורה אוטומטית בכל שליחה/תזמון; כאן אפשר לחזור על זה ידנית.")
+        self.btn_push_server.clicked.connect(self._push_current_list)
+        self.btn_push_server.setVisible(self._cb_server_on())
+        tools.addWidget(self.btn_push_server)
         btn_add = QPushButton("  הוסף אדם")
         btn_add.setStyleSheet(_BTN_ACCENT)
         btn_add.setIcon(QIcon(line_icon("plus", 18, "#7c2d12")))
@@ -1834,6 +1843,7 @@ class TzintukimTab(QWidget):
         self.banner.setVisible(not configured)
         self.lbl_ok.setVisible(configured)
         self._probe_connection()          # v3.22 — real server check (throttled)
+        self.btn_push_server.setVisible(self._cb_server_on())   # v3.36
         self._refresh_batch_banner()
         # #ifc70 — nothing is loaded until the operator asks for a list.
         loaded = (self._batch is not None or self._free is not None
@@ -2312,20 +2322,82 @@ class TzintukimTab(QWidget):
         return callback_server.is_enabled() and callback_server.is_configured()
 
     @staticmethod
-    def _push_week_list(dist_date: str, phones: dict) -> str:
+    def _push_week_list(dist_date: str, phones: dict, active_from=None,
+                        active_by_phone: dict | None = None) -> str:
         """v3.33 — hand this week's list to the callback server so a family
         that dials back hears "יש לך חלוקה" and can confirm 1/2/3. Runs on the
         send worker thread (no widgets!). Returns "" on success or when the
         server is switched off, else a plain-Hebrew reason — never raises:
-        the dial already went out and must not be reported as failed."""
+        the dial already went out and must not be reported as failed.
+        v3.36: `active_from` / `active_by_phone` — when the list becomes live
+        on the server (a schedule's hour; each smart-dispatch group's hour)."""
         from utils import callback_server
         try:
             if not callback_server.is_enabled() or not callback_server.is_configured():
                 return ""
-            callback_server.push_week_list(dist_date, phones)
+            callback_server.push_week_list(dist_date, phones, active_from, active_by_phone)
             return ""
         except Exception as e:      # CallbackError carries a Hebrew message already
             return str(e) or "שרת המענה לא הגיב."
+
+    def _push_list(self, dist_date: str, phones: dict, what: str,
+                   active_from=None, active_by_phone: dict | None = None) -> None:
+        """v3.36 — push after the dial/schedule was accepted by Yemot: off the
+        UI thread, best effort, one warning if the server did not take it.
+        Shared by send / schedule / smart dispatch (a resend needs no push —
+        the failed numbers are already in the list of that date)."""
+        if not self._cb_server_on():
+            return
+        cb_err = self._run_blocking(
+            lambda: self._push_week_list(dist_date, phones, active_from, active_by_phone),
+            "מעדכן את שרת המענה ברשימת החלוקה…")
+        if cb_err:
+            QMessageBox.warning(
+                self, "שרת המענה",
+                f"{what} — אבל רשימת החלוקה לא הגיעה לשרת המענה: מי שיחייג חזרה "
+                "לקו לא יישאל אם הוא מגיע.\n\n" + cb_err +
+                "\n\nאפשר לנסות שוב דרך \"עדכן את שרת המענה\" בכותרת הרשימה.")
+
+    def _clear_server_list(self, dist_date: str) -> None:
+        """v3.36 — after canceling a schedule: if nothing else for that date was
+        sent or is still waiting, the server must forget the list too (or a
+        family that happens to call in would be asked about a distribution
+        that no one rang them for). Silent on failure — the list expires."""
+        if not dist_date or not self._cb_server_on():
+            return
+        left = [c for c in db.get_tzintuk_campaigns(
+                    statuses=("scheduled", "sending", "stopping", "done"))
+                if (c.get("dist_date") or "") == dist_date]
+        if left:
+            return
+        try:
+            self._run_blocking(lambda: self._push_week_list(dist_date, {}),
+                               "מעדכן את שרת המענה…")
+        except Exception:                                    # noqa: BLE001
+            pass
+
+    def _push_current_list(self) -> None:
+        """v3.36 — "עדכן את שרת המענה" button: re-push the loaded list by hand
+        (after a failed automatic push, or a list edited after the dial)."""
+        if not self._cb_server_on():
+            QMessageBox.information(
+                self, "שרת המענה",
+                "שרת המענה כבוי או לא מוגדר — הפעל אותו בהגדרות (כרטיס הצינתוקים).")
+            return
+        phones = self._phones_map(self._ready_rows())
+        if not phones:
+            QMessageBox.warning(self, "שרת המענה", "אין אף נמען מסומן עם מספר תקין.")
+            return
+        dist_date = self._dist_date_iso()
+        err = self._run_blocking(lambda: self._push_week_list(dist_date, phones),
+                                 "מעדכן את שרת המענה ברשימת החלוקה…")
+        if err:
+            QMessageBox.warning(self, "שרת המענה", "העדכון נכשל:\n" + err)
+        else:
+            QMessageBox.information(
+                self, "שרת המענה",
+                f"שרת המענה עודכן ✓ — {len(phones)} מספרים. מי מהם שיחייג חזרה לקו "
+                "יישאל אם הוא מגיע (1 / 2 / 3).")
 
     def _phones_map(self, rows) -> dict:
         """{'0501234567': 'שם', …} — every number of every checked row (#gaira);
@@ -2717,14 +2789,7 @@ class TzintukimTab(QWidget):
         # v3.33 — the dial went out; now hand this week's list to our callback
         # server (off the UI thread, best effort — _push_week_list never raises,
         # the families were already rung and a push failure must not undo that).
-        cb_err = self._run_blocking(
-            lambda: self._push_week_list(dist_date, phones),
-            "מעדכן את שרת המענה ברשימת השבוע…") if self._cb_server_on() else ""
-        if cb_err:
-            QMessageBox.warning(
-                self, "שרת המענה",
-                "הצינתוק יצא, אבל רשימת השבוע לא הגיעה לשרת המענה — מי שיחייג "
-                "חזרה לשלוחת המענה ישמע \"לא רשומה עבורך חלוקה\".\n\n" + cb_err)
+        self._push_list(dist_date, phones, "הצינתוק יצא")
         from utils import sync
         name = self._campaign_name()
         sent_iso = datetime.now(timezone.utc).isoformat()   # survey answers count from now
@@ -3025,6 +3090,10 @@ class TzintukimTab(QWidget):
         self._list_guids.add(sched_guid)
         self._refresh_history()
         self._refresh_sched_banner()     # the strip shows up right away
+        # v3.36 — the callback server learns the list now, live from the hour
+        # of the dial (a family calling in before that was not rung yet).
+        self._push_list(dist_date, phones, "התזמון נקבע",
+                        active_from=self._to_utc_iso(when))
         QMessageBox.information(
             self, "תזמון שליחה",
             f"נקבע ✓ — הצינתוק יישלח ביום {when.strftime('%d/%m/%Y')} "
@@ -3151,6 +3220,18 @@ class TzintukimTab(QWidget):
             pushed = pushed or bool(r.get("pushed"))
         self._refresh_history()
         self._refresh_sched_banner()
+        # v3.36 — ONE push of everyone who got scheduled (a push replaces the
+        # date's list, so never per group), each number live from its hour.
+        pushed_phones, active_by_phone = {}, {}
+        for r in results:
+            group = buckets.get(r["hour"]) or buckets.get(str(r["hour"])) or {}
+            when_iso = self._to_utc_iso(r["when"])
+            for p, n in group.items():
+                pushed_phones[p] = n
+                active_by_phone[p] = when_iso
+        if pushed_phones:
+            self._push_list(dist_date, pushed_phones, "השיגורים נקבעו",
+                            active_by_phone=active_by_phone)
         if error is not None:
             text = (str(error) if isinstance(error, yemot.YemotError)
                     else f"השיגור נכשל: {error}")
@@ -3257,12 +3338,17 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "ביטול תזמון", f"הביטול נכשל: {e}")
             return
         canceled, errors = 0, []
+        dates = set()
         for guid, ok, msg in res:
             if ok:
                 db.update_tzintuk_campaign(guid, 0, 0, "canceled")
                 canceled += 1
+                dates.add(next((c.get("dist_date") or "" for c in scheds
+                                if c.get("guid") == guid), ""))
             else:
                 errors.append(msg)
+        for d in dates:
+            self._clear_server_list(d)
         if errors:
             QMessageBox.warning(
                 self, "ביטול תזמון",

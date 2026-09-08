@@ -287,11 +287,37 @@ def _(y, t, test, rel):
     cr = _func_body(y, "_callback_server_rows")
     push = _func_body(t, "_push_week_list")
     send = _func_body(t, "_send")
+    pl = _func_body(t, "_push_list")
     ok = (not bad and "_callback_server_rows()" in fs and "except Exception" in cr
           and "except Exception" in push
-          and "self._push_week_list(dist_date, phones)" in send
-          and "self._run_blocking(" in send.split("self._push_week_list")[0][-200:])
+          and 'self._push_list(dist_date, phones, "הצינתוק יצא")' in send
+          and "self._run_blocking(" in pl and "self._push_week_list(" in pl
+          and send.index("self._push_list(") > send.index("_do_send,"))
     return ok, ", ".join(bad) or ("" if ok else "missing wiring")
+
+
+@lint("I44", "v3.36 — שרת המענה: push גם בתזמון (active_from) ובשיגור חכם (push אחד, active_by_phone); שליחה חוזרת לא דוחפת (push מחליף את רשימת התאריך); ביטול תזמון מנקה רק כשלא נשאר צינתוק לתאריך; ה-Worker מוחק לפי dist_date בלבד")
+def _(y, t, test, rel):
+    sched = _func_body(t, "_schedule")
+    smart = _func_body(t, "_smart_schedule")
+    resend = _func_body(t, "_resend_failed")
+    cancel = _func_body(t, "_cancel_sched")
+    clear = _func_body(t, "_clear_server_list")
+    w = _read("dev/cloudflare/api_link_worker.js")
+    problems = []
+    if "active_from=self._to_utc_iso(when)" not in sched:
+        problems.append("schedule push")
+    if smart.count("self._push_list(") != 1 or "active_by_phone=active_by_phone" not in smart:
+        problems.append("smart push")
+    if "_push_list(" in resend or "_push_week_list(" in resend:
+        problems.append("resend pushes")
+    if "self._clear_server_list(d)" not in cancel or "if left:" not in clear:
+        problems.append("cancel clear")
+    if "DELETE FROM week_lists WHERE dist_date=?" not in w or "DELETE FROM week_list'" in w:
+        problems.append("worker deletes everything")
+    if "active_from IS NULL OR active_from<=datetime('now')" not in w:
+        problems.append("worker ignores active_from")
+    return not problems, ", ".join(problems)
 
 
 @lint("I41", "v3.28 — _apply_stop: כש-stopped_at קיים, גם finished מהשרת נושא stopped=True (עצירה שהשרת סגר לפני החסד); רשימה עצמאית מאקסל דרך _excel_row_line/find_phones (שני מספרים בתא); מסנני statuses ב-SQL ליד limit=200")

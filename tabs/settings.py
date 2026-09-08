@@ -159,6 +159,19 @@ def _form_row(form: QFormLayout, label: str, widget):
     form.addRow(_flabel(label), widget)
 
 
+class _BgWorker(QThread):
+    """v3.36 — one blocking callable off the UI thread; emits result or exception."""
+    done = pyqtSignal(object)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+
+    def run(self):
+        try:
+            self.done.emit(self._fn())
+        except Exception as e:                                # noqa: BLE001
+            self.done.emit(e)
 
 class _UpdateWorker(QThread):
     """Runs the network check / download off the UI thread."""
@@ -557,6 +570,17 @@ class SettingsTab(QWidget):
             _btn("בדוק חיבור לשרת המענה", _BTN_GHOST, self._test_callback_server,
                  "קורא מהשרת את התשובות שנאספו — מוודא שהכתובת והסוד נכונים"),
             self.lbl_cb_status))
+        # v3.36 — the line-side half: is extension 76 still an API extension
+        # pointing at our server? (Anyone holding the line password can break
+        # it; the send flows check too, but only once the switch is on.)
+        self.lbl_cb_ext = QLabel("")
+        self.lbl_cb_ext.setWordWrap(True)
+        self.lbl_cb_ext.setStyleSheet("color:#334155; font-size:12.5px; " + _LBL)
+        body.addLayout(_btn_row(
+            _btn(f"בדוק את שלוחת המענה בקו ({_cb.EXT})", _BTN_GHOST, self._check_callback_ext,
+                 "קורא מהקו את הגדרות השלוחה ומשווה לצפוי; אם משהו שונה — מציע לתקן "
+                 "(כותב רק את הקובץ של השלוחה הזו, לא נוגע בשום דבר אחר בקו)"),
+            self.lbl_cb_ext))
         _place(row, card, body)
 
         # ═════════════════════════ עבודה משני מחשבים ═════════════════════════
@@ -1366,19 +1390,85 @@ class SettingsTab(QWidget):
             state = "דלוק" if self.cb_enabled.isChecked() else "כבוי"
             self.lbl_cb_status.setText(f"נשמר ✓ (שרת המענה {state})")
 
+    def _bg(self, fn, on_done, label: QLabel, text: str):
+        """v3.36 — run one blocking network call off the UI thread; `label`
+        shows `text` meanwhile and on_done(result_or_exception) runs on the UI
+        thread. (The old busy_cursor froze the window for up to 20 s when
+        NetFree swallowed the request.)"""
+        label.setText(text)
+        worker = _BgWorker(fn, self)
+        self._bg_workers = getattr(self, "_bg_workers", [])
+        self._bg_workers.append(worker)
+
+        def _finish(res):
+            try:
+                on_done(res)
+            finally:
+                if worker in self._bg_workers:
+                    self._bg_workers.remove(worker)
+                worker.deleteLater()
+        worker.done.connect(_finish)
+        worker.start()
+
     def _test_callback_server(self):
         from utils import callback_server as cb
         self._save_callback_settings(silent=True)
         if not cb.is_configured():
             QMessageBox.warning(self, "שרת המענה", "יש למלא כתובת וסוד תחילה.")
             return
-        with busy_cursor():
-            try:
-                n = cb.check_connection()
-            except cb.CallbackError as e:
-                self.lbl_cb_status.setText("✗ " + str(e))
+
+        def _done(res):
+            if isinstance(res, Exception):
+                self.lbl_cb_status.setText("✗ " + str(res))
+            else:
+                self.lbl_cb_status.setText(
+                    f"החיבור לשרת המענה תקין ✓ — {res} תשובות שמורות בשרת")
+        self._bg(cb.check_connection, _done, self.lbl_cb_status, "בודק חיבור…")
+
+    def _check_callback_ext(self):
+        """v3.36 — read extension 76 from the line; offer a repair of THAT file
+        only when it is missing / not API / pointing elsewhere."""
+        from utils import callback_server as cb
+        from utils import yemot
+        self._save_callback_settings(silent=True)
+        if not yemot.is_configured():
+            QMessageBox.warning(self, "שלוחת המענה",
+                                "יש למלא קודם מספר מערכת וסיסמה של ימות המשיח.")
+            return
+
+        def _after_repair(res):
+            if isinstance(res, Exception):
+                self.lbl_cb_ext.setText("✗ התיקון נכשל: " + str(res))
+            elif res:
+                self.lbl_cb_ext.setText("✗ נכתב, אבל הקריאה החוזרת עדיין מדווחת:\n" + res)
+            else:
+                self.lbl_cb_ext.setText(f"שלוחה {cb.EXT} תוקנה ואומתה ✓")
+
+        def _repair_and_verify():
+            cb.repair_extension()
+            return cb.verify_extension()
+
+        def _done(res):
+            if isinstance(res, Exception):
+                self.lbl_cb_ext.setText("✗ לא הצלחתי לקרוא את השלוחה מהקו: " + str(res))
                 return
-        self.lbl_cb_status.setText(f"החיבור לשרת המענה תקין ✓ — {n} תשובות שמורות בשרת")
+            if not res:
+                self.lbl_cb_ext.setText(
+                    f"שלוחה {cb.EXT} תקינה ✓ — שלוחת API שמצביעה לשרת המענה שלנו")
+                return
+            self.lbl_cb_ext.setText("⚠ " + res)
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setWindowTitle("שלוחת המענה")
+            box.setText(res + f"\n\nלכתוב מחדש את שלוחה {cb.EXT}?\n"
+                        "(נכתב רק הקובץ של השלוחה הזו — שום דבר אחר בקו לא משתנה.)")
+            fix = box.addButton("תקן", QMessageBox.ButtonRole.AcceptRole)
+            cancel = box.addButton("ביטול", QMessageBox.ButtonRole.RejectRole)
+            box.setDefaultButton(cancel)
+            box.exec()
+            if box.clickedButton() is fix:
+                self._bg(_repair_and_verify, _after_repair, self.lbl_cb_ext, "מתקן…")
+        self._bg(cb.verify_extension, _done, self.lbl_cb_ext, "קורא את השלוחה מהקו…")
 
     def _test_yemot_connection(self):
         from utils import yemot

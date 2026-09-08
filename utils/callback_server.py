@@ -114,22 +114,52 @@ def _http(url: str, data: bytes | None = None) -> bytes:
 
 # ─── API ─────────────────────────────────────────────────────────────────────
 
-def push_payload(dist_date: str, phones: dict) -> dict:
-    """{phone: name} → גוף הבקשה ל-/push (טהור — נבדק)."""
+def _iso_utc(value) -> str:
+    """datetime (aware או naive-UTC) / מחרוזת → ISO UTC; ריק → "" (= פעיל מיד)."""
+    if not value:
+        return ""
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    return str(value)
+
+
+def push_payload(dist_date: str, phones: dict, active_from=None,
+                 active_by_phone: dict | None = None) -> dict:
+    """{phone: name} → גוף הבקשה ל-/push (טהור — נבדק).
+
+    v3.36: ``active_from`` = מאיזה רגע הרשימה "חיה" בשרת (תזמון: שעת השיגור — מי
+    שמחייג לפני כן לא נשאל, כי עוד לא צולצל אליו); ``active_by_phone`` = רגע אישי
+    לכל מספר (שיגור חכם: שעת הקבוצה של כל אחד). ריק = פעיל מיד (שליחה מיידית)."""
     from utils.yemot import normalize_phone
+    per = {}
+    for p, when in (active_by_phone or {}).items():
+        np_ = normalize_phone(p)
+        if np_:
+            per[np_] = _iso_utc(when)
     seen, out = set(), []
     for p, n in (phones or {}).items():
         np_ = normalize_phone(p)
         if not np_ or np_ in seen:
             continue
         seen.add(np_)
-        out.append({"phone": np_, "name": n or ""})
-    return {"dist_date": dist_date or "", "phones": out}
+        item = {"phone": np_, "name": n or ""}
+        if per.get(np_):
+            item["active_from"] = per[np_]
+        out.append(item)
+    body = {"dist_date": dist_date or "", "phones": out}
+    if _iso_utc(active_from):
+        body["active_from"] = _iso_utc(active_from)
+    return body
 
 
-def push_week_list(dist_date: str, phones: dict) -> int:
-    """דוחפת את רשימת השבוע לשרת (מחליפה את הקודמת). מחזירה כמה מספרים נקלטו."""
-    body = json.dumps(push_payload(dist_date, phones), ensure_ascii=False).encode("utf-8")
+def push_week_list(dist_date: str, phones: dict, active_from=None,
+                   active_by_phone: dict | None = None) -> int:
+    """דוחפת את רשימת החלוקה לשרת (מחליפה את הרשימה של **אותו תאריך** בלבד — v3.36;
+    רשימות של חלוקות אחרות נשארות). רשימה ריקה = מחיקת הרשימה של התאריך.
+    מחזירה כמה מספרים נקלטו."""
+    payload = push_payload(dist_date, phones, active_from, active_by_phone)
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     raw = _http(_url("/push"), body)
     try:
         res = json.loads(raw.decode("utf-8", errors="replace") or "{}")
@@ -138,6 +168,11 @@ def push_week_list(dist_date: str, phones: dict) -> int:
     if not res.get("ok"):
         raise CallbackError("שרת המענה לא אישר את קליטת הרשימה.")
     return int(res.get("count") or 0)
+
+
+def clear_week_list(dist_date: str) -> None:
+    """מוחקת מהשרת את רשימת החלוקה של התאריך (ביטול תזמון שלא נשאר לו שום צינתוק)."""
+    push_week_list(dist_date, {})
 
 
 def _parse_at(value) -> datetime | None:

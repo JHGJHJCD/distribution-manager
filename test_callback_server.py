@@ -190,6 +190,49 @@ ok("_callback_ext_ready: תקלת קריאה לא חוסמת חיוג", "except 
 ok("_callback_ext_ready: ברירת-מחדל = ביטול", "box.setDefaultButton(cancel)" in body_fn)
 ok("_callback_ext_ready: כבוי = לא נוגע בקו", "if not self._cb_server_on():\n            return True" in body_fn)
 
+# ── 6. v3.36 — רשימה לכל חלוקה + active_from (תזמון / שיגור חכם) + החיבור למסך ──
+print("— v3.36: push בתזמון ובשיגור חכם —")
+from datetime import datetime as _dt
+body = cb.push_payload("2026-09-16", {"0521234567": "כהן", "0501112233": "לוי"})
+ok("שליחה מיידית: בלי active_from בכלל", "active_from" not in body
+   and all("active_from" not in p for p in body["phones"]))
+when = _dt(2026, 9, 16, 10, 0, tzinfo=timezone.utc)
+body = cb.push_payload("2026-09-16", {"0521234567": "כהן"}, active_from=when)
+ok("תזמון: active_from כללי ב-ISO UTC", body["active_from"] == "2026-09-16T10:00:00+00:00")
+body = cb.push_payload("2026-09-16", {"0521234567": "כהן"}, active_from="2026-09-16T07:00:00+00:00")
+ok("active_from כמחרוזת עובר כמו שהוא", body["active_from"] == "2026-09-16T07:00:00+00:00")
+body = cb.push_payload("2026-09-16", {"052-123-4567": "כהן", "0501112233": "לוי", "0541111111": "בלי"},
+                       active_by_phone={"0521234567": when, "+972501112233": "2026-09-16T12:00:00+00:00"})
+per = {p["phone"]: p.get("active_from") for p in body["phones"]}
+ok("שיגור חכם: active_from אישי לכל מספר (מנורמל בשני הצדדים)",
+   per["0521234567"] == "2026-09-16T10:00:00+00:00" and per["0501112233"] == "2026-09-16T12:00:00+00:00")
+ok("מספר בלי שעה אישית = בלי active_from (פעיל מיד / לפי הכללי)", per["0541111111"] is None
+   and "active_from" not in body)
+ok("naive datetime נחשב UTC", cb._iso_utc(_dt(2026, 1, 1, 8, 0)) == "2026-01-01T08:00:00+00:00")
+
+cb._TRANSPORT = transport_ok; cb._backoff_until = 0.0
+calls.clear()
+cb.clear_week_list("2026-09-16")
+sent = json.loads(calls[-1][1].decode("utf-8"))
+ok("clear_week_list = push של רשימה ריקה לאותו תאריך", "/push" in calls[-1][0]
+   and sent["dist_date"] == "2026-09-16" and sent["phones"] == [])
+
+# החיבור למסך: push אחרי כל דרך חיוג-מרובה (שליחה/תזמון/שיגור חכם), פעם אחת לשיגור חכם,
+# מחיקה בביטול, ולעולם לא בשליחה חוזרת (הרשימה של התאריך כבר מכילה את הנכשלים).
+def _body(name):
+    return src.split("def " + name)[1].split("\n    def ")[0]
+ok("_send דוחף דרך _push_list", 'self._push_list(dist_date, phones, "הצינתוק יצא")' in _body("_send("))
+ok("_schedule דוחף עם active_from=שעת השיגור",
+   "self._push_list(dist_date, phones, \"התזמון נקבע\"" in _body("_schedule(") and "active_from=self._to_utc_iso(when)" in _body("_schedule("))
+sm = _body("_smart_schedule(")
+ok("_smart_schedule: push אחד עם active_by_phone", sm.count("self._push_list(") == 1 and "active_by_phone=active_by_phone" in sm)
+ok("_resend_failed לא דוחף (היה מוחק את הרשימה המלאה)", "_push_list(" not in _body("_resend_failed(") and "_push_week_list(" not in _body("_resend_failed("))
+ok("_cancel_sched מנקה בשרת דרך _clear_server_list", "self._clear_server_list(d)" in _body("_cancel_sched("))
+pl = _body("_push_list(")
+ok("_push_list: כבוי = לא נוגע; רץ ב-_run_blocking", "if not self._cb_server_on():\n            return" in pl and "self._run_blocking(" in pl)
+cl = _body("_clear_server_list(")
+ok("_clear_server_list: מוחק רק כשלא נשאר שום צינתוק לתאריך", '"scheduled", "sending", "stopping", "done"' in cl and "if left:\n            return" in cl)
+
 print()
 if fails:
     print(f"FAILED: {len(fails)}")
