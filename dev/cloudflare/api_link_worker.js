@@ -77,9 +77,13 @@ export default {
 
     const row = await env.DB.prepare('SELECT name,dist_date FROM week_list WHERE phone=?')
       .bind(phone).first();
+    // מספר בדיקה (סוד TEST_PHONE ב"סודות (env)") נחשב זכאי גם בלי שורה ברשימה —
+    // לבדיקות בלבד; למחוק את הסוד כשהתוכנה דוחפת רשימות אמיתיות.
+    const isTest = !!env.TEST_PHONE && phone === norm(env.TEST_PHONE);
 
-    if (!row)
+    if (!row && !isTest)
       return reply('id_list_message=t-שלום, לא רשומה עבורך חלוקה השבוע, תודה ולהתראות&go_to_folder=/');
+    const distDate = row ? row.dist_date : 'test';
 
     if (digits === null)
       return reply('read=t-שלום, יש לך חלוקה השבוע, אם תגיע הקישו 1, אם לא תגיע הקישו 2, אם אינך יודע הקישו 3=Digits,,1,1,7,No,yes,no');
@@ -87,7 +91,7 @@ export default {
     await env.DB.prepare(
       `INSERT INTO answers (phone,dist_date,answer,at) VALUES (?,?,?,datetime('now'))
        ON CONFLICT(phone,dist_date) DO UPDATE SET answer=excluded.answer, at=excluded.at`)
-      .bind(phone, row.dist_date, String(digits)).run();
+      .bind(phone, distDate, String(digits)).run();
 
     const msg = digits === '1' ? 'תודה, רשמנו שתגיע'
               : digits === '2' ? 'רשמנו שלא תגיע, תודה'

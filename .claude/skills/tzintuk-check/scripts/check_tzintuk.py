@@ -258,6 +258,26 @@ def _(y, t, test, rel):
     return okk, ""
 
 
+@lint("I43", "v3.34 — שלוחת המענה נבדקת לפני חיוג (_callback_ext_ready אחרי כל _recording_ready), התיקון כותב רק ivr2:/76/ext.ini (לא שורש), תקלת קריאה לא חוסמת, ברירת-מחדל ביטול")
+def _(y, t, test, rel):
+    cbs = _read("utils/callback_server.py")
+    rep = _func_body(cbs, "repair_extension")
+    okk = ('EXT = "76"' in cbs and "_upload_multipart(EXT_PATH" in rep
+           and cbs.count("_upload_multipart(") == 1 and "ivr2:/ext.ini" not in cbs)
+    n_rec = t.count("if not self._recording_ready(")
+    okk = okk and n_rec == t.count("if not self._callback_ext_ready(") == 5
+    paired = re.findall(r'if not self\._recording_ready\("([^"]+)"\):\n\s+return\n\s+'
+                        r'if not self\._callback_ext_ready\("\1"\)', t)
+    okk = okk and len(paired) == 5
+    cer = _func_body(t, "_callback_ext_ready")
+    okk = okk and ("except Exception:\n            return True" in cer
+                   and "box.setDefaultButton(cancel)" in cer
+                   and "if not self._cb_server_on():\n            return True" in cer)
+    cbt = _read("test_callback_server.py")
+    okk = okk and "repair_extension" in cbt and "ivr2:/76/ext.ini" in cbt
+    return okk, ""
+
+
 @lint("I42", "v3.33 — שרת המענה: callback_server בלי פקודות חיוג; fetch_survey_rows מצרף _callback_server_rows בתוך try; _push_week_list לא מעלה חריגה ורצה ב-_send דרך _run_blocking אחרי _do_send")
 def _(y, t, test, rel):
     cbs = _read("utils/callback_server.py")

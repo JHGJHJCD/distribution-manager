@@ -201,3 +201,68 @@ def check_connection() -> int:
     global _backoff_until
     _backoff_until = 0.0
     return len(fetch_answer_rows())
+
+
+# ─── שלוחת ה-API בקו (v3.34) ─────────────────────────────────────────────────
+# הקו משותף עם מערכת אחרת; מי שמחזיק את סיסמת הקו יכול למחוק/לשנות את השלוחה
+# בטעות (או לשחזר גיבוי ישן של הקו). לפני חיוג התוכנה קוראת את השלוחה ומשווה;
+# "תקן" כותב מחדש **רק** את הקובץ של השלוחה הזו — לעולם לא את השורש.
+EXT = "76"
+EXT_PATH = f"ivr2:/{EXT}/ext.ini"
+EXT_TITLE = "שרת המענה (מנהל חלוקה)"
+
+
+def expected_ext_ini(url: str | None = None) -> str:
+    """תוכן ה-ext.ini של השלוחה כפי שהתוכנה מצפה לו (טהור)."""
+    link = (url or base_url()).rstrip("/")
+    return f"type=api\ntitle={EXT_TITLE}\napi_link={link}\n"
+
+
+def parse_ext_ini(text: str) -> dict:
+    """``key=value`` לכל שורה → dict (טהור; שורות ריקות/הערות מדולגות)."""
+    out = {}
+    for line in (text or "").replace("\r", "").split("\n"):
+        line = line.strip()
+        if not line or line.startswith(("#", ";", "[")) or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def extension_problem(text: str | bytes | None, url: str | None = None) -> str:
+    """"" = השלוחה תקינה; אחרת סיבה בעברית פשוטה (טהור). הכותרת לא נבדקת —
+    רק הסוג וכתובת השרת (זה מה שקובע לאן המתקשר מגיע)."""
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
+    text = (text or "").strip()
+    if not text or text.startswith("{"):        # DownloadFile החזיר JSON = אין קובץ
+        return f"שלוחה {EXT} לא קיימת בקו (נמחקה או שוחזר גיבוי ישן של הקו)."
+    ini = parse_ext_ini(text)
+    if ini.get("type", "").lower() != "api":
+        return (f"שלוחה {EXT} שונתה בקו — היא כבר לא שלוחת API "
+                f"(סוג נוכחי: {ini.get('type') or 'לא מוגדר'}).")
+    want = (url or base_url()).rstrip("/")
+    have = ini.get("api_link", "").rstrip("/")
+    if have != want:
+        return (f"שלוחה {EXT} מצביעה לכתובת אחרת ולא לשרת המענה שלנו.\n"
+                f"בקו: {have or '(ריק)'}\nצפוי: {want}")
+    return ""
+
+
+def verify_extension() -> str:
+    """קורא את השלוחה מהקו (קריאה בלבד) ומחזיר "" / סיבה. מעלה YemotError על תקלת רשת."""
+    from utils import yemot
+    try:
+        raw = yemot._download(EXT_PATH)
+    except yemot.YemotError as e:
+        if e.code in (-1, -3):
+            raise
+        raw = b""                               # השרת ענה "אין קובץ" כשגיאה
+    return extension_problem(raw)
+
+
+def repair_extension() -> None:
+    """כותב מחדש את ext.ini של שלוחה EXT בלבד (לא נוגע בשום קובץ אחר בקו)."""
+    from utils import yemot
+    yemot._upload_multipart(EXT_PATH, expected_ext_ini().encode("utf-8"), convert="0")

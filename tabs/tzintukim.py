@@ -2057,6 +2057,51 @@ class TzintukimTab(QWidget):
             "למספר שלך, ורק אז שלח.")
         return False
 
+    def _callback_ext_ready(self, title: str) -> bool:
+        """v3.34 — the line is shared with another system; before dialing (only
+        when the callback server is switched on) read extension 76 and make
+        sure it still exists and points at OUR server. A damaged extension is
+        offered a repair that rewrites that one file only (never the root).
+        Can't read the line at all? Don't block the dial — the send itself
+        will report the connection problem properly."""
+        if not self._cb_server_on():
+            return True
+        from utils import callback_server as cbs
+        try:
+            problem = self._run_blocking(cbs.verify_extension,
+                                         f"בודק את שלוחת המענה ({cbs.EXT}) בקו…")
+        except Exception:
+            return True
+        if not problem:
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(title)
+        box.setText(f"שלוחת המענה בקו לא תקינה:\n{problem}\n\n"
+                    "מי שיחזור לצינתוק לא ישמע את הודעת החלוקה ולא יוכל לאשר הגעה.\n"
+                    f"\"תקן ושלח\" כותב מחדש רק את שלוחה {cbs.EXT} (לא נוגע בשאר הקו).")
+        fix = box.addButton("תקן ושלח", QMessageBox.ButtonRole.AcceptRole)
+        skip = box.addButton("שלח בלי לתקן", QMessageBox.ButtonRole.DestructiveRole)
+        cancel = box.addButton("ביטול", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel)
+        box.setEscapeButton(cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is skip:
+            return True
+        if clicked is not fix:
+            return False
+        try:
+            self._run_blocking(cbs.repair_extension, f"כותב מחדש את שלוחה {cbs.EXT}…")
+            left = self._run_blocking(cbs.verify_extension, "מאמת את השלוחה…")
+        except Exception as e:
+            QMessageBox.warning(self, title, f"התיקון לא הצליח:\n{e}\n\nהשליחה בוטלה.")
+            return False
+        if left:
+            QMessageBox.warning(self, title, f"השלוחה עדיין לא תקינה:\n{left}\n\nהשליחה בוטלה.")
+            return False
+        return True
+
     def _prev_campaign(self, dist_date: str):
         """The newest campaign already sent to THIS list (double-send guard):
         by distribution date, or — for a standalone list, which has no date —
@@ -2564,6 +2609,8 @@ class TzintukimTab(QWidget):
             return
         if not self._recording_ready("שליחת בדיקה"):
             return
+        if not self._callback_ext_ready("שליחת בדיקה"):
+            return
         saved = (db.get_setting(yemot.SET_TEST_PHONE) or "").strip()
         phone, okd = QInputDialog.getText(
             self, "שליחת בדיקה",
@@ -2609,6 +2656,8 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "צינתוקים", "אין אף נמען מסומן עם מספר תקין.")
             return
         if not self._recording_ready("צינתוקים"):
+            return
+        if not self._callback_ext_ready("צינתוקים"):
             return
         # A pending schedule that dials the MAIN template's stored list (a
         # record made before v3.22) would be re-targeted by an immediate send,
@@ -2756,6 +2805,8 @@ class TzintukimTab(QWidget):
         if not phones:
             return
         if not self._recording_ready("שליחה חוזרת"):
+            return
+        if not self._callback_ext_ready("שליחה חוזרת"):
             return
         n_unrung = sum(1 for e in self._last_failed if e.get("stopped"))
         who = (f"{len(phones)} מספרים שלא צולצלו או נכשלו בסבב הקודם" if n_unrung
@@ -2919,6 +2970,8 @@ class TzintukimTab(QWidget):
         pending = self._pending_main_sched()
         if not self._recording_ready("תזמון שליחה"):
             return
+        if not self._callback_ext_ready("תזמון שליחה"):
+            return
         dist_date = self._dist_date_iso()
         prev = self._prev_campaign(dist_date)
         dlg = _ScheduleDialog(len(phones), self, smart_hint=self._smart_hint(phones))
@@ -3024,6 +3077,8 @@ class TzintukimTab(QWidget):
                 "הרשימות שלו — בטל אותו קודם (\"בטל\" ברצועת התזמון) ואז שגר מחדש.")
             return
         if not self._recording_ready("שיגור חכם"):
+            return
+        if not self._callback_ext_ready("שיגור חכם"):
             return
         stats = self._stats or {}
         fallback = yemot.list_best_hour(phones, stats)

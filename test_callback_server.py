@@ -137,6 +137,57 @@ entries, changed = yemot.merge_survey_answers(entries, yemot.fetch_survey_rows()
 ok("תשובה מהשרת נחתמת על הרשומה", entries[0]["answer"] == "1" and entries[1]["answer"] == "2")
 ok("תשובת הסקר עדיין נחתמת", entries[2]["answer"] == "1")
 
+# ── 5. שלוחת ה-API בקו (v3.34): בדיקה לפני חיוג + תיקון של הקובץ שלה בלבד ────
+print("— שלוחה 76 בקו —")
+db.set_setting(cb.SET_URL, "https://example.workers.dev/")
+good = "type=api\ntitle=שרת המענה (מנהל חלוקה) — בדיקה\napi_link=https://example.workers.dev\n"
+ok("שלוחה תקינה (כותרת אחרת לא מפריעה)", cb.extension_problem(good) == "")
+ok("CRLF + סלאש בסוף הכתובת = תקין",
+   cb.extension_problem(good.replace("\n", "\r\n").replace("workers.dev\r\n", "workers.dev/\r\n").encode("utf-8")) == "")
+ok("אין קובץ (JSON מהשרת) = לא קיימת", "לא קיימת" in cb.extension_problem('{"responseStatus":"ERROR"}'))
+ok("ריק = לא קיימת", "לא קיימת" in cb.extension_problem(b""))
+ok("סוג אחר = שונתה", "לא שלוחת API" in cb.extension_problem("type=menu\napi_link=https://example.workers.dev"))
+ok("כתובת אחרת = מצביעה לשרת אחר",
+   "כתובת אחרת" in cb.extension_problem("type=api\napi_link=https://other.example.com"))
+exp = cb.expected_ext_ini()
+ok("ה-ext.ini הצפוי תקין בעצמו", cb.extension_problem(exp) == "" and "type=api" in exp)
+
+# verify_extension קורא דרך DownloadFile של ימות; repair_extension כותב רק ivr2:/76/ext.ini
+ycalls = []
+def ytransport(url, data):
+    ycalls.append((url, data))
+    if "DownloadFile" in url:
+        return good.encode("utf-8")
+    return b'{"responseStatus":"OK"}'
+yemot._TRANSPORT = ytransport
+ok("verify_extension: קריאה בלבד, תקין", cb.verify_extension() == "" and "DownloadFile" in ycalls[-1][0]
+   and "ivr2%3A%2F76%2Fext.ini" in ycalls[-1][0])
+ycalls.clear()
+cb.repair_extension()
+ok("repair_extension: כתיבה אחת בלבד", len(ycalls) == 1 and "UploadFile" in ycalls[0][0])
+body = ycalls[0][1] or b""
+ok("repair_extension: הנתיב הוא של שלוחה 76 בלבד",
+   b"ivr2:/76/ext.ini" in body and b"ivr2:/ext.ini" not in body and b'name="convertAudio"\r\n\r\n0' in body)
+ok("repair_extension: התוכן = הצפוי", exp.encode("utf-8") in body)
+yemot._TRANSPORT = lambda url, data: b'{"responseStatus":"ERROR","message":"file not found"}'
+ok("verify_extension: השרת ענה JSON = לא קיימת", "לא קיימת" in cb.verify_extension())
+def ynet(url, data):
+    raise urllib.error.URLError("down")
+yemot._TRANSPORT = ynet
+try:
+    cb.verify_extension(); ok("verify_extension: תקלת רשת מעלה חריגה", False)
+except yemot.YemotError as e:
+    ok("verify_extension: תקלת רשת מעלה חריגה (לא 'לא קיימת')", e.code == -1)
+yemot._TRANSPORT = None
+
+# החיבור למסך: הבדיקה רצה אחרי _recording_ready בכל 5 פעולות החיוג, ולא חוסמת כשאין קריאה
+src = open("tabs/tzintukim.py", encoding="utf-8").read()
+ok("_callback_ext_ready מחובר ל-5 פעולות החיוג", src.count("if not self._callback_ext_ready(") == 5)
+body_fn = src.split("def _callback_ext_ready")[1].split("\n    def ")[0]
+ok("_callback_ext_ready: תקלת קריאה לא חוסמת חיוג", "except Exception:\n            return True" in body_fn)
+ok("_callback_ext_ready: ברירת-מחדל = ביטול", "box.setDefaultButton(cancel)" in body_fn)
+ok("_callback_ext_ready: כבוי = לא נוגע בקו", "if not self._cb_server_on():\n            return True" in body_fn)
+
 print()
 if fails:
     print(f"FAILED: {len(fails)}")
