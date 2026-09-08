@@ -221,7 +221,7 @@ ok("clear_week_list = push של רשימה ריקה לאותו תאריך", "/pu
 # מחיקה בביטול, ולעולם לא בשליחה חוזרת (הרשימה של התאריך כבר מכילה את הנכשלים).
 def _body(name):
     return src.split("def " + name)[1].split("\n    def ")[0]
-ok("_send דוחף דרך _push_list", 'self._push_list(dist_date, phones, "הצינתוק יצא")' in _body("_send("))
+ok("_send דוחף דרך _push_list", 'self._push_list(dist_date, phones, "הצינתוק יצא"' in _body("_send("))
 ok("_schedule דוחף עם active_from=שעת השיגור",
    "self._push_list(dist_date, phones, \"התזמון נקבע\"" in _body("_schedule(") and "active_from=self._to_utc_iso(when)" in _body("_schedule("))
 sm = _body("_smart_schedule(")
@@ -232,6 +232,51 @@ pl = _body("_push_list(")
 ok("_push_list: כבוי = לא נוגע; רץ ב-_run_blocking", "if not self._cb_server_on():\n            return" in pl and "self._run_blocking(" in pl)
 cl = _body("_clear_server_list(")
 ok("_clear_server_list: מוחק רק כשלא נשאר שום צינתוק לתאריך", '"scheduled", "sending", "stopping", "done"' in cl and "if left:\n            return" in cl)
+
+# ── 7. v3.37 — מצב ההשמעה בחזרה לקו + העתקת ההקלטה לשלוחה 76 ─────────────────
+print("— v3.37: מצב השמעה + הקלטה בשלוחה —")
+db.set_setting(cb.SET_REC_STAMP, "")
+db.set_setting(yemot.SET_REC_INFO, json.dumps({"name": "הודעה", "at": "2026-09-10T10:00:00+00:00"}))
+body = cb.push_payload("2026-09-16", {"0521234567": "כהן"})
+ok("ברירת מחדל: mode=both, recording=False כשלא הועתקה", body["mode"] == "both" and body["recording"] is False)
+body = cb.push_payload("2026-09-16", {"0521234567": "כהן"}, mode="message")
+ok("mode=message עובר", body["mode"] == "message")
+body = cb.push_payload("2026-09-16", {"0521234567": "כהן"}, mode="junk")
+ok("mode לא מוכר → both", body["mode"] == "both")
+db.set_setting(cb.SET_REC_STAMP, "2026-09-10T10:00:00+00:00")
+ok("חותמת תואמת = recording=True", cb.push_payload("d", {"0521234567": ""})["recording"] is True)
+db.set_setting(yemot.SET_REC_INFO, json.dumps({"name": "חדשה", "at": "2026-09-11T10:00:00+00:00"}))
+ok("הקלטה חדשה שטרם הועתקה = recording=False", cb.push_payload("d", {"0521234567": ""})["recording"] is False)
+ok("last_mode ברירת מחדל both", cb.last_mode() == "both")
+cb.remember_mode("message"); ok("remember_mode נשמר", cb.last_mode() == "message")
+cb.remember_mode("bogus"); ok("remember_mode דוחה ערך לא מוכר", cb.last_mode() == "message")
+cb.remember_mode("both")
+
+# publish_recording: DownloadFile tpl:<id> → UploadFile ivr2:/76/msg.wav בלבד, בלי המרה, וחותמת
+ycalls.clear()
+def ytr(url, data):
+    ycalls.append((url, data))
+    if "DownloadFile" in url:
+        return b"RIFF....WAVEfake"
+    return b'{"responseStatus":"OK"}'
+yemot._TRANSPORT = ytr
+db.set_setting(yemot.SET_TEMPLATE, "1430692")
+path = cb.publish_recording()
+ups = [c for c in ycalls if "UploadFile" in c[0]]
+ok("publish_recording: כתיבה אחת בלבד, ל-ivr2:/76/msg.wav", len(ups) == 1 and b"ivr2:/76/msg.wav" in (ups[0][1] or b"")
+   and path == cb.REC_PATH)
+ok("publish_recording: בלי המרה (כבר WAV טלפוני)", b'name="convertAudio"\r\n\r\n0' in (ups[0][1] or b""))
+ok("publish_recording: החותמת = ה-at של ההקלטה", cb.recording_on_line())
+yemot._TRANSPORT = None
+
+# החיבור למסך: _CallbackModeBox בשלושת הדיאלוגים, המצב מועבר ל-_push_list, "none" מנקה
+ok("_CallbackModeBox בשלושת הדיאלוגים", src.count("self.cb_box = _CallbackModeBox(self)") == 3)
+ok("שלושת הדיאלוגים חושפים cb_mode", src.count("self.cb_mode = self.cb_box.mode") == 3)
+ok("_send/_schedule/_smart_schedule מעבירים mode=dlg.cb_mode", src.count("mode=dlg.cb_mode or \"\"") == 3)
+pw = src.split("def _push_week_list")[1].split("\n    def ")[0]
+ok("mode=none → clear_week_list (לא push)", 'if mode == "none":' in pw and "callback_server.clear_week_list(dist_date)" in pw)
+up = open("utils/yemot.py", encoding="utf-8").read().split("def upload_message_wav")[1].split("\ndef ")[0]
+ok("upload_message_wav מעתיק ל-76 (publish_recording) ולא ל-78", "callback_server.publish_recording(" in up and "publish_callback_message(" not in up)
 
 print()
 if fails:

@@ -32,7 +32,20 @@ from utils import netblock
 SET_URL = "cb_server_url"
 SET_SECRET = "cb_server_secret"
 SET_ENABLED = "cb_server_enabled"
+SET_MODE = "cb_server_mode"         # v3.37 — last chosen callback mode (synced)
+SET_REC_STAMP = "cb_server_rec"     # v3.37 — recording 'at' stamp copied to /76 (synced)
 DEFAULT_URL = "https://pai-dev-s-api-link.pai-ffff542b.workers.dev"
+
+# v3.37 — what a family that dials back hears (chosen in every send dialog):
+#   both    = the recording, then "1 מגיע / 2 לא / 3 לא יודע" (once per distribution)
+#   message = the recording only, no question (once per distribution)
+#   none    = nothing — the server forgets the list of that date
+MODES = ("both", "message", "none")
+MODE_LABELS = {"both": "ההקלטה ואז שאלת האישור (1 מגיע · 2 לא · 3 לא יודע)",
+               "message": "ההקלטה בלבד, בלי שאלה",
+               "none": "כלום — תפריט רגיל"}
+DEFAULT_MODE = "both"
+REC_FILE = "msg"                    # ivr2:/76/msg.wav — played by the worker as f-msg
 
 TIMEOUT_S = 10             # קצר: הדחיפה רצה בתוך דיאלוג "שולח…" אחרי שהחיוג כבר יצא
 _FAIL_BACKOFF_S = 60       # אחרי כישלון קריאה — לא להציק לשרת בכל טיק של המעקב
@@ -69,6 +82,26 @@ def is_enabled() -> bool:
 
 def is_configured() -> bool:
     return bool(base_url() and secret())
+
+
+def last_mode() -> str:
+    m = _get(SET_MODE)
+    return m if m in MODES else DEFAULT_MODE
+
+
+def remember_mode(mode: str) -> None:
+    import database as db
+    if mode in MODES:
+        db.set_setting(SET_MODE, mode)
+
+
+def recording_on_line() -> bool:
+    """True when the recording currently on the campaign template was also
+    copied to extension 76 (stamps match) — the worker may play it."""
+    from utils import yemot
+    info = yemot.recording_info() or {}
+    stamp = _get(SET_REC_STAMP)
+    return bool(stamp) and stamp == str(info.get("at") or "")
 
 
 # ─── Transport ───────────────────────────────────────────────────────────────
@@ -125,7 +158,8 @@ def _iso_utc(value) -> str:
 
 
 def push_payload(dist_date: str, phones: dict, active_from=None,
-                 active_by_phone: dict | None = None) -> dict:
+                 active_by_phone: dict | None = None, mode: str = "",
+                 recording: bool | None = None) -> dict:
     """{phone: name} → גוף הבקשה ל-/push (טהור — נבדק).
 
     v3.36: ``active_from`` = מאיזה רגע הרשימה "חיה" בשרת (תזמון: שעת השיגור — מי
@@ -150,15 +184,21 @@ def push_payload(dist_date: str, phones: dict, active_from=None,
     body = {"dist_date": dist_date or "", "phones": out}
     if _iso_utc(active_from):
         body["active_from"] = _iso_utc(active_from)
+    # v3.37 — mode + whether /76 holds the current recording (else the worker
+    # asks in plain TTS; a missing file would make Yemot say "אין מענה").
+    body["mode"] = mode if mode in MODES else DEFAULT_MODE
+    body["recording"] = bool(recording_on_line() if recording is None else recording)
     return body
 
 
 def push_week_list(dist_date: str, phones: dict, active_from=None,
-                   active_by_phone: dict | None = None) -> int:
+                   active_by_phone: dict | None = None, mode: str = "",
+                   recording: bool | None = None) -> int:
     """דוחפת את רשימת החלוקה לשרת (מחליפה את הרשימה של **אותו תאריך** בלבד — v3.36;
     רשימות של חלוקות אחרות נשארות). רשימה ריקה = מחיקת הרשימה של התאריך.
     מחזירה כמה מספרים נקלטו."""
-    payload = push_payload(dist_date, phones, active_from, active_by_phone)
+    payload = push_payload(dist_date, phones, active_from, active_by_phone,
+                           mode, recording)
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     raw = _http(_url("/push"), body)
     try:
@@ -244,6 +284,22 @@ def check_connection() -> int:
 # "תקן" כותב מחדש **רק** את הקובץ של השלוחה הזו — לעולם לא את השורש.
 EXT = "76"
 EXT_PATH = f"ivr2:/{EXT}/ext.ini"
+REC_PATH = f"ivr2:/{EXT}/{REC_FILE}.wav"
+
+
+def publish_recording(template_id: str | None = None) -> str:
+    """v3.37 — copy the campaign template's recording into extension 76
+    (server-side: DownloadFile tpl:<id> → UploadFile ivr2:/76/msg.wav, already
+    telephony WAV so no conversion) and remember the stamp. Called after every
+    upload; the worker plays it as ``f-msg`` to a family that dials back."""
+    from utils import yemot
+    import database as db
+    template_id = template_id or yemot.ensure_template()
+    content = yemot._download_template_message(template_id)
+    yemot._upload_multipart(REC_PATH, content, convert="0")
+    info = yemot.recording_info() or {}
+    db.set_setting(SET_REC_STAMP, str(info.get("at") or ""))
+    return REC_PATH
 EXT_TITLE = "שרת המענה (מנהל חלוקה)"
 
 

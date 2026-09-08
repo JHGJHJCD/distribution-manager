@@ -877,10 +877,14 @@ def upload_message_wav(file_path: str, template_id: str | None = None,
         res = _upload_multipart(f"ivr2:{template_id}.wav", content)
     set_recording_info(name or os.path.splitext(os.path.basename(file_path))[0],
                        source=source)
+    # v3.37 — the caller-back hears the NEW message through the callback
+    # server (extension 76). Best effort: on failure the stamp stays stale and
+    # the worker asks in plain TTS until the next successful upload.
     try:
-        publish_callback_message(template_id)   # the caller-back hears the NEW message
-    except YemotError:
-        pass                                    # repaired again at the next send
+        from utils import callback_server
+        callback_server.publish_recording(template_id)
+    except Exception:                                        # noqa: BLE001
+        pass
     return res
 
 

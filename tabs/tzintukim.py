@@ -442,6 +442,66 @@ def _safe_default(ok: QPushButton, cancel: QPushButton) -> None:
     cancel.setDefault(True)
 
 
+def callback_server_last_mode() -> str:
+    from utils import callback_server as cb
+    return cb.last_mode()
+
+
+class _CallbackModeBox(QWidget):
+    """v3.37 — "מה ישמע מי שיחזור לקו": ההקלטה ואז השאלה / ההקלטה בלבד / כלום.
+    Shown in every send/schedule dialog while the callback server is on; the
+    choice rides with the push (the worker plays accordingly) and the last
+    choice is remembered (synced setting). `.mode` is None when the server is
+    off — nothing is pushed then, exactly like before."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PyQt6.QtWidgets import QRadioButton, QButtonGroup
+        from utils import callback_server as cb
+        self._on = TzintukimTab._cb_server_on()
+        self._buttons = {}
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 6, 0, 0)
+        lay.setSpacing(4)
+        self.setMinimumWidth(500)       # the longest label must not be clipped
+        if not self._on:
+            self.setVisible(False)
+            return
+        head = QLabel("מה ישמע מי שיחייג חזרה לקו (וברשימה הזו):")
+        head.setStyleSheet("font-weight:700;")
+        lay.addWidget(head)
+        self._group = QButtonGroup(self)
+        last = cb.last_mode()
+        for mode in cb.MODES:
+            rb = QRadioButton(cb.MODE_LABELS[mode])
+            rb.setChecked(mode == last)
+            self._group.addButton(rb)
+            self._buttons[mode] = rb
+            lay.addWidget(rb)
+        tip = ("פעם אחת לכל חלוקה; מי שלא ברשימה או שכבר שמע — תפריט רגיל בלי כלום."
+               if cb.recording_on_line() else
+               "⚠ ההקלטה הנוכחית עדיין לא הועתקה לשלוחת המענה — עד שתעלה הקלטה מחדש "
+               "המתקשר ישמע את השאלה בקול מחשב בלבד.")
+        note = QLabel(tip)
+        note.setObjectName("subtitle")
+        note.setWordWrap(True)
+        lay.addWidget(note)
+
+    @property
+    def mode(self):
+        if not self._on:
+            return None
+        for m, rb in self._buttons.items():
+            if rb.isChecked():
+                return m
+        return "both"
+
+    def remember(self):
+        from utils import callback_server as cb
+        if self.mode:
+            cb.remember_mode(self.mode)
+
+
 class _SendModeDialog(QDialog):
     """אישור שליחה + בחירת סוג הצינתוק (#1/9): רגיל (משמיע הודעה למי שעונה)
     או קלאסי (צלצול קצר בלי מענה — מי שמתקשר חזרה שומע את ההודעה)."""
@@ -451,6 +511,7 @@ class _SendModeDialog(QDialog):
         self.setWindowTitle("אישור שליחה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.mode = None               # 'voice' | 'classic'
+        self.cb_mode = None            # v3.37 — callback mode (None = server off)
         from PyQt6.QtWidgets import QRadioButton
         lay = QVBoxLayout(self)
         lay.setSpacing(8)
@@ -471,6 +532,8 @@ class _SendModeDialog(QDialog):
         note.setObjectName("subtitle")
         note.setWordWrap(True)
         lay.addWidget(note)
+        self.cb_box = _CallbackModeBox(self)       # v3.37
+        lay.addWidget(self.cb_box)
         btns = QHBoxLayout()
         self.btn_ok = ok = QPushButton("שלח עכשיו »")
         ok.setObjectName("primary")
@@ -485,6 +548,8 @@ class _SendModeDialog(QDialog):
 
     def _accept(self):
         self.mode = "classic" if self.rb_classic.isChecked() else "voice"
+        self.cb_mode = self.cb_box.mode
+        self.cb_box.remember()
         self.accept()
 
 
@@ -582,6 +647,7 @@ class _ScheduleDialog(QDialog):
         self.setWindowTitle("תזמון שליחה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.when = None
+        self.cb_mode = None
         lay = QVBoxLayout(self)
         lay.setSpacing(8)
         info = QLabel(f"הצינתוק יישלח ל-{count} נמענים במועד שתבחר.\n"
@@ -607,6 +673,8 @@ class _ScheduleDialog(QDialog):
             hint.setObjectName("subtitle")
             hint.setWordWrap(True)
             lay.addWidget(hint)
+        self.cb_box = _CallbackModeBox(self)       # v3.37
+        lay.addWidget(self.cb_box)
         btns = QHBoxLayout()
         self.btn_ok = ok = QPushButton("תזמן »")
         ok.setObjectName("primary")
@@ -627,6 +695,8 @@ class _ScheduleDialog(QDialog):
                                 "בחר מועד עתידי (לפחות כמה דקות מעכשיו).")
             return
         self.when = when
+        self.cb_mode = self.cb_box.mode
+        self.cb_box.remember()
         self.accept()
 
 
@@ -640,6 +710,7 @@ class _SmartScheduleDialog(QDialog):
         self.setWindowTitle("שיגור לפי השעה של כל אחד")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.date = None
+        self.cb_mode = None
         total = sum(len(v) for v in buckets.values())
         lay = QVBoxLayout(self)
         lay.setSpacing(8)
@@ -692,6 +763,8 @@ class _SmartScheduleDialog(QDialog):
         note.setObjectName("subtitle")
         note.setWordWrap(True)
         lay.addWidget(note)
+        self.cb_box = _CallbackModeBox(self)       # v3.37
+        lay.addWidget(self.cb_box)
 
         btns = QHBoxLayout()
         self.btn_ok = ok = QPushButton("המשך »")
@@ -707,6 +780,8 @@ class _SmartScheduleDialog(QDialog):
 
     def _accept(self):
         self.date = self.dt_edit.dateTime().toPyDateTime().date()
+        self.cb_mode = self.cb_box.mode
+        self.cb_box.remember()
         self.accept()
 
 
@@ -2323,7 +2398,7 @@ class TzintukimTab(QWidget):
 
     @staticmethod
     def _push_week_list(dist_date: str, phones: dict, active_from=None,
-                        active_by_phone: dict | None = None) -> str:
+                        active_by_phone: dict | None = None, mode: str = "") -> str:
         """v3.33 — hand this week's list to the callback server so a family
         that dials back hears "יש לך חלוקה" and can confirm 1/2/3. Runs on the
         send worker thread (no widgets!). Returns "" on success or when the
@@ -2335,27 +2410,34 @@ class TzintukimTab(QWidget):
         try:
             if not callback_server.is_enabled() or not callback_server.is_configured():
                 return ""
-            callback_server.push_week_list(dist_date, phones, active_from, active_by_phone)
+            if mode == "none":      # v3.37 — nothing on callback: forget this date
+                callback_server.clear_week_list(dist_date)
+            else:
+                callback_server.push_week_list(dist_date, phones, active_from,
+                                               active_by_phone, mode=mode)
             return ""
         except Exception as e:      # CallbackError carries a Hebrew message already
             return str(e) or "שרת המענה לא הגיב."
 
     def _push_list(self, dist_date: str, phones: dict, what: str,
-                   active_from=None, active_by_phone: dict | None = None) -> None:
+                   active_from=None, active_by_phone: dict | None = None,
+                   mode: str = "") -> None:
         """v3.36 — push after the dial/schedule was accepted by Yemot: off the
         UI thread, best effort, one warning if the server did not take it.
         Shared by send / schedule / smart dispatch (a resend needs no push —
         the failed numbers are already in the list of that date)."""
         if not self._cb_server_on():
             return
+        mode = mode or callback_server_last_mode()
         cb_err = self._run_blocking(
-            lambda: self._push_week_list(dist_date, phones, active_from, active_by_phone),
+            lambda: self._push_week_list(dist_date, phones, active_from,
+                                         active_by_phone, mode),
             "מעדכן את שרת המענה ברשימת החלוקה…")
         if cb_err:
             QMessageBox.warning(
                 self, "שרת המענה",
                 f"{what} — אבל רשימת החלוקה לא הגיעה לשרת המענה: מי שיחייג חזרה "
-                "לקו לא יישאל אם הוא מגיע.\n\n" + cb_err +
+                "לקו לא ישמע את ההודעה ולא יישאל.\n\n" + cb_err +
                 "\n\nאפשר לנסות שוב דרך \"עדכן את שרת המענה\" בכותרת הרשימה.")
 
     def _clear_server_list(self, dist_date: str) -> None:
@@ -2389,15 +2471,18 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "שרת המענה", "אין אף נמען מסומן עם מספר תקין.")
             return
         dist_date = self._dist_date_iso()
-        err = self._run_blocking(lambda: self._push_week_list(dist_date, phones),
-                                 "מעדכן את שרת המענה ברשימת החלוקה…")
+        mode = callback_server_last_mode()
+        err = self._run_blocking(
+            lambda: self._push_week_list(dist_date, phones, mode=mode),
+            "מעדכן את שרת המענה ברשימת החלוקה…")
         if err:
             QMessageBox.warning(self, "שרת המענה", "העדכון נכשל:\n" + err)
         else:
+            from utils import callback_server as cb
             QMessageBox.information(
                 self, "שרת המענה",
                 f"שרת המענה עודכן ✓ — {len(phones)} מספרים. מי מהם שיחייג חזרה לקו "
-                "יישאל אם הוא מגיע (1 / 2 / 3).")
+                f"ישמע: {cb.MODE_LABELS.get(mode, mode)} (הבחירה האחרונה שלך).")
 
     def _phones_map(self, rows) -> dict:
         """{'0501234567': 'שם', …} — every number of every checked row (#gaira);
@@ -2493,6 +2578,9 @@ class TzintukimTab(QWidget):
         if yemot.CALLBACK_ENABLED:
             return ("מי שלא ענה ישמע את ההודעה כשיתקשר חזרה לקו "
                     "(מושמעת רק למי שברשימה הזו).")
+        if TzintukimTab._cb_server_on():      # v3.37 — the callback server
+            return ("מי שלא ענה ויחייג חזרה לקו ישמע לפי הבחירה למטה "
+                    "(רק מי שברשימה הזו, פעם אחת).")
         return ("מי שלא ענה יראה שיחה שלא נענתה מהמספר של הקו; "
                 "ההשמעה האוטומטית למתקשר-חוזר כבויה כרגע — "
                 "מי שמתקשר חזרה מגיע לתפריט הרגיל של הקו.")
@@ -2789,7 +2877,7 @@ class TzintukimTab(QWidget):
         # v3.33 — the dial went out; now hand this week's list to our callback
         # server (off the UI thread, best effort — _push_week_list never raises,
         # the families were already rung and a push failure must not undo that).
-        self._push_list(dist_date, phones, "הצינתוק יצא")
+        self._push_list(dist_date, phones, "הצינתוק יצא", mode=dlg.cb_mode or "")
         from utils import sync
         name = self._campaign_name()
         sent_iso = datetime.now(timezone.utc).isoformat()   # survey answers count from now
@@ -3093,7 +3181,7 @@ class TzintukimTab(QWidget):
         # v3.36 — the callback server learns the list now, live from the hour
         # of the dial (a family calling in before that was not rung yet).
         self._push_list(dist_date, phones, "התזמון נקבע",
-                        active_from=self._to_utc_iso(when))
+                        active_from=self._to_utc_iso(when), mode=dlg.cb_mode or "")
         QMessageBox.information(
             self, "תזמון שליחה",
             f"נקבע ✓ — הצינתוק יישלח ביום {when.strftime('%d/%m/%Y')} "
@@ -3231,7 +3319,7 @@ class TzintukimTab(QWidget):
                 active_by_phone[p] = when_iso
         if pushed_phones:
             self._push_list(dist_date, pushed_phones, "השיגורים נקבעו",
-                            active_by_phone=active_by_phone)
+                            active_by_phone=active_by_phone, mode=dlg.cb_mode or "")
         if error is not None:
             text = (str(error) if isinstance(error, yemot.YemotError)
                     else f"השיגור נכשל: {error}")

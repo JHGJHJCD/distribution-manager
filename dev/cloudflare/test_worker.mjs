@@ -7,12 +7,16 @@ const NOW = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
 function makeDB() {
   const lists = new Map();    // 'phone|dist_date' → {phone, dist_date, name, active_from}
   const answers = new Map();  // 'phone|dist_date' → {phone, dist_date, answer, at}
+  const meta = new Map();     // dist_date → {mode, recording}
+  const heard = new Map();    // 'phone|dist_date' → at
   const stmt = (sql) => {
     let args = [];
     const s = {
       bind(...a) { args = a; return s; },
       async first() {
         if (sql.includes('FROM answers')) return answers.has(args[0] + '|' + args[1]) ? { 1: 1 } : null;
+        if (sql.includes('FROM heard')) return heard.has(args[0] + '|' + args[1]) ? { 1: 1 } : null;
+        if (sql.includes('FROM list_meta')) return meta.get(args[0]) || null;
         throw new Error('first? ' + sql);
       },
       async run() {
@@ -28,6 +32,8 @@ function makeDB() {
           return;
         }
         if (sql.includes('INTO week_lists')) { lists.set(args[0] + '|' + args[1], { phone: args[0], dist_date: args[1], name: args[2], active_from: args[3] }); return; }
+        if (sql.includes('INTO list_meta')) { meta.set(args[0], { mode: args[1], recording: args[2] }); return; }
+        if (sql.includes('INTO heard')) { heard.set(args[0] + '|' + args[1], NOW()); return; }
         if (sql.includes('INTO answers')) { answers.set(args[0] + '|' + args[1], { phone: args[0], dist_date: args[1], answer: args[2], at: NOW() }); return; }
         if (sql.includes('CRASH')) throw new Error('boom');
         throw new Error('run? ' + sql);
@@ -45,7 +51,7 @@ function makeDB() {
     };
     return s;
   };
-  return { prepare: stmt, batch: async (l) => { for (const x of l) await x.run(); }, _lists: lists, _answers: answers };
+  return { prepare: stmt, batch: async (l) => { for (const x of l) await x.run(); }, _lists: lists, _answers: answers, _meta: meta, _heard: heard };
 }
 const env = { DB: makeDB(), APP_SECRET: 's3cret' };
 const call = async (q, opts) => (await worker.fetch(new Request('https://w.test/' + (q || ''), opts), env));
@@ -114,6 +120,31 @@ ok('ענה על שתיהן = בשקט', (await text('?ApiPhone=0571111111')) ===
 env.DB._lists.set('0581111111|2020-01-01', { phone: '0581111111', dist_date: '2020-01-01', name: 'ישן', active_from: null });
 await push({ dist_date: '2026-10-14', phones: [] });
 ok('רשימה מלפני 45+ יום נמחקת', !env.DB._lists.has('0581111111|2020-01-01'));
+// ── v3.37: מצב השמעה + הקלטה ──
+// 13a. both + recording: השאלה פותחת בהקלטה (f-msg) ואז הטקסט; הקשה לא מוכרת = טקסט בלבד
+await push({ dist_date: '2026-11-04', mode: 'both', recording: true, phones: [{ phone: '0591111111', name: 'ח' }] });
+t = await text('?ApiPhone=0591111111');
+ok('both+recording: read= מתחיל ב-f-msg ואז t-', t.startsWith('read=f-msg.t-') && t.includes('=Digits,'));
+t = await text('?ApiPhone=0591111111&Digits=8');
+ok('הקשה לא מוכרת = שואלים שוב בלי ההקלטה', t.startsWith('read=t-') && !t.includes('f-msg'));
+await text('?ApiPhone=0591111111&Digits=1');
+ok('both: אחרי תשובה = בשקט', (await text('?ApiPhone=0591111111')) === 'go_to_folder=/');
+// 13b. both בלי הקלטה בשלוחה: שאלה ב-TTS בלבד (לא מנסים קובץ שלא קיים)
+await push({ dist_date: '2026-11-11', mode: 'both', recording: false, phones: [{ phone: '0592222222', name: 'ט' }] });
+t = await text('?ApiPhone=0592222222');
+ok('both בלי הקלטה = read=t- בלבד', t.startsWith('read=t-') && !t.includes('f-msg'));
+// 13c. message + recording: משמיעים פעם אחת וממשיכים לתפריט; אין שאלה; אין answers
+await push({ dist_date: '2026-11-18', mode: 'message', recording: true, phones: [{ phone: '0593333333', name: 'י' }] });
+t = await text('?ApiPhone=0593333333');
+ok('message: id_list_message=f-msg ואז לתפריט', t === 'id_list_message=f-msg&go_to_folder=/');
+ok('message: נרשם ב-heard, לא ב-answers', env.DB._heard.has('0593333333|2026-11-18') && !env.DB._answers.has('0593333333|2026-11-18'));
+ok('message: פעם שנייה = בשקט', (await text('?ApiPhone=0593333333')) === 'go_to_folder=/');
+// 13d. message בלי הקלטה = בשקט (ולא "אין מענה")
+await push({ dist_date: '2026-11-25', mode: 'message', recording: false, phones: [{ phone: '0594444444', name: 'כ' }] });
+ok('message בלי הקלטה = בשקט', (await text('?ApiPhone=0594444444')) === 'go_to_folder=/');
+// 13e. push בלי mode = both (תאימות לתוכנה ישנה)
+await push({ dist_date: '2026-12-02', phones: [{ phone: '0595555555', name: 'ל' }] });
+ok('בלי mode = both בלי הקלטה', (await text('?ApiPhone=0595555555')).startsWith('read=t-'));
 // 13. TEST_PHONE: זכאי תמיד, גם אחרי תשובה
 env.TEST_PHONE = '0556752642';
 ok('מספר בדיקה שומע שאלה', isQ(await text('?ApiPhone=0556752642')));

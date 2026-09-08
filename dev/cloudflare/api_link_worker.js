@@ -10,7 +10,12 @@
 //   • ברירת מחדל  → הקו של ימות (api_link): אם יש חלוקה למתקשר, אוסף אישור 1/2/3
 //   • POST /push   (מוגן בסוד) → התוכנה דוחפת את רשימת הזכאים של חלוקה אחת
 //                    body: {dist_date:"YYYY-MM-DD", active_from?:"ISO-UTC",
+//                           mode?:"both"|"message", recording?:true|false,
 //                           phones:[{phone,name,active_from?}]}
+//                    v3.37: mode = מה המתקשר שומע — both: ההקלטה (f-msg בשלוחה 76,
+//                    התוכנה מעתיקה אותה בכל העלאה) ואז השאלה 1/2/3; message: ההקלטה
+//                    בלבד (פעם אחת, טבלת heard). recording=false ⇒ אין קובץ בשלוחה
+//                    (אסור לנסות להשמיע — ימות היו משמיעים "אין מענה") ⇒ שאלה ב-TTS.
 //                    v3.36: מחליפה **רק** את הרשימה של אותו dist_date (רשימות של
 //                    חלוקות אחרות נשארות), ו-active_from = מאיזה רגע השורה "חיה"
 //                    (תזמון: שעת השיגור; שיגור חכם: שעת הקבוצה של כל אחד) — לפני
@@ -40,7 +45,12 @@ const norm = (p) => {
 };
 
 const TO_MENU = 'go_to_folder=/';            // המשך שקט לתפריט הראשי
-const QUESTION = 'read=t-שלום, יש לך חלוקה השבוע, אם תגיע הקישו 1, אם לא תגיע הקישו 2, אם אינך יודע הקישו 3=Digits,,1,1,7,No,yes,no';
+const REC = 'f-msg';                         // ivr2:/76/msg.wav — ההקלטה של הצינתוק
+const ASK = 'אם תגיע הקישו 1, אם לא תגיע הקישו 2, אם אינך יודע הקישו 3';
+const READ_ARGS = '=Digits,,1,1,7,No,yes,no';
+const QUESTION = 'read=t-שלום, יש לך חלוקה השבוע, ' + ASK + READ_ARGS;   // בלי הקלטה
+const QUESTION_REC = 'read=' + REC + '.t-' + ASK + READ_ARGS;            // הקלטה ואז השאלה
+const ASK_AGAIN = 'read=t-' + ASK + READ_ARGS;                           // הקשה לא מוכרת
 const KEEP_DAYS = 45;                        // רשימות ישנות מזה נמחקות בדחיפה הבאה
 
 // 'YYYY-MM-DDTHH:MM:SS(.ffffff)(+00:00|Z)' → 'YYYY-MM-DD HH:MM:SS' (UTC, בר-השוואה
@@ -63,6 +73,12 @@ async function ensureTables(env) {
       phone TEXT, dist_date TEXT, answer TEXT,
       at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (phone, dist_date))`),
+    // v3.37: מצב ההשמעה לכל חלוקה + האם ההקלטה קיימת בשלוחה; ומי כבר שמע (מצב message)
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS list_meta (
+      dist_date TEXT PRIMARY KEY, mode TEXT, recording INTEGER)`),
+    env.DB.prepare(`CREATE TABLE IF NOT EXISTS heard (
+      phone TEXT, dist_date TEXT, at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (phone, dist_date))`),
     env.DB.prepare('DROP TABLE IF EXISTS week_list'),
   ]);
 }
@@ -77,8 +93,11 @@ async function appApi(request, env, url) {
     const distDate = body.dist_date || '';
     const defaultFrom = toSqlUtc(body.active_from);
     const rows = (body.phones || []).filter(e => norm(e.phone));
+    const mode = body.mode === 'message' ? 'message' : 'both';
     const stmts = [
       env.DB.prepare('DELETE FROM week_lists WHERE dist_date=?').bind(distDate),
+      env.DB.prepare('INSERT OR REPLACE INTO list_meta (dist_date,mode,recording) VALUES (?,?,?)')
+        .bind(distDate, mode, body.recording ? 1 : 0),
       // ניקוי רשימות של חלוקות ישנות (dist_date תאריכי בלבד; רשימה עצמאית '' נשארת)
       env.DB.prepare(`DELETE FROM week_lists WHERE dist_date<>'' AND dist_date<date('now',?)`)
         .bind(`-${KEEP_DAYS} days`),
@@ -118,21 +137,33 @@ async function lineCall(request, env) {
   // מספר בדיקה (סוד TEST_PHONE ב"סודות (env)") נחשב זכאי גם בלי שורה ברשימה,
   // ונשאל בכל שיחה (בלי "פעם אחת") — לבדיקות בלבד; בלי הסוד הקוד הזה רדום.
   const isTest = !!env.TEST_PHONE && phone === norm(env.TEST_PHONE);
-  let distDate = null;
+  let distDate = null, meta = { mode: 'both', recording: 0 };
   if (isTest) {
     distDate = 'test';
   } else {
     for (const r of rows || []) {
-      const done = await env.DB.prepare('SELECT 1 FROM answers WHERE phone=? AND dist_date=?')
+      const m = await env.DB.prepare('SELECT mode,recording FROM list_meta WHERE dist_date=?')
+        .bind(r.dist_date).first() || { mode: 'both', recording: 0 };
+      // מצב "הקלטה בלבד": מי שכבר שמע — הלאה; אחרת משמיעים פעם אחת וממשיכים לתפריט
+      const doneTable = m.mode === 'message' ? 'heard' : 'answers';
+      const done = await env.DB.prepare(`SELECT 1 FROM ${doneTable} WHERE phone=? AND dist_date=?`)
         .bind(phone, r.dist_date).first();
-      if (!done) { distDate = r.dist_date; break; }
+      if (!done) { distDate = r.dist_date; meta = m; break; }
     }
   }
-  if (distDate === null) return reply(TO_MENU);   // לא זכאי / כבר ענה — בשקט לתפריט
+  if (distDate === null) return reply(TO_MENU);   // לא זכאי / כבר ענה/שמע — בשקט לתפריט
 
-  if (digits === null || digits === undefined || digits === '') return reply(QUESTION);
+  if (meta.mode === 'message') {
+    await env.DB.prepare('INSERT OR REPLACE INTO heard (phone,dist_date,at) VALUES (?,?,datetime(\'now\'))')
+      .bind(phone, distDate).run();
+    // בלי הקלטה בשלוחה אין מה להשמיע — בשקט לתפריט (לא מנסים f-msg שלא קיים)
+    return reply(meta.recording ? 'id_list_message=' + REC + '&' + TO_MENU : TO_MENU);
+  }
+
+  const first = meta.recording ? QUESTION_REC : QUESTION;
+  if (digits === null || digits === undefined || digits === '') return reply(first);
   const d = String(digits);
-  if (!['1', '2', '3'].includes(d)) return reply(QUESTION);   // הקשה לא מוכרת — שואלים שוב
+  if (!['1', '2', '3'].includes(d)) return reply(ASK_AGAIN);   // הקשה לא מוכרת — שואלים שוב (בלי ההקלטה)
 
   await env.DB.prepare(
     `INSERT INTO answers (phone,dist_date,answer,at) VALUES (?,?,?,datetime('now'))

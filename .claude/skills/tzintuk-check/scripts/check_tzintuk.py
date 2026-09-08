@@ -263,7 +263,9 @@ def _(y, t, test, rel):
     cbs = _read("utils/callback_server.py")
     rep = _func_body(cbs, "repair_extension")
     okk = ('EXT = "76"' in cbs and "_upload_multipart(EXT_PATH" in rep
-           and cbs.count("_upload_multipart(") == 1 and "ivr2:/ext.ini" not in cbs)
+           # v3.37: a second upload — the recording copy — also targets /76 only
+           and cbs.count("_upload_multipart(") == 2 and "_upload_multipart(REC_PATH" in cbs
+           and 'REC_PATH = f"ivr2:/{EXT}/' in cbs and "ivr2:/ext.ini" not in cbs)
     n_rec = t.count("if not self._recording_ready(")
     okk = okk and n_rec == t.count("if not self._callback_ext_ready(") == 5
     paired = re.findall(r'if not self\._recording_ready\("([^"]+)"\):\n\s+return\n\s+'
@@ -290,7 +292,7 @@ def _(y, t, test, rel):
     pl = _func_body(t, "_push_list")
     ok = (not bad and "_callback_server_rows()" in fs and "except Exception" in cr
           and "except Exception" in push
-          and 'self._push_list(dist_date, phones, "הצינתוק יצא")' in send
+          and 'self._push_list(dist_date, phones, "הצינתוק יצא"' in send
           and "self._run_blocking(" in pl and "self._push_week_list(" in pl
           and send.index("self._push_list(") > send.index("_do_send,"))
     return ok, ", ".join(bad) or ("" if ok else "missing wiring")
@@ -317,6 +319,23 @@ def _(y, t, test, rel):
         problems.append("worker deletes everything")
     if "active_from IS NULL OR active_from<=datetime('now')" not in w:
         problems.append("worker ignores active_from")
+    return not problems, ", ".join(problems)
+
+
+@lint("I45", "v3.37 — מצב חזרה-לקו נבחר בכל שליחה (_CallbackModeBox ב-3 דיאלוגים, mode עובר ל-_push_list, none=מחיקה); ההקלטה מועתקת ל-76 בכל העלאה; ה-Worker לא משמיע f-msg כש-recording=false")
+def _(y, t, test, rel):
+    problems = []
+    if t.count("self.cb_box = _CallbackModeBox(self)") != 3 or t.count('mode=dlg.cb_mode or ""') != 3:
+        problems.append("dialogs")
+    pw = _func_body(t, "_push_week_list")
+    if 'if mode == "none":' not in pw or "clear_week_list(" not in pw:
+        problems.append("none")
+    up = _func_body(y, "upload_message_wav")
+    if "callback_server.publish_recording(" not in up:
+        problems.append("publish_recording")
+    w = _read("dev/cloudflare/api_link_worker.js")
+    if "meta.recording ? QUESTION_REC : QUESTION" not in w or "meta.recording ? 'id_list_message='" not in w:
+        problems.append("worker recording guard")
     return not problems, ", ".join(problems)
 
 
