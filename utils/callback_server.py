@@ -215,7 +215,11 @@ EXT_TITLE = "שרת המענה (מנהל חלוקה)"
 def expected_ext_ini(url: str | None = None) -> str:
     """תוכן ה-ext.ini של השלוחה כפי שהתוכנה מצפה לו (טהור)."""
     link = (url or base_url()).rstrip("/")
-    return f"type=api\ntitle={EXT_TITLE}\napi_link={link}\n"
+    # api_wait_answer_music_on_hold=no — ב-ivr.ini של הקו מוזיקת-המתנה דלוקה לכל שלוחת
+    # API; כאן השרת עונה תוך ~0.5 שנ' וכל מתקשר ל-04 עובר דרכה (Did_Go_To) — בלי מוזיקה.
+    # api_end_goto=/ — גם כשהשרת לא קבע יעד, המתקשר ממשיך לתפריט הראשי.
+    return (f"type=api\ntitle={EXT_TITLE}\napi_link={link}\n"
+            "api_wait_answer_music_on_hold=no\napi_end_goto=/\n")
 
 
 def parse_ext_ini(text: str) -> dict:

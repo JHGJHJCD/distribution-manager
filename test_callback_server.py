@@ -151,6 +151,8 @@ ok("כתובת אחרת = מצביעה לשרת אחר",
    "כתובת אחרת" in cb.extension_problem("type=api\napi_link=https://other.example.com"))
 exp = cb.expected_ext_ini()
 ok("ה-ext.ini הצפוי תקין בעצמו", cb.extension_problem(exp) == "" and "type=api" in exp)
+ok("ה-ext.ini הצפוי: בלי מוזיקת המתנה + חזרה לתפריט (כל מתקשר ל-04 עובר דרכה)",
+   "api_wait_answer_music_on_hold=no" in exp and "api_end_goto=/" in exp)
 
 # verify_extension קורא דרך DownloadFile של ימות; repair_extension כותב רק ivr2:/76/ext.ini
 ycalls = []

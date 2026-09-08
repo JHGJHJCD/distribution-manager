@@ -44,6 +44,7 @@ description: >-
 | `api_hangup_link=` | URL | כתובת נפרדת לדיווח ניתוק (ברירת מחדל: אותו `api_link`) |
 | `api_hangup_send=no` | ברירת מחדל yes | לא לשלוח בקשה כשהמתקשר מנתק |
 | `api_end_goto=/5/8` | נתיב | לאן להמשיך כשה-API מסיים (ברירת מחדל: חזרה לשלוחה הקודמת) |
+| — | **שגיאה/אין תשובה** | **אין יעד-שגיאה למודול** (אומת בסכמת MCP 10/9/2026): תשובה לא תקינה / שרת לא עונה ⇒ ימות משמיעים "אין מענה" ויוצאים שלב אחורה. `api_error_goto` שייך **רק** ל-`check_api` (בדיקת הרשאה בכניסה, topic/8470). ⇒ שרת שכל המתקשרים עוברים דרכו חייב `try/catch` שמחזיר `go_to_folder=/` בעצמו, ומעל `Did_Go_To` — `check_did_and_go_to_folder_one_time=yes` (אחרת לולאה). |
 | `api_wait_answer_music_on_hold=yes` | — | מוזיקת המתנה בזמן שהשרת "חושב" (+גרסאות `_different`/`_continue_all_sends`) |
 | `say_api_answer=yes` | — | תשובה פשוטה מהשרת (כמו `OK`) מוקראת ב-TTS אם אין קובץ תואם |
 | `api_answer_XXX=` | פעולה | מיפוי תשובה→פעולה בצד ההגדרות, למשל `api_answer_OK=go_to_folder=3` (שרשור: `api_answer_OK_1=` וכו') |

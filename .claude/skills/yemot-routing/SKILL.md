@@ -134,6 +134,10 @@ check_did_and_go_to_folder=yes
   `0527666666-Directed-0773137770=/5` (המחייג-Directed-המחויג=שלוחה).
 - מחייג **וגם** מחויג: `did_and_phone_check=yes`; פורמט `0501234567-0773137770=/1`.
 - `check_did_and_go_to_folder_one_time=yes` = הניתוב חל רק בכניסה הראשונה לשלוחה.
+  **⚠ חובה כשהיעד מחזיר לשורש (10/9/2026):** הניתוב רץ ב**כל** כניסה לשלוחה שבה
+  `check_did_and_go_to_folder=yes`, כולל חזרה אליה מ-`go_to_folder=/` או מיציאת-שגיאה של
+  שלוחת `api` ⇒ בלי `_one_time` נוצרת **לולאה** (שורש → יעד → שורש → יעד…). ניתוב DID
+  לשלוחת-מענה שמחזירה לתפריט הראשי = תמיד עם `_one_time=yes`.
 - יומן ניסיונות: `Log/LogDidDirectedCheck.ini`.
 - **נלמד חי 3/9/2026:** כל שורה ב-`Log/LogFolderEnterExit-YYYY-MM.ymgr` נושאת `IncomingDID#<המספר שחויג>` ⇒ מעקב "מי חזר לצינתוק" לפי DID ייעודי הוא מדויק ובלי פילטרים. `RunTzintuk`/`RunCampaign` מקבלים DID משני כ-`callerId` ⇒ **DID ייעודי + שורה ב-`Did_Go_To.ini` הוא התחליף הבטוח ל-`check_template_filter`** (שמספרו = אינדקס 0-based ב-GetTemplates ונשבר במחיקת תבנית). בקו: `0773019787` (→/50) רדום מאז אוגוסט — מועמד; הכרעה אצל המשתמש.
 - **בקו האמיתי:** ל-DID משני יש שורת `<המספר>=/555` ב-Did_Go_To.ini ש**גוברת**
