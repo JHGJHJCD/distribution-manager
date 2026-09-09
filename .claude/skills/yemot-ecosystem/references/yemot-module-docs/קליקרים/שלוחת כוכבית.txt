@@ -1,0 +1,30 @@
+ב"ה
+השלוחות שבשלוחת כוכבית ברירת מחדל
+כוכבית - תפריט כוכבית
+type=menu_star
+
+כוכבית אחת - הוראות הפעלה
+type=message_options_menu
+
+כוכבית שתים - השארת הודעה למנהל המערכת
+type=voicemail_email
+
+כוכבית שלוש - חזרה למיקום האחרון אליו הֶאֵזַנְתֶם
+type=last_play
+
+כוכבית ארבע - השמעת כל ההקלטות הקיימות במערכת
+folder_to_play=LinkAllRecord
+
+כוכבית חמש - פתיחת מערכת ווצאפון שבמקש #8 נכנס למערכת שלך
+type=open_wap_reseller_customer
+
+כוכבית שש - רשימת השמעה אישית
+type=phone_play_list
+
+כוכבית שבע - הקלטות לכל השלוחות ע"י סיסמת הקלטות
+folder_move=tfr
+password=password_record
+
+כוכבית שמונה - הגדרה שכל שלוחות השמעת קבצים יהיה לו תפריט בחירת קובץ
+type=start_select_file
+
