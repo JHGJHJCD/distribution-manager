@@ -1778,11 +1778,23 @@ def merge_survey_answers(entries: list, rows: list, since_iso: str = "",
         cur = latest.get(r["phone"])
         if cur is None or r["at"] >= cur[0]:
             latest[r["phone"]] = (r["at"], r["answer"])
+    # v3.38 — an empty fetch must NEVER wipe an answer that was already
+    # recorded. `rows` comes back empty on a transient failure (NetFree blocks
+    # the callback server's workers.dev host while call2all answers "no 77
+    # file"), during the callback server's 60s backoff, or when the source that
+    # collected the answer was switched off — and the answer is permanent on
+    # the server, so losing it (→ a wrong "לא הגיב", a vanished "אישר הגעה"
+    # tag, synced to the other computer) is a data-integrity bug. Only a fetch
+    # that actually returned rows may clear/move a recorded answer (the
+    # until_by_phone reattribution needs the moving answer to be IN rows).
+    rows_empty = not (rows or [])
     changed = False
     for e in entries or []:
         if not isinstance(e, dict):
             continue
         hit = latest.get(normalize_phone(e.get("phone")))
+        if hit is None and rows_empty and e.get("answer"):
+            continue                       # keep the recorded answer as-is
         answer = hit[1] if hit else ""
         at = hit[0].isoformat() if hit else ""
         if "answer" not in e or e.get("answer") != answer or (e.get("answer_at") or "") != at:

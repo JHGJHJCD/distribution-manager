@@ -2497,6 +2497,33 @@ ok("אקסל: שורה בלי מספר בכלל — ריקה", _FreeListDialog._
    _FreeListDialog._excel_row_line(("כהן", None)))
 _close_all(); _calls.clear(); _msgs.clear()
 
+# ── 28. סקירה 9/9: fetch ריק (תקלה זמנית / מקור כבוי) לא מוחק תשובה שנרשמה ──
+# הבאג: אם קריאת התשובות מחזירה [] (שרת המענה חסום/כבוי בזמן ש-77 עונה "אין
+# קובץ"), merge_survey_answers מחק "1"→"" וסימן "לא הגיב" בטעות — ונשמר ל-DB.
+print("— סקירה 9/9: fetch ריק לא מוחק תשובה שנרשמה —")
+_e28 = [{"phone": "0521234567", "answer": "1", "answer_at": "2026-09-16T11:00:00+00:00"},
+        {"phone": "0501112233"}]                       # לא ענה עדיין
+_m28, _c28 = yemot.merge_survey_answers(_e28, [], since_iso="2026-09-16T10:00:00+00:00")
+ok("fetch ריק לא מוחק תשובה שכבר נרשמה", _m28[0]["answer"] == "1", _m28[0])
+ok("fetch ריק לא משנה answer_at של תשובה קיימת",
+   _m28[0].get("answer_at") == "2026-09-16T11:00:00+00:00", _m28[0])
+ok("fetch ריק כן מסמן 'נבדק' למי שלא ענה עדיין",
+   _m28[1].get("answer") == "" and "answer" in _m28[1], _m28[1])
+# rows לא ריק: תשובה מחוץ לחלון (until_by_phone) עדיין מתאפסת — ריאטריביושן תקין
+from datetime import timezone as _tz
+_far = datetime(2026, 9, 23, 13, 0, tzinfo=_tz.utc)
+_e28b = [{"phone": "0521234567", "answer": "1", "answer_at": "2026-09-16T11:00:00+00:00"}]
+_rows28 = [{"phone": "0521234567", "at": _far, "answer": "1"}]
+_m28b, _ = yemot.merge_survey_answers(
+    _e28b, _rows28, since_iso="2026-09-16T10:00:00+00:00",
+    until_by_phone={"0521234567": "2026-09-20T00:00:00+00:00"})
+ok("rows לא ריק: תשובה מאוחרת מחוץ לחלון מתאפסת (ריאטריביושן נשמר)",
+   _m28b[0]["answer"] == "", _m28b[0])
+# rows ריק אבל הרשומה כבר מסומנת 'נבדק' בלי תשובה — נשאר כך, בלי changed
+_e28c = [{"phone": "0521234567", "answer": "", "answer_at": ""}]
+_m28c, _chg28c = yemot.merge_survey_answers(_e28c, [], since_iso="2026-09-16T10:00:00+00:00")
+ok("fetch ריק על 'נבדק ללא תשובה' — בלי שינוי", _chg28c is False, _chg28c)
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")

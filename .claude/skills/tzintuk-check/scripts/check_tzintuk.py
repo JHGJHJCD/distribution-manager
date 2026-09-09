@@ -339,6 +339,17 @@ def _(y, t, test, rel):
     return not problems, ", ".join(problems)
 
 
+@lint("I46", "v3.38 — merge_survey_answers לא מוחק תשובה שנרשמה כש-fetch חזר ריק (rows_empty guard); הבדיקה מכסה תקלה זמנית + שמירת ריאטריביושן")
+def _(y, t, test, rel):
+    body = _func_body(y, "merge_survey_answers")
+    okk = ("rows_empty" in body
+           and "if hit is None and rows_empty and e.get(\"answer\"):" in body
+           and "continue" in body)
+    okk = okk and "fetch ריק לא מוחק תשובה שכבר נרשמה" in test
+    okk = okk and "ריאטריביושן נשמר" in test
+    return okk, ""
+
+
 @lint("I41", "v3.28 — _apply_stop: כש-stopped_at קיים, גם finished מהשרת נושא stopped=True (עצירה שהשרת סגר לפני החסד); רשימה עצמאית מאקסל דרך _excel_row_line/find_phones (שני מספרים בתא); מסנני statuses ב-SQL ליד limit=200")
 def _(y, t, test, rel):
     stop = _func_body(t, "_apply_stop")
