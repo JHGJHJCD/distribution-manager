@@ -758,6 +758,60 @@ def _apply_setting(conn, rec: dict, state: dict):
     known[key] = rec.get("ts") or ""
 
 
+def _apply_mail_add(conn, rec: dict):
+    """שליחת-מיילים מהמחשב השני (v3.39). Idempotent לפי guid; ה-seed נושא את
+    התוצאות בתוך mail_add עצמו (כמו tz_add)."""
+    guid = rec.get("guid") or ""
+    if not guid or conn.execute("SELECT 1 FROM mail_campaigns WHERE guid=?",
+                                (guid,)).fetchone():
+        return
+    conn.execute(
+        "INSERT INTO mail_campaigns (guid, sent_at, subject, body, audience, sender, "
+        "device, total, status, status_ts, sent, failed, report_json) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (guid, rec.get("sent_at", ""), rec.get("subject", ""), rec.get("body", ""),
+         rec.get("audience", ""), rec.get("sender", ""), rec.get("device", ""),
+         int(rec.get("total") or 0), rec.get("status") or "sending",
+         rec.get("status_ts") or rec.get("sent_at", ""),
+         int(rec.get("sent") or 0), int(rec.get("failed") or 0),
+         rec.get("report_json") or ""))
+
+
+def _apply_mail_update(conn, rec: dict):
+    guid = rec.get("guid") or ""
+    ts = rec.get("ts") or ""
+    if not guid:
+        return
+    row = conn.execute("SELECT status_ts FROM mail_campaigns WHERE guid=?",
+                       (guid,)).fetchone()
+    if not row or (row["status_ts"] or "") >= ts:
+        return
+    conn.execute("UPDATE mail_campaigns SET sent=?, failed=?, status=?, status_ts=?, "
+                 "report_json=? WHERE guid=?",
+                 (int(rec.get("sent") or 0), int(rec.get("failed") or 0),
+                  rec.get("status", "sending"), ts, rec.get("report_json", ""), guid))
+
+
+def _apply_mtpl_upsert(conn, rec: dict):
+    """תבנית מייל מהמחשב השני — LWW לפי updated_at (מחיקה = deleted=1)."""
+    guid = rec.get("guid") or ""
+    if not guid:
+        return
+    ts = rec.get("updated_at") or ""
+    row = conn.execute("SELECT updated_at FROM mail_templates WHERE guid=?",
+                       (guid,)).fetchone()
+    vals = (rec.get("name", ""), rec.get("subject", ""), rec.get("body", ""), ts,
+            int(rec.get("deleted") or 0))
+    if row:
+        if (row["updated_at"] or "") >= ts:
+            return
+        conn.execute("UPDATE mail_templates SET name=?, subject=?, body=?, updated_at=?, "
+                     "deleted=? WHERE guid=?", (*vals, guid))
+    else:
+        conn.execute("INSERT INTO mail_templates (guid, name, subject, body, updated_at, "
+                     "deleted) VALUES (?,?,?,?,?,?)", (guid, *vals))
+
+
 _APPLIERS = {
     "rec_upsert":   _apply_rec_upsert,
     "rec_delete":   _apply_rec_delete,
@@ -772,6 +826,9 @@ _APPLIERS = {
     "fb_status":    _apply_fb_status,
     "tz_add":       _apply_tz_add,
     "tz_update":    _apply_tz_update,
+    "mail_add":     _apply_mail_add,
+    "mail_update":  _apply_mail_update,
+    "mtpl_upsert":  _apply_mtpl_upsert,
 }
 
 
@@ -1033,6 +1090,22 @@ def _snapshot_body(include_settings: bool = True) -> int:
                                      "ts": c.get("status_ts", ""),
                                      "report_json": c.get("report_json", "")})
             n += 1
+    # v3.39: היסטוריית מיילים + תבניות (התוצאות בתוך mail_add עצמו).
+    with db.get_connection() as conn:
+        mails = [dict(r) for r in conn.execute(
+            "SELECT * FROM mail_campaigns ORDER BY sent_at ASC")]
+        tpls = [dict(r) for r in conn.execute("SELECT * FROM mail_templates")]
+    for c in mails:
+        log_change("mail_add", {k: c.get(k, "") for k in
+                                ("guid", "sent_at", "subject", "body", "audience",
+                                 "sender", "device", "total", "status", "status_ts",
+                                 "sent", "failed", "report_json")})
+        n += 1
+    for t in tpls:
+        log_change("mtpl_upsert", {k: t.get(k, "") for k in
+                                   ("guid", "name", "subject", "body", "updated_at",
+                                    "deleted")})
+        n += 1
     return n
 
 

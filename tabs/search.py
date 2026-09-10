@@ -231,6 +231,11 @@ class SearchTab(QWidget):
         self.hist_table.verticalHeader().setVisible(False)
         enable_touch_scroll(self.hist_table)
         right_panel.addWidget(self.hist_table, 1)
+        # v3.39 — מיילים שנשלחו למקבל הזה (מסך 'מיילים')
+        self.lbl_mails = QLabel("")
+        self.lbl_mails.setWordWrap(True)
+        self.lbl_mails.setStyleSheet("color:#475569; font-size:12.5px; background:transparent;")
+        right_panel.addWidget(self.lbl_mails)
 
     # ── data ───────────────────────────────────────────────────────────────────
     def refresh(self):
@@ -440,6 +445,18 @@ class SearchTab(QWidget):
 
         # History
         self.hist_title.setText(f"היסטוריית חלוקות ({len(hist)})")
+        try:
+            mails = db.get_mails_for_recipient(rec["id"])
+        except Exception:
+            mails = []
+        if mails:
+            from utils import timefmt
+            last = mails[0]
+            self.lbl_mails.setText(
+                f"✉ מיילים שנשלחו: {len(mails)} · אחרון: {timefmt.datetime_str(last['sent_at'])} — "
+                f"{last['subject']}" + (" (נכשל)" if last.get('status') == 'failed' else ""))
+        else:
+            self.lbl_mails.setText("")
         self.hist_table.clearContents()
         self.hist_table.setRowCount(0)
         self.hist_table.setRowCount(len(hist))

@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>הדמיה — שליחת מיילים למקבלים</title>
+<style>
+  :root{--p:#0f9d78;--pd:#0f766e;--bg:#f4faf7;--amb:#f59e0b;--txt:#1e293b;--mut:#64748b;--line:#dbe7e1}
+  body{margin:0;background:var(--bg);font-family:"Segoe UI",Arial,sans-serif;color:var(--txt);font-size:14px}
+  .page{max-width:1080px;margin:0 auto;padding:24px}
+  h1{font-size:26px;margin:0 0 4px}
+  .sub{color:var(--mut);margin:0 0 12px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+  .chip{background:#e6f5ef;color:var(--pd);border-radius:999px;padding:4px 12px;font-weight:600;font-size:13px}
+  .chip.amb{background:#fff4dc;color:#b45309}
+  .chip.gray{background:#eef2f5;color:var(--mut)}
+  .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  .card h2{display:flex;align-items:center;gap:10px;font-size:17px;margin:0 0 12px}
+  .badge{display:inline-flex;width:28px;height:28px;border-radius:50%;background:var(--p);color:#fff;align-items:center;justify-content:center;font-weight:700;font-size:15px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .pick{border:2px solid var(--line);border-radius:10px;padding:10px 14px;cursor:pointer;background:#fafcfb;font-weight:600}
+  .pick.on{border-color:var(--p);background:#e6f5ef;color:var(--pd)}
+  .pick small{display:block;font-weight:400;color:var(--mut);font-size:12px}
+  .count{margin-top:12px;padding:10px 14px;background:#f8fafc;border-radius:10px;display:flex;gap:18px;flex-wrap:wrap}
+  .count b{color:var(--pd)}
+  .count .warn{color:#b45309}
+  .names{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+  .name{background:#eef2f5;border-radius:999px;padding:3px 10px;font-size:13px}
+  .name span{color:#94a3b8;margin-right:6px;cursor:pointer}
+  input,textarea,select{font:inherit;border:1px solid var(--line);border-radius:8px;padding:8px 10px;width:100%;box-sizing:border-box;background:#fff}
+  textarea{min-height:150px;resize:vertical}
+  label{display:block;font-size:13px;color:var(--mut);margin:10px 0 4px}
+  .two{display:grid;grid-template-columns:1.2fr 1fr;gap:18px}
+  .preview{border:1px dashed var(--line);border-radius:10px;padding:14px;background:#fcfefd;font-size:13px}
+  .preview .logo{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding-bottom:8px;margin-bottom:10px;color:var(--pd);font-weight:700}
+  .btn{border:none;border-radius:10px;padding:10px 18px;font-weight:700;font-size:14px;cursor:pointer;background:#e6f5ef;color:var(--pd)}
+  .btn.main{background:var(--p);color:#fff;font-size:16px;padding:12px 28px}
+  .btn.sec{background:#fff4dc;color:#b45309}
+  .btn.ghost{background:#fff;border:1px solid var(--line);color:var(--txt);font-weight:500}
+  .bar{position:sticky;bottom:0;background:#fff;border-top:1px solid var(--line);padding:12px 20px;display:flex;gap:12px;align-items:center;border-radius:14px 14px 0 0;box-shadow:0 -4px 12px rgba(0,0,0,.05)}
+  .bar .sum{flex:1;color:var(--mut)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th{background:#e6f5ef;color:var(--pd);text-align:right;padding:8px}
+  td{padding:8px;border-bottom:1px solid #eef2f5}
+  .ok{color:var(--pd);font-weight:600}.bad{color:#b91c1c;font-weight:600}
+  .sect{margin:34px 0 10px;font-size:20px;color:var(--pd);border-bottom:2px solid var(--line);padding-bottom:6px}
+  .note{background:#fff4dc;border-radius:10px;padding:10px 14px;color:#7c3e00;margin:10px 0}
+  .g{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:9px 16px;background:#fff;font-weight:600;cursor:pointer}
+  .g i{width:18px;height:18px;border-radius:50%;background:conic-gradient(#ea4335 0 25%,#fbbc05 0 50%,#34a853 0 75%,#4285f4 0)}
+  .prog{height:10px;background:#eef2f5;border-radius:999px;overflow:hidden;margin:8px 0}
+  .prog div{height:100%;width:35%;background:var(--p)}
+  ul{line-height:1.7}
+  .q{background:#fff;border-right:4px solid var(--amb);border-radius:8px;padding:10px 14px;margin:8px 0}
+</style>
+</head>
+<body>
+<div class="page">
+
+<h1>📧 מיילים למקבלים</h1>
+<p class="sub">שליחת הודעה לקבוצה או לאדם בודד, ישירות מהתוכנה, מחשבון ה-Gmail של הקופה</p>
+<div class="chips">
+  <span class="chip">✓ מחובר: kupa.haryona@gmail.com</span>
+  <span class="chip gray">190 מקבלים עם כתובת מייל</span>
+  <span class="chip amb">331 בלי מייל</span>
+</div>
+
+<!-- ① -->
+<div class="card">
+  <h2><span class="badge">1</span> למי שולחים?</h2>
+  <div class="row">
+    <div class="pick on">רשימת החלוקה הנוכחית<small>מי שמופיע עכשיו ב"חלוקה ורישום"</small></div>
+    <div class="pick">לפי קהילה ▾<small>נציג / קהילה מהכרטיס</small></div>
+    <div class="pick">לפי אזור ▾</div>
+    <div class="pick">לפי בית כנסת ▾</div>
+    <div class="pick">קבועים בלבד</div>
+    <div class="pick">כל המקבלים</div>
+    <div class="pick">מי שלא הגיע לאחרונה<small>לפי התראות אי-הגעה</small></div>
+    <div class="pick">אנשים בודדים<small>חיפוש לפי שם</small></div>
+  </div>
+  <div class="count">
+    <span>נבחרו <b>87</b> אנשים</span>
+    <span>מהם <b>34</b> עם מייל — יקבלו</span>
+    <span class="warn">53 בלי מייל — <u>הצג רשימה</u></span>
+  </div>
+  <label>הוסף או הסר אנשים בודדים</label>
+  <input placeholder="🔍 הקלד שם להוספה…">
+  <div class="names">
+    <span class="name">כהן ישראל <span>✕</span></span>
+    <span class="name">לוי משה <span>✕</span></span>
+    <span class="name">פרידמן שרה <span>✕</span></span>
+    <span class="name">… ועוד 31</span>
+  </div>
+</div>
+
+<!-- ② -->
+<div class="card">
+  <h2><span class="badge">2</span> מה כותבים?</h2>
+  <div class="two">
+    <div>
+      <label>תבנית</label>
+      <select><option>תזכורת לחלוקה השבועית</option><option>חג שמח</option><option>הודעה כללית</option><option>— תבנית חדשה —</option></select>
+      <label>נושא</label>
+      <input value="תזכורת: חלוקה ביום רביעי {תאריך}">
+      <label>תוכן ההודעה</label>
+      <textarea>שלום {שם},
+תזכורת שהחלוקה השבועית תתקיים ביום רביעי {תאריך} בין השעות 17:00–19:00 בנקודת החלוקה הקבועה.
+נשמח לראותכם,
+קופה של צדקה הר יונה</textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn ghost">＋ {שם}</button>
+        <button class="btn ghost">＋ {תאריך חלוקה}</button>
+        <button class="btn ghost">＋ {פרשה}</button>
+        <button class="btn ghost">📎 צרף קובץ</button>
+      </div>
+      <label><input type="checkbox" checked style="width:auto"> להוסיף כותרת עם הלוגו של הקופה</label>
+      <label><input type="checkbox" checked style="width:auto"> לשמור כתבנית לפעם הבאה</label>
+    </div>
+    <div>
+      <label>כך זה ייראה אצל כהן ישראל</label>
+      <div class="preview">
+        <div class="logo">🧺 קופה של צדקה הר יונה</div>
+        <b>תזכורת: חלוקה ביום רביעי 16/09/2026</b><br><br>
+        שלום כהן ישראל,<br>
+        תזכורת שהחלוקה השבועית תתקיים ביום רביעי 16/09/2026 בין השעות 17:00–19:00 בנקודת החלוקה הקבועה.<br>
+        נשמח לראותכם,<br>קופה של צדקה הר יונה
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ③ -->
+<div class="bar">
+  <span class="badge">3</span>
+  <span class="sum">יישלחו <b>34</b> מיילים אישיים (כל אחד רואה רק את עצמו) מהחשבון kupa.haryona@gmail.com</span>
+  <button class="btn sec">שלח בדיקה אליי</button>
+  <button class="btn main">שלח עכשיו ✉</button>
+</div>
+
+<!-- progress -->
+<div class="card" style="margin-top:16px">
+  <h2>בזמן השליחה</h2>
+  <div>שולח… 12 מתוך 34</div>
+  <div class="prog"><div></div></div>
+  <div style="color:var(--mut)">נשלחו 11 · נכשל 1 (כתובת שגויה: לוי משה) · אפשר לסגור את החלון, השליחה ממשיכה</div>
+</div>
+
+<!-- history -->
+<div class="card">
+  <h2>היסטוריית שליחות</h2>
+  <table>
+    <tr><th>תאריך</th><th>נושא</th><th>למי</th><th>נשלחו</th><th>נכשלו</th><th></th></tr>
+    <tr><td>10/09/2026 14:20</td><td>תזכורת: חלוקה ביום רביעי</td><td>רשימת החלוקה הנוכחית</td><td class="ok">33</td><td class="bad">1</td><td><u>פרטים</u> · <u>שלח שוב לנכשלים</u></td></tr>
+    <tr><td>03/09/2026 11:05</td><td>שנה טובה!</td><td>כל המקבלים</td><td class="ok">188</td><td class="bad">2</td><td><u>פרטים</u></td></tr>
+    <tr><td>28/08/2026 09:40</td><td>עדכון שעות חלוקה</td><td>קהילה: בית יוסף</td><td class="ok">21</td><td>0</td><td><u>פרטים</u></td></tr>
+  </table>
+  <div style="margin-top:8px;color:var(--mut)">בכרטיס של כל מקבל (חיפוש מהיר) יופיע גם "מיילים שנשלחו אליו".</div>
+</div>
+
+<!-- settings -->
+<div class="sect">בהגדרות — חיבור לחשבון Google</div>
+<div class="card">
+  <h2>חשבון Google של הקופה</h2>
+  <p style="color:var(--mut);margin-top:0">משמש לשליחת מיילים למקבלים ולמתנדבים. במקום סיסמת אפליקציה — התחברות רגילה של גוגל, כמו באתרים.</p>
+  <div class="row">
+    <span class="g"><i></i> התחבר עם Google</span>
+    <span style="color:var(--mut)">← נפתח דפדפן, בוחרים את חשבון הקופה, לוחצים "אישור", וחוזרים לתוכנה. פעם אחת.</span>
+  </div>
+  <div class="count" style="margin-top:14px">
+    <span>מצב: <b>✓ מחובר — kupa.haryona@gmail.com</b></span>
+    <span><u>התנתק</u></span>
+    <span><u>שלח מייל בדיקה</u></span>
+  </div>
+</div>
+
+<!-- how -->
+<div class="sect">איך זה יעבוד מאחורי הקלעים (בקצרה)</div>
+<div class="card">
+  <ul>
+    <li><b>החיבור לגוגל</b> — התוכנה פותחת את הדפדפן במסך ההסכמה הרשמי של גוגל. אחרי האישור גוגל מחזירה לתוכנה "מפתח" שנשמר במחשב, והתוכנה שולחת מיילים דרך שירות ה-Gmail הרשמי בלי לדעת את הסיסמה. אין צורך באימות דו-שלבי ולא בסיסמת אפליקציה.</li>
+    <li><b>הכנה חד-פעמית מהצד שלנו</b> — כדי שגוגל תסכים לפתוח מסך התחברות בשם "מנהל חלוקה", צריך לרשום את התוכנה פעם אחת ב-Google Cloud (כ-10 דקות, אני מכוון צעד-צעד). זה נעשה פעם אחת לכל החיים, ואחר כך כל מי שמתקין את התוכנה רק לוחץ "התחבר עם Google".</li>
+    <li><b>מגבלה שכדאי לדעת</b> — כל עוד התוכנה לא עברה "אימות" רשמי של גוגל (תהליך ארוך שלא מתאים לנו), במסך ההתחברות מופיעה אזהרה "Google לא אימתה את האפליקציה" ולוחצים "המשך בכל זאת". זה קורה פעם אחת ולא מפריע אחר כך. Gmail מאפשר כ-500 מיילים ביום — הרבה מעבר ל-190 הכתובות שיש לנו.</li>
+    <li><b>שליחה אישית לכל אחד</b> — כל מקבל מקבל מייל נפרד עם שמו, ואף אחד לא רואה כתובות של אחרים. השליחה רצה ברקע עם מד-התקדמות, וכישלונות נרשמים עם "שלח שוב לנכשלים".</li>
+    <li><b>סנכרון</b> — ההיסטוריה והתבניות מסתנכרנות בין שני המחשבים כמו כל שאר הנתונים.</li>
+    <li><b>המייל למתנדבים</b> — יעבור גם הוא לחיבור גוגל, כך שסיסמת האפליקציה לא תידרש יותר (השאלה הפתוחה למטה).</li>
+  </ul>
+</div>
+
+<div class="sect">שאלות פתוחות</div>
+<div class="q">1. איפה זה יושב בתוכנה — אזור חדש "מיילים" בסרגל הראשי, או בתוך אזור "הודעות" לצד צ'אט הצוות?</div>
+<div class="q">2. אילו קבוצות באמת צריך ביום-יום? (רשימת החלוקה הנוכחית / קהילה / אזור / בית כנסת / קבועים / כולם / לא-הגיעו / בודדים)</div>
+<div class="q">3. חיבור גוגל — פעם אחת ומשותף לשני המחשבים (אותו חשבון קופה), או כל מחשב מתחבר בנפרד?</div>
+<div class="q">4. הקליטה האוטומטית של תשובות המתנדבים מהמייל (קריאת תיבת הדואר) — להשאיר על סיסמת האפליקציה הקיימת, או להעביר גם אותה לגוגל (זה מבקש הרשאת "קריאת מיילים", שגוגל מקשה עליה יותר)?</div>
+
+</div>
+</body>
+</html>

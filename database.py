@@ -372,6 +372,34 @@ def init_db():
             report_json  TEXT DEFAULT ''
         );
 
+        -- v3.39: מיילים למקבלים — היסטוריית שליחות (שורה לכל שליחה, מסונכרנת
+        -- לפי guid) ותבניות הודעה משותפות לשני המחשבים.
+        CREATE TABLE IF NOT EXISTS mail_campaigns (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            guid         TEXT DEFAULT '',
+            sent_at      TEXT DEFAULT '',
+            subject      TEXT DEFAULT '',
+            body         TEXT DEFAULT '',
+            audience     TEXT DEFAULT '',
+            sender       TEXT DEFAULT '',
+            device       TEXT DEFAULT '',
+            total        INTEGER DEFAULT 0,
+            sent         INTEGER DEFAULT 0,
+            failed       INTEGER DEFAULT 0,
+            status       TEXT DEFAULT 'sending',
+            status_ts    TEXT DEFAULT '',
+            report_json  TEXT DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS mail_templates (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            guid         TEXT DEFAULT '',
+            name         TEXT DEFAULT '',
+            subject      TEXT DEFAULT '',
+            body         TEXT DEFAULT '',
+            updated_at   TEXT DEFAULT '',
+            deleted      INTEGER DEFAULT 0
+        );
+
         -- Journal of changes RECEIVED from another computer, with enough 'before'
         -- state to undo them. Powers the manager's change-log (#5rhe9). Local only
         -- (never synced) — each machine records what IT applied.
@@ -1909,6 +1937,124 @@ def tzintuk_campaign_for_date(dist_date: str):
         return dict(row) if row else None
 
 
+# ─── Mail campaigns + templates (v3.39) ───────────────────────────────────────
+
+def add_mail_campaign(subject: str, body: str, audience: str, sender: str,
+                      total: int, guid: str = "", device: str = "",
+                      status: str = "sending", sent_at: str = "") -> str:
+    """רישום שליחת-מיילים אחת. Idempotent לפי guid (משמש גם לרשומה שמגיעה
+    מהמחשב השני). מחזיר guid."""
+    guid = (guid or "").strip() or uuid.uuid4().hex
+    now = _utc_now()
+    sent_at = sent_at or now
+    with get_connection() as conn:
+        if conn.execute("SELECT 1 FROM mail_campaigns WHERE guid=?", (guid,)).fetchone():
+            return guid
+        conn.execute(
+            "INSERT INTO mail_campaigns (guid, sent_at, subject, body, audience, sender, "
+            "device, total, status, status_ts) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (guid, sent_at, subject or "", body or "", audience or "", sender or "",
+             device or "", int(total or 0), status or "sending", now))
+    _sync_log("mail_add", {"guid": guid, "sent_at": sent_at, "subject": subject or "",
+                           "body": body or "", "audience": audience or "",
+                           "sender": sender or "", "device": device or "",
+                           "total": int(total or 0), "status": status or "sending",
+                           "status_ts": now})
+    return guid
+
+
+def update_mail_campaign(guid: str, sent: int, failed: int, status: str,
+                         report_json: str = "") -> bool:
+    """עדכון התקדמות/תוצאה (LWW לפי status_ts = עכשיו)."""
+    guid = (guid or "").strip()
+    if not guid:
+        return False
+    ts = _utc_now()
+    with get_connection() as conn:
+        cur = conn.execute(
+            "UPDATE mail_campaigns SET sent=?, failed=?, status=?, status_ts=?, "
+            "report_json=? WHERE guid=?",
+            (int(sent or 0), int(failed or 0), status or "sending", ts,
+             report_json or "", guid))
+        if cur.rowcount == 0:
+            return False
+    _sync_log("mail_update", {"guid": guid, "sent": int(sent or 0),
+                              "failed": int(failed or 0), "status": status or "sending",
+                              "ts": ts, "report_json": report_json or ""})
+    return True
+
+
+def get_mail_campaigns(limit: int | None = None) -> list[dict]:
+    q = "SELECT * FROM mail_campaigns ORDER BY sent_at DESC"
+    if limit:
+        q += f" LIMIT {int(limit)}"
+    with get_connection() as conn:
+        return [dict(r) for r in conn.execute(q)]
+
+
+def get_mail_campaign(guid: str):
+    if not guid:
+        return None
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM mail_campaigns WHERE guid=?", (guid,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_mails_for_recipient(rec_id: int) -> list[dict]:
+    """המיילים שנשלחו למקבל (לפי report_json) — לכרטיס בחיפוש מהיר.
+    מחזיר [{sent_at, subject, status, email, error}] מהחדש לישן."""
+    out = []
+    for c in get_mail_campaigns():
+        try:
+            rows = json.loads(c.get("report_json") or "[]")
+        except Exception:
+            rows = []
+        for r in rows:
+            if str(r.get("rec_id") or "") == str(rec_id):
+                out.append({"sent_at": c.get("sent_at", ""), "subject": c.get("subject", ""),
+                            "status": r.get("status", ""), "email": r.get("email", ""),
+                            "error": r.get("error", "")})
+    return out
+
+
+def upsert_mail_template(name: str, subject: str, body: str, guid: str = "",
+                         updated_at: str = "", deleted: int = 0) -> str:
+    """שמירת תבנית (חדשה או עדכון לפי guid). LWW לפי updated_at."""
+    guid = (guid or "").strip() or uuid.uuid4().hex
+    ts = updated_at or _utc_now()
+    with get_connection() as conn:
+        row = conn.execute("SELECT updated_at FROM mail_templates WHERE guid=?",
+                           (guid,)).fetchone()
+        if row:
+            if (row["updated_at"] or "") > ts:
+                return guid
+            conn.execute("UPDATE mail_templates SET name=?, subject=?, body=?, "
+                         "updated_at=?, deleted=? WHERE guid=?",
+                         (name or "", subject or "", body or "", ts, int(deleted), guid))
+        else:
+            conn.execute("INSERT INTO mail_templates (guid, name, subject, body, "
+                         "updated_at, deleted) VALUES (?,?,?,?,?,?)",
+                         (guid, name or "", subject or "", body or "", ts, int(deleted)))
+    _sync_log("mtpl_upsert", {"guid": guid, "name": name or "", "subject": subject or "",
+                              "body": body or "", "updated_at": ts,
+                              "deleted": int(deleted)})
+    return guid
+
+
+def delete_mail_template(guid: str):
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM mail_templates WHERE guid=?", (guid,)).fetchone()
+        t = dict(row) if row else None
+    if t:
+        upsert_mail_template(t["name"], t["subject"], t["body"], guid=guid, deleted=1)
+
+
+def get_mail_templates() -> list[dict]:
+    with get_connection() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM mail_templates WHERE deleted=0 ORDER BY name COLLATE NOCASE")]
+
+
 # ─── Manager change-log + undo (#5rhe9) ───────────────────────────────────────
 
 def get_recipient_by_guid(guid: str):
@@ -2039,6 +2185,7 @@ def reset_all_data(tzintuk: bool = False):
         # With sync on, restart_from_peer brings the real history back.
         if tzintuk:
             conn.execute("DELETE FROM tzintuk_campaigns")
+            conn.execute("DELETE FROM mail_campaigns")
 
 
 # ─── Import helpers ───────────────────────────────────────────────────────────

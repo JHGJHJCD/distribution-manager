@@ -555,7 +555,7 @@ class _SendModeDialog(QDialog):
 
 class _TestStatusDialog(QDialog):
     """מעקב חי אחרי שיחת הבדיקה — כשמספר הבדיקה אינו הטלפון שביד המפעיל
-    רואים כאן אם השיחה נענתה, נכשלה או שהוקש 7, בלי לנחש."""
+    רואים כאן אם השיחה נענתה, נכשלה או מה הוקש בסקר (1/2/3), בלי לנחש."""
 
     def __init__(self, campaign_id: str, phone: str, parent=None):
         super().__init__(parent)

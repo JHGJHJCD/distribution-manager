@@ -16,6 +16,7 @@ from utils.backup import auto_backup, restore_from_backup
 from utils.ui import busy_cursor, ALIGN_RIGHT, section_header, line_icon, enable_touch_scroll
 from utils import updater
 from utils import email_utils
+from utils import google_auth
 from utils import sync
 from version import APP_VERSION
 import json
@@ -411,11 +412,34 @@ class SettingsTab(QWidget):
         lay.addLayout(_section("חיבורים"))
         row = _row(); lay.addLayout(row)
 
+        # ── חשבון Google (v3.39) ──
+        card, body, _h = _card("חשבון Google של הקופה", "mail",
+                               "התחברות רגילה של גוגל — בלי סיסמת אפליקציה")
+        body.addWidget(_desc(
+            "משמש לשליחת מיילים למקבלים (מסך \"מיילים\") ולמתנדבים. לוחצים \"התחבר עם "
+            "Google\", נפתח דפדפן, בוחרים את חשבון הקופה ומאשרים — פעם אחת. החיבור משותף "
+            "לשני המחשבים דרך הסנכרון."))
+        body.addWidget(_hint(
+            "במסך של גוגל עשויה להופיע אזהרה \"Google לא אימתה את האפליקציה\" — לוחצים "
+            "\"מתקדם\" ואז \"המשך\". התוכנה מבקשת הרשאת שליחה בלבד, לא קריאת מיילים.",
+            "#b45309"))
+        self.lbl_google_status = QLabel("")
+        self.lbl_google_status.setWordWrap(True)
+        self.lbl_google_status.setStyleSheet("color:#334155; font-size:13px; font-weight:700; " + _LBL)
+        body.addWidget(self.lbl_google_status)
+        self.btn_google_connect = _btn("התחבר עם Google", _BTN_PRIMARY, self._google_connect)
+        self.btn_google_disconnect = _btn("התנתק", _BTN_GHOST, self._google_disconnect)
+        self.btn_google_test = _btn("שלח מייל בדיקה", _BTN_GHOST, self._test_mail_settings)
+        body.addLayout(_btn_row(self.btn_google_connect, self.btn_google_disconnect,
+                                self.btn_google_test))
+        _place(row, card, body)
+
         # ── מייל למתנדבים ──
         card, body, _h = _card("מייל למתנדבים", "mail", "שליחת רשימה למתנדב וקליטת התוצאות")
         body.addWidget(_desc(
             "משמש לשליחת רשימת חלוקה למתנדב ולקליטה אוטומטית של התוצאות שהוא מחזיר "
-            "במייל (מסך \"חלוקה ורישום\"). דורש סיסמת אפליקציה של Gmail."))
+            "במייל (מסך \"חלוקה ורישום\"). כשחשבון Google מחובר — השליחה עוברת דרכו; "
+            "סיסמת האפליקציה נדרשת רק לקליטה האוטומטית של התשובות מתיבת הדואר."))
         mail_links = QLabel(
             "הגדרה חד-פעמית ב-Gmail (לפי הסדר):<br>"
             "1. <a href=\"https://authenticator.cc/\">התקנת אפליקציית מאמת (Authenticator)</a><br>"
@@ -753,7 +777,10 @@ class SettingsTab(QWidget):
         self.chip_yemot.setText("●  ימות המשיח מחובר" if ym else "●  ימות המשיח לא חובר")
         self.chip_yemot.setStyleSheet(_CHIP_GREEN if ym else _CHIP_AMBER)
         ml = email_utils.is_configured()
-        self.chip_mail.setText("●  מייל מוגדר" if ml else "●  מייל לא הוגדר")
+        if email_utils.google_connected():
+            self.chip_mail.setText("●  Google מחובר")
+        else:
+            self.chip_mail.setText("●  מייל מוגדר" if ml else "●  מייל לא הוגדר")
         self.chip_mail.setStyleSheet(_CHIP_GREEN if ml else _CHIP_AMBER)
 
     def refresh(self):
@@ -793,6 +820,7 @@ class SettingsTab(QWidget):
         self.org_subtitle.setText(db.get_setting("org_subtitle") or "")
         self._refresh_logo_status()
 
+        self._refresh_google_status()
         cfg = email_utils.get_smtp_config()
         self.mail_email.setText(cfg["email"])
         self.mail_password.setText(cfg["app_password"])
@@ -1317,25 +1345,79 @@ class SettingsTab(QWidget):
         # password / blocked SMTP all surface here as a failure.
         self._save_mail_settings_silent()
         cfg = email_utils.get_smtp_config()
-        if not (cfg["email"] and cfg["app_password"]):
+        if not email_utils.is_configured():
             QMessageBox.warning(self, "בדיקת מייל",
-                                "יש למלא כתובת מייל וסיסמת אפליקציה תחילה.")
+                                "התחבר עם Google, או מלא כתובת מייל וסיסמת אפליקציה תחילה.")
             return
+        me = email_utils.sender_email()
         with busy_cursor():
             try:
                 email_utils.send_email(
-                    cfg["email"],
+                    me,
                     subject="בדיקת מייל — מנהל חלוקה",
                     html_body="<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
                               "זוהי הודעת בדיקה. אם קיבלת אותה — שליחת המייל מוגדרת כראוי ✓</div>")
-                ok, msg = True, (f"נשלח מייל בדיקה בהצלחה אל {cfg['email']} ✓\n"
+                ok, msg = True, (f"נשלח מייל בדיקה בהצלחה אל {me} ✓\n"
                                  "בדוק שההודעה הגיעה לתיבת הדואר.")
             except Exception as e:
-                ok, msg = False, f"השליחה נכשלה — ודא חיבור לאינטרנט וסיסמת אפליקציה תקינה.\n\n{e}"
+                ok, msg = False, f"השליחה נכשלה — ודא חיבור לאינטרנט וחשבון מייל תקין.\n\n{e}"
         if ok:
             QMessageBox.information(self, "בדיקת מייל", msg)
         else:
             QMessageBox.warning(self, "בדיקת מייל", msg)
+
+    # ── Google account (v3.39) ────────────────────────────────────────────────
+
+    def _refresh_google_status(self):
+        avail = google_auth.is_available()
+        if google_auth.is_connected():
+            self.lbl_google_status.setText("✓ מחובר — " + (google_auth.connected_email() or "חשבון Google"))
+            self.lbl_google_status.setStyleSheet("color:#0f766e; font-size:13px; font-weight:700; " + _LBL)
+        elif not avail:
+            self.lbl_google_status.setText(
+                "החיבור לגוגל עדיין לא הופעל בגרסה זו (חסר זיהוי אפליקציה). בינתיים אפשר לשלוח עם סיסמת אפליקציה.")
+            self.lbl_google_status.setStyleSheet("color:#9ca3af; font-size:12.5px; " + _LBL)
+        else:
+            self.lbl_google_status.setText("לא מחובר")
+            self.lbl_google_status.setStyleSheet("color:#9ca3af; font-size:13px; " + _LBL)
+        self.btn_google_connect.setEnabled(avail and not google_auth.is_connected())
+        self.btn_google_connect.setText("התחבר מחדש" if google_auth.is_connected() else "התחבר עם Google")
+        self.btn_google_connect.setEnabled(avail)
+        self.btn_google_disconnect.setVisible(google_auth.is_connected())
+        self.btn_google_test.setVisible(google_auth.is_connected())
+
+    def _google_connect(self):
+        if not google_auth.is_available():
+            QMessageBox.information(self, "חיבור Google",
+                                    "החיבור לגוגל עדיין לא הופעל בגרסה זו של התוכנה.")
+            return
+        QMessageBox.information(
+            self, "חיבור Google",
+            "עכשיו ייפתח הדפדפן.\n1. בחר את חשבון ה-Gmail של הקופה.\n"
+            "2. אם מופיעה אזהרה שהאפליקציה לא אומתה — לחץ \"מתקדם\" ואז \"המשך\".\n"
+            "3. אשר את הגישה לשליחת מיילים.\nאחר כך חזור לכאן.")
+        self.btn_google_connect.setEnabled(False)
+        self.lbl_google_status.setText("ממתין לאישור בדפדפן…")
+        self._google_worker = _BgWorker(google_auth.connect, self)
+        self._google_worker.done.connect(self._google_connected)
+        self._google_worker.start()
+
+    def _google_connected(self, res):
+        self._google_worker = None
+        if isinstance(res, Exception):
+            QMessageBox.warning(self, "חיבור Google", str(res))
+        else:
+            QMessageBox.information(self, "חיבור Google",
+                                    f"החשבון {res} חובר בהצלחה ✓\nמעכשיו המיילים נשלחים דרכו.")
+        self.refresh()
+
+    def _google_disconnect(self):
+        if QMessageBox.question(self, "ניתוק", "לנתק את חשבון Google מהתוכנה (בשני המחשבים)?") \
+                != QMessageBox.StandardButton.Yes:
+            return
+        with busy_cursor():
+            google_auth.disconnect()
+        self.refresh()
 
     def _save_mail_settings_silent(self):
         email = self.mail_email.text().strip()

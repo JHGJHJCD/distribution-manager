@@ -44,9 +44,31 @@ def set_smtp_config(email: str, app_password: str, host: str = "", port=None):
     db.set_setting("smtp_port", str(int(port) if port else DEFAULT_PORT))
 
 
-def is_configured() -> bool:
+def smtp_configured() -> bool:
     cfg = get_smtp_config()
     return bool(cfg["email"] and cfg["app_password"])
+
+
+def google_connected() -> bool:
+    """v3.39: חשבון Google מחובר (utils/google_auth) — עדיף על SMTP לשליחה."""
+    try:
+        from utils import google_auth
+        return google_auth.is_connected()
+    except Exception:
+        return False
+
+
+def is_configured() -> bool:
+    """אפשר לשלוח מייל: חיבור Google או סיסמת-אפליקציה (SMTP)."""
+    return google_connected() or smtp_configured()
+
+
+def sender_email() -> str:
+    """כתובת השולח בפועל — של חשבון Google כשמחובר, אחרת של ה-SMTP."""
+    if google_connected():
+        from utils import google_auth
+        return google_auth.connected_email() or get_smtp_config()["email"]
+    return get_smtp_config()["email"]
 
 
 def get_checklist_password() -> str:
@@ -72,12 +94,13 @@ def send_email(to_addr: str, subject: str, html_body: str,
     image (referenced in html_body via <img src="cid:logo">). Raises on failure
     — the caller is expected to show the error to the user."""
     cfg = get_smtp_config()
-    if not (cfg["email"] and cfg["app_password"]):
+    via_google = google_connected()
+    if not via_google and not (cfg["email"] and cfg["app_password"]):
         raise RuntimeError("הגדרות שליחת מייל לא הוגדרו (ראה לשונית הגדרות).")
 
     root = MIMEMultipart("mixed")
     root["Subject"] = subject
-    root["From"] = cfg["email"]
+    root["From"] = sender_email() if via_google else cfg["email"]
     root["To"] = to_addr
 
     related = MIMEMultipart("related")
@@ -95,6 +118,13 @@ def send_email(to_addr: str, subject: str, html_body: str,
             part = MIMEApplication(f.read(), Name=os.path.basename(attachment_path))
         part["Content-Disposition"] = f'attachment; filename="{os.path.basename(attachment_path)}"'
         root.attach(part)
+
+    # v3.39: חשבון Google מחובר ⇒ Gmail API (בלי סיסמת אפליקציה). השגיאות שם
+    # כבר בעברית (GoogleAuthError) — עולות כמו שהן.
+    if via_google:
+        from utils import google_auth
+        google_auth.gmail_send_raw(root.as_bytes())
+        return
 
     # Connecting is where "no internet" shows up: getaddrinfo/timeout/refused all
     # surface as OSError-family here. Turn them into a clear Hebrew message so the

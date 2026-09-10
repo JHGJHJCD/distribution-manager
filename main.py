@@ -36,6 +36,7 @@ from tabs.distributions import DistributionsTab
 from tabs.settings import SettingsTab, _UpdateWorker
 from tabs.messages import MessagesTab
 from tabs.tzintukim import TzintukimTab
+from tabs.mails import MailsTab
 
 from version import APP_VERSION
 from utils import updater
@@ -628,18 +629,21 @@ class MainWindow(QMainWindow):
         ])
         self.messages_tab = MessagesTab(self)
         self.tzintukim_tab = TzintukimTab(self)
+        self.mails_tab = MailsTab(self)
         self.tabs.addTab(_leaf(self.group_tab, "dist"), "חלוקה")
         self.tabs.addTab(area_people, "אנשים")
         self._messages_tab_index = self.tabs.addTab(
             _leaf(self.messages_tab, "messages"), "הודעות")
         # v2.81: 'צינתוקים' — voice notifications to the week's list via Yemot.
         self.tabs.addTab(_leaf(self.tzintukim_tab, "tzintukim"), "צינתוקים")
+        # v3.39: 'מיילים' — מייל לקבוצה/לבודדים מחשבון הקופה (Google / SMTP).
+        self.tabs.addTab(_leaf(self.mails_tab, "mails"), "מיילים")
         self.tabs.addTab(_leaf(self.settings_tab, "settings"), "הגדרות")
         # Flat list of the real content tabs (leaves) for refresh bookkeeping.
         self._leaf_tabs = [self.group_tab, self.distributions_tab,
                            self.recipients_tab, self.search_tab,
                            self.messages_tab, self.tzintukim_tab,
-                           self.settings_tab]
+                           self.mails_tab, self.settings_tab]
 
         self._restore_tab_order()
         # Save the new order whenever the user drags a tab.

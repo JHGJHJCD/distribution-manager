@@ -582,9 +582,12 @@ def add_template_entry(phone: str, name: str = "",
 
 
 def template_position(template_id: str) -> int:
-    """1-based position of `template_id` in the line's template list — the
-    number the entry menu's campaign_message_to_play line refers to (verified
-    statistically on the live line 2/9/2026: 17 = 1430692). 0 = not found."""
+    """1-based index of `template_id` in GetTemplates' order. ⚠ NOT reliably the
+    number the root's campaign_message_to_play / check_template_filter refers to:
+    the 3/9/2026 incident disproved it (check_template_filter=17 caught 1430693,
+    at GetTemplates position 18 — not 1430692); the earlier "statistically
+    17=1430692" reading was wrong. Kept only for the disabled callback path
+    (CALLBACK_ENABLED=False) — verify live before any reliance. 0 = not found."""
     data = _call("GetTemplates")
     for i, t in enumerate(data.get("templates") or [], start=1):
         if str(t.get("templateId") or "").strip() == str(template_id):
