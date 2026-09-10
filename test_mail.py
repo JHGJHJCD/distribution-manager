@@ -213,6 +213,72 @@ ok("מחשב חדש מחובר לגוגל דרך הסנכרון (setting משו�
 db.reset_all_data(tzintuk=True)
 ok("reset_all_data מנקה mail_campaigns", db.get_mail_campaigns() == [])
 
+# ─── v3.41: קובץ-זיהוי מגוגל שנטען בהגדרות (settings מסונכרנות) ─────────────
+use_machine(dir_a)
+h = mailer.html_body("שלום", True)
+ok("כותרת המייל: לוגו עם width/height כאטריבוטים ובלי flex",
+   "width='44' height='44'" in h and "display:flex" not in h and "<table" in h)
+ok("בלי כותרת — אין לוגו", "cid:logo" not in mailer.html_body("שלום", False))
+cdir = tempfile.mkdtemp(prefix="gclient_")
+def _w(name, obj):
+    pth = os.path.join(cdir, name)
+    with open(pth, "w", encoding="utf-8") as f:
+        json.dump(obj, f)
+    return pth
+try:
+    from utils import _secret
+    _had = getattr(_secret, "GOOGLE_CLIENT_ID", None)
+    _secret.GOOGLE_CLIENT_ID = ""
+except Exception:
+    _secret = None
+db.set_setting(google_auth.SET_CLIENT_ID, ""); db.set_setting(google_auth.SET_CLIENT_SECRET, "")
+os.remove(os.path.join(dir_a, google_auth.CLIENT_FILE))   # הקובץ מהמקטע הראשון
+ok("בלי קובץ זיהוי — לא זמין", not google_auth.is_available())
+cid = google_auth.import_client_file(_w("installed.json", {"installed": {
+    "client_id": "123-abc.apps.googleusercontent.com", "client_secret": "S1"}}))
+ok("טעינת קובץ installed → זמין + settings", cid.endswith(".apps.googleusercontent.com")
+   and google_auth.is_available() and google_auth.client_credentials() == (cid, "S1"))
+for name, obj, why in (("flat.json", {"client_id": "9-x.apps.googleusercontent.com", "client_secret": "S2"}, "שטוח"),):
+    ok("פורמט " + why, google_auth.import_client_file(_w(name, obj)) == "9-x.apps.googleusercontent.com")
+for name, obj in (("web.json", {"web": {"client_id": "w.apps.googleusercontent.com", "client_secret": "x"}}),
+                  ("junk.json", {"foo": "bar"})):
+    try:
+        google_auth.import_client_file(_w(name, obj)); bad = False
+    except google_auth.GoogleAuthError:
+        bad = True
+    ok("קובץ לא מתאים נדחה בעברית: " + name, bad)
+with open(os.path.join(cdir, "notjson.json"), "w") as f:
+    f.write("hello")
+try:
+    google_auth.import_client_file(os.path.join(cdir, "notjson.json")); bad = False
+except google_auth.GoogleAuthError:
+    bad = True
+ok("קובץ שאינו JSON נדחה", bad)
+# הזיהוי מסתנכרן למחשב B
+use_machine(dir_b); sync.pull_changes()
+ok("קובץ הזיהוי מגיע למחשב B דרך הסנכרון", google_auth.client_credentials()[0] == "9-x.apps.googleusercontent.com")
+# loopback: בקשת favicon לפני ה-redirect לא שוברת את ההמתנה לקוד
+import http.server, threading, urllib.request
+srv = http.server.HTTPServer(("127.0.0.1", 0), google_auth._OneShotHandler)
+srv.expected_state = "ST"; srv.got_it = threading.Event(); srv.timeout = 1.0
+google_auth._OneShotHandler.result = {}
+port = srv.server_port
+def _client():
+    import time as _t; _t.sleep(0.2)
+    try: urllib.request.urlopen(f"http://127.0.0.1:{port}/favicon.ico", timeout=3)
+    except Exception: pass
+    urllib.request.urlopen(f"http://127.0.0.1:{port}/?state=ST&code=CODE9", timeout=3).read()
+threading.Thread(target=_client, daemon=True).start()
+google_auth._TRANSPORT = None
+google_auth.webbrowser.open = lambda *a, **k: None
+try:
+    code = google_auth._wait_for_code("about:blank", srv, 8)
+finally:
+    srv.server_close(); google_auth._TRANSPORT = fake_transport
+ok("loopback: favicon לפני הקוד לא מאבד את הקוד", code == "CODE9")
+if _secret is not None and _had is not None:
+    _secret.GOOGLE_CLIENT_ID = _had
+
 # disconnect
 use_machine(dir_a)
 google_auth.disconnect()

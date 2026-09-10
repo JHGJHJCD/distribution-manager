@@ -17,7 +17,7 @@
 import json
 import os
 
-from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QTextEdit,
     QTextBrowser, QComboBox, QCheckBox, QTableWidget, QTableWidgetItem, QHeaderView,
@@ -52,6 +52,21 @@ def _logo_path() -> str:
         return p if os.path.exists(p) else ""
     except Exception:
         return ""
+
+
+class _BgWorker(QThread):
+    """קריאה חוסמת אחת מחוץ ל-thread של ה-UI; פולט תוצאה או חריגה."""
+    done = pyqtSignal(object)
+
+    def __init__(self, fn, parent=None):
+        super().__init__(parent)
+        self._fn = fn
+
+    def run(self):
+        try:
+            self.done.emit(self._fn())
+        except Exception as e:                                # noqa: BLE001
+            self.done.emit(e)
 
 
 class _SendWorker(QThread):
@@ -204,6 +219,7 @@ class MailsTab(QWidget):
         self._recs = {}          # id → rec
         self._attachment = ""
         self._worker = None
+        self._test_worker = None
         self._active_guid = ""
         self._templates = []
         self._current_tpl_guid = ""
@@ -387,7 +403,10 @@ class MailsTab(QWidget):
         right.addWidget(self.lbl_preview_title)
         self.preview = QTextBrowser()
         self.preview.setMinimumWidth(300)
-        self.preview.setStyleSheet("QTextBrowser{background:#fcfefd; border:1px dashed #cbd5e1; border-radius:8px; padding:8px;}")
+        self.preview.setOpenExternalLinks(False)
+        # font-size ב-QSS = גופן-הבסיס של המסמך (ה-QSS הכללי של האפליקציה דורס setDefaultFont)
+        self.preview.setStyleSheet("QTextBrowser{background:#fcfefd; border:1px dashed #cbd5e1; border-radius:8px;"
+                                   " padding:8px; font-size:15px;}")
         right.addWidget(self.preview, 1)
         two.addLayout(right, 2)
         c_lay.addLayout(two)
@@ -588,8 +607,9 @@ class MailsTab(QWidget):
             self.lbl_summary.setText(
                 f"יישלחו <b>{ok}</b> מיילים אישיים (כל אחד רואה רק את עצמו) מהחשבון <b>{sender}</b>")
         sending = self._worker is not None
+        testing = getattr(self, "_test_worker", None) is not None
         self.btn_send.setEnabled(email_utils.is_configured() and ok > 0 and not sending)
-        self.btn_test.setEnabled(email_utils.is_configured() and not sending)
+        self.btn_test.setEnabled(email_utils.is_configured() and not sending and not testing)
 
     def _remove_target(self, tg):
         if tg.get("external"):
@@ -629,18 +649,19 @@ class MailsTab(QWidget):
 
     def _schedule_preview(self, *_):
         self._preview_timer.start()
-        self._update_metrics()
 
     def _ctx(self):
         return mailer.default_context(self._dist_iso())
 
     def _update_preview(self):
+        self._update_metrics()
         first = next((t for t in self._targets if t["ok"]), None)
         rec = self._recs.get(first["rec_id"]) if first and first.get("rec_id") is not None else None
         ctx = dict(self._ctx(), fallback_name=first["name"] if first else "ישראל ישראלי")
         subj = mailer.render(self.subject.text(), rec, ctx)
+        logo_url = QUrl.fromLocalFile(_logo_path()).toString() if _logo_path() else ""
         body = mailer.html_body(mailer.render(self.body.toPlainText(), rec, ctx),
-                                self.chk_header.isChecked(), ).replace("src='cid:logo'", f"src='{_logo_path()}'")
+                                self.chk_header.isChecked()).replace("src='cid:logo'", f"src='{logo_url}'")
         who = first["name"] if first else "נמען לדוגמה"
         self.lbl_preview_title.setText(f"כך זה ייראה אצל {who}")
         self.preview.setHtml(f"<div dir='rtl'><div style='color:#64748b;font-size:12px'>נושא:</div>"
@@ -739,18 +760,29 @@ class MailsTab(QWidget):
         first = next((t for t in self._targets if t["ok"]), None)
         rec = self._recs.get(first["rec_id"]) if first and first.get("rec_id") is not None else None
         ctx = dict(self._ctx(), fallback_name=first["name"] if first else "ישראל ישראלי")
-        with busy_cursor():
-            try:
-                email_utils.send_email(
-                    me, "[בדיקה] " + mailer.render(self.subject.text(), rec, ctx),
-                    mailer.html_body(mailer.render(self.body.toPlainText(), rec, ctx),
-                                     self.chk_header.isChecked()),
-                    attachment_path=self._attachment or None,
-                    inline_logo_path=_logo_path() if self.chk_header.isChecked() else None)
-            except Exception as e:
-                QMessageBox.warning(self, "בדיקה נכשלה", str(e))
-                return
-        QMessageBox.information(self, "נשלח", f"מייל הבדיקה נשלח אל {me} ✓\nבדוק בתיבת הדואר איך זה נראה.")
+        subj = "[בדיקה] " + mailer.render(self.subject.text(), rec, ctx)
+        html = mailer.html_body(mailer.render(self.body.toPlainText(), rec, ctx),
+                                self.chk_header.isChecked())
+        attach = self._attachment or None
+        logo = _logo_path() if self.chk_header.isChecked() else None
+        # ברקע — חיבור לשרת (במיוחד מאחורי נטפרי) יכול לקחת דקות; המסך לא קופא
+        self.btn_test.setEnabled(False)
+        self.btn_test.setText("שולח בדיקה…")
+        self._test_worker = _BgWorker(
+            lambda: email_utils.send_email(me, subj, html, attachment_path=attach,
+                                           inline_logo_path=logo), self)
+        self._test_worker.done.connect(lambda res: self._test_done(res, me))
+        self._test_worker.start()
+
+    def _test_done(self, res, me):
+        self._test_worker = None
+        self.btn_test.setText("שלח בדיקה אליי")
+        self._update_metrics()
+        if isinstance(res, Exception):
+            QMessageBox.warning(self, "בדיקה נכשלה", str(res))
+        else:
+            QMessageBox.information(
+                self, "נשלח", f"מייל הבדיקה נשלח אל {me} ✓" + chr(10) + "בדוק בתיבת הדואר איך זה נראה.")
 
     def _send(self, targets=None, audience=None):
         if self._worker is not None or not self._validate_message():

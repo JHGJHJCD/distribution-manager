@@ -112,11 +112,16 @@ def html_body(text: str, with_header: bool = True, org_name: str = "קופה ש�
         for p in paras if p)
     header = ""
     if with_header:
-        header = ("<div style='display:flex;align-items:center;gap:10px;border-bottom:2px solid #0f9d78;"
-                  "padding-bottom:8px;margin-bottom:16px'>"
-                  "<img src='cid:logo' alt='' style='height:44px'>"
-                  f"<span style='font-size:18px;font-weight:700;color:#0f766e'>{html.escape(org_name)}</span>"
-                  "</div>")
+        # טבלה (לא flex) + width/height כאטריבוטים: מנוע ה-rich-text של Qt
+        # (התצוגה המקדימה) מתעלם מ-CSS height על תמונה ומ-display:flex, וגם
+        # לקוחות מייל (Gmail/Outlook) אמינים יותר עם טבלה.
+        header = ("<table dir='rtl' width='100%' cellpadding='4' cellspacing='0' border='0'><tr>"
+                  "<td width='56' align='right' valign='middle'>"
+                  "<img src='cid:logo' alt='' width='44' height='44'></td>"
+                  "<td align='right' valign='middle' style='font-size:18px;font-weight:700;"
+                  f"color:#0f766e'>{html.escape(org_name)}</td>"
+                  "</tr></table>"
+                  "<hr style='border:none;border-top:2px solid #0f9d78;margin:0 0 16px'>")
     return ("<div dir='rtl' style=\"font-family:'Segoe UI',Arial,sans-serif;font-size:15px;"
             "color:#1e293b;line-height:1.6;max-width:640px;text-align:right\">"
             f"{header}{body}</div>")

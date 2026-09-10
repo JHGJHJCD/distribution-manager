@@ -413,8 +413,7 @@ class SettingsTab(QWidget):
         row = _row(); lay.addLayout(row)
 
         # ── חשבון Google (v3.39) ──
-        card, body, _h = _card("חשבון Google של הקופה", "mail",
-                               "התחברות רגילה של גוגל — בלי סיסמת אפליקציה")
+        card, body, _h = _card("חשבון Google של הקופה", "mail", "בלי סיסמת אפליקציה")
         body.addWidget(_desc(
             "משמש לשליחת מיילים למקבלים (מסך \"מיילים\") ולמתנדבים. לוחצים \"התחבר עם "
             "Google\", נפתח דפדפן, בוחרים את חשבון הקופה ומאשרים — פעם אחת. החיבור משותף "
@@ -430,8 +429,24 @@ class SettingsTab(QWidget):
         self.btn_google_connect = _btn("התחבר עם Google", _BTN_PRIMARY, self._google_connect)
         self.btn_google_disconnect = _btn("התנתק", _BTN_GHOST, self._google_disconnect)
         self.btn_google_test = _btn("שלח מייל בדיקה", _BTN_GHOST, self._test_mail_settings)
+        # v3.41: קובץ הזיהוי (OAuth client, Desktop app) שגוגל מורידה — נטען פעם
+        # אחת במחשב אחד ומסתנכרן; בלעדיו "התחבר עם Google" נעול.
+        self.btn_google_client = _btn("טען קובץ זיהוי מגוגל…", _BTN_GHOST, self._google_load_client,
+                                      "קובץ ה-JSON שהורדת מ-Google Cloud Console (Credentials → "
+                                      "OAuth client ID → Desktop app → Download JSON)")
         body.addLayout(_btn_row(self.btn_google_connect, self.btn_google_disconnect,
-                                self.btn_google_test))
+                                self.btn_google_test, self.btn_google_client))
+        self.lbl_google_help = QLabel(
+            "צריך פעם אחת \"קובץ זיהוי\" מגוגל: "
+            "<a href=\"https://console.cloud.google.com/apis/credentials\">Google Cloud Console</a>"
+            " → צור פרויקט → הפעל את Gmail API → OAuth consent screen (External, הוסף את מייל הקופה "
+            "כ-Test user) → Credentials → Create OAuth client ID → Desktop app → Download JSON. "
+            "אחר כך לחץ \"טען קובץ זיהוי מגוגל\" ובחר את הקובץ.")
+        self.lbl_google_help.setTextFormat(Qt.TextFormat.RichText)
+        self.lbl_google_help.setOpenExternalLinks(True)
+        self.lbl_google_help.setWordWrap(True)
+        self.lbl_google_help.setStyleSheet("color:#334155; font-size:12px; " + _LBL)
+        body.addWidget(self.lbl_google_help)
         _place(row, card, body)
 
         # ── מייל למתנדבים ──
@@ -481,11 +496,15 @@ class SettingsTab(QWidget):
         body.addWidget(_hint("סיסמת הקובץ נמסרת למתנדב פעם אחת בעל-פה; השאר ריק כדי לא להגן על הקובץ."))
         self.lbl_mail_status = QLabel("")
         self.lbl_mail_status.setWordWrap(True)
+        self.btn_mail_test = _btn("שלח מייל בדיקה", _BTN_GHOST, self._test_mail_settings)
         body.addLayout(_btn_row(
             _btn("שמור", _BTN_PRIMARY, self._save_mail_settings),
-            _btn("שלח מייל בדיקה", _BTN_GHOST, self._test_mail_settings),
+            self.btn_mail_test,
             self.lbl_mail_status))
         _place(row, card, body)
+
+        # v3.41: שלושה כרטיסים בשורה אחת חרגו מרוחב המסך — הצינתוקים בשורה נפרדת
+        row = _row(); lay.addLayout(row)
 
         # ── צינתוקים — ימות המשיח (v2.81) ──
         card, body, _h = _card("צינתוקים (ימות המשיח)", "phone", "החיבור למערכת הטלפונית")
@@ -1350,21 +1369,29 @@ class SettingsTab(QWidget):
                                 "התחבר עם Google, או מלא כתובת מייל וסיסמת אפליקציה תחילה.")
             return
         me = email_utils.sender_email()
-        with busy_cursor():
-            try:
-                email_utils.send_email(
-                    me,
-                    subject="בדיקת מייל — מנהל חלוקה",
-                    html_body="<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
-                              "זוהי הודעת בדיקה. אם קיבלת אותה — שליחת המייל מוגדרת כראוי ✓</div>")
-                ok, msg = True, (f"נשלח מייל בדיקה בהצלחה אל {me} ✓\n"
-                                 "בדוק שההודעה הגיעה לתיבת הדואר.")
-            except Exception as e:
-                ok, msg = False, f"השליחה נכשלה — ודא חיבור לאינטרנט וחשבון מייל תקין.\n\n{e}"
-        if ok:
-            QMessageBox.information(self, "בדיקת מייל", msg)
+        # v3.41: ברקע — חיבור לשרת (במיוחד מאחורי נטפרי) יכול לקחת דקות
+        for b in (self.btn_google_test, getattr(self, "btn_mail_test", None)):
+            if b is not None:
+                b.setEnabled(False)
+        self._mail_test_worker = _BgWorker(
+            lambda: email_utils.send_email(
+                me, subject="בדיקת מייל — מנהל חלוקה",
+                html_body="<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
+                          "זוהי הודעת בדיקה. אם קיבלת אותה — שליחת המייל מוגדרת כראוי ✓</div>"), self)
+        self._mail_test_worker.done.connect(lambda res: self._mail_test_done(res, me))
+        self._mail_test_worker.start()
+
+    def _mail_test_done(self, res, me):
+        self._mail_test_worker = None
+        for b in (self.btn_google_test, getattr(self, "btn_mail_test", None)):
+            if b is not None:
+                b.setEnabled(True)
+        if isinstance(res, Exception):
+            QMessageBox.warning(self, "בדיקת מייל",
+                                f"השליחה נכשלה — ודא חיבור לאינטרנט וחשבון מייל תקין.{chr(10)}{chr(10)}{res}")
         else:
-            QMessageBox.warning(self, "בדיקת מייל", msg)
+            QMessageBox.information(self, "בדיקת מייל",
+                                    f"נשלח מייל בדיקה בהצלחה אל {me} ✓{chr(10)}בדוק שההודעה הגיעה לתיבת הדואר.")
 
     # ── Google account (v3.39) ────────────────────────────────────────────────
 
@@ -1375,21 +1402,38 @@ class SettingsTab(QWidget):
             self.lbl_google_status.setStyleSheet("color:#0f766e; font-size:13px; font-weight:700; " + _LBL)
         elif not avail:
             self.lbl_google_status.setText(
-                "החיבור לגוגל עדיין לא הופעל בגרסה זו (חסר זיהוי אפליקציה). בינתיים אפשר לשלוח עם סיסמת אפליקציה.")
-            self.lbl_google_status.setStyleSheet("color:#9ca3af; font-size:12.5px; " + _LBL)
+                "עוד לא נטען קובץ זיהוי מגוגל — ראה ההסבר למטה. בינתיים אפשר לשלוח עם סיסמת אפליקציה.")
+            self.lbl_google_status.setStyleSheet("color:#b45309; font-size:12.5px; font-weight:700; " + _LBL)
         else:
-            self.lbl_google_status.setText("לא מחובר")
-            self.lbl_google_status.setStyleSheet("color:#9ca3af; font-size:13px; " + _LBL)
-        self.btn_google_connect.setEnabled(avail and not google_auth.is_connected())
+            self.lbl_google_status.setText("קובץ הזיהוי נטען ✓ — עכשיו לחץ \"התחבר עם Google\"")
+            self.lbl_google_status.setStyleSheet("color:#334155; font-size:13px; " + _LBL)
         self.btn_google_connect.setText("התחבר מחדש" if google_auth.is_connected() else "התחבר עם Google")
         self.btn_google_connect.setEnabled(avail)
         self.btn_google_disconnect.setVisible(google_auth.is_connected())
         self.btn_google_test.setVisible(google_auth.is_connected())
+        self.btn_google_client.setVisible(not avail)
+        self.lbl_google_help.setVisible(not avail)
+
+    def _google_load_client(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "בחר את קובץ הזיהוי שהורדת מגוגל", "", "קובץ JSON (*.json);;כל הקבצים (*)")
+        if not path:
+            return
+        try:
+            cid = google_auth.import_client_file(path)
+        except Exception as e:
+            QMessageBox.warning(self, "קובץ זיהוי", str(e))
+            return
+        self.refresh()
+        QMessageBox.information(
+            self, "קובץ זיהוי",
+            f"קובץ הזיהוי נטען ✓ ({cid[:14]}…)" + chr(10) +
+            "עכשיו לחץ \"התחבר עם Google\" ובחר את חשבון הקופה בדפדפן.")
 
     def _google_connect(self):
         if not google_auth.is_available():
             QMessageBox.information(self, "חיבור Google",
-                                    "החיבור לגוגל עדיין לא הופעל בגרסה זו של התוכנה.")
+                                    "קודם טען את קובץ הזיהוי מגוגל (\"טען קובץ זיהוי מגוגל…\").")
             return
         QMessageBox.information(
             self, "חיבור Google",

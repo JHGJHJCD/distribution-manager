@@ -42,6 +42,8 @@ SCOPES = ("https://www.googleapis.com/auth/gmail.send",
 
 SET_REFRESH = "google_refresh_token"
 SET_EMAIL = "google_email"
+SET_CLIENT_ID = "google_client_id"          # v3.41: זיהוי-לקוח שנטען בהגדרות (מסונכרן)
+SET_CLIENT_SECRET = "google_client_secret"
 CLIENT_FILE = "google_client.json"      # ליד ה-DB — fallback לפיתוח
 
 # תחבורה ניתנת-להזרקה: fn(method, url, data_bytes|None, headers) -> (status, body_bytes)
@@ -58,9 +60,21 @@ class GoogleAuthError(RuntimeError):
 
 # ─── זיהוי-לקוח ───────────────────────────────────────────────────────────────
 
+def _parse_client_json(data) -> tuple[str, str]:
+    """הפורמט שגוגל מורידה: {"installed": {...}} / {"web": {...}} / שטוח."""
+    if not isinstance(data, dict):
+        return "", ""
+    inner = data.get("installed") or data.get("web") or data
+    if not isinstance(inner, dict):
+        return "", ""
+    return ((inner.get("client_id") or "").strip(),
+            (inner.get("client_secret") or "").strip())
+
+
 def client_credentials() -> tuple[str, str]:
-    """(client_id, client_secret) — מ-_secret.py, ואם ריק מקובץ google_client.json
-    ליד ה-DB (הפורמט שגוגל מורידה: {"installed": {...}} או שטוח)."""
+    """(client_id, client_secret) — לפי הסדר: `_secret.py` (נכנס ל-EXE) →
+    settings מסונכרנות (v3.41: הקובץ שהמשתמש טען בהגדרות, משותף לשני
+    המחשבים) → קובץ google_client.json ליד ה-DB (פיתוח)."""
     cid = sec = ""
     try:
         from utils import _secret
@@ -70,15 +84,38 @@ def client_credentials() -> tuple[str, str]:
         pass
     if cid:
         return cid, sec
+    cid = (db.get_setting(SET_CLIENT_ID) or "").strip()
+    if cid:
+        return cid, (db.get_setting(SET_CLIENT_SECRET) or "").strip()
     path = os.path.join(os.path.dirname(db.DB_PATH), CLIENT_FILE)
     try:
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        data = data.get("installed") or data.get("web") or data
-        return ((data.get("client_id") or "").strip(),
-                (data.get("client_secret") or "").strip())
+            return _parse_client_json(json.load(f))
     except Exception:
         return "", ""
+
+
+def import_client_file(path: str) -> str:
+    """v3.41: טוען את קובץ ה-JSON שגוגל מורידה ("OAuth client ID → Desktop app →
+    Download JSON") ושומר את הזיהוי ב-settings מסונכרנות. מחזיר את client_id.
+    מעלה GoogleAuthError בעברית אם הקובץ לא נראה כמו קובץ זיהוי של גוגל."""
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except Exception as e:
+        raise GoogleAuthError("לא הצלחתי לקרוא את הקובץ — ודא שזה קובץ ה-JSON שהורדת מגוגל.") from e
+    cid, sec = _parse_client_json(data)
+    if not cid or not cid.endswith(".apps.googleusercontent.com"):
+        raise GoogleAuthError(
+            "זה לא קובץ זיהוי של גוגל. בקונסולה של גוגל: Credentials → OAuth client ID "
+            "(סוג Desktop app) → הורד JSON, וטען את הקובץ הזה.")
+    if isinstance(data, dict) and "web" in data and "installed" not in data:
+        raise GoogleAuthError(
+            "קובץ הזיהוי הוא מסוג \"Web application\" — צריך ליצור OAuth client מסוג "
+            "\"Desktop app\" ולהוריד את ה-JSON שלו.")
+    db.set_setting(SET_CLIENT_ID, cid)
+    db.set_setting(SET_CLIENT_SECRET, sec)
+    return cid
 
 
 def is_available() -> bool:
@@ -157,6 +194,12 @@ class _OneShotHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        if not q.get("code") and not q.get("error"):
+            # לא ה-redirect של גוגל (למשל /favicon.ico) — עונים ריק וממשיכים להמתין
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         code = (q.get("code") or [""])[0]
         state = (q.get("state") or [""])[0]
         ok = bool(code) and state == self.server.expected_state
@@ -180,7 +223,11 @@ def _wait_for_code(auth_url: str, server, timeout: float) -> str:
         webbrowser.open(auth_url)
     except Exception:
         pass
-    server.got_it.wait(timeout)
+    # הדפדפן עלול לשלוח בקשות נוספות (favicon.ico וכד') — מטפלים בבקשות עד
+    # שמגיע הקוד או עד ה-timeout, לא בבקשה אחת בלבד.
+    deadline = time.time() + timeout
+    while not server.got_it.is_set() and time.time() < deadline:
+        server.handle_request()
     res = _OneShotHandler.result or {}
     if not res.get("code"):
         if res.get("error") == "access_denied":
@@ -231,8 +278,7 @@ def connect(timeout: float = 240) -> str:
         server.got_it = threading.Event()
         _OneShotHandler.result = {}
         redirect = f"http://127.0.0.1:{server.server_port}/"
-        t = threading.Thread(target=server.handle_request, daemon=True)
-        t.start()
+        server.timeout = 1.0            # handle_request חוזר כל שנייה לבדיקת deadline
         try:
             code = _wait_for_code(build_auth_url(cid, redirect, state, challenge),
                                   server, timeout)

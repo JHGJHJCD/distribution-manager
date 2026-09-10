@@ -2,6 +2,11 @@
 
 > קובץ סטטוס זמני — מתעדכן כל הזמן. פרטים קבועים (ארכיטקטורה/כללים/שחרור) ב-`CLAUDE.md`.
 
+## ✉️ 10/9/2026 — v3.41: מעבר באגים על המיילים + טעינת קובץ-זיהוי של Google (שוחרר)
+- **תוקן:** לוגו ענק/טקסט קטן בתצוגה המקדימה (`mailer.html_body` → טבלה + `width/height` אטריבוטים, גופן 15px); מסך ההגדרות רחב מהחלון (שורת "חיבורים" עם 3 כרטיסים = 1423px → הצינתוקים בשורה נפרדת, 1039px); loopback של ההתחברות איבד את הקוד אם הדפדפן שלח `favicon.ico` קודם; מייל-בדיקה חסם את המסך (עכשיו `_BgWorker`).
+- **חיבור Google — מה חסר:** אין OAuth client. נוסף כפתור **"טען קובץ זיהוי מגוגל…"** בהגדרות (שומר ב-settings מסונכרנות `google_client_id/secret`) + הסבר עם קישור. **המשתמש צריך ליצור את ה-client פעם אחת** (הוראות בהערת-השחרור של 3.41 / בכרטיס בהגדרות). אחרי טעינה — "התחבר עם Google" נפתח ללא בנייה מחדש.
+- **נותר לאמת בשטח:** ההתחברות בדפדפן אמיתי (נטפרי מול accounts.google.com / gmail.googleapis.com) ושליחה אמיתית דרך Gmail API — אחרי שהמשתמש יטען את קובץ הזיהוי.
+
 ## ✉️ 10/9/2026 — v3.39: לשונית "מיילים" + חיבור Google (שוחרר)
 - **מה נעשה:** לשונית "מיילים" (`tabs/mails.py`), מנוע `utils/mailer.py`, חיבור Google OAuth `utils/google_auth.py`, כרטיס "חשבון Google של הקופה" בהגדרות, טבלאות `mail_campaigns`/`mail_templates` + סנכרון, מיילים בכרטיס המקבל. `test_mail.py` ירוק, צילומים אומתו דרך Gemini (הצ'אט הקודם נחסם ע"י נטפרי — כנראה בקריאת PNG).
 - **⚠ פתוח — זיהוי-לקוח של Google:** כפתור "התחבר עם Google" **נעול** עד שיהיו `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` ב-`utils/_secret.py` (או `google_client.json` ליד ה-DB). צריך: Google Cloud Console → פרויקט → הפעלת Gmail API → OAuth consent screen (External, scope gmail.send, להוסיף את מייל הקופה כ-test user) → Credentials → OAuth Client ID מסוג **Desktop app** → להעתיק ל-`_secret.py` → בנייה מחדש. עד אז שליחת מיילים עובדת עם **סיסמת אפליקציה** (SMTP) כמו קודם.

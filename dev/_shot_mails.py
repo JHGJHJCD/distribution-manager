@@ -49,6 +49,21 @@ os.makedirs("dev/_shots", exist_ok=True)
 inner = tab.findChild(QScrollArea).widget()
 inner.grab().save("dev/_shots/mails_tab.png")
 tab.grab().save("dev/_shots/mails_tab_full.png")
+tab.preview.grab().save("dev/_shots/mails_preview.png")
+# v3.41: הלוגו בתצוגה המקדימה חייב להיות קטן (44px) — לא בגודל הקובץ (725px)
+from PyQt6.QtGui import QTextImageFormat
+doc = tab.preview.document()
+blk = doc.begin(); imgs = []
+while blk.isValid():
+    it = blk.begin()
+    while not it.atEnd():
+        fr = it.fragment().charFormat()
+        if fr.isImageFormat():
+            imgs.append((fr.toImageFormat().width(), fr.toImageFormat().height()))
+        it += 1
+    blk = blk.next()
+assert imgs and all(w == 44 and h == 44 for w, h in imgs), imgs
+assert doc.defaultFont().pixelSize() >= 15, doc.defaultFont().pixelSize()
 
 # assert-ים בסיסיים
 oks = [t for t in tab._targets if t["ok"]]
@@ -67,4 +82,7 @@ for _ in range(6):
     app.processEvents()
 st.findChild(QScrollArea).widget().grab().save("dev/_shots/mails_settings.png")
 assert not st.btn_google_connect.isEnabled(), "no client id → button disabled"
+assert st.btn_google_client.isVisible() and st.lbl_google_help.isVisible()
+inner_s = st.findChild(QScrollArea).widget()
+assert inner_s.minimumSizeHint().width() <= 1200, inner_s.minimumSizeHint().width()
 print("OK shots + asserts")
