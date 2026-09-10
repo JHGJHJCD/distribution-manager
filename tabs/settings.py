@@ -1642,6 +1642,7 @@ class SettingsTab(QWidget):
                 f"ניתן להוריד ידנית את גרסה v{result['version']} מ-GitHub.")
             return
         dest = updater.download_target()
+        self._dl_tag = result.get("tag") or ""
         self._progress = QProgressDialog("מוריד עדכון...", "ביטול", 0, 100, self)
         self._progress.setWindowTitle("עדכון תוכנה")
         self._progress.setWindowModality(Qt.WindowModality.WindowModal)
@@ -1667,6 +1668,9 @@ class SettingsTab(QWidget):
                                      netblock.explain(result)
                                      or f"הורדת העדכון נכשלה:\n{result}")
             return
+        # v3.40: this download is OURS — the manager machine must not count it
+        # as "someone downloaded the software". Written before the relaunch.
+        updater.record_self_download(getattr(self, "_dl_tag", ""))
         # Release the single-instance lock BEFORE relaunching, otherwise the new
         # (updated) child process would see the lock still held and refuse to start.
         _app = QApplication.instance()

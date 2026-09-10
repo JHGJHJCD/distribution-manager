@@ -1134,21 +1134,44 @@ class MainWindow(QMainWindow):
         if isinstance(stats, Exception) or not isinstance(stats, dict):
             return
         from utils import sync
-        known = sync.local_get("dl_counts", None)
-        sync.local_set("dl_counts", stats)
+        # v3.40: subtract our own auto-update downloads (both computers write
+        # a synced `self_dl_<device>` setting) so only OTHER people count.
+        try:
+            with db.get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT key, value FROM settings "
+                    "WHERE key LIKE 'self_dl_%'").fetchall()
+            self_totals = updater.self_download_totals(
+                [(r["key"], r["value"]) for r in rows])
+        except Exception:
+            self_totals = {}
+        others = updater.others_downloads(stats, self_totals)
+        known = sync.local_get("dl_others_known", None)
+        prev = sync.local_get("dl_others_prev", None)
+        sync.local_set("dl_others_prev", others)
         if not isinstance(known, dict):
+            sync.local_set("dl_others_known", others)
             return                       # first run — baseline only, no noise
-        grown = [(tag, n - int(known.get(tag) or 0)) for tag, n in stats.items()
+        if not isinstance(prev, dict):
+            return
+        # A peer's own download shows up on GitHub a few seconds before its
+        # `self_dl` setting syncs over — so only report growth that is still
+        # there on the NEXT check (10 minutes later), not a first glimpse.
+        settled = {tag: min(n, int(prev.get(tag) or 0)) for tag, n in others.items()}
+        grown = [(tag, n - int(known.get(tag) or 0)) for tag, n in settled.items()
                  if n > int(known.get(tag) or 0)]
         if not grown:
             return
+        new_known = dict(known)
+        for tag, _d in grown:
+            new_known[tag] = settled[tag]
+        sync.local_set("dl_others_known", new_known)
         added = sum(d for _t, d in grown)
-        tags = ", ".join(t for t, _d in grown)
-        total = sum(stats.values())
+        per_tag = ", ".join(f"גרסה {t} (סה\"כ {settled[t]})" for t, _d in grown)
         self._notify_info(
             "מנהל חלוקה — הורדה חדשה 📥",
-            f"מישהו הוריד את התוכנה ({added} הורדות חדשות, גרסה {tags}). "
-            f"סה\"כ הורדות מגיטהאב: {total}.")
+            f"מישהו אחר הוריד את התוכנה ({added} הורדות חדשות): {per_tag}. "
+            "הורדות של שני המחשבים שלנו לא נספרות.")
 
     def _check_peer_updates(self):
         """After a sync pull: did the OTHER computer report a new app version?

@@ -74,7 +74,7 @@ def check_latest(timeout: int = 10):
     }
 
 
-API_RELEASES = f"https://api.github.com/repos/{REPO}/releases?per_page=20"
+API_RELEASES = f"https://api.github.com/repos/{REPO}/releases?per_page=100"
 
 
 def fetch_download_stats(timeout: int = 10) -> dict:
@@ -97,6 +97,50 @@ def fetch_download_stats(timeout: int = 10) -> dict:
                        for a in rel.get("assets") or []
                        if str(a.get("name", "")).lower().endswith(".exe"))
     return out
+
+
+def record_self_download(tag: str):
+    """v3.40: remember that THIS computer downloaded release `tag` itself
+    (auto-update), as a synced per-device setting `self_dl_<device>` =
+    {tag: count}. The manager machine subtracts these from the GitHub
+    counters so only downloads by OTHER people trigger a balloon."""
+    if not tag:
+        return
+    try:
+        import database as db
+        from utils import sync
+        key = "self_dl_" + sync.device_id()
+        try:
+            cur = json.loads(db.get_setting(key) or "{}")
+        except Exception:
+            cur = {}
+        if not isinstance(cur, dict):
+            cur = {}
+        cur[tag] = int(cur.get(tag) or 0) + 1
+        db.set_setting(key, json.dumps(cur, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def self_download_totals(rows) -> dict:
+    """Sum the per-device `self_dl_*` settings → {tag: count}."""
+    out = {}
+    for _key, val in rows or []:
+        try:
+            d = json.loads(val or "{}")
+        except Exception:
+            continue
+        if not isinstance(d, dict):
+            continue
+        for tag, n in d.items():
+            out[tag] = out.get(tag, 0) + int(n or 0)
+    return out
+
+
+def others_downloads(stats: dict, self_totals: dict) -> dict:
+    """GitHub counters minus our own auto-update downloads (never below 0)."""
+    return {tag: max(0, int(n) - int(self_totals.get(tag) or 0))
+            for tag, n in (stats or {}).items()}
 
 
 # ─── download ─────────────────────────────────────────────────────────────────
