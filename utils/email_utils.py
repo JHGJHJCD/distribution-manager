@@ -81,6 +81,12 @@ def set_checklist_password(pw: str):
     db.set_setting("checklist_password", pw or "")
 
 
+class MailFatalError(RuntimeError):
+    """v3.42: תקלה כללית שתחזור אצל כל נמען (רשת/סיסמה/מכסה) — mailer.send_batch
+    עוצר עליה במקום לנסות לכל 500 המקבלים."""
+    fatal = True
+
+
 def _connect(cfg: dict) -> smtplib.SMTP:
     server = smtplib.SMTP(cfg["host"], cfg["port"], timeout=20)
     server.starttls()
@@ -129,10 +135,16 @@ def send_email(to_addr: str, subject: str, html_body: str,
     # Connecting is where "no internet" shows up: getaddrinfo/timeout/refused all
     # surface as OSError-family here. Turn them into a clear Hebrew message so the
     # caller never reports a send as successful when the network was down (#ib2st).
+    # v3.42: smtplib.SMTPException *יורש* מ-OSError — סיסמת-אפליקציה שגויה הייתה
+    # מדווחת כ"אין חיבור לאינטרנט". תופסים אותה קודם, בהודעה נכונה.
     try:
         server = _connect(cfg)
+    except smtplib.SMTPAuthenticationError as e:
+        raise MailFatalError(
+            "שרת המייל דחה את הכניסה — סיסמת האפליקציה או כתובת השולח בהגדרות שגויות. "
+            "צור סיסמת אפליקציה חדשה בחשבון Gmail והזן אותה מחדש.") from e
     except (OSError, smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected) as e:
-        raise RuntimeError(
+        raise MailFatalError(
             "אין חיבור לאינטרנט — המייל לא נשלח. ודא/י שהמחשב מחובר לרשת ונסה/י שוב."
         ) from e
     try:
@@ -140,6 +152,11 @@ def send_email(to_addr: str, subject: str, html_body: str,
         # A refused recipient means the mail was NOT delivered — treat as failure
         # rather than silently reporting success.
         refused = server.sendmail(cfg["email"], [to_addr], root.as_string())
+    except smtplib.SMTPRecipientsRefused as e:
+        # הנמען היחיד סורב → smtplib מעלה חריגה (לא מחזיר dict). תקלה של הנמען הזה בלבד.
+        raise RuntimeError("המייל לא התקבל אצל הנמען — בדוק/י את כתובת המייל ונסה/י שוב.") from e
+    except (smtplib.SMTPDataError, smtplib.SMTPSenderRefused) as e:
+        raise _smtp_server_error(e) from e
     finally:
         try:
             server.quit()
@@ -147,6 +164,18 @@ def send_email(to_addr: str, subject: str, html_body: str,
             pass
     if refused:
         raise RuntimeError("המייל לא התקבל אצל הנמען — בדוק/י את כתובת המייל ונסה/י שוב.")
+
+
+
+def _smtp_server_error(e: smtplib.SMTPResponseException) -> Exception:
+    """שגיאת שרת אחרי החיבור → עברית. מכסה יומית של Gmail (5.4.5 / limit) = כללית."""
+    detail = e.smtp_error.decode("utf-8", "replace") if isinstance(e.smtp_error, bytes) \
+        else str(e.smtp_error or "")
+    low = detail.lower()
+    if "5.4.5" in low or "limit" in low or "quota" in low:
+        return MailFatalError(
+            "Gmail עצרה זמנית את השליחה (חריגה ממכסת המיילים היומית). נסה מחר.")
+    return RuntimeError(f"שרת המייל דחה את ההודעה ({e.smtp_code}): {detail}")
 
 
 # ─── Incoming: auto-pull volunteer replies over IMAP ──────────────────────────

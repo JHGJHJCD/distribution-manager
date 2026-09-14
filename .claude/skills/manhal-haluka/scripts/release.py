@@ -36,6 +36,7 @@ TESTS = [
     "test_scenarios.py", "test_search.py", "test_priority_import.py",
     "test_volunteer_flow.py", "test_updater.py", "test_sync.py",
     "test_score_scale.py", "test_fixes.py", "test_tzintuk.py", "test_tts.py",
+    "test_mail.py", "test_callback_server.py",
 ]
 
 

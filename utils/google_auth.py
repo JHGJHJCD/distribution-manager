@@ -55,7 +55,12 @@ _CODE_PROVIDER = None
 
 
 class GoogleAuthError(RuntimeError):
-    """שגיאה בעברית, מוכנה להצגה למפעיל."""
+    """שגיאה בעברית, מוכנה להצגה למפעיל. `fatal=True` = תקלה כללית שאינה תלויה
+    בנמען (רשת/הרשאה/מכסה) — mailer.send_batch עוצר עליה במקום לנסות לכולם (v3.42)."""
+
+    def __init__(self, msg: str, fatal: bool = True):
+        super().__init__(msg)
+        self.fatal = fatal
 
 
 # ─── זיהוי-לקוח ───────────────────────────────────────────────────────────────
@@ -377,11 +382,13 @@ def gmail_send_raw(mime_bytes: bytes) -> str:
     msg = ((data.get("error") or {}).get("message") or "") if isinstance(data, dict) else ""
     low = msg.lower()
     if status == 400 and ("recipient" in low or "address" in low or "invalid to" in low):
-        raise GoogleAuthError("כתובת המייל של הנמען שגויה.")
+        raise GoogleAuthError("כתובת המייל של הנמען שגויה.", fatal=False)
     if status == 403 and ("insufficient" in low or "scope" in low):
         raise GoogleAuthError("חסרה הרשאת שליחה — התנתק והתחבר מחדש לגוגל בהגדרות.")
     if status == 429 or "quota" in low or "limit" in low:
         raise GoogleAuthError("גוגל עצרה זמנית את השליחה (חריגה ממכסת המיילים היומית). נסה מחר.")
     if status == 401:
         raise GoogleAuthError("החיבור לגוגל פג — התחבר מחדש בהגדרות.")
-    raise GoogleAuthError(f"השליחה דרך Gmail נכשלה ({status}): {msg or 'שגיאה לא ידועה'}")
+    # שגיאה לא מזוהה — אולי תלויה בנמען (למשל גודל הודעה); לא עוצרים את כולם
+    raise GoogleAuthError(f"השליחה דרך Gmail נכשלה ({status}): {msg or 'שגיאה לא ידועה'}",
+                          fatal=False)

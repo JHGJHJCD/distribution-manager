@@ -1964,8 +1964,11 @@ def add_mail_campaign(subject: str, body: str, audience: str, sender: str,
 
 
 def update_mail_campaign(guid: str, sent: int, failed: int, status: str,
-                         report_json: str = "") -> bool:
-    """עדכון התקדמות/תוצאה (LWW לפי status_ts = עכשיו)."""
+                         report_json: str = "", sync: bool = True) -> bool:
+    """עדכון התקדמות/תוצאה (LWW לפי status_ts = עכשיו). `sync=False` (v3.42) =
+    כתיבה מקומית בלבד — התקדמות תוך כדי שליחה, כדי ששליחה שנקטעה (התוכנה
+    נסגרה) תדע מי כבר קיבל, בלי להציף את יומן הסנכרון בכל נמען; הסיכום
+    בסוף (או 'interrupted' בהפעלה הבאה) מסתנכרן כרגיל."""
     guid = (guid or "").strip()
     if not guid:
         return False
@@ -1978,6 +1981,8 @@ def update_mail_campaign(guid: str, sent: int, failed: int, status: str,
              report_json or "", guid))
         if cur.rowcount == 0:
             return False
+    if not sync:
+        return True
     _sync_log("mail_update", {"guid": guid, "sent": int(sent or 0),
                               "failed": int(failed or 0), "status": status or "sending",
                               "ts": ts, "report_json": report_json or ""})

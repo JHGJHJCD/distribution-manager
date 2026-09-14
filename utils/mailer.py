@@ -127,24 +127,44 @@ def html_body(text: str, with_header: bool = True, org_name: str = "קופה ש�
             f"{header}{body}</div>")
 
 
+STOP_MSG = "השליחה נעצרה"
+
+
+def is_fatal(exc: Exception) -> bool:
+    """v3.42: תקלה *כללית* — לא תלויה בנמען (אין אינטרנט, סיסמה/הרשאה שגויה,
+    מכסה יומית, חסימת נטפרי). כשהיא קורית אצל נמען אחד היא תקרה אצל כולם, ולכן
+    send_batch עוצר במקום לנסות 500 פעם (כל ניסיון = חיבור מלא/timeout)."""
+    return bool(getattr(exc, "fatal", False))
+
+
+def stop_reason(rows: list[dict]) -> str:
+    """הסיבה שבגללה האצווה נעצרה מעצמה (תקלה כללית); "" בעצירה ידנית / בלי עצירה."""
+    for r in rows:
+        if r.get("status") == "skipped" and r.get("error") and r["error"] != STOP_MSG:
+            return r["error"]
+    return ""
+
+
 def send_batch(targets: list[dict], subject: str, body_text: str, ctx: dict | None = None,
                attachment_path: str | None = None, logo_path: str | None = None,
                with_header: bool = True, rec_by_id: dict | None = None,
                progress=None, should_stop=None) -> list[dict]:
     """שולח לכל יעד ok=True. מחזיר דוח: [{rec_id, name, email, status: sent|failed,
     error}]. progress(done, total, last_row) נקרא אחרי כל נמען; should_stop() → True
-    עוצר (מי שלא נשלח מסומן 'skipped')."""
+    עוצר (מי שלא נשלח מסומן 'skipped'). תקלה כללית (is_fatal) עוצרת גם היא —
+    השאר 'skipped' עם סיבת התקלה."""
     rows = []
     todo = [t for t in targets if t.get("ok")]
     total = len(todo)
     rec_by_id = rec_by_id or {}
+    fatal_msg = ""
     for i, t in enumerate(todo, 1):
         row = {"rec_id": t.get("rec_id"), "guid": t.get("guid", ""),
                "name": t.get("name", ""), "email": t.get("email", ""),
                "status": "sent", "error": ""}
-        if should_stop and should_stop():
+        if fatal_msg or (should_stop and should_stop()):
             row["status"] = "skipped"
-            row["error"] = "השליחה נעצרה"
+            row["error"] = fatal_msg or STOP_MSG
             rows.append(row)
             continue
         rec = rec_by_id.get(t.get("rec_id")) if t.get("rec_id") is not None else None
@@ -158,6 +178,8 @@ def send_batch(targets: list[dict], subject: str, body_text: str, ctx: dict | No
         except Exception as e:
             row["status"] = "failed"
             row["error"] = str(e)
+            if is_fatal(e):
+                fatal_msg = str(e)
         rows.append(row)
         if progress:
             progress(i, total, row)

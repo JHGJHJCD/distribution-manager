@@ -14,6 +14,7 @@
 הלוגיקה (placeholders, יעדים, שליחה) ב-`utils/mailer.py` (טהור); ה-DB
 וה-סנכרון ב-`database.py` (`mail_campaigns`/`mail_templates`).
 """
+import html
 import json
 import os
 
@@ -176,8 +177,8 @@ class _HistoryDetailDialog(QDialog):
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.resize(720, 520)
         lay = QVBoxLayout(self)
-        head = QLabel(f"<b>{camp.get('subject','')}</b> · {timefmt.datetime_str(camp.get('sent_at',''))}"
-                      f" · {camp.get('audience','')} · נשלחו {camp.get('sent',0)} · נכשלו {camp.get('failed',0)}")
+        head = QLabel(f"<b>{html.escape(camp.get('subject') or '')}</b> · {timefmt.datetime_str(camp.get('sent_at',''))}"
+                      f" · {html.escape(camp.get('audience') or '')} · נשלחו {camp.get('sent',0)} · נכשלו {camp.get('failed',0)}")
         head.setWordWrap(True)
         lay.addWidget(head)
         body = QTextBrowser()
@@ -665,7 +666,7 @@ class MailsTab(QWidget):
         who = first["name"] if first else "נמען לדוגמה"
         self.lbl_preview_title.setText(f"כך זה ייראה אצל {who}")
         self.preview.setHtml(f"<div dir='rtl'><div style='color:#64748b;font-size:12px'>נושא:</div>"
-                             f"<div style='font-weight:700;margin-bottom:10px'>{subj}</div>{body}</div>")
+                             f"<div style='font-weight:700;margin-bottom:10px'>{html.escape(subj)}</div>{body}</div>")
 
     def _load_templates(self):
         self._templates = db.get_mail_templates()
@@ -791,7 +792,7 @@ class MailsTab(QWidget):
         if not targets:
             return
         audience = audience or self._audience_text()
-        msg = (f"לשלוח את ההודעה <b>\"{self.subject.text().strip()}\"</b><br>"
+        msg = (f"לשלוח את ההודעה <b>\"{html.escape(self.subject.text().strip())}\"</b><br>"
                f"ל-<b>{len(targets)}</b> נמענים ({audience})<br>"
                f"מהחשבון <b>{email_utils.sender_email()}</b>?"
                + ("<br>עם קובץ מצורף: " + os.path.basename(self._attachment) if self._attachment else ""))
@@ -810,6 +811,7 @@ class MailsTab(QWidget):
         self.lbl_prog.setText(f"שולח… 0 מתוך {len(targets)}")
         self.prog_box.show()
         self._sent_n = self._failed_n = 0
+        self._rows_acc = []
         self._update_metrics()
         self._worker.start()
 
@@ -820,6 +822,12 @@ class MailsTab(QWidget):
             self._failed_n += 1
         self.prog.setValue(done)
         self.lbl_prog.setText(f"שולח… {done} מתוך {total} · נשלחו {self._sent_n} · נכשלו {self._failed_n}")
+        # v3.42: התקדמות נשמרת מקומית (בלי סנכרון) — אם התוכנה תיסגר באמצע,
+        # הרשומה שתיסגר כ"נקטע" תדע מי כבר קיבל ומי לא ("שלח שוב לנכשלים").
+        self._rows_acc.append(dict(row))
+        if self._active_guid:
+            db.update_mail_campaign(self._active_guid, self._sent_n, self._failed_n, "sending",
+                                    json.dumps(self._rows_acc, ensure_ascii=False), sync=False)
 
     def _on_finished(self, rows):
         guid, self._active_guid = self._active_guid, ""
@@ -836,9 +844,17 @@ class MailsTab(QWidget):
             txt = f"נשלחו {sent} מיילים בהצלחה."
             if failed:
                 txt += f"\n{failed} נכשלו — ראה \"פרטים\" בהיסטוריה, ואפשר \"שלח שוב לנכשלים\"."
-            if stopped:
-                txt += "\nהשליחה נעצרה לפני הסוף."
-            QMessageBox.information(self, "סיום שליחה", txt)
+            reason = mailer.stop_reason(rows)
+            if reason:
+                # תקלה כללית (אין אינטרנט / סיסמה / מכסה) — עצרנו לבד, לא ניסינו לכולם
+                skipped = sum(1 for r in rows if r.get("status") == "skipped")
+                txt += (f"\n\nהשליחה נעצרה אחרי תקלה שתחזור אצל כולם ({skipped} לא נוסו):\n{reason}"
+                        "\n\nאחרי שהבעיה נפתרת — \"שלח שוב לנכשלים\" בהיסטוריה ישלח להם.")
+                QMessageBox.warning(self, "השליחה נעצרה", txt)
+            else:
+                if stopped:
+                    txt += "\nהשליחה נעצרה לפני הסוף."
+                QMessageBox.information(self, "סיום שליחה", txt)
         self._refresh_history()
         self._update_metrics()
 

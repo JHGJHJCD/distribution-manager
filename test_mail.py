@@ -279,6 +279,137 @@ ok("loopback: favicon לפני הקוד לא מאבד את הקוד", code == "C
 if _secret is not None and _had is not None:
     _secret.GOOGLE_CLIENT_ID = _had
 
+# ─── 6. v3.42 — תקלה כללית עוצרת את האצווה; SMTP: סיסמה שגויה ≠ "אין אינטרנט";
+#        התקדמות נשמרת מקומית כדי ששליחה שנקטעה תדע מי כבר קיבל ─────────────────
+print("— v3.42: עצירה על תקלה כללית / הודעות SMTP / התקדמות שנשמרת —")
+use_machine(dir_a)
+# (א) מכסת Gmail (429) אצל הנמען הראשון — השאר לא מנסים 500 פעם, מסומנים skipped עם הסיבה
+_orig_transport = google_auth._TRANSPORT
+def _quota_transport(method, url, data, headers):
+    if url == google_auth.GMAIL_SEND_URL:
+        calls.append((method, url, data, headers))
+        return 429, b'{"error":{"message":"User-rate limit exceeded"}}'
+    return fake_transport(method, url, data, headers)
+google_auth._TRANSPORT = _quota_transport
+tg6 = [{"rec_id": None, "guid": "", "name": f"n{i}", "email": f"p{i}@x.com", "ok": True, "reason": ""}
+       for i in range(5)]
+n0 = len(calls)
+rows6 = mailer.send_batch(tg6, "s", "b")
+sends6 = sum(1 for c in calls[n0:] if c[1] == google_auth.GMAIL_SEND_URL)
+ok("מכסה (429) → ניסיון שליחה אחד בלבד, לא לכל 5 הנמענים", sends6 == 1, sends6)
+ok("הראשון failed, השאר skipped", [r["status"] for r in rows6] == ["failed"] + ["skipped"] * 4,
+   [r["status"] for r in rows6])
+ok("ה-skipped נושאים את סיבת העצירה (המכסה), לא 'נעצר' סתם",
+   all("מכסת" in r["error"] for r in rows6[1:]), rows6[1]["error"])
+ok("mailer.stop_reason מחזיר את הסיבה", "מכסת" in mailer.stop_reason(rows6))
+google_auth._TRANSPORT = _orig_transport
+# (ב) כתובת שגויה של נמען אחד = כישלון מקומי, האצווה ממשיכה
+tg6b = [{"rec_id": None, "guid": "", "name": "a", "email": "bad@x.com", "ok": True, "reason": ""},
+        {"rec_id": None, "guid": "", "name": "b", "email": "good@x.com", "ok": True, "reason": ""}]
+rows6b = mailer.send_batch(tg6b, "s", "b")
+ok("כתובת שגויה לא עוצרת את האצווה", [r["status"] for r in rows6b] == ["failed", "sent"])
+ok("בלי עצירה כללית — stop_reason ריק", mailer.stop_reason(rows6b) == "")
+# עצירה ידנית ("עצור") נשארת עם ההודעה הרגילה ובלי סיבת-תקלה
+_flag = {"stop": False}
+rows6c = mailer.send_batch(tg6b[1:] * 3, "s", "b", progress=lambda d, t, r: _flag.update(stop=True),
+                           should_stop=lambda: _flag["stop"])
+ok("עצור ידני → skipped עם 'נעצר', stop_reason ריק",
+   [r["status"] for r in rows6c] == ["sent", "skipped", "skipped"] and mailer.stop_reason(rows6c) == "")
+# (ג) SMTP — סיסמת-אפליקציה שגויה חייבת להגיד את זה, לא "אין חיבור לאינטרנט"
+import smtplib
+google_auth.disconnect(revoke=False)
+email_utils.set_smtp_config("kupa@gmail.com", "app-pass")
+_orig_connect = email_utils._connect
+def _bad_login(cfg):
+    raise smtplib.SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted")
+email_utils._connect = _bad_login
+try:
+    email_utils.send_email("dest@example.com", "x", "y"); ok("סיסמה שגויה מעלה", False)
+except Exception as e:
+    ok("SMTP: סיסמה שגויה → 'סיסמת האפליקציה' (לא 'אין חיבור לאינטרנט')",
+       "סיסמ" in str(e) and "אינטרנט" not in str(e), str(e))
+    ok("סיסמה שגויה = תקלה כללית (עוצרת אצווה)", mailer.is_fatal(e))
+rows6d = mailer.send_batch(tg6b, "s", "b")
+ok("SMTP סיסמה שגויה: ניסיון אחד, השאר skipped", [r["status"] for r in rows6d] == ["failed", "skipped"])
+class _RefuseSMTP:
+    def sendmail(self, frm, to, msg):
+        raise smtplib.SMTPRecipientsRefused({to[0]: (550, b"5.1.1 The email account does not exist")})
+    def quit(self): pass
+email_utils._connect = lambda cfg: _RefuseSMTP()
+try:
+    email_utils.send_email("dest@example.com", "x", "y"); ok("נמען שסורב מעלה", False)
+except Exception as e:
+    ok("SMTP: נמען שסורב → הודעה בעברית (לא repr של dict)", "כתובת" in str(e) and "{" not in str(e), str(e))
+    ok("נמען שסורב = תקלה מקומית (לא עוצרת אצווה)", not mailer.is_fatal(e))
+class _LimitSMTP:
+    def sendmail(self, frm, to, msg):
+        raise smtplib.SMTPDataError(550, b"5.4.5 Daily user sending limit exceeded")
+    def quit(self): pass
+email_utils._connect = lambda cfg: _LimitSMTP()
+try:
+    email_utils.send_email("dest@example.com", "x", "y"); ok("מכסה SMTP מעלה", False)
+except Exception as e:
+    ok("SMTP: מכסה יומית → הודעה בעברית + תקלה כללית", "מכסת" in str(e) and mailer.is_fatal(e), str(e))
+email_utils._connect = _orig_connect
+email_utils.set_smtp_config("", "")
+google_auth.connect()
+# (ד) עדכון מקומי (בלי סנכרון) של ההתקדמות — שליחה שנקטעה יודעת מי כבר קיבל
+g6 = db.add_mail_campaign("s", "b", "כולם", "kupa@gmail.com", 3, device="PC-A")
+_before = os.path.getsize(sync.OUTBOX_PATH) if os.path.exists(sync.OUTBOX_PATH) else 0
+_jn = [f for f in os.listdir(shared) if f.startswith("journal-")]
+_jsize = sum(os.path.getsize(os.path.join(shared, f)) for f in _jn)
+db.update_mail_campaign(g6, 1, 0, "sending", json.dumps([{"rec_id": None, "name": "a", "email": "a@x.com",
+                                                          "status": "sent", "error": ""}]), sync=False)
+_jsize2 = sum(os.path.getsize(os.path.join(shared, f)) for f in
+              [f for f in os.listdir(shared) if f.startswith("journal-")])
+_after = os.path.getsize(sync.OUTBOX_PATH) if os.path.exists(sync.OUTBOX_PATH) else 0
+ok("update_mail_campaign(sync=False) כותב מקומית", db.get_mail_campaign(g6)["sent"] == 1)
+ok("…ולא מוסיף רשומה ליומן הסנכרון / ל-outbox", _jsize2 == _jsize and _after == _before)
+db.update_mail_campaign(g6, 1, 0, "interrupted", db.get_mail_campaign(g6)["report_json"])
+use_machine(dir_b); sync.pull_changes()
+cb6 = db.get_mail_campaign(g6)
+ok("B רואה את השליחה שנקטעה עם מי שכבר קיבל", cb6 and cb6["status"] == "interrupted"
+   and cb6["sent"] == 1 and "a@x.com" in (cb6["report_json"] or ""))
+
+# (ה) המסך: ההתקדמות נכתבת ל-DB בכל נמען, וסיום עם תקלה כללית מציג אזהרה עם הסיבה
+use_machine(dir_a)
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PyQt6.QtWidgets import QApplication
+_app = QApplication.instance() or QApplication([])
+import tabs.mails as mmod
+_msgs = []
+mmod.QMessageBox.information = staticmethod(lambda *a, **k: _msgs.append(("info", str(a[2]))) or 0)
+mmod.QMessageBox.warning = staticmethod(lambda *a, **k: _msgs.append(("warn", str(a[2]))) or 0)
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.Yes)
+mmod._SendWorker.start = lambda self: None
+tab = mmod.MailsTab(None)
+tab.refresh()
+tab._extra = ["q1@x.com", "q2@x.com", "q3@x.com"]
+tab._rebuild_targets()
+tab.subject.setText("נושא"); tab.body.setPlainText("גוף")
+tab._send()
+g7 = tab._active_guid
+ok("המסך: רשומת השליחה נוצרה לפני ההתחלה", bool(g7) and db.get_mail_campaign(g7)["status"] == "sending")
+r1 = {"rec_id": None, "guid": "", "name": "q1@x.com", "email": "q1@x.com", "status": "sent", "error": ""}
+tab._on_progress(1, 3, r1)
+c7 = db.get_mail_campaign(g7)
+ok("המסך: אחרי נמען אחד ה-DB כבר יודע שהוא קיבל (בלי לחכות לסוף)",
+   c7["sent"] == 1 and "q1@x.com" in c7["report_json"], c7["report_json"][:60])
+rows7 = [r1,
+         {"rec_id": None, "guid": "", "name": "q2@x.com", "email": "q2@x.com", "status": "failed",
+          "error": "אין חיבור לאינטרנט — המייל לא נשלח."},
+         {"rec_id": None, "guid": "", "name": "q3@x.com", "email": "q3@x.com", "status": "skipped",
+          "error": "אין חיבור לאינטרנט — המייל לא נשלח."}]
+tab._worker.finished_rows.emit(rows7) if False else tab._on_finished(rows7)
+c7 = db.get_mail_campaign(g7)
+ok("המסך: סיום עם תקלה כללית → סטטוס 'נעצר' + דוח מלא", c7["status"] == "stopped" and c7["sent"] == 1
+   and c7["failed"] == 1 and "q3@x.com" in c7["report_json"])
+ok("המסך: ההודעה למפעיל היא אזהרה עם סיבת העצירה ומספר מי שלא נוסה",
+   _msgs and _msgs[-1][0] == "warn" and "אינטרנט" in _msgs[-1][1] and "1 לא נוסו" in _msgs[-1][1],
+   _msgs[-1] if _msgs else "")
+ok("המסך: אחרי הסיום אין שליחה פעילה", tab._worker is None and tab._active_guid == "")
+tab.deleteLater()
+
 # disconnect
 use_machine(dir_a)
 google_auth.disconnect()
