@@ -346,9 +346,53 @@ def _(c):
     # החתימה על שתי שורות — _func_body לא תופס אותה; חותכים ידנית
     i = c["dbs"].find("def update_mail_campaign(")
     upd = c["dbs"][i:i + 1500] if i >= 0 else ""
-    return ("sync=False" in prog and "self._rows_acc.append" in prog
+    return ("sync=False" in prog and "self._rows_acc[done - 1] = dict(row)" in prog
             and "mailer.stop_reason(rows)" in fin
             and "sync: bool = True" in upd and "if not sync:" in upd), ""
+
+
+# ── v3.43: שליחה שנקטעה זוכרת את מי שלא נוסה; שליחה-חוזרת; עצור; קובץ עברי ─────
+
+@lint("M33", "_send רושם את כל היעדים כ-pending (mailer.pending_rows) לפני start(); "
+             "_close_stale_campaigns/_on_finished(Exception) → close_pending")
+def _(c):
+    m = c["m"]
+    send = _func_body(m, "_send")
+    stale = _func_body(m, "_close_stale_campaigns")
+    fin = _func_body(m, "_on_finished")
+    okk = ("mailer.pending_rows(targets)" in send
+           and send.index("mailer.pending_rows(targets)") < send.index("self._worker.start()")
+           and "mailer.close_pending(" in stale and "mailer.summarize(rows)" in stale
+           and "mailer.close_pending(" in fin
+           and _has(c["ml"], r"^def pending_rows\(") and _has(c["ml"], r"^def close_pending\(")
+           and '"pending"' in c["ml"])
+    return okk, ""
+
+
+@lint("M34", "היסטוריה: כפתור 'שלח שוב לנכשלים' לפי תוכן הדוח (mailer.resendable) — לא רק failed>0")
+def _(c):
+    body = _func_body(c["m"], "_refresh_history")
+    return ("mailer.resendable(" in body and _has(c["ml"], r"^def resendable\(")), ""
+
+
+@lint("M35", "_send מפעיל מחדש btn_stop; _resend_failed נחסם באמצע שליחה פעילה (לא דורס טיוטה); "
+             "קובץ מצורף חסר → אזהרה")
+def _(c):
+    m = c["m"]
+    send = _func_body(m, "_send")
+    res = _func_body(m, "_resend_failed")
+    return ("self.btn_stop.setEnabled(True)" in send
+            and "if self._worker is not None:" in res
+            and res.index("if self._worker is not None:") < res.index("self.subject.setText(")
+            and "not os.path.exists(self._attachment)" in send), ""
+
+
+@lint("M36", "קובץ מצורף: add_header('Content-Disposition', 'attachment', filename=…) — לא השמה ישירה "
+             "(שם עברי → כותרת שבורה)")
+def _(c):
+    body = _func_body(c["eu"], "send_email")
+    return ('part.add_header("Content-Disposition", "attachment"' in body
+            and 'part["Content-Disposition"] =' not in body), ""
 
 
 def run_lints() -> bool:

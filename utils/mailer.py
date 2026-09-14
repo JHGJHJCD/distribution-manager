@@ -192,4 +192,30 @@ def summarize(rows: list[dict]) -> tuple[int, int]:
     return sent, failed
 
 
-STATUS_HE = {"sent": "נשלח", "failed": "נכשל", "skipped": "לא נשלח (נעצר)"}
+STATUS_HE = {"sent": "נשלח", "failed": "נכשל", "skipped": "לא נשלח (נעצר)",
+             "pending": "ממתין…"}
+INTERRUPTED_MSG = "השליחה נקטעה (התוכנה נסגרה באמצע)"
+
+
+def pending_rows(targets: list[dict]) -> list[dict]:
+    """v3.43: שורת-דוח 'ממתין' לכל יעד ok — נכתבת ל-DB *לפני* השליחה, כך ששליחה
+    שנקטעה (התוכנה נסגרה) יודעת גם את מי *לא* ניסתה, ו"שלח שוב לנכשלים" אוסף אותם."""
+    return [{"rec_id": t.get("rec_id"), "guid": t.get("guid", ""), "name": t.get("name", ""),
+             "email": t.get("email", ""), "status": "pending", "error": ""}
+            for t in targets if t.get("ok")]
+
+
+def close_pending(rows: list[dict], reason: str = INTERRUPTED_MSG) -> list[dict]:
+    """מי שנשאר 'ממתין' אחרי קטיעה → 'skipped' עם הסיבה (נאסף בשליחה חוזרת)."""
+    out = []
+    for r in rows or []:
+        r = dict(r)
+        if r.get("status") == "pending":
+            r["status"], r["error"] = "skipped", reason
+        out.append(r)
+    return out
+
+
+def resendable(rows: list[dict]) -> bool:
+    """יש למי לשלוח שוב (נכשל / לא נוסה) — גם כשנכשלו=0 (עצירה ידנית / נקטע)."""
+    return any(r.get("status") in ("failed", "skipped") for r in rows or [])

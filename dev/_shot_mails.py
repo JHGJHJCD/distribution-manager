@@ -29,6 +29,13 @@ db.update_mail_campaign(g, 3, 1, "done", json.dumps(
     [{"rec_id": 1, "name": "כהן ישראל", "email": "cohen@example.com", "status": "sent", "error": ""},
      {"rec_id": 2, "name": "לוי משה", "email": "levi@example.com", "status": "failed", "error": "כתובת שגויה"}],
     ensure_ascii=False))
+# v3.43: שליחה שנעצרה ידנית — נכשלו 0 אבל יש "לא נשלח" → חייב כפתור "שלח שוב לנכשלים"
+g2 = db.add_mail_campaign("חג שמח", "שלום {שם}", "כל המקבלים", "kupa.haryona@gmail.com", 3, device="A")
+db.update_mail_campaign(g2, 1, 0, "stopped", json.dumps(
+    [{"rec_id": 1, "name": "כהן ישראל", "email": "cohen@example.com", "status": "sent", "error": ""},
+     {"rec_id": 2, "name": "לוי משה", "email": "levi@example.com", "status": "skipped", "error": "השליחה נעצרה"},
+     {"rec_id": 4, "name": "גולדברג דוד", "email": "gold@example.com", "status": "skipped", "error": "השליחה נעצרה"}],
+    ensure_ascii=False))
 db.upsert_mail_template("תזכורת לחלוקה", "תזכורת: חלוקה ביום רביעי {תאריך חלוקה}",
                         "שלום {שם},\nתזכורת שהחלוקה תתקיים ביום רביעי {תאריך חלוקה}.\n\nנשמח לראותכם,\nקופה של צדקה הר יונה")
 
@@ -71,7 +78,11 @@ assert len(tab._targets) == 6, tab._targets
 assert len(oks) == 3, [t["reason"] for t in tab._targets]     # cohen, levi, gold (כפול/ריק/שבור נפסלים)
 assert tab.btn_send.isEnabled(), "send should be enabled with SMTP configured"
 assert "3" in tab.lbl_summary.text()
-assert tab.hist.rowCount() == 1
+assert tab.hist.rowCount() == 2
+from PyQt6.QtWidgets import QPushButton
+_row_stopped = next(i for i, c in enumerate(tab._camps) if c["guid"] == g2)
+_btns = [b.text() for b in tab.hist.cellWidget(_row_stopped, 5).findChildren(QPushButton)]
+assert "שלח שוב לנכשלים" in _btns, _btns          # v3.43: גם כשנכשלו=0
 assert tab.lbl_preview_title.text().startswith("כך זה ייראה אצל ") and len(tab.lbl_preview_title.text()) > 18, tab.lbl_preview_title.text()
 
 # הגדרות — כרטיס Google

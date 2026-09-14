@@ -19,6 +19,10 @@
 | M30 | **SMTP: `SMTPException` יורשת מ-`OSError`** (3.42) — `SMTPAuthenticationError` חייבת להיתפס *לפני* `except OSError`, אחרת סיסמה שגויה מדווחת "אין חיבור לאינטרנט". `SMTPRecipientsRefused` (הנמען היחיד סורב = חריגה, לא dict) ו-`SMTPDataError` (מכסה 5.4.5) → עברית; רשת/סיסמה/מכסה = `MailFatalError` | `email_utils.send_email` | ✓ |
 | M31 | `GoogleAuthError(msg, fatal=True)`: כתובת-נמען שגויה (400) ושגיאה לא-מזוהה = `fatal=False` (תלויות בנמען); כל השאר כללי (3.42) | `google_auth` | ✓ |
 | M32 | **התקדמות נשמרת מקומית** (3.42): `_on_progress` → `update_mail_campaign(..., sync=False)` אחרי כל נמען (בלי יומן סנכרון), כך ששליחה שנקטעה נסגרת כ-`interrupted` **עם** מי שכבר קיבל; `_on_finished` מציג `stop_reason` כאזהרה | `mails._on_progress`/`database.update_mail_campaign` | ✓ |
+| M33 | **שליחה שנקטעה זוכרת גם את מי שלא נוסה** (3.43): `_send` כותב לדוח מראש שורת `pending` לכל יעד (`mailer.pending_rows`) לפני `start()`; `_on_progress` מחליף את שורת ה-pending; `_close_stale_campaigns` ו-`_on_finished(Exception)` הופכים `pending`→`skipped` עם סיבה (`mailer.close_pending`). בלי זה "נקטע" הכיל רק את מי שכבר טופל, ו"שלח שוב לנכשלים" לא הכיר את השאר | `mails._send`/`_on_progress`/`_close_stale_campaigns` | ✓ |
+| M34 | כפתור "שלח שוב לנכשלים" מופיע לפי **תוכן הדוח** (`mailer.resendable`: failed/skipped), לא רק כש-`failed>0` — עצירה ידנית/נקטע = נכשלו 0 אבל מאות "לא נשלח" (3.43) | `mails._refresh_history` | ✓ |
+| M35 | `_send` מפעיל מחדש את `btn_stop` (אחרי "עצור" הוא נשאר נעול לשליחה הבאה); `_resend_failed` נחסם כשיש שליחה פעילה **לפני** שהוא דורס נושא/גוף; קובץ מצורף שלא קיים בדיסק → אזהרה, לא שליחה בלי הקובץ (3.43) | `mails.py` | ✓ |
+| M36 | קובץ מצורף: `part.add_header("Content-Disposition", "attachment", filename=…)` (RFC 2231) — השמה ישירה של מחרוזת עם שם עברי עוטפת את כל הערך ב-`=?utf-8?b?…?=` ⇒ כותרת שבורה, הנמען רואה "noname" (3.43) | `email_utils.send_email` | ✓ |
 
 ## UI לא קופא — קריאות רשת ברקע
 

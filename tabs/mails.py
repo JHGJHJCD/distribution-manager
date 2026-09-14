@@ -791,6 +791,9 @@ class MailsTab(QWidget):
         targets = targets if targets is not None else [t for t in self._targets if t["ok"]]
         if not targets:
             return
+        if self._attachment and not os.path.exists(self._attachment):
+            QMessageBox.warning(self, "", "הקובץ המצורף לא נמצא (נמחק או הועבר). הסר אותו או צרף מחדש.")
+            return
         audience = audience or self._audience_text()
         msg = (f"לשלוח את ההודעה <b>\"{html.escape(self.subject.text().strip())}\"</b><br>"
                f"ל-<b>{len(targets)}</b> נמענים ({audience})<br>"
@@ -811,7 +814,11 @@ class MailsTab(QWidget):
         self.lbl_prog.setText(f"שולח… 0 מתוך {len(targets)}")
         self.prog_box.show()
         self._sent_n = self._failed_n = 0
-        self._rows_acc = []
+        # v3.43: כל הנמענים נרשמים מראש כ"ממתין" — שליחה שנקטעה יודעת את מי לא ניסתה
+        self._rows_acc = mailer.pending_rows(targets)
+        db.update_mail_campaign(self._active_guid, 0, 0, "sending",
+                                json.dumps(self._rows_acc, ensure_ascii=False), sync=False)
+        self.btn_stop.setEnabled(True)
         self._update_metrics()
         self._worker.start()
 
@@ -824,7 +831,10 @@ class MailsTab(QWidget):
         self.lbl_prog.setText(f"שולח… {done} מתוך {total} · נשלחו {self._sent_n} · נכשלו {self._failed_n}")
         # v3.42: התקדמות נשמרת מקומית (בלי סנכרון) — אם התוכנה תיסגר באמצע,
         # הרשומה שתיסגר כ"נקטע" תדע מי כבר קיבל ומי לא ("שלח שוב לנכשלים").
-        self._rows_acc.append(dict(row))
+        if 0 < done <= len(self._rows_acc):
+            self._rows_acc[done - 1] = dict(row)      # מחליף את שורת ה"ממתין"
+        else:
+            self._rows_acc.append(dict(row))
         if self._active_guid:
             db.update_mail_campaign(self._active_guid, self._sent_n, self._failed_n, "sending",
                                     json.dumps(self._rows_acc, ensure_ascii=False), sync=False)
@@ -834,7 +844,10 @@ class MailsTab(QWidget):
         self._worker = None
         self.prog_box.hide()
         if isinstance(rows, Exception):
-            db.update_mail_campaign(guid, 0, 0, "failed", json.dumps([], ensure_ascii=False))
+            # v3.43: מי שכבר קיבל נשאר בדוח; מי שלא נוסה מסומן לשליחה חוזרת
+            kept = mailer.close_pending(getattr(self, "_rows_acc", []), str(rows))
+            sent, failed = mailer.summarize(kept)
+            db.update_mail_campaign(guid, sent, failed, "failed", json.dumps(kept, ensure_ascii=False))
             QMessageBox.warning(self, "השליחה נכשלה", str(rows))
         else:
             sent, failed = mailer.summarize(rows)
@@ -870,8 +883,15 @@ class MailsTab(QWidget):
         for c in db.get_mail_campaigns():
             if c.get("status") == "sending" and (c.get("device") or "") == me \
                     and c.get("guid") != self._active_guid:
-                db.update_mail_campaign(c["guid"], c.get("sent", 0), c.get("failed", 0),
-                                        "interrupted", c.get("report_json") or "")
+                try:
+                    rows = json.loads(c.get("report_json") or "[]")
+                except Exception:
+                    rows = []
+                # v3.43: מי שנשאר "ממתין" → "לא נשלח" עם סיבה, כדי ששליחה-חוזרת תאסוף אותו
+                rows = mailer.close_pending(rows)
+                sent, failed = mailer.summarize(rows)
+                db.update_mail_campaign(c["guid"], sent, failed, "interrupted",
+                                        json.dumps(rows, ensure_ascii=False))
 
     # ── history ───────────────────────────────────────────────────────────────
 
@@ -901,7 +921,12 @@ class MailsTab(QWidget):
             b1.setStyleSheet(_BTN_LINK)
             b1.clicked.connect(lambda _c, r=i: self._show_details(r))
             wl.addWidget(b1)
-            if c.get("failed"):
+            try:
+                _rows = json.loads(c.get("report_json") or "[]")
+            except Exception:
+                _rows = []
+            # v3.43: גם כשנכשלו=0 — עצירה ידנית / נקטע משאירים 'לא נשלח' שצריך לשלוח שוב
+            if c.get("failed") or mailer.resendable(_rows):
                 b2 = QPushButton("שלח שוב לנכשלים")
                 b2.setStyleSheet(_BTN_LINK)
                 b2.clicked.connect(lambda _c, r=i: self._resend_failed(r))
@@ -920,6 +945,10 @@ class MailsTab(QWidget):
 
     def _resend_failed(self, row):
         if not (0 <= row < len(self._camps)):
+            return
+        if self._worker is not None:
+            # v3.43: לא לדרוס את הטיוטה שבשדות באמצע שליחה פעילה
+            QMessageBox.information(self, "", "יש שליחה פעילה — המתן לסיומה ואז שלח שוב לנכשלים.")
             return
         c = self._camps[row]
         try:

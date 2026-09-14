@@ -122,7 +122,10 @@ def send_email(to_addr: str, subject: str, html_body: str,
     if attachment_path and os.path.exists(attachment_path):
         with open(attachment_path, "rb") as f:
             part = MIMEApplication(f.read(), Name=os.path.basename(attachment_path))
-        part["Content-Disposition"] = f'attachment; filename="{os.path.basename(attachment_path)}"'
+        # v3.43: add_header מקודד שם עברי לפי RFC 2231 (filename*=utf-8''…). השמה
+        # ישירה עטפה את *כל* הערך ב-=?utf-8?b?…?= — כותרת שבורה, הנמען ראה "noname".
+        part.add_header("Content-Disposition", "attachment",
+                        filename=os.path.basename(attachment_path))
         root.attach(part)
 
     # v3.39: חשבון Google מחובר ⇒ Gmail API (בלי סיסמת אפליקציה). השגיאות שם

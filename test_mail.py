@@ -410,6 +410,89 @@ ok("המסך: ההודעה למפעיל היא אזהרה עם סיבת העצי
 ok("המסך: אחרי הסיום אין שליחה פעילה", tab._worker is None and tab._active_guid == "")
 tab.deleteLater()
 
+# ─── 7. v3.43 — סקירת /בדוק-מיילים 14/9/2026 ─────────────────────────────────
+print("— v3.43: שליחה שנקטעה זוכרת את מי שלא נוסה / כפתור שליחה-חוזרת / עצור / קובץ עברי —")
+use_machine(dir_a)
+tab = mmod.MailsTab(None)
+tab.refresh()
+tab._extra = ["p1@x.com", "p2@x.com", "p3@x.com"]
+tab._rebuild_targets()
+tab.subject.setText("נושא 7"); tab.body.setPlainText("גוף 7")
+# (א) הדוח מכיל את *כל* הנמענים מרגע ההתחלה (pending) — לא רק מי שכבר טופל
+tab._send()
+g8 = tab._active_guid
+rows8 = json.loads(db.get_mail_campaign(g8)["report_json"] or "[]")
+ok("הדוח נוצר מראש עם כל 3 הנמענים במצב 'ממתין'", len(rows8) == 3
+   and all(r["status"] == "pending" for r in rows8), rows8)
+tab._on_progress(1, 3, {"rec_id": None, "guid": "", "name": "p1@x.com", "email": "p1@x.com",
+                        "status": "sent", "error": ""})
+rows8 = json.loads(db.get_mail_campaign(g8)["report_json"] or "[]")
+ok("אחרי נמען אחד: הראשון נשלח, השניים האחרים עדיין ממתינים (לא נעלמו)",
+   [r["status"] for r in rows8] == ["sent", "pending", "pending"], rows8)
+# התוכנה "נסגרה" באמצע → הפעלה הבאה סוגרת כ'נקטע' ומי שלא נוסה מסומן לשליחה חוזרת
+tab2 = mmod.MailsTab(None)
+tab2._close_stale_campaigns()
+c8 = db.get_mail_campaign(g8)
+rows8 = json.loads(c8["report_json"] or "[]")
+ok("שליחה שנקטעה: סטטוס 'נקטע', נשלח 1", c8["status"] == "interrupted" and c8["sent"] == 1)
+ok("מי שלא נוסה מסומן 'לא נשלח' עם סיבה (כדי ש'שלח שוב לנכשלים' יאסוף אותו)",
+   [r["status"] for r in rows8] == ["sent", "skipped", "skipped"] and rows8[1]["error"], rows8)
+ok("mailer.resendable מזהה שיש למי לשלוח שוב", mailer.resendable(rows8))
+# (ב) כפתור "שלח שוב לנכשלים" מופיע גם כשנכשלו=0 (עצירה ידנית / נקטע)
+tab2._refresh_history()
+idx8 = next(i for i, c in enumerate(tab2._camps) if c["guid"] == g8)
+w8 = tab2.hist.cellWidget(idx8, 5)
+btns8 = [b.text() for b in w8.findChildren(mmod.QPushButton)] if w8 else []
+ok("היסטוריה: כפתור 'שלח שוב לנכשלים' מופיע לשליחה שנקטעה בלי כישלונות", "שלח שוב לנכשלים" in btns8, btns8)
+# שליחה חוזרת אוספת בדיוק את 2 המדולגים
+_sent_args = {}
+tab2._send = lambda targets=None, audience=None: _sent_args.update(t=targets, a=audience)
+tab2._resend_failed(idx8)
+ok("שליחה חוזרת: בדיוק 2 היעדים שלא נוסו", sorted(t["email"] for t in _sent_args.get("t") or []) == ["p2@x.com", "p3@x.com"],
+   _sent_args)
+tab2.deleteLater()
+# (ג) "עצור" חוזר להיות פעיל בשליחה הבאה
+tab._active_guid = g8
+tab._stop()
+ok("אחרי לחיצה על עצור הכפתור נעול", not tab.btn_stop.isEnabled())
+tab._on_finished([{"rec_id": None, "guid": "", "name": "p1@x.com", "email": "p1@x.com", "status": "sent", "error": ""},
+                  {"rec_id": None, "guid": "", "name": "p2@x.com", "email": "p2@x.com", "status": "skipped", "error": mailer.STOP_MSG},
+                  {"rec_id": None, "guid": "", "name": "p3@x.com", "email": "p3@x.com", "status": "skipped", "error": mailer.STOP_MSG}])
+tab._send()
+ok("בשליחה הבאה 'עצור' פעיל שוב", tab.btn_stop.isEnabled() and tab._worker is not None)
+# (ד) "שלח שוב לנכשלים" באמצע שליחה פעילה לא דורס את הטיוטה
+tab._refresh_history()
+tab.subject.setText("טיוטה חיה")
+tab._resend_failed(next(i for i, c in enumerate(tab._camps) if c["guid"] == g8))
+ok("שליחה פעילה: שליחה-חוזרת נחסמת בלי לדרוס את הנושא", tab.subject.text() == "טיוטה חיה"
+   and _msgs[-1][0] in ("info", "warn"), _msgs[-1])
+# (ה) חריגה כללית בסיום לא מוחקת את ההתקדמות שכבר נרשמה
+g9 = tab._active_guid
+tab._on_progress(1, 3, {"rec_id": None, "guid": "", "name": "p1@x.com", "email": "p1@x.com", "status": "sent", "error": ""})
+tab._on_finished(RuntimeError("קרס"))
+c9 = db.get_mail_campaign(g9)
+rows9 = json.loads(c9["report_json"] or "[]")
+ok("חריגה בסיום: מי שכבר קיבל נשאר בדוח, השאר מסומנים לשליחה חוזרת",
+   c9["status"] == "failed" and c9["sent"] == 1 and [r["status"] for r in rows9] == ["sent", "skipped", "skipped"], rows9)
+# (ו) קובץ מצורף שנמחק מהדיסק → אזהרה, לא שליחה בלי הקובץ
+tab._set_attachment(os.path.join(dir_a, "nothere.pdf"))
+n_before = len(db.get_mail_campaigns())
+tab._send()
+ok("קובץ מצורף חסר: אזהרה ולא נוצרה שליחה", len(db.get_mail_campaigns()) == n_before and tab._worker is None
+   and "מצורף" in _msgs[-1][1], _msgs[-1])
+tab._set_attachment("")
+tab.deleteLater()
+# (ז) קובץ מצורף בשם עברי — כותרת תקנית (RFC 2231), לא כותרת מקודדת שבורה
+heb = os.path.join(dir_a, "רשימת חלוקה.pdf")
+open(heb, "wb").write(b"%PDF-1.4 test")
+n0 = len(calls)
+email_utils.send_email("dest@example.com", "עם קובץ", "<p>x</p>", attachment_path=heb)
+sent = [c for c in calls[n0:] if c[1] == google_auth.GMAIL_SEND_URL]
+raw = base64.urlsafe_b64decode(json.loads(sent[0][2])["raw"] + "==").decode("utf-8", "replace")
+cd = next((l for l in raw.splitlines() if l.startswith("Content-Disposition") and "attachment" in l.lower()), "")
+ok("שם קובץ עברי: Content-Disposition תקני (filename*=utf-8) ולא =?utf-8?b?",
+   "filename*=utf-8''" in raw and not cd.startswith("Content-Disposition: =?"), cd or raw[:300])
+
 # disconnect
 use_machine(dir_a)
 google_auth.disconnect()
