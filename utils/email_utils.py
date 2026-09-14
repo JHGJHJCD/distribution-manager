@@ -160,6 +160,11 @@ def send_email(to_addr: str, subject: str, html_body: str,
         raise RuntimeError("המייל לא התקבל אצל הנמען — בדוק/י את כתובת המייל ונסה/י שוב.") from e
     except (smtplib.SMTPDataError, smtplib.SMTPSenderRefused) as e:
         raise _smtp_server_error(e) from e
+    except (OSError, smtplib.SMTPException) as e:
+        # v3.44: ניתוק/timeout *באמצע* השליחה (אחרי חיבור מוצלח) — עברית, לא
+        # "Connection unexpectedly closed". תקלה של הנמען הזה; אם הרשת באמת נפלה,
+        # הנמען הבא ייכשל כבר בחיבור (MailFatalError) ויעצור את האצווה.
+        raise RuntimeError(f"החיבור לשרת המייל נותק באמצע השליחה — המייל לא נשלח ({e}).") from e
     finally:
         try:
             server.quit()

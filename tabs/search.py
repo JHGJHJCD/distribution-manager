@@ -446,7 +446,7 @@ class SearchTab(QWidget):
         # History
         self.hist_title.setText(f"היסטוריית חלוקות ({len(hist)})")
         try:
-            mails = db.get_mails_for_recipient(rec["id"])
+            mails = db.get_mails_for_recipient(rec["id"], rec.get("guid") or "")
         except Exception:
             mails = []
         if mails:

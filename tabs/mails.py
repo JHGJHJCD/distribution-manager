@@ -757,6 +757,9 @@ class MailsTab(QWidget):
     def _send_test(self):
         if not self._validate_message():
             return
+        if self._attachment and not os.path.exists(self._attachment):
+            QMessageBox.warning(self, "", "הקובץ המצורף לא נמצא (נמחק או הועבר). הסר אותו או צרף מחדש.")
+            return
         me = email_utils.sender_email()
         first = next((t for t in self._targets if t["ok"]), None)
         rec = self._recs.get(first["rec_id"]) if first and first.get("rec_id") is not None else None
@@ -964,8 +967,15 @@ class MailsTab(QWidget):
         self.body.setPlainText(c.get("body", ""))
         recs = {}
         targets = []
+        me = sync.device_name() or ""
         for r in failed:
-            rec = db.get_recipient(r["rec_id"]) if r.get("rec_id") is not None else None
+            # v3.44: הכרטיס לפי guid (יציב בין המחשבים). rec_id הוא מזהה *מקומי* —
+            # בדוח שהגיע מהמחשב השני אותו מספר = אדם אחר ⇒ רק כשהשליחה הייתה שלנו.
+            rec = None
+            if r.get("guid"):
+                rec = db.get_recipient_by_guid(r["guid"])
+            elif r.get("rec_id") is not None and (c.get("device") or "") == me:
+                rec = db.get_recipient(r["rec_id"])
             if rec:
                 rec = dict(rec)
                 recs[rec["id"]] = rec

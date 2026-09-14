@@ -493,6 +493,87 @@ cd = next((l for l in raw.splitlines() if l.startswith("Content-Disposition") an
 ok("שם קובץ עברי: Content-Disposition תקני (filename*=utf-8) ולא =?utf-8?b?",
    "filename*=utf-8''" in raw and not cd.startswith("Content-Disposition: =?"), cd or raw[:300])
 
+# ─── 8. v3.44 — סקירת /בדוק-מיילים 14/9/2026, סבב שלישי ─────────────────────
+print("— v3.44: דוח חוצה-מחשבים לפי guid / ניתוק SMTP באמצע / קובץ חסר במייל-בדיקה —")
+# (א) rec_id הוא מזהה *מקומי*: במחשב השני אותו מספר = אדם אחר.
+shared2 = os.path.join(root, "drive2"); os.makedirs(shared2)
+dir_d = os.path.join(root, "pc_d"); os.makedirs(dir_d)
+dir_e = os.path.join(root, "pc_e"); os.makedirs(dir_e)
+use_machine(dir_e)                                   # E: "לוי" מקבל id=1
+sync.enable_sync(shared2, seed=False)
+levi_id = db.add_recipient({"full_name": "לוי משה", "email": "levi@x.com", "status": "פעיל"})
+use_machine(dir_d)                                   # D: "כהן" מקבל id=1
+sync.enable_sync(shared2, seed=False)
+cohen_id = db.add_recipient({"full_name": "כהן ישראל", "email": "cohen@x.com", "status": "פעיל"})
+cohen_guid = db.get_recipient(cohen_id)["guid"]
+ok("תנאי הבדיקה: אותו id מקומי לשני אנשים שונים", cohen_id == levi_id == 1)
+gd = db.add_mail_campaign("חוצה", "גוף", "כולם", "kupa@gmail.com", 1, device="D")
+db.update_mail_campaign(gd, 0, 1, "done", json.dumps(
+    [{"rec_id": cohen_id, "guid": cohen_guid, "name": "כהן ישראל", "email": "cohen@x.com",
+      "status": "failed", "error": "x"}], ensure_ascii=False))
+sync.push_changes() if hasattr(sync, "push_changes") else None
+use_machine(dir_e)
+sync.pull_changes()
+cohen_e = db.get_recipient_by_guid(cohen_guid)
+ok("E קיבל את כהן עם id מקומי אחר", cohen_e is not None and cohen_e["id"] != levi_id, cohen_e and cohen_e["id"])
+ok("כרטיס לוי ב-E: לא מציג מייל שנשלח לכהן (אותו rec_id)",
+   db.get_mails_for_recipient(levi_id, db.get_recipient(levi_id)["guid"]) == [])
+ok("כרטיס כהן ב-E: כן מציג את המייל (לפי guid)",
+   len(db.get_mails_for_recipient(cohen_e["id"], cohen_e["guid"])) == 1)
+# "שלח שוב לנכשלים" ב-E — לכהן, לא ללוי
+tabE = mmod.MailsTab(None)
+tabE.refresh()
+_sentE = {}
+tabE._send = lambda targets=None, audience=None: _sentE.update(t=targets)
+tabE._resend_failed(next(i for i, c in enumerate(tabE._camps) if c["guid"] == gd))
+tE = _sentE.get("t") or []
+ok("E: שליחה חוזרת הולכת לכהן (לפי guid), לא ללוי (לפי rec_id)",
+   [t["email"] for t in tE] == ["cohen@x.com"] and tE[0]["rec_id"] == cohen_e["id"], tE)
+# דוח ישן בלי guid ממחשב אחר → לא מנחשים כרטיס לפי rec_id; שולחים לכתובת שבדוח
+db.update_mail_campaign(gd, 0, 1, "done", json.dumps(
+    [{"rec_id": 1, "guid": "", "name": "כהן ישראל", "email": "cohen@x.com", "status": "failed", "error": "x"}],
+    ensure_ascii=False))
+tabE._refresh_history()
+tabE._resend_failed(next(i for i, c in enumerate(tabE._camps) if c["guid"] == gd))
+tE = _sentE.get("t") or []
+ok("E: דוח בלי guid ממחשב אחר → לכתובת שבדוח, בלי כרטיס לפי rec_id",
+   [t["email"] for t in tE] == ["cohen@x.com"] and tE[0]["rec_id"] is None, tE)
+tabE.deleteLater()
+# (ב) SMTP: ניתוק באמצע sendmail (אחרי חיבור מוצלח) → עברית, לא חריגה גולמית
+use_machine(dir_a)
+google_auth.disconnect(revoke=False)
+email_utils.set_smtp_config("kupa@gmail.com", "app-pass")
+class _DropSMTP:
+    def sendmail(self, frm, to, msg):
+        raise smtplib.SMTPServerDisconnected("Connection unexpectedly closed")
+    def quit(self): pass
+email_utils._connect = lambda cfg: _DropSMTP()
+try:
+    email_utils.send_email("dest@example.com", "x", "y"); ok("ניתוק באמצע מעלה", False)
+except Exception as e:
+    ok("SMTP: ניתוק באמצע השליחה → הודעה בעברית", "נותק" in str(e) and not mailer.is_fatal(e), str(e))
+class _TimeoutSMTP:
+    def sendmail(self, frm, to, msg):
+        raise TimeoutError("timed out")
+    def quit(self): pass
+email_utils._connect = lambda cfg: _TimeoutSMTP()
+try:
+    email_utils.send_email("dest@example.com", "x", "y"); ok("timeout באמצע מעלה", False)
+except Exception as e:
+    ok("SMTP: timeout באמצע השליחה → הודעה בעברית", "נותק" in str(e), str(e))
+email_utils._connect = _orig_connect
+email_utils.set_smtp_config("", "")
+google_auth.connect()
+# (ג) מייל-בדיקה עם קובץ מצורף שנמחק → אזהרה, לא שליחה בלי הקובץ
+tabT = mmod.MailsTab(None)
+tabT.refresh()
+tabT.subject.setText("נ"); tabT.body.setPlainText("ג")
+tabT._set_attachment(os.path.join(dir_a, "gone.pdf"))
+mmod._BgWorker.start = lambda self: None
+tabT._send_test()
+ok("מייל-בדיקה: קובץ מצורף חסר → אזהרה ולא נשלח", tabT._test_worker is None and "מצורף" in _msgs[-1][1], _msgs[-1])
+tabT.deleteLater()
+
 # disconnect
 use_machine(dir_a)
 google_auth.disconnect()

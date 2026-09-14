@@ -395,12 +395,36 @@ def _(c):
             and 'part["Content-Disposition"] =' not in body), ""
 
 
+@lint("M37", "דוח חוצה-מחשבים לפי guid: get_mails_for_recipient מתאים לפי guid; _resend_failed פותר "
+             "כרטיס דרך get_recipient_by_guid, ו-rec_id רק כשהשליחה של המחשב הזה")
+def _(c):
+    dbs = _func_body(c["dbs"], "get_mails_for_recipient")
+    res = _func_body(c["m"], "_resend_failed")
+    return ("guid" in dbs and 'rg == guid' in dbs
+            and "db.get_recipient_by_guid(" in res and "device" in res
+            and 'db.get_mails_for_recipient(rec["id"], rec.get("guid")' in c["search"]), ""
+
+
+@lint("M38", "SMTP: ניתוק/timeout באמצע sendmail נתפס (OSError/SMTPException) → עברית, לא חריגה גולמית")
+def _(c):
+    body = _func_body(c["eu"], "send_email")
+    i = body.find("server.sendmail(")
+    return i > 0 and "except (OSError, smtplib.SMTPException) as e:" in body[i:], ""
+
+
+@lint("M39", "_send_test בודק שהקובץ המצורף קיים בדיסק (כמו _send)")
+def _(c):
+    body = _func_body(c["m"], "_send_test")
+    return "os.path.exists(self._attachment)" in body, ""
+
+
 def run_lints() -> bool:
     ctx = {
         "m": _read("tabs/mails.py"), "ml": _read("utils/mailer.py"),
         "ga": _read("utils/google_auth.py"), "eu": _read("utils/email_utils.py"),
         "st": _read("tabs/settings.py"), "dbs": _read("database.py"),
         "sy": _read("utils/sync.py"), "test": _read("test_mail.py"),
+        "search": _read("tabs/search.py"),
         "rel": _read(".claude/skills/manhal-haluka/scripts/release.py"),
     }
     print("— לינט אינווריאנטים (מיילים) —")

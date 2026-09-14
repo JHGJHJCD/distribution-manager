@@ -2005,9 +2005,14 @@ def get_mail_campaign(guid: str):
         return dict(row) if row else None
 
 
-def get_mails_for_recipient(rec_id: int) -> list[dict]:
+def get_mails_for_recipient(rec_id: int, guid: str = "") -> list[dict]:
     """המיילים שנשלחו למקבל (לפי report_json) — לכרטיס בחיפוש מהיר.
-    מחזיר [{sent_at, subject, status, email, error}] מהחדש לישן."""
+    מחזיר [{sent_at, subject, status, email, error}] מהחדש לישן.
+    v3.44: התאמה לפי **guid** (יציב בין המחשבים) כשהשורה נושאת אותו; `rec_id`
+    הוא מזהה מקומי — במחשב השני אותו מספר = אדם אחר."""
+    if not guid:
+        rec = get_recipient(rec_id)
+        guid = ((rec or {}).get("guid") or "").strip()
     out = []
     for c in get_mail_campaigns():
         try:
@@ -2015,7 +2020,10 @@ def get_mails_for_recipient(rec_id: int) -> list[dict]:
         except Exception:
             rows = []
         for r in rows:
-            if str(r.get("rec_id") or "") == str(rec_id):
+            rg = (r.get("guid") or "").strip()
+            hit = (rg == guid) if rg else (r.get("rec_id") is not None
+                                           and str(r.get("rec_id")) == str(rec_id))
+            if hit:
                 out.append({"sent_at": c.get("sent_at", ""), "subject": c.get("subject", ""),
                             "status": r.get("status", ""), "email": r.get("email", ""),
                             "error": r.get("error", "")})
