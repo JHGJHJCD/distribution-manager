@@ -103,12 +103,28 @@ def build_targets(recs: list[dict], extra_addresses: list[str] | None = None) ->
     return out
 
 
+URL_RE = re.compile(r"(https?://[^\s<>\"']+)")
+
+
+def _linkify(escaped: str) -> str:
+    """v3.45: כתובות אינטרנט בטקסט (אחרי html.escape) → קישור לחיץ. לא סומכים על
+    הלינקיפיקציה של Gmail/Outlook (לא כל לקוח עושה אותה); סימן פיסוק בסוף לא נכלל."""
+    def rep(m):
+        url = m.group(1)
+        tail = ""
+        while url and url[-1] in ".,;:!?)":
+            tail = url[-1] + tail
+            url = url[:-1]
+        return f"<a href='{url}' style='color:#0f766e'>{url}</a>{tail}"
+    return URL_RE.sub(rep, escaped)
+
+
 def html_body(text: str, with_header: bool = True, org_name: str = "קופה של צדקה הר יונה") -> str:
     """טקסט פשוט → HTML RTL. שורות ריקות = פסקאות. with_header מוסיף רצועת
     כותרת עם הלוגו (cid:logo — email_utils מצרף אותו inline)."""
     paras = [p.strip() for p in re.split(r"\n\s*\n", (text or "").strip())]
     body = "".join(
-        "<p style='margin:0 0 12px'>" + html.escape(p).replace("\n", "<br>") + "</p>"
+        "<p style='margin:0 0 12px'>" + _linkify(html.escape(p)).replace("\n", "<br>") + "</p>"
         for p in paras if p)
     header = ""
     if with_header:
@@ -170,11 +186,13 @@ def send_batch(targets: list[dict], subject: str, body_text: str, ctx: dict | No
         rec = rec_by_id.get(t.get("rec_id")) if t.get("rec_id") is not None else None
         c = dict(ctx or {}, fallback_name=t.get("name", ""))
         try:
+            plain = render(body_text, rec, c)
             email_utils.send_email(
                 t["email"], render(subject, rec, c),
-                html_body(render(body_text, rec, c), with_header),
+                html_body(plain, with_header),
                 attachment_path=attachment_path,
-                inline_logo_path=logo_path if with_header else None)
+                inline_logo_path=logo_path if with_header else None,
+                text_body=plain)
         except Exception as e:
             row["status"] = "failed"
             row["error"] = str(e)

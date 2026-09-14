@@ -418,6 +418,39 @@ def _(c):
     return "os.path.exists(self._attachment)" in body, ""
 
 
+@lint("M40", "המייל = mixed › alternative › [text/plain, related › [html, לוגו]] — תמיד גרסת טקסט-רגיל (3.45)")
+def _(c):
+    body = _func_body(c["eu"], "send_email")
+    return ('MIMEMultipart("alternative")' in body and '"plain", "utf-8"' in body
+            and "html_to_text(html_body)" in body and "alt.attach(related)" in body
+            and "root.attach(alt)" in body), ""
+
+
+@lint("M41", "From = formataddr((SENDER_NAME, כתובת)) + Date + Message-ID עם דומיין השולח (לא hostname)")
+def _(c):
+    body = _func_body(c["eu"], "send_email")
+    return ("formataddr((SENDER_NAME, from_addr))" in body and 'root["Date"] = formatdate(' in body
+            and 'root["Message-ID"] = make_msgid(domain=' in body), ""
+
+
+@lint("M42", "send_batch ו-_send_test מעבירים text_body=הטקסט המרונדר (אותה זרימה בשני המקומות)")
+def _(c):
+    return ("text_body=plain" in _func_body(c["ml"], "send_batch")
+            and "text_body=plain" in _func_body(c["m"], "_send_test")), ""
+
+
+@lint("M43", "לוגו למייל = עותק מוקטן (MAIL_LOGO_PX) ליד ה-DB (DB_PATH, לא USER_LOGO_PATH) — לא המקור")
+def _(c):
+    body = _func_body(c["m"], "_logo_path")
+    return ("MAIL_LOGO_PX" in body and "os.path.dirname(db.DB_PATH)" in body
+            and "SmoothTransformation" in body), ""
+
+
+@lint("M44", "html_body: כתובות אינטרנט הופכות לקישור (_linkify אחרי html.escape)")
+def _(c):
+    return "_linkify(html.escape(p))" in _func_body(c["ml"], "html_body"), ""
+
+
 def run_lints() -> bool:
     ctx = {
         "m": _read("tabs/mails.py"), "ml": _read("utils/mailer.py"),

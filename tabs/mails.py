@@ -44,7 +44,10 @@ _BTN_LINK = ("QPushButton{background:transparent; color:#0f766e; border:none;"
 _MAX_TABLE_ROWS = 14
 
 
-def _logo_path() -> str:
+MAIL_LOGO_PX = 88   # 2× של 44px בתצוגה — חד גם במסכי רטינה, כמה KB במקום 34KB (או MB של לוגו מותאם)
+
+
+def _source_logo_path() -> str:
     if os.path.exists(db.USER_LOGO_PATH):
         return db.USER_LOGO_PATH
     try:
@@ -53,6 +56,29 @@ def _logo_path() -> str:
         return p if os.path.exists(p) else ""
     except Exception:
         return ""
+
+
+def _logo_path() -> str:
+    """v3.45: הלוגו שמצורף לכל מייל — עותק מוקטן (MAIL_LOGO_PX) שנשמר ליד ה-DB ומתחדש
+    כשהמקור השתנה. המקור (725px / 34KB, או לוגו מותאם שיכול להיות צילום של כמה MB) נשלח
+    קודם כמו שהוא ל-500 נמענים — איטי, מנפח את המכסה, ומוצג ממילא ב-44px."""
+    src = _source_logo_path()
+    if not src:
+        return ""
+    try:
+        from PyQt6.QtGui import QImage
+        from PyQt6.QtCore import Qt
+        out = os.path.join(os.path.dirname(db.DB_PATH), "logo_mail.png")   # ליד ה-DB (בבדיקות: DB זמני)
+        if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(src):
+            return out
+        img = QImage(src)
+        if img.isNull():
+            return src
+        img = img.scaled(MAIL_LOGO_PX, MAIL_LOGO_PX, Qt.AspectRatioMode.KeepAspectRatio,
+                         Qt.TransformationMode.SmoothTransformation)
+        return out if img.save(out, "PNG") else src
+    except Exception:
+        return src
 
 
 class _BgWorker(QThread):
@@ -765,8 +791,8 @@ class MailsTab(QWidget):
         rec = self._recs.get(first["rec_id"]) if first and first.get("rec_id") is not None else None
         ctx = dict(self._ctx(), fallback_name=first["name"] if first else "ישראל ישראלי")
         subj = "[בדיקה] " + mailer.render(self.subject.text(), rec, ctx)
-        html = mailer.html_body(mailer.render(self.body.toPlainText(), rec, ctx),
-                                self.chk_header.isChecked())
+        plain = mailer.render(self.body.toPlainText(), rec, ctx)
+        html = mailer.html_body(plain, self.chk_header.isChecked())
         attach = self._attachment or None
         logo = _logo_path() if self.chk_header.isChecked() else None
         # ברקע — חיבור לשרת (במיוחד מאחורי נטפרי) יכול לקחת דקות; המסך לא קופא
@@ -774,7 +800,7 @@ class MailsTab(QWidget):
         self.btn_test.setText("שולח בדיקה…")
         self._test_worker = _BgWorker(
             lambda: email_utils.send_email(me, subj, html, attachment_path=attach,
-                                           inline_logo_path=logo), self)
+                                           inline_logo_path=logo, text_body=plain), self)
         self._test_worker.done.connect(lambda res: self._test_done(res, me))
         self._test_worker.start()
 

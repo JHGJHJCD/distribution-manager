@@ -64,6 +64,11 @@
 | M24 | `build_targets`: כתובת אחת לאדם, dedupe **לא-רגיש לאותיות**, סיבת-דילוג לכל מי שלא נשלח (אין/לא תקינה/כפולה) | `mailer.build_targets` | ✓ |
 | M25 | `render`: `{שם פרטי}` = החלק **השני** של `full_name` (משפחה-קודם, ראה `project-name-convention`) | `mailer.render` | ✓ |
 | M26 | `html_body`: כותרת = **טבלה** + `width`/`height` **אטריבוטים** על הלוגו (בלי flex / CSS height — Qt מתעלם → לוגו ענק) (3.41) | `mailer.html_body` | ✓ |
+| M40 | `send_email`: מבנה **mixed › alternative › [text/plain, related › [html, לוגו]] › קובץ** — תמיד גרסת טקסט-רגיל (`text_body` או `html_to_text`); HTML-בלבד = ניקוד ספאם + snippet/קורא-מסך שבורים (3.45) | `email_utils.send_email` | ✓ |
+| M41 | `From` = `formataddr((SENDER_NAME, כתובת))` (הנמען רואה "קופה של צדקה הר יונה", לא כתובת חשופה); `Date` + `Message-ID` נכתבים בתוכנה, דומיין מכתובת השולח (לא hostname — שם המחשב לא זולג) (3.45) | `email_utils.send_email` | ✓ |
+| M42 | `send_batch` **ו-**`_send_test` מעבירים `text_body=` הטקסט המרונדר — זרימות אחיות, אותו מבנה (3.45) | `mailer.send_batch`, `mails._send_test` | ✓ |
+| M43 | הלוגו שמצורף למייל = **עותק מוקטן** (`MAIL_LOGO_PX`=88) ליד ה-DB (`DB_PATH`, כדי שבדיקות לא יכתבו לתיקייה האמיתית), מתחדש לפי mtime של המקור — לא המקור (725px/34KB, או לוגו-מותאם של MB) ×500 נמענים (3.45) | `mails._logo_path` | ✓ |
+| M44 | `html_body`: כתובות `http(s)://` בגוף → `<a>` לחיץ (`_linkify` **אחרי** `html.escape`; פיסוק בסוף לא נכלל) — לא סומכים על לינקיפיקציה של לקוח המייל (3.45) | `mailer.html_body` | ✓ |
 
 ## בדיקות
 

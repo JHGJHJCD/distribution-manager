@@ -18,7 +18,10 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from email.mime.application import MIMEApplication
+from email.utils import formataddr, formatdate, make_msgid
 from io import BytesIO
+import html as _html
+import re as _re
 
 import database as db
 
@@ -94,21 +97,50 @@ def _connect(cfg: dict) -> smtplib.SMTP:
     return server
 
 
+SENDER_NAME = "קופה של צדקה הר יונה"   # שם התצוגה של השולח (From) בכל מייל יוצא
+
+
+def html_to_text(html_body: str) -> str:
+    """v3.45: גרסת טקסט-רגיל מ-HTML — לגרסה החלופית (text/plain) כשלא סופק טקסט
+    מקורי (זרימת המתנדבים). <br>/<p>/<tr> → שורות, שאר התגים מוסרים, ישויות מפוענחות."""
+    t = html_body or ""
+    t = _re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", "", t)
+    t = _re.sub(r"(?i)<br\s*/?>", "\n", t)
+    t = _re.sub(r"(?i)</(p|div|tr|h[1-6]|li|table)>", "\n", t)
+    t = _re.sub(r"<[^>]+>", "", t)
+    t = _html.unescape(t)
+    lines = [ln.strip() for ln in t.splitlines()]
+    return _re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def send_email(to_addr: str, subject: str, html_body: str,
-               attachment_path: str = None, inline_logo_path: str = None):
+               attachment_path: str = None, inline_logo_path: str = None,
+               text_body: str = None):
     """Send an HTML email, optionally with a file attached and an inline logo
     image (referenced in html_body via <img src="cid:logo">). Raises on failure
-    — the caller is expected to show the error to the user."""
+    — the caller is expected to show the error to the user.
+
+    v3.45 — מבנה המייל: mixed › alternative › [text/plain, related › [text/html, לוגו]]
+    › קובץ מצורף. גרסת טקסט-רגיל (text_body, או נגזרת מה-HTML) = פחות סינון-ספאם
+    (MIME_HTML_ONLY), תצוגה בלקוחות טקסט/קוראי-מסך, ו-snippet נכון. From נושא את שם
+    הקופה; Date/Message-ID נוספים כאן (לא סומכים על השרת)."""
     cfg = get_smtp_config()
     via_google = google_connected()
     if not via_google and not (cfg["email"] and cfg["app_password"]):
         raise RuntimeError("הגדרות שליחת מייל לא הוגדרו (ראה לשונית הגדרות).")
+    from_addr = sender_email() if via_google else cfg["email"]
 
     root = MIMEMultipart("mixed")
     root["Subject"] = subject
-    root["From"] = sender_email() if via_google else cfg["email"]
+    root["From"] = formataddr((SENDER_NAME, from_addr))
     root["To"] = to_addr
+    root["Date"] = formatdate(localtime=True)
+    # דומיין מכתובת השולח — לא hostname (שם המחשב לא זולג לנמען)
+    root["Message-ID"] = make_msgid(domain=(from_addr.rsplit("@", 1)[-1] or "localhost"))
 
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(text_body if text_body is not None else html_to_text(html_body),
+                        "plain", "utf-8"))
     related = MIMEMultipart("related")
     related.attach(MIMEText(html_body, "html", "utf-8"))
     if inline_logo_path and os.path.exists(inline_logo_path):
@@ -117,7 +149,8 @@ def send_email(to_addr: str, subject: str, html_body: str,
         img.add_header("Content-ID", "<logo>")
         img.add_header("Content-Disposition", "inline", filename="logo.png")
         related.attach(img)
-    root.attach(related)
+    alt.attach(related)
+    root.attach(alt)
 
     if attachment_path and os.path.exists(attachment_path):
         with open(attachment_path, "rb") as f:
@@ -154,7 +187,7 @@ def send_email(to_addr: str, subject: str, html_body: str,
         # sendmail returns the recipients the server REFUSED (empty = all accepted).
         # A refused recipient means the mail was NOT delivered — treat as failure
         # rather than silently reporting success.
-        refused = server.sendmail(cfg["email"], [to_addr], root.as_string())
+        refused = server.sendmail(from_addr, [to_addr], root.as_string())
     except smtplib.SMTPRecipientsRefused as e:
         # הנמען היחיד סורב → smtplib מעלה חריגה (לא מחזיר dict). תקלה של הנמען הזה בלבד.
         raise RuntimeError("המייל לא התקבל אצל הנמען — בדוק/י את כתובת המייל ונסה/י שוב.") from e

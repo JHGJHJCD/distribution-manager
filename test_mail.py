@@ -103,7 +103,7 @@ email_utils.send_email("dest@example.com", "נושא", "<div>גוף</div>")
 sent_calls = [c for c in calls[n0:] if c[1] == google_auth.GMAIL_SEND_URL]
 ok("send_email → Gmail API (בלי SMTP)", len(sent_calls) == 1)
 raw = base64.urlsafe_b64decode(json.loads(sent_calls[0][2])["raw"] + "==")
-ok("MIME: From=חשבון גוגל, To=נמען", b"From: kupa@gmail.com" in raw and b"To: dest@example.com" in raw)
+ok("MIME: From=חשבון גוגל (עם שם הקופה), To=נמען", b"<kupa@gmail.com>" in raw and b"To: dest@example.com" in raw)
 # טוקן ישן → ריענון וניסיון שני
 google_auth._cache.update(token="STALE", exp=9e12)
 n0 = len(calls)
@@ -579,6 +579,58 @@ use_machine(dir_a)
 google_auth.disconnect()
 ok("disconnect מנקה settings + revoke", not google_auth.is_connected()
    and any(c[1] == google_auth.REVOKE_URL for c in calls))
+
+# ── 9. v3.45: המייל עצמו — טקסט-רגיל חלופי, שם שולח, Date/Message-ID, לוגו קטן ──
+print("— v3.45: מבנה המייל (alternative + plain), שם השולח, Date/Message-ID, לוגו מוקטן —")
+use_machine(dir_a)
+import email as _em
+from email.header import decode_header as _dh
+_raw9 = {}
+class _CapSMTP:
+    def sendmail(self, frm, to, msg): _raw9["msg"] = msg; return {}
+    def quit(self): pass
+_orig_gc9 = email_utils.google_connected
+_orig_cfg9 = email_utils.get_smtp_config
+email_utils.google_connected = lambda: False
+email_utils.get_smtp_config = lambda: {"email": "kupa@gmail.com", "app_password": "x",
+                                       "host": "smtp.gmail.com", "port": 587}
+email_utils._connect = lambda cfg: _CapSMTP()
+_rec9 = {"id": 1, "full_name": "כהן דוד", "first_name": "דוד", "email": "d@x.co"}
+_ctx9 = mailer.default_context("2026-09-16")
+_txt9 = mailer.render("שלום {שם פרטי},\n\nיש חלוקה ב-{תאריך חלוקה}.\nפרטים: https://example.com/a?b=1&c=2", _rec9, _ctx9)
+email_utils.send_email("d@x.co", "תזכורת", mailer.html_body(_txt9), text_body=_txt9,
+                       inline_logo_path=os.path.join(root, "nologo.png"))
+_m9 = _em.message_from_string(_raw9["msg"])
+_types9 = [p.get_content_type() for p in _m9.walk()]
+ok("המייל כולל גרסת טקסט-רגיל לצד ה-HTML (multipart/alternative)",
+   "multipart/alternative" in _types9 and "text/plain" in _types9 and "text/html" in _types9, _types9)
+_plain9 = next((p for p in _m9.walk() if p.get_content_type() == "text/plain"), None)
+_ptext9 = _plain9.get_payload(decode=True).decode("utf-8") if _plain9 else ""
+ok("הטקסט-הרגיל = הטקסט המרונדר (שם + תאריך)", "שלום דוד" in _ptext9 and "16/09/2026" in _ptext9)
+_html9 = next(p for p in _m9.walk() if p.get_content_type() == "text/html").get_payload(decode=True).decode("utf-8")
+ok("קישור בגוף המייל הופך ל-<a> לחיץ", "<a href='https://example.com/a?b=1&amp;c=2'" in _html9
+   or "<a href=\"https://example.com/a?b=1&amp;c=2\"" in _html9, _html9[-200:])
+def _dec9(v):
+    return "".join(b.decode(c or "ascii") if isinstance(b, bytes) else b for b, c in _dh(v))
+ok("From נושא את שם הקופה (לא רק כתובת)", "קופה של צדקה הר יונה" in _dec9(_m9["From"])
+   and "kupa@gmail.com" in _dec9(_m9["From"]), _dec9(_m9["From"]))
+ok("כותרות Date ו-Message-ID קיימות", bool(_m9["Date"]) and bool(_m9["Message-ID"]))
+ok("Message-ID לא מדליף את שם המחשב (דומיין מכתובת השולח)", "@gmail.com>" in (_m9["Message-ID"] or ""))
+# בלי text_body (זרימת המתנדבים) — נגזר מה-HTML
+email_utils.send_email("d@x.co", "x", "<div dir='rtl'><p>שורה א</p><p>שורה &amp; ב</p></div>")
+_m9b = _em.message_from_string(_raw9["msg"])
+_p9b = next(p for p in _m9b.walk() if p.get_content_type() == "text/plain").get_payload(decode=True).decode("utf-8")
+ok("בלי text_body — טקסט-רגיל נגזר מה-HTML (בלי תגים, ישויות מפוענחות)",
+   "שורה א" in _p9b and "שורה & ב" in _p9b and "<" not in _p9b, _p9b)
+email_utils.google_connected = _orig_gc9
+email_utils.get_smtp_config = _orig_cfg9
+email_utils._connect = _orig_connect
+# לוגו מוקטן לשליחה — _logo_path (tabs/mails) מחזיר עותק קטן, לא את הקובץ המקורי (725px / 34KB)
+from tabs import mails as _mails_mod
+_lp9 = _mails_mod._logo_path()
+ok("לוגו למייל קיים ונשמר ליד ה-DB הזמני (לא בתיקייה האמיתית)", bool(_lp9) and os.path.exists(_lp9) and _lp9.startswith(dir_a), _lp9)
+ok("לוגו למייל מוקטן (≤ 12KB) — לא הקובץ המקורי", bool(_lp9) and os.path.getsize(_lp9) <= 12 * 1024,
+   os.path.getsize(_lp9) if _lp9 else -1)
 
 print()
 if fails:
