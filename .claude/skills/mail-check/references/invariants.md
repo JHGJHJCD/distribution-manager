@@ -38,7 +38,7 @@
 | M11 | ה-loopback עונה 404 לבקשה בלי `code`/`error` (favicon.ico) וממשיך להמתין (`_wait_for_code` בלולאה עד `got_it`) — לא בקשה אחת בלבד (3.41) | `google_auth._OneShotHandler`/`_wait_for_code` | ✓ |
 | M12 | PKCE (`code_verifier`) + אימות `state == expected_state`; בלי `refresh_token` בתשובה = שגיאה בעברית (3.39) | `google_auth.connect` | ✓ |
 | M13 | `invalid_grant` ("פג או בוטל") מנקה את `SET_REFRESH` — לא להשאיר "מחובר" מטעה (3.39) | `google_auth.access_token` | ✓ |
-| M14 | סדר זיהוי-לקוח: `_secret.py` → settings מסונכרנות → `google_client.json`; `import_client_file` דוחה קובץ "web" ולא-גוגל בעברית (3.41) | `google_auth.client_credentials`/`import_client_file` | ✓ |
+| M14 | סדר זיהוי-לקוח: `_secret.py` → settings מסונכרנות → `google_client.json` (**הכרעת המשתמש 14/9/2026: המובנה גובר** — לא לשנות את הסדר); `import_client_file` דוחה קובץ "web" ולא-גוגל בעברית (3.41) | `google_auth.client_credentials`/`import_client_file` | ✓ |
 | M15 | `google_refresh_token`/`google_email`/`google_client_id` **מסונכרנים** (הכרעת המשתמש 10/9/2026: חיבור אחד לשני המחשבים) — לא ב-`EXCLUDED_SETTINGS` | `sync.py` | ✓ |
 | M16 | `_secret.py` ב-`.gitignore`; אין סוד גוגל/סיסמת-אפליקציה בקוד או בבדיקות | repo | ✓ |
 | M17 | `sender_email`/`is_configured`: Google **או** SMTP; כשגוגל מחובר — `send_email` הולך ל-Gmail API ולא ל-SMTP (3.39) | `email_utils` | ✓ |
