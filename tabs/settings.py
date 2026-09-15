@@ -1682,7 +1682,20 @@ class SettingsTab(QWidget):
             self.lbl_update_status.setStyleSheet("color:#334155;")
             self.lbl_update_status.setText(f"התוכנה מעודכנת (v{APP_VERSION}) ✓")
 
+    def _mails_guard_ok(self) -> bool:
+        """v3.47: עדכון-תוכנה באמצע שליחת מיילים — ההתקנה יוצאת ב-quit() שלא עובר
+        ב-closeEvent ⇒ השליחה הייתה נהרגת בשקט. שואלים (ברירת-מחדל: לא) לפני ההורדה
+        ושוב לפני ההחלפה (השליחה יכלה להתחיל בזמן ההורדה)."""
+        mt = getattr(self.main, "mails_tab", None) if getattr(self, "main", None) else None
+        if mt is None or not hasattr(mt, "guard_update"):
+            return True
+        return bool(mt.guard_update())
+
     def _start_download(self, result):
+        if not self._mails_guard_ok():
+            self.lbl_update_status.setStyleSheet("color:#b45309;")
+            self.lbl_update_status.setText("העדכון נדחה — יש שליחת מיילים פעילה. אפשר לעדכן אחרי שתסתיים.")
+            return
         if not updater.current_exe():
             QMessageBox.information(
                 self, "עדכון",
@@ -1715,6 +1728,12 @@ class SettingsTab(QWidget):
                 QMessageBox.critical(self, "שגיאת עדכון",
                                      netblock.explain(result)
                                      or f"הורדת העדכון נכשלה:\n{result}")
+            return
+        if not self._mails_guard_ok():
+            # v3.47: שליחה שהתחילה בזמן ההורדה — לא מחליפים את ה-EXE מתחתיה
+            self.lbl_update_status.setStyleSheet("color:#b45309;")
+            self.lbl_update_status.setText("העדכון הורד אך לא הותקן — יש שליחת מיילים פעילה. "
+                                           "לחץ \"בדוק עדכון\" אחרי שתסתיים.")
             return
         # v3.40: this download is OURS — the manager machine must not count it
         # as "someone downloaded the software". Written before the relaunch.

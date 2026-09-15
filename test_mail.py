@@ -755,6 +755,150 @@ ok("הגדרות: 'התנתק' לא קורא לרשת על ה-UI (revoke=False +
    "disconnect(revoke=False)" in _dis and "_BgWorker" in _dis and "busy_cursor" not in _dis)
 google_auth.connect()
 
+# ── 11. v3.47: סקירת /בדוק-מיילים 15/9/2026, סבב חמישי — שליחה-חוזרת עם הקובץ המקורי /
+#        חיבור SMTP אחד לכל האצווה / עדכון-תוכנה באמצע שליחה / תבנית בשם קיים ─────────
+print("— v3.47: קובץ מקורי בשליחה-חוזרת / חיבור SMTP יחיד / עדכון באמצע שליחה / תבנית בשם קיים —")
+use_machine(dir_a)
+google_auth._TRANSPORT = fake_transport
+if not google_auth.is_connected():
+    google_auth.connect()
+_me = sync.device_name() or ""
+# (א) "שלח שוב לנכשלים" שולח את *הקובץ המצורף המקורי* (ובלי/עם כותרת כמו במקור) — לא את מה שבטיוטה
+_old = os.path.join(dir_a, "רשימה_ישנה.pdf"); open(_old, "wb").write(b"%PDF old")
+_new = os.path.join(dir_a, "קבלה_חדשה.pdf"); open(_new, "wb").write(b"%PDF new")
+g12 = db.add_mail_campaign("נושא עם קובץ", "גוף", "כולם", "kupa@gmail.com", 1, device=_me,
+                           attachment=_old, with_header=0)
+db.update_mail_campaign(g12, 0, 1, "done", json.dumps([
+    {"rec_id": None, "guid": "", "name": "f@x.com", "email": "f@x.com", "status": "failed", "error": "x"}]))
+c12 = db.get_mail_campaign(g12)
+ok("הרשומה זוכרת את הקובץ המצורף ואת מצב הכותרת", c12.get("attachment") == _old and int(c12.get("with_header", 1)) == 0,
+   (c12.get("attachment"), c12.get("with_header")))
+tab = mmod.MailsTab(None)
+tab.refresh()
+tab._set_attachment(_new); tab.chk_header.setChecked(True)
+tab.subject.setText("טיוטה"); tab.body.setPlainText("טיוטה")
+tab._refresh_history()
+idx12 = next(i for i, c in enumerate(tab._camps) if c["guid"] == g12)
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.Yes)
+tab._resend_failed(idx12)
+_args = getattr(tab._worker, "_a", ()) if tab._worker is not None else ()
+ok("שליחה-חוזרת יוצאת עם הקובץ *המקורי* של אותה שליחה (לא הקובץ שבטיוטה)",
+   len(_args) >= 6 and _args[4] == _old, _args[4] if len(_args) > 4 else None)
+ok("…ועם אותו מצב כותרת/לוגו כמו במקור (בלי כותרת)", len(_args) >= 6 and _args[5] is False)
+ok("…והטיוטה (הקובץ שצורף במסך) לא נגעה", tab._attachment == _new and tab.chk_header.isChecked())
+c12b = db.get_mail_campaign(tab._active_guid)
+ok("רשומת השליחה-החוזרת נושאת גם היא את הקובץ המקורי", c12b and c12b.get("attachment") == _old)
+tab._on_finished([{"rec_id": None, "guid": "", "name": "f@x.com", "email": "f@x.com", "status": "sent", "error": ""}])
+# הקובץ המקורי נמחק מהדיסק → שואלים (לא שולחים בשקט בלי הקובץ / עם קובץ אחר)
+os.remove(_old)
+idx12 = next(i for i, c in enumerate(tab._camps) if c["guid"] == g12)   # ההיסטוריה נטענה מחדש
+_q12 = []
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: _q12.append(str(a[2])) or mmod.QMessageBox.StandardButton.No)
+n_before = len(db.get_mail_campaigns())
+tab._resend_failed(idx12)
+ok("הקובץ המקורי חסר → שאלה למפעיל (ברירת-מחדל: לא לשלוח), לא שליחה בשקט",
+   tab._worker is None and len(db.get_mail_campaigns()) == n_before and _q12 and "רשימה_ישנה" in _q12[0],
+   _q12[:1])
+tab.deleteLater()
+mmod.QMessageBox.question = _orig_q10
+# הקובץ ומצב-הכותרת מסתנכרנים למחשב השני (הנתיב מקומי — אבל B יודע שהיה קובץ ומזהיר)
+use_machine(dir_b); sync.pull_changes()
+cb12 = db.get_mail_campaign(g12)
+ok("B מקבל את שם הקובץ ומצב הכותרת של השליחה", cb12 and "רשימה_ישנה" in (cb12.get("attachment") or "")
+   and int(cb12.get("with_header", 1)) == 0)
+use_machine(dir_a)
+
+# (ב) SMTP: חיבור+login *אחד* לכל האצווה (לא 500 כניסות — Gmail חוסמת "Too many login attempts")
+google_auth.disconnect(revoke=False)
+email_utils.set_smtp_config("kupa@gmail.com", "app-pass")
+_conns = []
+class _CountSMTP:
+    def __init__(self): self.sent = []; self.dead = False
+    def sendmail(self, frm, to, msg):
+        if self.dead:
+            raise smtplib.SMTPServerDisconnected("Connection unexpectedly closed")
+        self.sent.append(to[0]); return {}
+    def quit(self): pass
+    def noop(self): return (250, b"OK")
+def _count_connect(cfg):
+    s = _CountSMTP(); _conns.append(s); return s
+email_utils._connect = _count_connect
+tg13 = [{"rec_id": None, "guid": "", "name": f"n{i}", "email": f"s{i}@x.com", "ok": True, "reason": ""}
+        for i in range(4)]
+rows13 = mailer.send_batch(tg13, "s", "b")
+ok("4 נמענים ב-SMTP = חיבור יחיד (לא חיבור+login לכל נמען)", len(_conns) == 1 and
+   [r["status"] for r in rows13] == ["sent"] * 4, (len(_conns), [r["status"] for r in rows13]))
+# השרת ניתק באמצע האצווה → מתחברים מחדש פעם אחת ושולחים לאותו נמען (לא "נכשל" בגלל ניתוק שגרתי)
+_conns.clear()
+_hits = {"n": 0}
+def _flaky_connect(cfg):
+    s = _CountSMTP(); _conns.append(s)
+    if len(_conns) == 1:
+        _orig_send = s.sendmail
+        def _send_then_die(frm, to, msg):
+            _hits["n"] += 1
+            if _hits["n"] == 3:
+                s.dead = True
+            return _orig_send(frm, to, msg)
+        s.sendmail = _send_then_die
+    return s
+email_utils._connect = _flaky_connect
+rows13b = mailer.send_batch(tg13, "s", "b")
+ok("ניתוק שרת באמצע האצווה → חיבור מחדש והנמען נשלח (לא נכשל)",
+   [r["status"] for r in rows13b] == ["sent"] * 4 and len(_conns) == 2
+   and sum(len(s.sent) for s in _conns) == 4, ([r["status"] for r in rows13b], len(_conns)))
+# שליחה בודדת (מייל בדיקה / מתנדבים) בלי session — עדיין מתחברת ומנתקת בעצמה
+_conns.clear()
+email_utils.send_email("one@x.com", "s", "<p>b</p>")
+ok("שליחה בודדת בלי session: חיבור אחד, נשלח", len(_conns) == 1 and _conns[0].sent == ["one@x.com"])
+email_utils._connect = _orig_connect
+email_utils.set_smtp_config("", "")
+google_auth.connect()
+
+# (ג) עדכון-תוכנה באמצע שליחה: quit() לא עובר ב-closeEvent ⇒ ההתקנה חייבת לשאול בעצמה
+tab = mmod.MailsTab(None)
+tab.refresh()
+tab._extra = ["u1@x.com", "u2@x.com"]
+tab._rebuild_targets()
+tab.subject.setText("נושא"); tab.body.setPlainText("גוף")
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.Yes)
+tab._send()
+g14 = tab._active_guid
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.No)
+_g = tab.guard_update() if hasattr(tab, "guard_update") else None
+ok("guard_update: שליחה פעילה + המפעיל מסרב → העדכון לא ממשיך והשליחה חיה",
+   _g is False and tab._worker is not None and db.get_mail_campaign(g14)["status"] == "sending")
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.Yes)
+_g = tab.guard_update() if hasattr(tab, "guard_update") else None
+ok("guard_update: אישור → השליחה נסגרת כ'נקטע' והעדכון ממשיך",
+   _g is True and tab._worker is None and db.get_mail_campaign(g14)["status"] == "interrupted")
+ok("guard_update בלי שליחה פעילה = True בלי שאלה", tab.guard_update() is True)
+tab.deleteLater()
+mmod.QMessageBox.question = _orig_q10
+_st_src = open("tabs/settings.py", encoding="utf-8").read()
+_sd = _st_src[_st_src.index("def _start_download"):]; _sd = _sd[:_sd.index("\n    def ")]
+_od = _st_src[_st_src.index("def _on_downloaded"):]; _od = _od[:_od.index("\n\nclass ")]
+ok("הגדרות: ההורדה וההתקנה של עדכון עוברות דרך guard_update (לפני ההורדה ולפני ההחלפה)",
+   any(g in _sd for g in ("guard_update", "_mails_guard_ok")) and any(g in _od.split("apply_update(")[0] for g in ("guard_update", "_mails_guard_ok")))
+
+# (ד) "שמור כתבנית" בשם של תבנית קיימת מעדכן אותה — לא יוצר כפילות-שם
+tab = mmod.MailsTab(None)
+tab.refresh()
+_n0 = len(db.get_mail_templates())
+mmod.QInputDialog.getText = staticmethod(lambda *a, **k: ("תבנית פסח", True))
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.Yes)
+tab.subject.setText("נושא 1"); tab.body.setPlainText("גוף 1")
+tab._save_template()
+tab.tpl_combo.setCurrentIndex(0)          # "בלי תבנית" — כמו מפעיל שמתחיל טיוטה חדשה
+tab.subject.setText("נושא 2"); tab.body.setPlainText("גוף 2")
+tab._save_template()
+_tp = [t for t in db.get_mail_templates() if t["name"] == "תבנית פסח"]
+ok("שמירה פעמיים באותו שם = תבנית אחת (מעודכנת), לא שתיים", len(_tp) == 1 and _tp[0]["subject"] == "נושא 2",
+   [(t["name"], t["subject"]) for t in _tp])
+ok("…ומספר התבניות גדל ב-1 בלבד", len(db.get_mail_templates()) == _n0 + 1)
+tab.deleteLater()
+mmod.QMessageBox.question = _orig_q10
+
 print()
 if fails:
     print(f"FAILED ({len(fails)}):"); [print("  -", f) for f in fails]

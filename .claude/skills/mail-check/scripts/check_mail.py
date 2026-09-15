@@ -69,9 +69,10 @@ def _(c):
 @lint("M2", "SMTP: נמען שסורב = כישלון (if refused: raise); אין-אינטרנט → הודעה בעברית")
 def _(c):
     body = _func_body(c["eu"], "send_email")
+    conn = _func_body(c["eu"], "_connect_checked")     # 3.47: מיפוי שגיאות-החיבור עבר לכאן
     return ("if refused:" in body and "raise RuntimeError" in body
-            and "except (OSError, smtplib.SMTPConnectError" in body
-            and "אין חיבור לאינטרנט" in body), ""
+            and "except (OSError, smtplib.SMTPConnectError" in conn
+            and "אין חיבור לאינטרנט" in conn), ""
 
 
 @lint("M3", "gmail_send_raw: 401 → ריענון (force=True) וניסיון אחד נוסף; netblock נבדק")
@@ -212,7 +213,7 @@ def _(c):
     body = _func_body(eu, "send_email")
     return ("google_connected() or smtp_configured()" in _func_body(eu, "is_configured")
             and "if via_google:" in body and "google_auth.gmail_send_raw(" in body
-            and body.index("gmail_send_raw(") < body.index("_connect(cfg)")), ""
+            and body.index("gmail_send_raw(") < body.index("sess.server(cfg)")), ""
 
 
 # ── נתונים וסנכרון ─────────────────────────────────────────────────────────
@@ -320,9 +321,10 @@ def _(c):
              "MailFatalError; SMTPRecipientsRefused/SMTPDataError → עברית")
 def _(c):
     body = _func_body(c["eu"], "send_email")
-    i_auth = body.find("except smtplib.SMTPAuthenticationError")
-    i_os = body.find("except (OSError, smtplib.SMTPConnectError")
-    return (0 <= i_auth < i_os and "raise MailFatalError" in body
+    conn = _func_body(c["eu"], "_connect_checked")     # 3.47: החיבור (ושגיאותיו) ב-_connect_checked
+    i_auth = conn.find("except smtplib.SMTPAuthenticationError")
+    i_os = conn.find("except (OSError, smtplib.SMTPConnectError")
+    return (0 <= i_auth < i_os and "raise MailFatalError" in conn
             and "except smtplib.SMTPRecipientsRefused" in body
             and "except (smtplib.SMTPDataError, smtplib.SMTPSenderRefused)" in body
             and "fatal = True" in _class_body(c["eu"], "MailFatalError")), ""
@@ -384,7 +386,8 @@ def _(c):
     return ("self.btn_stop.setEnabled(True)" in send
             and "if self._worker is not None:" in res
             and res.index("if self._worker is not None:") < res.index("self._send(")
-            and "not os.path.exists(self._attachment)" in send), ""
+            and ("not os.path.exists(self._attachment)" in send
+                 or "not os.path.exists(attachment)" in send)), ""
 
 
 @lint("M36", "קובץ מצורף: add_header('Content-Disposition', 'attachment', filename=…) — לא השמה ישירה "
@@ -495,6 +498,52 @@ def _(c):
             and "subject=c.get(" in res and "self.subject.text()" not in send.split("def")[0].replace(
                 "subject = self.subject.text() if subject is None else subject", "")
             and "disconnect(revoke=False)" in dis and "_BgWorker" in dis and "busy_cursor" not in dis), ""
+
+
+@lint("M49", "שליחה-חוזרת עם הקובץ *המקורי*: mail_campaigns.attachment/with_header (DB+mail_add+seed+applier); "
+             "_send(attachment=, with_header=); _resend_failed לוקח c.get('attachment'), קובץ חסר → שאלה (3.47)")
+def _(c):
+    m, dbs, sy = c["m"], c["dbs"], c["sy"]
+    res = _func_body(m, "_resend_failed")
+    send = _func_body(m, "_send", sig_hint="targets=None")
+    add = _func_body(dbs, "add_mail_campaign")
+    return (bool(send) and "attachment=attachment" in send and "with_header=1 if with_header" in send
+            and 'c.get("attachment")' in res and "not os.path.exists(attachment)" in res
+            and "QMessageBox.question" in res.split("self._send(")[0]
+            and "attachment" in add.split("_sync_log")[1] and "with_header" in add.split("_sync_log")[1]
+            and "attachment" in _func_body(sy, "_apply_mail_add")
+            and '"attachment", "with_header"' in _func_body(sy, "_snapshot_body")
+            and "ADD COLUMN attachment" in dbs and "ADD COLUMN with_header" in dbs), ""
+
+
+@lint("M50", "SMTP: חיבור+login *אחד* לכל האצווה (SmtpSession דרך mail_session ב-send_batch); ניתוק של חיבור "
+             "ותיק באמצע sendmail → reset + ניסיון נוסף אחד לאותו נמען (3.47)")
+def _(c):
+    eu, ml = c["eu"], c["ml"]
+    body = _func_body(eu, "send_email")
+    batch = _func_body(ml, "send_batch")
+    return ("class SmtpSession" in eu and "session: \"SmtpSession | None\" = None" in eu
+            and "for attempt in (0, 1):" in body and "sess.reset()" in body
+            and "stale and attempt == 0" in body and "if own:" in body
+            and "with email_utils.mail_session() as session:" in batch and "session=session" in batch), ""
+
+
+@lint("M51", "עדכון-תוכנה באמצע שליחה: settings._start_download ו-_on_downloaded (לפני apply_update) עוברים "
+             "דרך MailsTab.guard_update (quit() לא עובר ב-closeEvent) (3.47)")
+def _(c):
+    st, m = c["st"], c["m"]
+    sd = _func_body(st, "_start_download")
+    od = _func_body(st, "_on_downloaded")
+    return ("_mails_guard_ok" in sd and "_mails_guard_ok" in od.split("apply_update(")[0]
+            and "guard_update" in _func_body(st, "_mails_guard_ok")
+            and "return self.confirm_close()" in _func_body(m, "guard_update")), ""
+
+
+@lint("M52", "'שמור כתבנית' בשם של תבנית קיימת מעדכן אותה (guid של הקיימת) אחרי שאלה — לא כפילות-שם (3.47)")
+def _(c):
+    body = _func_body(c["m"], "_save_template")
+    return ("x[\"name\"].strip().lower() == name.lower()" in body and "guid = same[\"guid\"]" in body
+            and "QMessageBox.question" in body), ""
 
 
 def run_lints() -> bool:

@@ -174,33 +174,35 @@ def send_batch(targets: list[dict], subject: str, body_text: str, ctx: dict | No
     total = len(todo)
     rec_by_id = rec_by_id or {}
     fatal_msg = ""
-    for i, t in enumerate(todo, 1):
-        row = {"rec_id": t.get("rec_id"), "guid": t.get("guid", ""),
-               "name": t.get("name", ""), "email": t.get("email", ""),
-               "status": "sent", "error": ""}
-        if fatal_msg or (should_stop and should_stop()):
-            row["status"] = "skipped"
-            row["error"] = fatal_msg or STOP_MSG
+    # v3.47: חיבור SMTP אחד לכל האצווה (ב-Gmail API אין חיבור קבוע — ה-session לא בשימוש)
+    with email_utils.mail_session() as session:
+        for i, t in enumerate(todo, 1):
+            row = {"rec_id": t.get("rec_id"), "guid": t.get("guid", ""),
+                   "name": t.get("name", ""), "email": t.get("email", ""),
+                   "status": "sent", "error": ""}
+            if fatal_msg or (should_stop and should_stop()):
+                row["status"] = "skipped"
+                row["error"] = fatal_msg or STOP_MSG
+                rows.append(row)
+                continue
+            rec = rec_by_id.get(t.get("rec_id")) if t.get("rec_id") is not None else None
+            c = dict(ctx or {}, fallback_name=t.get("name", ""))
+            try:
+                plain = render(body_text, rec, c)
+                email_utils.send_email(
+                    t["email"], render(subject, rec, c),
+                    html_body(plain, with_header),
+                    attachment_path=attachment_path,
+                    inline_logo_path=logo_path if with_header else None,
+                    text_body=plain, session=session)
+            except Exception as e:
+                row["status"] = "failed"
+                row["error"] = str(e)
+                if is_fatal(e):
+                    fatal_msg = str(e)
             rows.append(row)
-            continue
-        rec = rec_by_id.get(t.get("rec_id")) if t.get("rec_id") is not None else None
-        c = dict(ctx or {}, fallback_name=t.get("name", ""))
-        try:
-            plain = render(body_text, rec, c)
-            email_utils.send_email(
-                t["email"], render(subject, rec, c),
-                html_body(plain, with_header),
-                attachment_path=attachment_path,
-                inline_logo_path=logo_path if with_header else None,
-                text_body=plain)
-        except Exception as e:
-            row["status"] = "failed"
-            row["error"] = str(e)
-            if is_fatal(e):
-                fatal_msg = str(e)
-        rows.append(row)
-        if progress:
-            progress(i, total, row)
+            if progress:
+                progress(i, total, row)
     return rows
 
 

@@ -388,7 +388,9 @@ def init_db():
             failed       INTEGER DEFAULT 0,
             status       TEXT DEFAULT 'sending',
             status_ts    TEXT DEFAULT '',
-            report_json  TEXT DEFAULT ''
+            report_json  TEXT DEFAULT '',
+            attachment   TEXT DEFAULT '',
+            with_header  INTEGER DEFAULT 1
         );
         CREATE TABLE IF NOT EXISTS mail_templates (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -490,6 +492,13 @@ def init_db():
         batch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dist_batches)")}
         if "guid" not in batch_cols:
             conn.execute("ALTER TABLE dist_batches ADD COLUMN guid TEXT DEFAULT ''")
+        # v3.47: שליחת-מיילים זוכרת את הקובץ המצורף ואת מצב הכותרת — "שלח שוב לנכשלים"
+        # שולח את *המקור*, לא את מה שבטיוטה. נתיב מקומי; במחשב השני = שם בלבד (אזהרה).
+        mail_cols = {row["name"] for row in conn.execute("PRAGMA table_info(mail_campaigns)")}
+        if "attachment" not in mail_cols:
+            conn.execute("ALTER TABLE mail_campaigns ADD COLUMN attachment TEXT DEFAULT ''")
+        if "with_header" not in mail_cols:
+            conn.execute("ALTER TABLE mail_campaigns ADD COLUMN with_header INTEGER DEFAULT 1")
 
         # Back-fill stable guids (v2.61, cross-computer sync): every row gets a
         # random identity ONCE; new rows get theirs at insert time.
@@ -1941,9 +1950,11 @@ def tzintuk_campaign_for_date(dist_date: str):
 
 def add_mail_campaign(subject: str, body: str, audience: str, sender: str,
                       total: int, guid: str = "", device: str = "",
-                      status: str = "sending", sent_at: str = "") -> str:
+                      status: str = "sending", sent_at: str = "",
+                      attachment: str = "", with_header: int = 1) -> str:
     """רישום שליחת-מיילים אחת. Idempotent לפי guid (משמש גם לרשומה שמגיעה
-    מהמחשב השני). מחזיר guid."""
+    מהמחשב השני). מחזיר guid. v3.47: `attachment` (נתיב הקובץ המצורף) +
+    `with_header` נשמרים כדי ששליחה-חוזרת תשלח את המקור, לא את הטיוטה."""
     guid = (guid or "").strip() or uuid.uuid4().hex
     now = _utc_now()
     sent_at = sent_at or now
@@ -1952,14 +1963,17 @@ def add_mail_campaign(subject: str, body: str, audience: str, sender: str,
             return guid
         conn.execute(
             "INSERT INTO mail_campaigns (guid, sent_at, subject, body, audience, sender, "
-            "device, total, status, status_ts) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "device, total, status, status_ts, attachment, with_header) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (guid, sent_at, subject or "", body or "", audience or "", sender or "",
-             device or "", int(total or 0), status or "sending", now))
+             device or "", int(total or 0), status or "sending", now,
+             attachment or "", 1 if with_header else 0))
     _sync_log("mail_add", {"guid": guid, "sent_at": sent_at, "subject": subject or "",
                            "body": body or "", "audience": audience or "",
                            "sender": sender or "", "device": device or "",
                            "total": int(total or 0), "status": status or "sending",
-                           "status_ts": now})
+                           "status_ts": now, "attachment": attachment or "",
+                           "with_header": 1 if with_header else 0})
     return guid
 
 

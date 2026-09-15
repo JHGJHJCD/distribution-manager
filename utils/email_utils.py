@@ -97,6 +97,63 @@ def _connect(cfg: dict) -> smtplib.SMTP:
     return server
 
 
+def _connect_checked(cfg: dict) -> smtplib.SMTP:
+    """חיבור + login עם השגיאות בעברית (תקלה כללית — עוצרת את האצווה).
+    v3.42: smtplib.SMTPException *יורש* מ-OSError — סיסמת-אפליקציה שגויה הייתה
+    מדווחת כ"אין חיבור לאינטרנט". תופסים אותה קודם, בהודעה נכונה."""
+    try:
+        return _connect(cfg)
+    except smtplib.SMTPAuthenticationError as e:
+        raise MailFatalError(
+            "שרת המייל דחה את הכניסה — סיסמת האפליקציה או כתובת השולח בהגדרות שגויות. "
+            "צור סיסמת אפליקציה חדשה בחשבון Gmail והזן אותה מחדש.") from e
+    except (OSError, smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected) as e:
+        raise MailFatalError(
+            "אין חיבור לאינטרנט — המייל לא נשלח. ודא/י שהמחשב מחובר לרשת ונסה/י שוב."
+        ) from e
+
+
+class SmtpSession:
+    """v3.47: חיבור SMTP אחד לכל האצווה. עד 3.46 כל נמען פתח חיבור+login משלו —
+    500 כניסות רצופות ל-Gmail = "454 4.7.0 Too many login attempts" באמצע הרשימה
+    (וגם פי-3 זמן). השרת מנתק מדי פעם חיבור ארוך → `reset()` והנמען מנוסה שוב
+    על חיבור טרי (פעם אחת). `with mail_session() as s: send_email(..., session=s)`."""
+
+    def __init__(self):
+        self._server = None
+        self.fresh = False       # True = החיבור נפתח לנמען הנוכחי (ניתוק = כישלון אמיתי)
+
+    def server(self, cfg: dict):
+        if self._server is None:
+            self._server = _connect_checked(cfg)
+            self.fresh = True
+        else:
+            self.fresh = False
+        return self._server
+
+    def reset(self):
+        s, self._server = self._server, None
+        if s is not None:
+            try:
+                s.quit()
+            except Exception:
+                pass
+
+    def close(self):
+        self.reset()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+def mail_session() -> SmtpSession:
+    return SmtpSession()
+
+
 SENDER_NAME = "קופה של צדקה הר יונה"   # שם התצוגה של השולח (From) בכל מייל יוצא
 
 # v3.46: Gmail מקבלת מייל עד 25MB *אחרי* קידוד base64 (×1.37). קובץ של 20MB = מייל של
@@ -121,7 +178,7 @@ def html_to_text(html_body: str) -> str:
 
 def send_email(to_addr: str, subject: str, html_body: str,
                attachment_path: str = None, inline_logo_path: str = None,
-               text_body: str = None):
+               text_body: str = None, session: "SmtpSession | None" = None):
     """Send an HTML email, optionally with a file attached and an inline logo
     image (referenced in html_body via <img src="cid:logo">). Raises on failure
     — the caller is expected to show the error to the user.
@@ -182,41 +239,38 @@ def send_email(to_addr: str, subject: str, html_body: str,
         google_auth.gmail_send_raw(mime_bytes)
         return
 
-    # Connecting is where "no internet" shows up: getaddrinfo/timeout/refused all
-    # surface as OSError-family here. Turn them into a clear Hebrew message so the
-    # caller never reports a send as successful when the network was down (#ib2st).
-    # v3.42: smtplib.SMTPException *יורש* מ-OSError — סיסמת-אפליקציה שגויה הייתה
-    # מדווחת כ"אין חיבור לאינטרנט". תופסים אותה קודם, בהודעה נכונה.
+    # Connecting is where "no internet" shows up (see _connect_checked → MailFatalError).
+    # v3.47: עם `session` החיבור משותף לכל האצווה (login אחד ל-500 נמענים); ניתוק
+    # של חיבור *ותיק* באמצע = מתחברים מחדש ומנסים את אותו נמען פעם אחת.
+    own = session is None
+    sess = session or SmtpSession()
+    payload = root.as_string()
     try:
-        server = _connect(cfg)
-    except smtplib.SMTPAuthenticationError as e:
-        raise MailFatalError(
-            "שרת המייל דחה את הכניסה — סיסמת האפליקציה או כתובת השולח בהגדרות שגויות. "
-            "צור סיסמת אפליקציה חדשה בחשבון Gmail והזן אותה מחדש.") from e
-    except (OSError, smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected) as e:
-        raise MailFatalError(
-            "אין חיבור לאינטרנט — המייל לא נשלח. ודא/י שהמחשב מחובר לרשת ונסה/י שוב."
-        ) from e
-    try:
-        # sendmail returns the recipients the server REFUSED (empty = all accepted).
-        # A refused recipient means the mail was NOT delivered — treat as failure
-        # rather than silently reporting success.
-        refused = server.sendmail(from_addr, [to_addr], root.as_string())
-    except smtplib.SMTPRecipientsRefused as e:
-        # הנמען היחיד סורב → smtplib מעלה חריגה (לא מחזיר dict). תקלה של הנמען הזה בלבד.
-        raise RuntimeError("המייל לא התקבל אצל הנמען — בדוק/י את כתובת המייל ונסה/י שוב.") from e
-    except (smtplib.SMTPDataError, smtplib.SMTPSenderRefused) as e:
-        raise _smtp_server_error(e) from e
-    except (OSError, smtplib.SMTPException) as e:
-        # v3.44: ניתוק/timeout *באמצע* השליחה (אחרי חיבור מוצלח) — עברית, לא
-        # "Connection unexpectedly closed". תקלה של הנמען הזה; אם הרשת באמת נפלה,
-        # הנמען הבא ייכשל כבר בחיבור (MailFatalError) ויעצור את האצווה.
-        raise RuntimeError(f"החיבור לשרת המייל נותק באמצע השליחה — המייל לא נשלח ({e}).") from e
+        for attempt in (0, 1):
+            server = sess.server(cfg)
+            try:
+                # sendmail returns the recipients the server REFUSED (empty = all accepted).
+                # A refused recipient means the mail was NOT delivered — treat as failure
+                # rather than silently reporting success.
+                refused = server.sendmail(from_addr, [to_addr], payload)
+                break
+            except smtplib.SMTPRecipientsRefused as e:
+                # הנמען היחיד סורב → smtplib מעלה חריגה (לא מחזיר dict). תקלה של הנמען הזה בלבד.
+                raise RuntimeError("המייל לא התקבל אצל הנמען — בדוק/י את כתובת המייל ונסה/י שוב.") from e
+            except (smtplib.SMTPDataError, smtplib.SMTPSenderRefused) as e:
+                raise _smtp_server_error(e) from e
+            except (OSError, smtplib.SMTPException) as e:
+                stale = not sess.fresh
+                sess.reset()
+                if stale and attempt == 0:
+                    continue          # חיבור ותיק שהשרת סגר — חיבור טרי, ניסיון נוסף
+                # v3.44: ניתוק/timeout *באמצע* השליחה (אחרי חיבור מוצלח) — עברית, לא
+                # "Connection unexpectedly closed". תקלה של הנמען הזה; אם הרשת באמת נפלה,
+                # הנמען הבא ייכשל כבר בחיבור (MailFatalError) ויעצור את האצווה.
+                raise RuntimeError(f"החיבור לשרת המייל נותק באמצע השליחה — המייל לא נשלח ({e}).") from e
     finally:
-        try:
-            server.quit()
-        except Exception:
-            pass
+        if own:
+            sess.close()
     if refused:
         raise RuntimeError("המייל לא התקבל אצל הנמען — בדוק/י את כתובת המייל ונסה/י שוב.")
 

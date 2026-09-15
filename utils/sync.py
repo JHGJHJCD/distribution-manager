@@ -767,14 +767,15 @@ def _apply_mail_add(conn, rec: dict):
         return
     conn.execute(
         "INSERT INTO mail_campaigns (guid, sent_at, subject, body, audience, sender, "
-        "device, total, status, status_ts, sent, failed, report_json) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "device, total, status, status_ts, sent, failed, report_json, attachment, with_header) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (guid, rec.get("sent_at", ""), rec.get("subject", ""), rec.get("body", ""),
          rec.get("audience", ""), rec.get("sender", ""), rec.get("device", ""),
          int(rec.get("total") or 0), rec.get("status") or "sending",
          rec.get("status_ts") or rec.get("sent_at", ""),
          int(rec.get("sent") or 0), int(rec.get("failed") or 0),
-         rec.get("report_json") or ""))
+         rec.get("report_json") or "",
+         rec.get("attachment") or "", 1 if rec.get("with_header", 1) else 0))   # v3.47
 
 
 def _apply_mail_update(conn, rec: dict):
@@ -1099,7 +1100,7 @@ def _snapshot_body(include_settings: bool = True) -> int:
         log_change("mail_add", {k: c.get(k, "") for k in
                                 ("guid", "sent_at", "subject", "body", "audience",
                                  "sender", "device", "total", "status", "status_ts",
-                                 "sent", "failed", "report_json")})
+                                 "sent", "failed", "report_json", "attachment", "with_header")})
         n += 1
     for t in tpls:
         log_change("mtpl_upsert", {k: t.get(k, "") for k in

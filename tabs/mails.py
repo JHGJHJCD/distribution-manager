@@ -726,9 +726,19 @@ class MailsTab(QWidget):
                                         text=cur["name"] if cur else self.subject.text()[:40])
         if not ok or not name.strip():
             return
-        guid = cur["guid"] if cur and cur["name"] == name.strip() else ""
+        name = name.strip()
+        guid = cur["guid"] if cur and cur["name"] == name else ""
+        if not guid:
+            # v3.47: שם של תבנית קיימת (לא זו שנבחרה) → מעדכנים אותה, לא יוצרים כפילות-שם
+            same = next((x for x in self._templates if x["name"].strip().lower() == name.lower()), None)
+            if same:
+                if QMessageBox.question(self, "תבנית קיימת",
+                                        f"כבר יש תבנית בשם \"{name}\" — להחליף את התוכן שלה?") \
+                        != QMessageBox.StandardButton.Yes:
+                    return
+                guid = same["guid"]
         self._current_tpl_guid = db.upsert_mail_template(
-            name.strip(), self.subject.text(), self.body.toPlainText(), guid=guid)
+            name, self.subject.text(), self.body.toPlainText(), guid=guid)
         self._load_templates()
 
     def _delete_template(self):
@@ -819,32 +829,37 @@ class MailsTab(QWidget):
             QMessageBox.information(
                 self, "נשלח", f"מייל הבדיקה נשלח אל {me} ✓" + chr(10) + "בדוק בתיבת הדואר איך זה נראה.")
 
-    def _send(self, targets=None, audience=None, subject=None, body=None):
+    def _send(self, targets=None, audience=None, subject=None, body=None,
+              attachment=None, with_header=None):
         # v3.46: subject/body מפורשים = שליחה-חוזרת של הודעה ישנה; בלעדיהם = הטיוטה שבשדות.
         # כך "שלח שוב לנכשלים" לא דורס את מה שהמפעיל כתב (גם כשהוא מבטל בחלון האישור).
+        # v3.47: גם attachment/with_header מפורשים — שליחה-חוזרת עם הקובץ *המקורי*.
         subject = self.subject.text() if subject is None else subject
         body = self.body.toPlainText() if body is None else body
+        attachment = (self._attachment or "") if attachment is None else (attachment or "")
+        with_header = self.chk_header.isChecked() if with_header is None else bool(with_header)
         if self._worker is not None or not self._validate_message(subject, body):
             return
         targets = targets if targets is not None else [t for t in self._targets if t["ok"]]
         if not targets:
             return
-        if self._attachment and not os.path.exists(self._attachment):
+        if attachment and not os.path.exists(attachment):
             QMessageBox.warning(self, "", "הקובץ המצורף לא נמצא (נמחק או הועבר). הסר אותו או צרף מחדש.")
             return
         audience = audience or self._audience_text()
         msg = (f"לשלוח את ההודעה <b>\"{html.escape(subject.strip())}\"</b><br>"
                f"ל-<b>{len(targets)}</b> נמענים ({audience})<br>"
                f"מהחשבון <b>{email_utils.sender_email()}</b>?"
-               + ("<br>עם קובץ מצורף: " + os.path.basename(self._attachment) if self._attachment else ""))
+               + ("<br>עם קובץ מצורף: " + html.escape(os.path.basename(attachment)) if attachment else ""))
         if QMessageBox.question(self, "אישור שליחה", msg) != QMessageBox.StandardButton.Yes:
             return
         self._active_guid = db.add_mail_campaign(
             subject.strip(), body, audience,
-            email_utils.sender_email(), len(targets), device=sync.device_name() or "")
+            email_utils.sender_email(), len(targets), device=sync.device_name() or "",
+            attachment=attachment, with_header=1 if with_header else 0)
         self._worker = _SendWorker(targets, subject.strip(), body,
-                                   self._ctx(), self._attachment or None,
-                                   self.chk_header.isChecked(), dict(self._recs), self)
+                                   self._ctx(), attachment or None,
+                                   with_header, dict(self._recs), self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_rows.connect(self._on_finished)
         self.prog.setRange(0, len(targets))
@@ -939,6 +954,12 @@ class MailsTab(QWidget):
             return False
         self._abort_for_close()
         return True
+
+    def guard_update(self) -> bool:
+        """v3.47: התקנת עדכון-תוכנה יוצאת ב-`QApplication.quit()` — *לא* עוברת ב-closeEvent,
+        ולכן שליחה פעילה הייתה נהרגת בשקט (thread מת עם התהליך, הרשומה "בתהליך" עד
+        ההפעלה הבאה). ההורדה וההתקנה שואלות כאן קודם; אישור = עצירה מסודרת (כמו סגירה)."""
+        return self.confirm_close()
 
     def _abort_for_close(self, wait_ms: int = 8000):
         w, self._worker = self._worker, None
@@ -1066,10 +1087,28 @@ class MailsTab(QWidget):
                 targets.append({"rec_id": None, "guid": "", "name": r.get("name", ""),
                                 "email": r.get("email", ""), "ok": mailer.valid_email(r.get("email", "")),
                                 "reason": "", "external": True})
+        dropped = [t["name"] for t in targets if not t["ok"]]
         targets = [t for t in targets if t["ok"]]
         if not targets:
             QMessageBox.information(self, "", "לנכשלים אין כתובת מייל תקינה בכרטיס.")
             return
+        if dropped:
+            QMessageBox.information(
+                self, "", f"{len(dropped)} מהנכשלים בלי כתובת מייל תקינה בכרטיס — לא יישלח להם:\n"
+                + "\n".join(dropped[:15]) + ("\n…" if len(dropped) > 15 else ""))
+        # v3.47: הקובץ המצורף ומצב הכותרת של השליחה *המקורית* — לא של הטיוטה שבמסך.
+        # הנתיב מקומי: במחשב השני (או אחרי מחיקה) הקובץ חסר → שואלים, לא שולחים בשקט בלעדיו.
+        attachment = (c.get("attachment") or "").strip()
+        if attachment and not os.path.exists(attachment):
+            if QMessageBox.question(
+                    self, "הקובץ המקורי חסר",
+                    f"השליחה המקורית כללה קובץ מצורף (\"{os.path.basename(attachment)}\") "
+                    "שלא נמצא במחשב הזה.\nלשלוח שוב לנכשלים בלי הקובץ?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
+            attachment = ""
         self._recs.update(recs)
         self._send(targets, audience=f"שליחה חוזרת לנכשלים ({c.get('audience', '')})",
-                   subject=c.get("subject", ""), body=c.get("body", ""))
+                   subject=c.get("subject", ""), body=c.get("body", ""),
+                   attachment=attachment, with_header=int(c.get("with_header", 1) or 0))
