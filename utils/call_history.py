@@ -26,12 +26,15 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 import database as db
 
 CACHE_NAME = "yemot_history.json"
 MAX_TX_PAGES = 500             # GetTransactions pages of 200 (safety cap)
+MAX_MONTHS_KEPT = 48           # v3.51: newest 4 years of call logs are plenty for
+                               # the smart-hour stats; the shared line logs EVERY
+                               # caller, so the cache grew ~0.6MB/year without a cap
 _TX_TS = "%Y-%m-%d %H:%M:%S"
 _LOG_RE = re.compile(r"^LogFolderEnterExit-(\d{4}-\d{2})\.ymgr$")
 
@@ -215,7 +218,7 @@ def sync_from_server(progress=None, months: int | None = None) -> dict:
         avail = available_months(yemot)
     except Exception:
         avail, errors = {}, errors + 1
-    keys = sorted(avail)
+    keys = sorted(avail)[-MAX_MONTHS_KEPT:]
     if months:
         keys = keys[-months:]
     months_fetched = 0
@@ -236,7 +239,9 @@ def sync_from_server(progress=None, months: int | None = None) -> dict:
         months_fetched += 1
         if months_fetched % 6 == 0:
             save(data)
-    data["updated"] = datetime.utcnow().isoformat() + "+00:00"
+    for old in sorted(data["months"])[:-MAX_MONTHS_KEPT]:
+        data["months"].pop(old, None)
+    data["updated"] = datetime.now(timezone.utc).isoformat()
     save(data)
     s = summary(data)
     s.update(new_campaigns=new_campaigns, months_fetched=months_fetched, errors=errors)
@@ -264,5 +269,5 @@ def is_stale(hours: float = 24.0, data: dict | None = None) -> bool:
         dt = datetime.fromisoformat(upd)
     except ValueError:
         return True
-    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.utcnow()
+    now = datetime.now(dt.tzinfo) if dt.tzinfo else datetime.now(timezone.utc).replace(tzinfo=None)
     return (now - dt).total_seconds() > hours * 3600

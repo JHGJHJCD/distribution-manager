@@ -95,6 +95,12 @@ a bad migration breaks.
   `manhal-haluka` skill). Tests should point `db.DB_PATH` at a temp file.
 - Don't reorder or rename anything in `full_name` / `first_name` / `last_name` — the
   identity is **family-name-first**; changing it corrupts sync identity.
+- **Journal compaction (v3.51):** a device's journal past `JOURNAL_MAX_BYTES` is replaced by
+  `journal_head` + delete **tombstones** + a full snapshot. So (a) every new *hard-delete* op
+  must be added to `sync._TOMBSTONE_OPS` (soft deletes like `mtpl_upsert deleted=1` travel
+  inside the snapshot already); (b) every new table must be part of `_snapshot_body`, or a
+  peer joining after a compaction never receives it; (c) every `*_add` applier must stay
+  idempotent by guid — the head is replayed on peers that already have the data.
 
 ## Done means
 

@@ -11,6 +11,7 @@ import json
 import ssl
 import subprocess
 import urllib.request
+import urllib.error
 
 REPO = "JHGJHJCD/distribution-manager"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
@@ -47,15 +48,37 @@ def _ssl_ctx():
         return None
 
 
+_ETAGS: dict = {}      # url → (etag, parsed json) — v3.51 conditional requests
+
+
+def _get_json(url: str, timeout: int):
+    """GET a GitHub API url with `If-None-Match`. A 304 answer does not count
+    against GitHub's 60 requests/hour per address (the app polls every 2 min
+    from two computers that may share one connection — without this, the
+    quota could run out and updates would go unnoticed for the rest of the
+    hour). Raises on network error / HTTP error other than 304."""
+    headers = {"User-Agent": _UA, "Accept": "application/vnd.github+json"}
+    cached = _ETAGS.get(url)
+    if cached:
+        headers["If-None-Match"] = cached[0]
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            etag = resp.headers.get("ETag") or ""
+    except urllib.error.HTTPError as e:
+        if e.code == 304 and cached:
+            return cached[1]
+        raise
+    if etag:
+        _ETAGS[url] = (etag, data)
+    return data
+
+
 def check_latest(timeout: int = 10):
     """Return dict {version, tag, url, size, notes} for the latest release, or
     None if it cannot be determined / has no .exe asset. Raises on network error."""
-    req = urllib.request.Request(
-        API_LATEST,
-        headers={"User-Agent": _UA, "Accept": "application/vnd.github+json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = _get_json(API_LATEST, timeout)
 
     tag = data.get("tag_name") or ""
     # prefer the canonical asset name, else the first .exe
@@ -82,12 +105,7 @@ def fetch_download_stats(timeout: int = 10) -> dict:
     download of the release asset (auto-updates by the app included). Used by
     the manager machine to notice 'someone downloaded a version' (v2.96).
     Raises on network error (caller stays silent)."""
-    req = urllib.request.Request(
-        API_RELEASES,
-        headers={"User-Agent": _UA, "Accept": "application/vnd.github+json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_ctx()) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    data = _get_json(API_RELEASES, timeout)
     out = {}
     for rel in data or []:
         tag = str(rel.get("tag_name") or "")

@@ -50,6 +50,12 @@ EXCLUDED_SETTINGS = {"password", "win_geometry", "backup_folder", "last_backup_a
 EXCLUDED_SETTING_PREFIXES = ("sync_", "export_dir_")   # export_dir_* are per-machine paths (#5e1jc)
 
 JOURNAL_PREFIX = "journal-"
+ARCHIVE_PREFIX = "archive-"          # compacted-away journals (not read by peers)
+JOURNAL_MAX_BYTES = 3 * 1024 * 1024  # compact own journal past this size (v3.51)
+ARCHIVES_KEEP = 2                    # old journals kept per device after compaction
+TOMBSTONES_MAX = 5000                # delete-ops remembered for the compacted head
+_TOMBSTONE_OPS = ("rec_delete", "batch_delete", "dist_delete", "msg_delete")
+_COMPACTING = False
 _LOCK = threading.RLock()
 _APPLYING = False          # True while applying remote records → suppress logging
 _DEFER_FLUSH = False       # True during a bulk seed → buffer, flush once at the end
@@ -312,10 +318,12 @@ def _setting_syncable(key: str) -> bool:
     return not any(key.startswith(p) for p in EXCLUDED_SETTING_PREFIXES)
 
 
-def log_change(op: str, payload: dict):
+def log_change(op: str, payload: dict, ts: str = ""):
     """Called by database.py after every successful data write. Appends one
     record to the local outbox and tries to flush it to the shared folder.
-    No-ops while sync is disabled or while APPLYING remote records."""
+    No-ops while sync is disabled or while APPLYING remote records.
+    `ts` (internal, compaction only) stamps the record with an older time so
+    last-write-wins on the peers stays truthful."""
     global _APPLYING
     if _APPLYING or not is_enabled():
         return
@@ -331,9 +339,15 @@ def log_change(op: str, payload: dict):
             state["device_id"] = dev
         seq = int(state.get("seq") or 0) + 1
         state["seq"] = seq
-        rec = {"seq": seq, "ts": _utc_now(), "dev": dev, "op": op, **payload}
-        if op == "setting":
+        rec = {"seq": seq, "ts": ts or _utc_now(), "dev": dev, "op": op, **payload}
+        if op == "setting" and not ts:
             state.setdefault("setting_ts", {})[payload.get("key", "")] = rec["ts"]
+        if op in _TOMBSTONE_OPS and not ts:
+            # Remembered so a compacted journal (a snapshot of what EXISTS) still
+            # tells a long-offline peer what was deleted meanwhile (v3.51).
+            tomb = state.setdefault("tombstones", [])
+            tomb.append({"op": op, "ts": rec["ts"], "payload": payload})
+            del tomb[:-TOMBSTONES_MAX]
         with open(_outbox_path(), "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
         _save_state(state)
@@ -362,13 +376,93 @@ def flush() -> int:
             return 0
         if not lines:
             return 0
-        with open(_journal_path(device_id()), "a", encoding="utf-8") as f:
+        path = _journal_path(device_id())
+        with open(path, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
         # Truncate the outbox only after the shared write succeeded. A crash in
         # between would duplicate lines — harmless, dedup'd by seq on apply.
         with open(_outbox_path(), "w", encoding="utf-8") as f:
             f.write("")
-        return len(lines)
+        n = len(lines)
+    try:
+        if not _COMPACTING and not _DEFER_FLUSH and os.path.getsize(path) > JOURNAL_MAX_BYTES:
+            compact_journal()
+    except Exception:
+        pass   # compaction is an optimisation — never fail a flush over it
+    return n
+
+
+def _journal_epoch(path: str) -> str:
+    """Identity of a journal file: the `epoch` of its `journal_head` first line
+    ('' for a legacy journal without one). Changes on every compaction so a
+    reader whose byte offset belongs to the previous file starts from 0."""
+    try:
+        with open(path, "rb") as f:
+            first = f.readline(4096)
+        rec = json.loads(first.decode("utf-8", "replace"))
+        return str(rec.get("epoch") or "") if rec.get("op") == "journal_head" else ""
+    except Exception:
+        return ""
+
+
+def compact_journal() -> int:
+    """v3.51 — keep the shared journal from growing forever (Drive re-uploads the
+    whole file on every append; after years that is tens of MB per change).
+    Moves the current journal aside (`archive-<dev>-<stamp>.jsonl`, newest
+    ARCHIVES_KEEP kept) and starts a fresh, self-contained one: a `journal_head`
+    line (new epoch → peers reset their read offset), the remembered delete
+    tombstones, a full data snapshot, then the settings stamped with their real
+    last-write time (LWW on the peers stays correct). Sequence numbers keep
+    climbing, so every peer applies the head exactly once — and a computer
+    joining later still receives everything. Returns records written."""
+    global _COMPACTING, _DEFER_FLUSH
+    if _COMPACTING or not is_enabled() or not folder_available():
+        return 0
+    _COMPACTING = True
+    try:
+        with _LOCK:
+            dev = device_id()
+            path = _journal_path(dev)
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            if os.path.exists(path):
+                os.replace(path, os.path.join(get_folder(),
+                                              f"{ARCHIVE_PREFIX}{dev}-{stamp}.jsonl"))
+            olds = sorted(glob.glob(os.path.join(get_folder(),
+                                                 f"{ARCHIVE_PREFIX}{dev}-*.jsonl")))
+            for old in olds[:-ARCHIVES_KEEP]:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
+            head = {"seq": 0, "ts": _utc_now(), "dev": dev, "op": "journal_head",
+                    "epoch": uuid.uuid4().hex}
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(head, ensure_ascii=False) + "\n")
+            state = _load_state()
+            tombs = list(state.get("tombstones") or [])
+            known_ts = dict(state.get("setting_ts") or {})
+        n = 0
+        _DEFER_FLUSH = True
+        try:
+            for t in tombs:
+                log_change(t.get("op", ""), dict(t.get("payload") or {}),
+                           ts=t.get("ts") or "")
+                n += 1
+            n += _snapshot_body(include_settings=False)
+            with db.get_connection() as conn:
+                settings = {r["key"]: r["value"]
+                            for r in conn.execute("SELECT * FROM settings")}
+            for key, value in settings.items():
+                if _setting_syncable(key):
+                    log_change("setting", {"key": key, "value": value},
+                               ts=known_ts.get(key) or _utc_now())
+                    n += 1
+        finally:
+            _DEFER_FLUSH = False
+        flush()
+        return n
+    finally:
+        _COMPACTING = False
 
 
 # ─── Applying remote changes ─────────────────────────────────────────────────
@@ -449,6 +543,23 @@ def _record_incoming(conn, op, guid, name, summary, before, after, dev):
             (_utc_now(), dev or "", "", op, guid or "", name or "", summary or "",
              json.dumps(before, ensure_ascii=False) if before is not None else "",
              json.dumps(after, ensure_ascii=False) if after is not None else ""))
+    except Exception:
+        pass
+
+
+INCOMING_KEEP_DAYS = 400     # manager's review/undo log — a year is plenty
+INCOMING_KEEP_ROWS = 5000
+
+
+def _prune_incoming(conn):
+    """The manager's incoming-change log (before/after JSON per row) would grow
+    forever; keep about a year / the newest INCOMING_KEEP_ROWS (v3.51)."""
+    try:
+        conn.execute("DELETE FROM sync_incoming WHERE applied_at < ?",
+                     (_hours_ago(INCOMING_KEEP_DAYS * 24),))
+        conn.execute("DELETE FROM sync_incoming WHERE id NOT IN "
+                     "(SELECT id FROM sync_incoming ORDER BY id DESC LIMIT ?)",
+                     (INCOMING_KEEP_ROWS,))
     except Exception:
         pass
 
@@ -846,6 +957,7 @@ def pull_changes() -> int:
         my_dev = device_id()
         seen = state.setdefault("applied", {})       # dev → highest seq applied (safety dedup)
         offsets = state.setdefault("offsets", {})    # dev → byte position already read
+        epochs = state.setdefault("epochs", {})      # dev → journal identity (compaction)
         _APPLYING = True
         # On the manager machine, record incoming recipient changes for undo (#5rhe9).
         _RECORD_INCOMING = bool(state.get("is_manager"))
@@ -858,6 +970,10 @@ def pull_changes() -> int:
                         continue
                     last = int(seen.get(dev) or 0)
                     off = int(offsets.get(dev) or 0)
+                    epoch = _journal_epoch(path)
+                    if epoch != (epochs.get(dev) or ""):
+                        off = 0        # the peer compacted → read its new head from the top
+                        epochs[dev] = epoch
                     try:
                         lines, new_off = _read_new_lines(path, off)
                     except OSError:
@@ -890,6 +1006,8 @@ def pull_changes() -> int:
                         last = seq
                     seen[dev] = last
                     offsets[dev] = new_off
+                if _RECORD_INCOMING:
+                    _prune_incoming(conn)
         finally:
             _APPLYING = False
             _RECORD_INCOMING = False

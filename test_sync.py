@@ -260,6 +260,61 @@ ok("B got its data back after reset", len(db.get_all_recipients()) >= 1, str(len
 ok("B kept its Yemot password through the reset (#rliqc)",
    db.get_setting("yemot_password") == "B-SECRET", repr(db.get_setting("yemot_password")))
 
+# ── v3.51: journal compaction — the shared journal must not grow forever ─────
+# A deletes a recipient (tombstone remembered), B goes "offline" (does not
+# pull), A's journal crosses the size limit → compacted into head+tombstones+
+# snapshot with a new epoch. B must then: reset its offset (epoch changed),
+# apply the delete, keep newer local edits (LWW), and see A's later edits.
+use_machine(dir_a)
+a_recs = db.get_all_recipients()
+victim = db.add_recipient({"full_name": "נמחק בעתיד", "phone1": "0509999999",
+                           "frequency": "שבועי", "priority": 4, "souls": 2})
+sync.run_sync()
+use_machine(dir_b)
+_st = sync._load_state(); _st["applied"] = {}; sync._save_state(_st)   # undo the fake seq 999999 above
+sync.run_sync()
+ok("B has the soon-deleted recipient",
+   any(r["full_name"] == "נמחק בעתיד" for r in db.get_all_recipients()))
+b_local = [r for r in db.get_all_recipients() if r["full_name"] == "ישראל כהן"][0]
+db.update_recipient(b_local["id"], {"address": "עריכה חדשה של B בזמן ניתוק"})   # B's newer edit
+use_machine(dir_a)
+victim_guid = db.get_recipient(victim)["guid"]
+db.delete_recipient(victim)
+db.set_setting("yemot_system", "0771234567")
+old_limit = sync.JOURNAL_MAX_BYTES
+sync.JOURNAL_MAX_BYTES = 1                       # force compaction on the next flush
+try:
+    db.update_recipient([r for r in db.get_all_recipients() if r["full_name"] == "יעקב לוי"][0]["id"],
+                        {"address": "אחרי הדחיסה"})
+finally:
+    sync.JOURNAL_MAX_BYTES = old_limit
+sync.run_sync()
+files = os.listdir(shared)
+ok("A's old journal was archived", any(f.startswith("archive-") for f in files), str(files))
+a_journal = sync._journal_path(sync.device_id())
+first = json.loads(open(a_journal, encoding="utf-8").readline())
+ok("new journal starts with a journal_head epoch",
+   first.get("op") == "journal_head" and bool(first.get("epoch")))
+ops = [json.loads(l).get("op") for l in open(a_journal, encoding="utf-8") if l.strip()]
+ok("compacted journal carries the delete tombstone + snapshot", "rec_delete" in ops and ops.count("rec_upsert") >= 3, str(ops[:6]))
+ok("compacted journal is small", os.path.getsize(a_journal) < 200_000, str(os.path.getsize(a_journal)))
+# an edit AFTER compaction lands in the new journal too
+db.update_recipient([r for r in db.get_all_recipients() if r["full_name"] == "יעקב לוי"][0]["id"],
+                    {"address": "עריכה שנייה אחרי הדחיסה"})
+sync.run_sync()
+use_machine(dir_b)
+n = sync.run_sync()
+ok("B applied the compacted head (offset reset by epoch)", n["applied"] >= 3 if isinstance(n, dict) else True)
+ok("B applied the delete from the tombstone", db.get_recipient_by_guid(victim_guid) is None)
+ok("B kept its own newer edit (LWW) despite A's snapshot",
+   db.get_recipient(b_local["id"])["address"] == "עריכה חדשה של B בזמן ניתוק",
+   db.get_recipient(b_local["id"])["address"])
+ok("B received A's edit made after the compaction",
+   [r for r in db.get_all_recipients() if r["full_name"] == "יעקב לוי"][0]["address"] == "עריכה שנייה אחרי הדחיסה")
+ok("B received the setting through the compacted journal", db.get_setting("yemot_system") == "0771234567")
+sync.run_sync()
+ok("second pull applies nothing new (no replay loop)", sync.run_sync().get("applied", 0) == 0)
+
 print()
 if fails:
     print(f"✗ {len(fails)} FAILED: {fails}")
