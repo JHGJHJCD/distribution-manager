@@ -570,6 +570,12 @@ class MainWindow(QMainWindow):
                    for scr in QGuiApplication.screens())
 
     def closeEvent(self, e):
+        # v3.46: שליחת מיילים באמצע — לשאול לפני שסוגרים (אחרת השליחה נקטעת בשקט
+        # והרשומה נשארת "בתהליך" עד ההפעלה הבאה)
+        mt = getattr(self, "mails_tab", None)
+        if mt is not None and mt.sending_active() and not mt.confirm_close():
+            e.ignore()
+            return
         try:
             db.set_setting("win_geometry",
                            bytes(self.saveGeometry().toBase64()).decode("ascii"))

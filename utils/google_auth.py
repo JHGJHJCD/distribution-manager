@@ -37,6 +37,12 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+# v3.46: בקשת JSON ל-messages.send מוגבלת ל-10MB (raw = base64 של ה-MIME, שהוא בעצמו
+# base64 של הקובץ המצורף ⇒ קובץ 6MB כבר חורג). מעל JSON_RAW_LIMIT שולחים את ה-MIME
+# כמו שהוא דרך נתיב ה-upload (message/rfc822, עד 35MB) — בלי ניפוח base64 נוסף.
+GMAIL_UPLOAD_URL = ("https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send"
+                    "?uploadType=media")
+JSON_RAW_LIMIT = 5 * 1024 * 1024
 SCOPES = ("https://www.googleapis.com/auth/gmail.send",
           "https://www.googleapis.com/auth/userinfo.email", "openid")
 
@@ -318,18 +324,31 @@ def connect(timeout: float = 240) -> str:
     return email
 
 
-def disconnect(revoke: bool = True):
-    """ניתוק: מוחק את ההרשאה מקומית (ובסנכרון) ומבטל אותה בגוגל כמיטב היכולת."""
+def disconnect(revoke: bool = True) -> str:
+    """ניתוק: מוחק את ההרשאה מקומית (ובסנכרון) ומבטל אותה בגוגל כמיטב היכולת.
+    מחזיר את ה-refresh_token שהוסר — עם `revoke=False` (v3.46) הקורא מבטל אותו
+    בעצמו ברקע דרך `revoke()`, כדי שקריאת-הרשת (דקות מאחורי נטפרי) לא תרוץ על ה-UI."""
     refresh = (db.get_setting(SET_REFRESH) or "").strip()
     db.set_setting(SET_REFRESH, "")
     db.set_setting(SET_EMAIL, "")
     _cache.update(token="", exp=0.0)
     if revoke and refresh:
-        try:
-            _http("POST", REVOKE_URL, urllib.parse.urlencode({"token": refresh}).encode(),
-                  {"Content-Type": "application/x-www-form-urlencoded"})
-        except Exception:
-            pass
+        revoke_token(refresh)
+    return refresh
+
+
+def revoke_token(refresh: str):
+    """ביטול ההרשאה בצד גוגל (רשת; לא מעלה חריגה — ההרשאה כבר נמחקה מקומית)."""
+    if not refresh:
+        return
+    try:
+        _http("POST", REVOKE_URL, urllib.parse.urlencode({"token": refresh}).encode(),
+              {"Content-Type": "application/x-www-form-urlencoded"})
+    except Exception:
+        pass
+
+
+revoke = revoke_token
 
 
 def access_token(force: bool = False) -> str:
@@ -361,13 +380,16 @@ def access_token(force: bool = False) -> str:
 def gmail_send_raw(mime_bytes: bytes) -> str:
     """שולח הודעת MIME מוכנה דרך Gmail API. מחזיר את מזהה ההודעה.
     מעלה GoogleAuthError בעברית על כישלון (כתובת שגויה, מכסה, הרשאה)."""
-    raw = base64.urlsafe_b64encode(mime_bytes).decode()
-    body = json.dumps({"raw": raw}).encode()
+    if len(mime_bytes) > JSON_RAW_LIMIT:
+        # v3.46: מייל גדול (קובץ מצורף) — נתיב upload, ה-MIME עצמו כגוף הבקשה
+        url, body, ctype = GMAIL_UPLOAD_URL, mime_bytes, "message/rfc822"
+    else:
+        raw = base64.urlsafe_b64encode(mime_bytes).decode()
+        url, body, ctype = GMAIL_SEND_URL, json.dumps({"raw": raw}).encode(), "application/json"
     for attempt in (0, 1):
         tok = access_token(force=(attempt == 1))
-        status, resp = _http("POST", GMAIL_SEND_URL, body,
-                             {"Authorization": "Bearer " + tok,
-                              "Content-Type": "application/json"})
+        status, resp = _http("POST", url, body,
+                             {"Authorization": "Bearer " + tok, "Content-Type": ctype})
         if status == 401 and attempt == 0:
             continue
         break
@@ -383,6 +405,10 @@ def gmail_send_raw(mime_bytes: bytes) -> str:
     low = msg.lower()
     if status == 400 and ("recipient" in low or "address" in low or "invalid to" in low):
         raise GoogleAuthError("כתובת המייל של הנמען שגויה.", fatal=False)
+    if status == 413 or "too large" in low or "payload size" in low or "exceeds the limit" in low:
+        # v3.46: גודל ההודעה לא תלוי בנמען — אותו קובץ ייכשל אצל כולם ⇒ תקלה כללית
+        raise GoogleAuthError(
+            "ההודעה גדולה מדי ל-Gmail (הקובץ המצורף גדול מדי) — הקטן או הסר את הקובץ ונסה שוב.")
     if status == 403 and ("insufficient" in low or "scope" in low):
         raise GoogleAuthError("חסרה הרשאת שליחה — התנתק והתחבר מחדש לגוגל בהגדרות.")
     if status == 429 or "quota" in low or "limit" in low:

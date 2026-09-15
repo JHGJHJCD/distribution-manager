@@ -1459,9 +1459,13 @@ class SettingsTab(QWidget):
         if QMessageBox.question(self, "ניתוק", "לנתק את חשבון Google מהתוכנה (בשני המחשבים)?") \
                 != QMessageBox.StandardButton.Yes:
             return
-        with busy_cursor():
-            google_auth.disconnect()
+        # v3.46: הניתוק המקומי מיידי; ביטול ההרשאה בצד גוגל = קריאת רשת (דקות מאחורי
+        # נטפרי) ⇒ ברקע, לא על ה-UI (M10 — כמו connect ומייל-הבדיקה)
+        tok = google_auth.disconnect(revoke=False)
         self.refresh()
+        if tok:
+            self._google_revoke_worker = _BgWorker(lambda: google_auth.revoke_token(tok), self)
+            self._google_revoke_worker.start()
 
     def _save_mail_settings_silent(self):
         email = self.mail_email.text().strip()

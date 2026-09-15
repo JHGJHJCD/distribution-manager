@@ -446,7 +446,7 @@ btns8 = [b.text() for b in w8.findChildren(mmod.QPushButton)] if w8 else []
 ok("היסטוריה: כפתור 'שלח שוב לנכשלים' מופיע לשליחה שנקטעה בלי כישלונות", "שלח שוב לנכשלים" in btns8, btns8)
 # שליחה חוזרת אוספת בדיוק את 2 המדולגים
 _sent_args = {}
-tab2._send = lambda targets=None, audience=None: _sent_args.update(t=targets, a=audience)
+tab2._send = lambda targets=None, audience=None, **kw: _sent_args.update(t=targets, a=audience, **kw)
 tab2._resend_failed(idx8)
 ok("שליחה חוזרת: בדיוק 2 היעדים שלא נוסו", sorted(t["email"] for t in _sent_args.get("t") or []) == ["p2@x.com", "p3@x.com"],
    _sent_args)
@@ -524,7 +524,7 @@ ok("כרטיס כהן ב-E: כן מציג את המייל (לפי guid)",
 tabE = mmod.MailsTab(None)
 tabE.refresh()
 _sentE = {}
-tabE._send = lambda targets=None, audience=None: _sentE.update(t=targets)
+tabE._send = lambda targets=None, audience=None, **kw: _sentE.update(t=targets)
 tabE._resend_failed(next(i for i, c in enumerate(tabE._camps) if c["guid"] == gd))
 tE = _sentE.get("t") or []
 ok("E: שליחה חוזרת הולכת לכהן (לפי guid), לא ללוי (לפי rec_id)",
@@ -631,6 +631,129 @@ _lp9 = _mails_mod._logo_path()
 ok("לוגו למייל קיים ונשמר ליד ה-DB הזמני (לא בתיקייה האמיתית)", bool(_lp9) and os.path.exists(_lp9) and _lp9.startswith(dir_a), _lp9)
 ok("לוגו למייל מוקטן (≤ 12KB) — לא הקובץ המקורי", bool(_lp9) and os.path.getsize(_lp9) <= 12 * 1024,
    os.path.getsize(_lp9) if _lp9 else -1)
+
+# ── 10. v3.46: 4 באגים קריטיים — סגירה באמצע שליחה / מייל גדול ב-Gmail API /
+#        שליחה-חוזרת דורסת טיוטה / התנתקות מגוגל מקפיאה את המסך ──────────────────
+print("— v3.46: סגירה באמצע שליחה / מייל גדול / טיוטה בשליחה-חוזרת / התנתקות ברקע —")
+use_machine(dir_a)
+google_auth._TRANSPORT = fake_transport
+if not google_auth.is_connected():
+    google_auth.connect()
+_orig_q10 = mmod.QMessageBox.question
+# (א) סגירת התוכנה באמצע שליחה — אזהרה; אישור → הרשומה נסגרת כ'נקטע' עם מי שקיבל ומי שלא נוסה
+tab = mmod.MailsTab(None)
+tab.refresh()
+tab._extra = ["c1@x.com", "c2@x.com", "c3@x.com"]
+tab._rebuild_targets()
+tab.subject.setText("נושא 10"); tab.body.setPlainText("גוף 10")
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.Yes)
+tab._send()
+g10 = tab._active_guid
+tab._on_progress(1, 3, {"rec_id": None, "guid": "", "name": "c1@x.com", "email": "c1@x.com",
+                        "status": "sent", "error": ""})
+ok("המסך יודע שיש שליחה פעילה (sending_active)", hasattr(tab, "sending_active") and tab.sending_active())
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.No)
+_r = tab.confirm_close() if hasattr(tab, "confirm_close") else None
+ok("סגירה באמצע שליחה: המפעיל מסרב → לא סוגרים, השליחה ממשיכה",
+   _r is False and tab._worker is not None and db.get_mail_campaign(g10)["status"] == "sending")
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.Yes)
+_r = tab.confirm_close() if hasattr(tab, "confirm_close") else None
+c10 = db.get_mail_campaign(g10)
+rows10 = json.loads((c10 or {}).get("report_json") or "[]")
+ok("סגירה באמצע שליחה: אישור → הרשומה נסגרת כ'נקטע' (לא נשארת 'בתהליך' עד ההפעלה הבאה)",
+   _r is True and c10 and c10["status"] == "interrupted" and c10["sent"] == 1
+   and [r["status"] for r in rows10] == ["sent", "skipped", "skipped"] and tab._worker is None, (c10 or {}).get("status"))
+ok("…והרשומה הסגורה מסתנכרנת (status_ts חדש מהתחלה)", c10 and c10["status_ts"] > c10["sent_at"])
+ok("main.py: closeEvent שואל את מסך המיילים לפני סגירה",
+   "confirm_close()" in open("main.py", encoding="utf-8").read())
+tab.deleteLater()
+mmod.QMessageBox.question = _orig_q10
+
+# (ב) מייל גדול דרך Gmail API — הבקשה ב-JSON מוגבלת ל-10MB; מעבר לזה → נתיב upload (message/rfc822)
+_up_calls = []
+def _size_transport(method, url, data, headers):
+    if url.startswith("https://gmail.googleapis.com/upload/"):
+        _up_calls.append((method, url, data, headers))
+        if len(data or b"") > 30 * 1024 * 1024:
+            return 413, b'{"error":{"message":"Request Entity Too Large"}}'
+        return 200, b'{"id":"up-1"}'
+    return fake_transport(method, url, data, headers)
+google_auth._TRANSPORT = _size_transport
+_big = b"x" * (6 * 1024 * 1024)
+n0 = len(calls)
+google_auth.gmail_send_raw(_big)
+ok("מייל של 6MB נשלח בנתיב ה-upload של Gmail (message/rfc822), לא כ-JSON (מגבלת 10MB)",
+   len(_up_calls) == 1 and _up_calls[0][3].get("Content-Type") == "message/rfc822"
+   and _up_calls[0][2] == _big and len([c for c in calls[n0:] if c[1] == google_auth.GMAIL_SEND_URL]) == 0,
+   (len(_up_calls), _up_calls[0][3] if _up_calls else None))
+n0 = len(calls); _up_calls.clear()
+google_auth.gmail_send_raw(b"small")
+ok("מייל קטן עדיין נשלח כ-JSON (הנתיב שאומת בשטח)", not _up_calls
+   and len([c for c in calls[n0:] if c[1] == google_auth.GMAIL_SEND_URL]) == 1)
+try:
+    google_auth.gmail_send_raw(b"x" * (31 * 1024 * 1024)); ok("413 מעלה", False)
+except Exception as e:
+    ok("413 (גדול מדי) = תקלה כללית בעברית — עוצרת את האצווה, לא 500 העלאות ענק",
+       mailer.is_fatal(e) and "גדול" in str(e), str(e))
+# הגנה לפני השליחה: מייל שחורג מ-25MB (מגבלת Gmail) נעצר בתוכנה, בלי להעלות בכלל
+_huge = os.path.join(dir_a, "huge.bin")
+with open(_huge, "wb") as f:
+    f.write(b"\0" * (20 * 1024 * 1024))     # 20MB → ~27MB אחרי base64
+n0 = len(calls); _up_calls.clear()
+try:
+    email_utils.send_email("d@x.co", "גדול", "<p>x</p>", attachment_path=_huge); ok("מייל ענק מעלה", False)
+except Exception as e:
+    ok("קובץ 20MB → נעצר בתוכנה לפני שליחה (בלי בקשת רשת), תקלה כללית בעברית",
+       mailer.is_fatal(e) and "גדול" in str(e) and not _up_calls
+       and len([c for c in calls[n0:] if c[1] == google_auth.GMAIL_SEND_URL]) == 0, str(e))
+ok("תקרת הקובץ המצורף במסך ≤ 18MB (20MB × base64 = 27MB > 25MB של Gmail)",
+   getattr(email_utils, "MAX_ATTACHMENT_BYTES", 0) and email_utils.MAX_ATTACHMENT_BYTES <= 18 * 1024 * 1024
+   and "MAX_ATTACHMENT_BYTES" in open("tabs/mails.py", encoding="utf-8").read())
+os.remove(_huge)
+google_auth._TRANSPORT = fake_transport
+
+# (ג) "שלח שוב לנכשלים" לא דורס את הטיוטה שבשדות — גם כשמבטלים בחלון האישור
+tab = mmod.MailsTab(None)
+tab.refresh()
+_me = sync.device_name() or ""
+g11 = db.add_mail_campaign("נושא ישן", "גוף ישן", "כולם", "kupa@gmail.com", 2, device=_me)
+db.update_mail_campaign(g11, 1, 1, "done", json.dumps([
+    {"rec_id": None, "guid": "", "name": "ok@x.com", "email": "ok@x.com", "status": "sent", "error": ""},
+    {"rec_id": None, "guid": "", "name": "f@x.com", "email": "f@x.com", "status": "failed", "error": "x"}],
+    ensure_ascii=False))
+tab._refresh_history()
+idx11 = next(i for i, c in enumerate(tab._camps) if c["guid"] == g11)
+tab.subject.setText("טיוטה חדשה"); tab.body.setPlainText("גוף הטיוטה")
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.No)
+n_before = len(db.get_mail_campaigns())
+tab._resend_failed(idx11)
+ok("ביטול בחלון האישור של שליחה-חוזרת: הטיוטה בשדות נשארת (לא נדרסה)",
+   tab.subject.text() == "טיוטה חדשה" and tab.body.toPlainText() == "גוף הטיוטה"
+   and len(db.get_mail_campaigns()) == n_before and tab._worker is None, tab.subject.text())
+mmod.QMessageBox.question = staticmethod(lambda *a, **k: mmod.QMessageBox.StandardButton.Yes)
+tab._resend_failed(idx11)
+c11 = db.get_mail_campaign(tab._active_guid) if tab._active_guid else None
+ok("אישור: השליחה-החוזרת יוצאת עם הנושא והגוף *המקוריים*",
+   c11 and c11["subject"] == "נושא ישן" and c11["body"] == "גוף ישן" and c11["total"] == 1, c11 and c11["subject"])
+ok("…והטיוטה בשדות עדיין שלמה", tab.subject.text() == "טיוטה חדשה" and tab.body.toPlainText() == "גוף הטיוטה")
+tab._on_finished([{"rec_id": None, "guid": "", "name": "f@x.com", "email": "f@x.com", "status": "sent", "error": ""}])
+tab.deleteLater()
+mmod.QMessageBox.question = _orig_q10
+
+# (ד) התנתקות מגוגל: הניתוק המקומי מיידי, ביטול הטוקן בגוגל (רשת) ברקע — לא על ה-UI
+google_auth.connect()
+n0 = len(calls)
+_tok = google_auth.disconnect(revoke=False)
+ok("disconnect(revoke=False): מנתק מקומית בלי בקשת רשת ומחזיר את הטוקן לביטול-ברקע",
+   not google_auth.is_connected() and len(calls) == n0 and _tok == "RT1", _tok)
+google_auth.revoke(_tok)
+ok("revoke(token) פונה לגוגל לביטול", calls[-1][1] == google_auth.REVOKE_URL and b"RT1" in (calls[-1][2] or b""))
+_st_src = open("tabs/settings.py", encoding="utf-8").read()
+_dis = _st_src[_st_src.index("def _google_disconnect"):]
+_dis = _dis[:_dis.index("\n    def ")]
+ok("הגדרות: 'התנתק' לא קורא לרשת על ה-UI (revoke=False + _BgWorker)",
+   "disconnect(revoke=False)" in _dis and "_BgWorker" in _dis and "busy_cursor" not in _dis)
+google_auth.connect()
 
 print()
 if fails:

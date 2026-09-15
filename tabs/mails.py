@@ -744,8 +744,11 @@ class MailsTab(QWidget):
     def _pick_attachment(self):
         path, _ = QFileDialog.getOpenFileName(self, "בחר קובץ לצירוף")
         if path:
-            if os.path.getsize(path) > 20 * 1024 * 1024:
-                QMessageBox.warning(self, "", "הקובץ גדול מדי (Gmail מגביל ל-25MB).")
+            # v3.46: Gmail מגבילה ל-25MB *אחרי* קידוד (×1.37) ⇒ קובץ עד 18MB
+            if os.path.getsize(path) > email_utils.MAX_ATTACHMENT_BYTES:
+                mb = os.path.getsize(path) / (1024 * 1024)
+                QMessageBox.warning(self, "", f"הקובץ גדול מדי ({mb:.0f}MB). Gmail מקבלת מייל עד 25MB "
+                                    "כולל הקידוד, לכן הקובץ המצורף יכול להיות עד 18MB.")
                 return
             self._set_attachment(path)
 
@@ -768,11 +771,13 @@ class MailsTab(QWidget):
             extra.append(f"+{len(self._extra)} חיצוניים")
         return base + (" (" + ", ".join(extra) + ")" if extra else "")
 
-    def _validate_message(self) -> bool:
-        if not self.subject.text().strip():
+    def _validate_message(self, subject: str | None = None, body: str | None = None) -> bool:
+        subject = self.subject.text() if subject is None else subject
+        body = self.body.toPlainText() if body is None else body
+        if not subject.strip():
             QMessageBox.warning(self, "", "חסר נושא להודעה.")
             return False
-        if not self.body.toPlainText().strip():
+        if not body.strip():
             QMessageBox.warning(self, "", "ההודעה ריקה.")
             return False
         if not email_utils.is_configured():
@@ -814,8 +819,12 @@ class MailsTab(QWidget):
             QMessageBox.information(
                 self, "נשלח", f"מייל הבדיקה נשלח אל {me} ✓" + chr(10) + "בדוק בתיבת הדואר איך זה נראה.")
 
-    def _send(self, targets=None, audience=None):
-        if self._worker is not None or not self._validate_message():
+    def _send(self, targets=None, audience=None, subject=None, body=None):
+        # v3.46: subject/body מפורשים = שליחה-חוזרת של הודעה ישנה; בלעדיהם = הטיוטה שבשדות.
+        # כך "שלח שוב לנכשלים" לא דורס את מה שהמפעיל כתב (גם כשהוא מבטל בחלון האישור).
+        subject = self.subject.text() if subject is None else subject
+        body = self.body.toPlainText() if body is None else body
+        if self._worker is not None or not self._validate_message(subject, body):
             return
         targets = targets if targets is not None else [t for t in self._targets if t["ok"]]
         if not targets:
@@ -824,16 +833,16 @@ class MailsTab(QWidget):
             QMessageBox.warning(self, "", "הקובץ המצורף לא נמצא (נמחק או הועבר). הסר אותו או צרף מחדש.")
             return
         audience = audience or self._audience_text()
-        msg = (f"לשלוח את ההודעה <b>\"{html.escape(self.subject.text().strip())}\"</b><br>"
+        msg = (f"לשלוח את ההודעה <b>\"{html.escape(subject.strip())}\"</b><br>"
                f"ל-<b>{len(targets)}</b> נמענים ({audience})<br>"
                f"מהחשבון <b>{email_utils.sender_email()}</b>?"
                + ("<br>עם קובץ מצורף: " + os.path.basename(self._attachment) if self._attachment else ""))
         if QMessageBox.question(self, "אישור שליחה", msg) != QMessageBox.StandardButton.Yes:
             return
         self._active_guid = db.add_mail_campaign(
-            self.subject.text().strip(), self.body.toPlainText(), audience,
+            subject.strip(), body, audience,
             email_utils.sender_email(), len(targets), device=sync.device_name() or "")
-        self._worker = _SendWorker(targets, self.subject.text().strip(), self.body.toPlainText(),
+        self._worker = _SendWorker(targets, subject.strip(), body,
                                    self._ctx(), self._attachment or None,
                                    self.chk_header.isChecked(), dict(self._recs), self)
         self._worker.progress.connect(self._on_progress)
@@ -905,6 +914,53 @@ class MailsTab(QWidget):
             self._worker.stop()
             self.btn_stop.setEnabled(False)
             self.lbl_prog.setText("עוצר אחרי המייל הנוכחי…")
+
+    # ── סגירת התוכנה באמצע שליחה (v3.46) ─────────────────────────────────────
+
+    def sending_active(self) -> bool:
+        return self._worker is not None
+
+    def confirm_close(self) -> bool:
+        """נקרא מ-MainWindow.closeEvent כשיש שליחה פעילה. False = לא לסגור.
+        True = המפעיל אישר; השליחה נעצרה אחרי המייל הנוכחי והרשומה נסגרה כ'נקטע'
+        (מי שקיבל נשאר, מי שלא נוסה מסומן לשליחה חוזרת) — במקום להישאר "בתהליך"
+        עד ההפעלה הבאה."""
+        if self._worker is None:
+            return True
+        total = max(self.prog.maximum(), 1)
+        ans = QMessageBox.question(
+            self, "שליחת מיילים פעילה",
+            f"יש שליחת מיילים באמצע — נשלחו {self._sent_n} מתוך {total}.\n"
+            "לסגור את התוכנה בכל זאת?\n\nמי שעדיין לא קיבל יסומן \"לא נשלח\", ואפשר יהיה "
+            "לשלוח לו דרך \"שלח שוב לנכשלים\" בהיסטוריה.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return False
+        self._abort_for_close()
+        return True
+
+    def _abort_for_close(self, wait_ms: int = 8000):
+        w, self._worker = self._worker, None
+        guid, self._active_guid = self._active_guid, ""
+        if w is None:
+            return
+        try:
+            w.finished_rows.disconnect(self._on_finished)   # לא לפתוח הודעת-סיום על מסך שנסגר
+        except Exception:
+            pass
+        w.stop()
+        try:
+            w.wait(wait_ms)                                   # מחכים למייל הנוכחי (לא קוטעים באמצע)
+            from PyQt6.QtCore import QCoreApplication
+            QCoreApplication.processEvents()                  # progress שממתין בתור → _rows_acc
+        except Exception:
+            pass
+        if guid:
+            rows = mailer.close_pending(getattr(self, "_rows_acc", []))
+            sent, failed = mailer.summarize(rows)
+            db.update_mail_campaign(guid, sent, failed, "interrupted",
+                                    json.dumps(rows, ensure_ascii=False))
 
     def _close_stale_campaigns(self):
         """שליחה שנקטעה (התוכנה נסגרה באמצע) — לא להשאיר "בתהליך" לנצח."""
@@ -988,9 +1044,7 @@ class MailsTab(QWidget):
         if not failed:
             QMessageBox.information(self, "", "אין נכשלים לשלוח שוב.")
             return
-        # ההודעה המקורית חוזרת לשדות (אפשר לתקן לפני השליחה)
-        self.subject.setText(c.get("subject", ""))
-        self.body.setPlainText(c.get("body", ""))
+        # v3.46: ההודעה המקורית נשלחת כמו שהיא — הטיוטה שבשדות לא נדרסת
         recs = {}
         targets = []
         me = sync.device_name() or ""
@@ -1017,4 +1071,5 @@ class MailsTab(QWidget):
             QMessageBox.information(self, "", "לנכשלים אין כתובת מייל תקינה בכרטיס.")
             return
         self._recs.update(recs)
-        self._send(targets, audience=f"שליחה חוזרת לנכשלים ({c.get('audience', '')})")
+        self._send(targets, audience=f"שליחה חוזרת לנכשלים ({c.get('audience', '')})",
+                   subject=c.get("subject", ""), body=c.get("body", ""))

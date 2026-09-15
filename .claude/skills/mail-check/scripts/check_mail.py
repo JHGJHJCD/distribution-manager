@@ -85,7 +85,7 @@ def _(c):
 @lint("M4", "_validate_message רץ ב-_send וב-_send_test")
 def _(c):
     bad = [n for n in ("_send", "_send_test")
-           if "self._validate_message()" not in _func_body(c["m"], n)]
+           if "self._validate_message(" not in _func_body(c["m"], n)]
     return not bad, ", ".join(bad)
 
 
@@ -99,7 +99,7 @@ def _(c):
 def _(c):
     send = _func_body(c["m"], "_send")
     fin = _func_body(c["m"], "_on_finished")
-    okk = ("if self._worker is not None or not self._validate_message():" in send
+    okk = ("if self._worker is not None or not self._validate_message(subject, body):" in send
            and "db.add_mail_campaign(" in send and "self._worker.start()" in send
            and send.index("db.add_mail_campaign(") < send.index("self._worker.start()"))
     okk = okk and fin.count("db.update_mail_campaign(") >= 2 and "isinstance(rows, Exception)" in fin
@@ -383,7 +383,7 @@ def _(c):
     res = _func_body(m, "_resend_failed")
     return ("self.btn_stop.setEnabled(True)" in send
             and "if self._worker is not None:" in res
-            and res.index("if self._worker is not None:") < res.index("self.subject.setText(")
+            and res.index("if self._worker is not None:") < res.index("self._send(")
             and "not os.path.exists(self._attachment)" in send), ""
 
 
@@ -449,6 +449,52 @@ def _(c):
 @lint("M44", "html_body: כתובות אינטרנט הופכות לקישור (_linkify אחרי html.escape)")
 def _(c):
     return "_linkify(html.escape(p))" in _func_body(c["ml"], "html_body"), ""
+
+
+@lint("M45", "סגירת התוכנה באמצע שליחה: closeEvent שואל (confirm_close), ו-_abort_for_close עוצר, "
+             "מחכה למייל הנוכחי וסוגר את הרשומה כ-interrupted עם close_pending (3.46)")
+def _(c):
+    main = _read("main.py")
+    ce = _func_body(main, "closeEvent")
+    ab = _func_body(c["m"], "_abort_for_close")
+    cc = _func_body(c["m"], "confirm_close")
+    return ("mt.sending_active() and not mt.confirm_close()" in ce and "e.ignore()" in ce
+            and "w.stop()" in ab and "w.wait(" in ab and "mailer.close_pending(" in ab
+            and '"interrupted"' in ab and "QMessageBox.StandardButton.No)" in cc), ""
+
+
+@lint("M46", "Gmail API: מייל > JSON_RAW_LIMIT → GMAIL_UPLOAD_URL עם message/rfc822 (JSON מוגבל ל-10MB); "
+             "413/too large = תקלה כללית (fatal) (3.46)")
+def _(c):
+    ga = c["ga"]
+    body = _func_body(ga, "gmail_send_raw")
+    return ("uploadType=media" in ga and "len(mime_bytes) > JSON_RAW_LIMIT" in body
+            and '"message/rfc822"' in body and "status == 413" in body
+            and "fatal=False" not in body.split("status == 413")[1].split("raise")[1]), ""
+
+
+@lint("M47", "גודל מייל: send_email עוצר מייל > MAX_MAIL_BYTES (25MB) כ-MailFatalError לפני כל שליחה; "
+             "תקרת הקובץ במסך = email_utils.MAX_ATTACHMENT_BYTES ≤ 18MB (base64 ×1.37) (3.46)")
+def _(c):
+    eu, m = c["eu"], c["m"]
+    se = _func_body(eu, "send_email")
+    mx = re.search(r"^MAX_ATTACHMENT_BYTES\s*=\s*(\d+)", eu, re.M)
+    return ("len(mime_bytes) > MAX_MAIL_BYTES" in se and se.index("MAX_MAIL_BYTES") < se.index("if via_google:")
+            and "raise MailFatalError(" in se.split("MAX_MAIL_BYTES")[1][:400]
+            and mx and int(mx.group(1)) <= 18 and "email_utils.MAX_ATTACHMENT_BYTES" in _func_body(m, "_pick_attachment")), ""
+
+
+@lint("M48", "שליחה-חוזרת לא דורסת טיוטה: _send(subject=, body=) מפורשים; _resend_failed לא קורא "
+             "subject.setText/body.setPlainText; 'התנתק' = disconnect(revoke=False) + revoke_token ב-_BgWorker (3.46)")
+def _(c):
+    m, st = c["m"], c["st"]
+    res = _func_body(m, "_resend_failed")
+    send = _func_body(m, "_send", sig_hint="subject=None")
+    dis = _func_body(st, "_google_disconnect")
+    return (bool(send) and "self.subject.setText(" not in res and "self.body.setPlainText(" not in res
+            and "subject=c.get(" in res and "self.subject.text()" not in send.split("def")[0].replace(
+                "subject = self.subject.text() if subject is None else subject", "")
+            and "disconnect(revoke=False)" in dis and "_BgWorker" in dis and "busy_cursor" not in dis), ""
 
 
 def run_lints() -> bool:

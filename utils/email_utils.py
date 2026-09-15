@@ -99,6 +99,12 @@ def _connect(cfg: dict) -> smtplib.SMTP:
 
 SENDER_NAME = "קופה של צדקה הר יונה"   # שם התצוגה של השולח (From) בכל מייל יוצא
 
+# v3.46: Gmail מקבלת מייל עד 25MB *אחרי* קידוד base64 (×1.37). קובץ של 20MB = מייל של
+# 27MB ⇒ נדחה אצל כל נמען. תקרת הקובץ במסך 18MB (≈24.7MB מקודד), ובדיקה סופית על
+# המייל המוכן לפני כל שליחה — תקלה כללית (עוצרת את האצווה), לא 500 העלאות-ענק שנכשלות.
+MAX_MAIL_BYTES = 25 * 1024 * 1024
+MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024
+
 
 def html_to_text(html_body: str) -> str:
     """v3.45: גרסת טקסט-רגיל מ-HTML — לגרסה החלופית (text/plain) כשלא סופק טקסט
@@ -161,11 +167,19 @@ def send_email(to_addr: str, subject: str, html_body: str,
                         filename=os.path.basename(attachment_path))
         root.attach(part)
 
+    # v3.46: מייל שחורג ממגבלת Gmail נעצר כאן — לפני שמעלים אותו בכלל
+    mime_bytes = root.as_bytes()
+    if len(mime_bytes) > MAX_MAIL_BYTES:
+        mb = len(mime_bytes) / (1024 * 1024)
+        raise MailFatalError(
+            f"ההודעה גדולה מדי ({mb:.0f}MB אחרי הקידוד) — Gmail מקבלת עד 25MB. "
+            "הקטן או הסר את הקובץ המצורף ונסה שוב.")
+
     # v3.39: חשבון Google מחובר ⇒ Gmail API (בלי סיסמת אפליקציה). השגיאות שם
     # כבר בעברית (GoogleAuthError) — עולות כמו שהן.
     if via_google:
         from utils import google_auth
-        google_auth.gmail_send_raw(root.as_bytes())
+        google_auth.gmail_send_raw(mime_bytes)
         return
 
     # Connecting is where "no internet" shows up: getaddrinfo/timeout/refused all
