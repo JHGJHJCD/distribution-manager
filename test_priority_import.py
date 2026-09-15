@@ -21,7 +21,12 @@ for e in ("", "-wal", "-shm"):
 from utils.excel_utils import import_from_excel
 from collections import Counter
 
-FILE = r"C:\Users\יהודה\Downloads\חלוקת שבת מעודכן בלק פו (2) (1).xlsx"
+_NAME = "חלוקת שבת מעודכן בלק פו (2) (1).xlsx"
+# 15/9/2026: סידור המחשב העביר את הקובץ לתת-תיקייה "מסמכים" בהורדות — מחפשים בשני המקומות
+FILE = next((p for p in (rf"C:\Users\יהודה\Downloads\{_NAME}",
+                         rf"C:\Users\יהודה\Downloads\מסמכים\{_NAME}",
+                         rf"C:\Users\יהודה\Documents\עבודה - חלוקה\אקסל מקורי (מערכת קופה)\{_NAME}")
+             if os.path.exists(p)), rf"C:\Users\יהודה\Downloads\{_NAME}")
 ok = True
 def check(label, cond, extra=""):
     global ok; ok = ok and cond

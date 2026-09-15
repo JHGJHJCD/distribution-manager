@@ -49,6 +49,18 @@ tab = win.mails_tab
 win.navigate_to_tab(tab)
 tab.refresh()
 tab.tpl_combo.setCurrentIndex(1)
+# v3.50: עיצוב — הדגשה אדומה + קו תחתון + רשימה, כדי שהסרגל והתצוגה המקדימה יראו אותו
+from PyQt6.QtGui import QTextCursor, QTextListFormat, QColor, QTextCharFormat
+_c = tab.body.textCursor(); _c.setPosition(0); _c.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+tab.body.setTextCursor(_c); tab._toggle_bold()
+_f = QTextCharFormat(); _f.setForeground(QColor("#b91c1c")); tab._merge(_f)
+_c = tab.body.textCursor(); _c.movePosition(QTextCursor.MoveOperation.End); tab.body.setTextCursor(_c)
+tab._list(QTextListFormat.Style.ListDisc)
+assert tab._fmt_btns["ul"].isChecked()
+_c.movePosition(QTextCursor.MoveOperation.Start); tab.body.setTextCursor(_c)
+assert tab._fmt_btns["bold"].isChecked(), "bold button should reflect cursor format"
+from utils import mailer as _mailer
+assert _mailer.is_rich(tab._body_markup()) and "<b>" in tab._body_markup()
 tab._update_preview()
 for _ in range(6):
     app.processEvents()

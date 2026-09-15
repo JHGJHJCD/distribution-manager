@@ -539,6 +539,20 @@ def _(c):
             and "return self.confirm_close()" in _func_body(m, "guard_update")), ""
 
 
+@lint("M53", "v3.50 עיצוב-טקסט: גוף ההודעה נקרא רק דרך _body_markup (לא toPlainText — מאבד עיצוב); "
+             "render מבריח ערכים בגוף rich; html_body/to_plain/send_batch מכירים RICH_PREFIX")
+def _m53(c):
+    m = c["m"]
+    reads = [ln for ln in m.splitlines() if "self.body.toPlainText()" in ln and "_body_plain" not in ln
+             and "# noqa" not in ln]
+    okk = (not reads and "richtext.document_to_markup(self.body.document())" in m
+           and "richtext.load_into(" in m
+           and "esc = html.escape if is_rich(out)" in _func_body(c["ml"], "render")
+           and "if is_rich(text):" in _func_body(c["ml"], "html_body")
+           and "text_body=to_plain(rendered)" in _func_body(c["ml"], "send_batch"))
+    return okk, "; ".join(reads)[:200]
+
+
 @lint("M52", "'שמור כתבנית' בשם של תבנית קיימת מעדכן אותה (guid של הקיימת) אחרי שאלה — לא כפילות-שם (3.47)")
 def _(c):
     body = _func_body(c["m"], "_save_template")

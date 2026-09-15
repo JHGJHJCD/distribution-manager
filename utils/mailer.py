@@ -28,8 +28,32 @@ def valid_email(addr: str) -> bool:
     return bool(EMAIL_RE.match((addr or "").strip()))
 
 
+# v3.50: גוף-הודעה מעוצב (הדגשה/צבע/רשימות… מהעורך) נשמר כ-HTML נקי עם הסימון
+# הזה בתחילתו; בלעדיו הגוף הוא טקסט-רגיל כמו תמיד. (utils/richtext.py מייצר אותו)
+RICH_PREFIX = "<!--rich-->"
+
+
+def is_rich(text: str) -> bool:
+    return (text or "").startswith(RICH_PREFIX)
+
+
+def to_plain(text: str) -> str:
+    """גוף-הודעה → טקסט-רגיל (לגרסת text/plain, לאימות "ההודעה ריקה", להיסטוריה)."""
+    if not is_rich(text):
+        return text or ""
+    t = text[len(RICH_PREFIX):]
+    t = re.sub(r"(?i)<br\s*/?>", "\n", t)
+    t = re.sub(r"(?i)<li[^>]*>", "• ", t)
+    t = re.sub(r"(?i)</(p|li|ul|ol|div)>", "\n", t)
+    t = re.sub(r"<[^>]+>", "", t)
+    t = html.unescape(t).replace("\xa0", " ")
+    lines = [ln.rstrip() for ln in t.splitlines()]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def render(text: str, rec: dict | None, ctx: dict | None = None) -> str:
-    """החלפת placeholders. rec — כרטיס מקבל (או None לכתובת חיצונית)."""
+    """החלפת placeholders. rec — כרטיס מקבל (או None לכתובת חיצונית).
+    בגוף מעוצב (is_rich) הערכים מוברחים ל-HTML — שם עם '<' לא ישבור את המייל."""
     rec = rec or {}
     ctx = ctx or {}
     full = (rec.get("full_name") or "").strip()
@@ -43,8 +67,9 @@ def render(text: str, rec: dict | None, ctx: dict | None = None) -> str:
             "{תאריך חלוקה}": ctx.get("dist_date", ""),
             "{פרשה}": ctx.get("parsha", "")}
     out = text or ""
+    esc = html.escape if is_rich(out) else (lambda v: v)
     for k, v in repl.items():
-        out = out.replace(k, v)
+        out = out.replace(k, esc(v))
     return out
 
 
@@ -119,13 +144,33 @@ def _linkify(escaped: str) -> str:
     return URL_RE.sub(rep, escaped)
 
 
+def _linkify_markup(markup: str) -> str:
+    """v3.50: לינקיפיקציה של כתובות בגוף מעוצב — רק בטקסט שמחוץ לתגים ומחוץ ל-<a>."""
+    out, in_a = [], 0
+    for piece in re.split(r"(<[^>]+>)", markup):
+        if piece.startswith("<"):
+            low = piece.lower()
+            if low.startswith("<a ") or low == "<a>":
+                in_a += 1
+            elif low.startswith("</a"):
+                in_a = max(0, in_a - 1)
+            out.append(piece)
+        else:
+            out.append(piece if in_a else _linkify(piece))
+    return "".join(out)
+
+
 def html_body(text: str, with_header: bool = True, org_name: str = "קופה של צדקה הר יונה") -> str:
     """טקסט פשוט → HTML RTL. שורות ריקות = פסקאות. with_header מוסיף רצועת
-    כותרת עם הלוגו (cid:logo — email_utils מצרף אותו inline)."""
-    paras = [p.strip() for p in re.split(r"\n\s*\n", (text or "").strip())]
-    body = "".join(
-        "<p style='margin:0 0 12px'>" + _linkify(html.escape(p)).replace("\n", "<br>") + "</p>"
-        for p in paras if p)
+    כותרת עם הלוגו (cid:logo — email_utils מצרף אותו inline).
+    v3.50: גוף מעוצב (is_rich) נכנס כמו שהוא (HTML נקי מ-richtext.document_to_markup)."""
+    if is_rich(text):
+        body = _linkify_markup(text[len(RICH_PREFIX):])
+    else:
+        paras = [p.strip() for p in re.split(r"\n\s*\n", (text or "").strip())]
+        body = "".join(
+            "<p style='margin:0 0 12px'>" + _linkify(html.escape(p)).replace("\n", "<br>") + "</p>"
+            for p in paras if p)
     header = ""
     if with_header:
         # טבלה (לא flex) + width/height כאטריבוטים: מנוע ה-rich-text של Qt
@@ -188,13 +233,13 @@ def send_batch(targets: list[dict], subject: str, body_text: str, ctx: dict | No
             rec = rec_by_id.get(t.get("rec_id")) if t.get("rec_id") is not None else None
             c = dict(ctx or {}, fallback_name=t.get("name", ""))
             try:
-                plain = render(body_text, rec, c)
+                rendered = render(body_text, rec, c)
                 email_utils.send_email(
                     t["email"], render(subject, rec, c),
-                    html_body(plain, with_header),
+                    html_body(rendered, with_header),
                     attachment_path=attachment_path,
                     inline_logo_path=logo_path if with_header else None,
-                    text_body=plain, session=session)
+                    text_body=to_plain(rendered), session=session)
             except Exception as e:
                 row["status"] = "failed"
                 row["error"] = str(e)

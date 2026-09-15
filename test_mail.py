@@ -899,6 +899,48 @@ ok("…ומספר התבניות גדל ב-1 בלבד", len(db.get_mail_template
 tab.deleteLater()
 mmod.QMessageBox.question = _orig_q10
 
+# ── §12 (v3.50): עיצוב-טקסט במייל — הדגשה/צבע/רשימה/קישור ─────────────────
+print("\n§12 עיצוב-טקסט (rich body)")
+from utils import richtext
+from PyQt6.QtGui import QTextCharFormat, QTextCursor, QTextListFormat, QColor, QFont
+tab = mmod.MailsTab(None)
+tab.refresh()
+tab.body.setPlainText("שלום {שם},\nתזכורת\n\nשורה שלישית")
+ok("בלי עיצוב — הגוף נשמר כטקסט-רגיל בדיוק (תאימות לאחור)",
+   tab._body_markup() == "שלום {שם},\nתזכורת\n\nשורה שלישית", repr(tab._body_markup()))
+_c = tab.body.textCursor(); _c.setPosition(11); _c.setPosition(17, QTextCursor.MoveMode.KeepAnchor)
+tab.body.setTextCursor(_c); tab._toggle_bold()
+_f = QTextCharFormat(); _f.setForeground(QColor("#ff0000")); tab._merge(_f)
+_c = tab.body.textCursor(); _c.setPosition(20); tab.body.setTextCursor(_c)
+tab._list(QTextListFormat.Style.ListDecimal)
+m12 = tab._body_markup()
+ok("עם עיצוב — HTML נקי עם סימון rich (<b>, צבע, <ol>)",
+   mailer.is_rich(m12) and "<b>" in m12 and "color:#ff0000" in m12 and "<ol" in m12 and "<li>" in m12, m12)
+ok("ה-HTML נקי — בלי הניפוח של Qt (font-family/span ריקים)", "font-family" not in m12 and "<span style=''>" not in m12)
+r12 = mailer.render(m12, {"full_name": "כהן <x>"}, {})
+ok("placeholder בגוף מעוצב מוברח ל-HTML (שם עם '<' לא שובר את המייל)", "כהן &lt;x&gt;" in r12 and "<x>" not in r12)
+ok("to_plain: גרסת טקסט-רגיל בלי תגים, עם שורות ורשימה", mailer.to_plain(r12) == "שלום כהן <x>,\nתזכורת\n\n• שורה שלישית", repr(mailer.to_plain(r12)))
+h12 = mailer.html_body(r12, False)
+ok("html_body מכניס גוף מעוצב כמו שהוא (לא מבריח את התגים)", "<b><span style='color:#ff0000'>תזכורת</span></b>" in h12 and "&lt;b&gt;" not in h12)
+_e2 = mmod.QTextEdit(); richtext.load_into(_e2, m12)
+ok("טעינה חזרה לעורך (תבנית/היסטוריה) ושמירה = אותו HTML (round-trip)",
+   richtext.document_to_markup(_e2.document()) == m12, richtext.document_to_markup(_e2.document()))
+tab.body.setPlainText("ראו https://example.com/x. תודה")
+_c = tab.body.textCursor(); _c.select(QTextCursor.SelectionType.Document); tab.body.setTextCursor(_c); tab._toggle_bold()
+h12b = mailer.html_body(tab._body_markup(), False)
+ok("כתובת בטקסט מודגש הופכת לקישור לחיץ (בלי הנקודה בסוף), לא כפול", h12b.count("<a href='https://example.com/x'") == 1 and "x.</a>" not in h12b, h12b)
+tab.body.setPlainText("")
+_c = tab.body.textCursor(); tab.body.setTextCursor(_c); tab._toggle_bold()
+ok("עורך ריק עם 'מודגש' דלוק = הודעה ריקה (לא rich ריק)", tab._body_markup() == "" and not mailer.to_plain(tab._body_markup()).strip())
+tab.subject.setText("נושא"); tab._extra = ["q@x.com"]; tab._rebuild_targets()
+_msgs.clear(); tab._send()
+ok("שליחה עם גוף ריק (רק עיצוב) נחסמת: 'ההודעה ריקה'", any("ריקה" in m for _k, m in _msgs), _msgs)
+tab.body.setPlainText("גוף"); _c = tab.body.textCursor(); _c.select(QTextCursor.SelectionType.Document); tab.body.setTextCursor(_c); tab._toggle_underline()
+db.upsert_mail_template("מעוצבת", "נושא", tab._body_markup())
+_t = next(t for t in db.get_mail_templates() if t["name"] == "מעוצבת")
+ok("תבנית שומרת את העיצוב (u)", mailer.is_rich(_t["body"]) and "<u>" in _t["body"], _t["body"])
+tab.deleteLater()
+
 print()
 if fails:
     print(f"FAILED ({len(fails)}):"); [print("  -", f) for f in fails]

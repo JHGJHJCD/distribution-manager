@@ -84,3 +84,4 @@
 |---|---|---|---|
 | M27 | `test_mail.py` מזריק `google_auth._TRANSPORT` + `_CODE_PROVIDER` ורץ על DB זמני — אפס רשת | `test_mail.py` | ✓ |
 | M28 | `test_mail.py` ברשימת `TESTS` של `release.py` (נמצא חסר ב-14/9/2026 — שחרור לא הריץ אותו) | `release.py` | ✓ |
+| M53 | **עיצוב-טקסט (3.50):** גוף ההודעה נקרא במסך רק דרך `_body_markup()` (`richtext.document_to_markup`) — `toPlainText()` מאבד הדגשה/צבע/רשימות. בלי עיצוב = טקסט-רגיל **זהה לקודם** (תאימות); עם עיצוב = `mailer.RICH_PREFIX`+HTML נקי. `render` מבריח ערכי-placeholder בגוף rich (שם עם `<`); `html_body` מכניס rich כמו-שהוא (+לינקיפיקציה מחוץ ל-`<a>`); `send_batch` שולח `text_body=to_plain(...)`; תבנית/היסטוריה נטענות ב-`richtext.load_into` | `mails._body_markup`, `utils/richtext.py`, `mailer.render/html_body/to_plain` | ✓ |

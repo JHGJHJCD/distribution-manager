@@ -19,14 +19,16 @@ import json
 import os
 
 from PyQt6.QtCore import Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QTextCharFormat, QTextCursor, QTextListFormat, QFont
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit, QTextEdit,
     QTextBrowser, QComboBox, QCheckBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QScrollArea, QDialog, QListWidget, QListWidgetItem, QMessageBox, QFileDialog,
-    QInputDialog, QProgressBar, QAbstractItemView, QSizePolicy, QFrame, QButtonGroup)
+    QInputDialog, QProgressBar, QAbstractItemView, QSizePolicy, QFrame, QButtonGroup,
+    QColorDialog, QToolButton)
 
 import database as db
-from utils import email_utils, mailer, sync, timefmt
+from utils import email_utils, mailer, richtext, sync, timefmt
 from utils.ui import busy_cursor, enable_touch_scroll
 from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _CHIP_AMBER, _LBL,
                                _BTN_PRIMARY, _BTN_GHOST, _BTN_PRINT, _BTN_ACCENT,
@@ -42,6 +44,13 @@ _BTN_LINK = ("QPushButton{background:transparent; color:#0f766e; border:none;"
              " font-weight:700; text-decoration:underline; padding:2px 6px;}"
              "QPushButton:hover{color:#065f46;}")
 _MAX_TABLE_ROWS = 14
+_FMT_BAR_QSS = ("QWidget#fmtbar{background:#f1f5f9; border:1px solid #e2e8f0; border-bottom:none;"
+                " border-top-left-radius:8px; border-top-right-radius:8px;}"
+                "QToolButton{background:transparent; border:none; border-radius:6px; min-width:30px;"
+                " min-height:28px; font-size:14px; color:#334155; padding:0 4px;}"
+                "QToolButton:hover{background:#e2e8f0;}"
+                "QToolButton:checked{background:#c7ede0; color:#0f766e;}"
+                "QComboBox{min-height:26px; font-size:12.5px; padding:0 6px; min-width:64px;}")
 
 
 MAIL_LOGO_PX = 88   # 2× של 44px בתצוגה — חד גם במסכי רטינה, כמה KB במקום 34KB (או MB של לוגו מותאם)
@@ -209,7 +218,7 @@ class _HistoryDetailDialog(QDialog):
         lay.addWidget(head)
         body = QTextBrowser()
         body.setMaximumHeight(120)
-        body.setPlainText(camp.get("body") or "")
+        richtext.load_into(body, camp.get("body") or "")
         lay.addWidget(body)
         try:
             rows = json.loads(camp.get("report_json") or "[]")
@@ -392,6 +401,10 @@ class MailsTab(QWidget):
         self.body.setMinimumHeight(180)
         self.body.setPlaceholderText("שלום {שם},\n…")
         self.body.textChanged.connect(self._schedule_preview)
+        # v3.50: סרגל עיצוב (כמו ב-Gmail); הדבקה נכנסת כטקסט-רגיל, העיצוב רק מהסרגל
+        self.body.currentCharFormatChanged.connect(self._sync_format_bar)
+        self.body.cursorPositionChanged.connect(self._sync_format_bar)
+        left.addWidget(self._build_format_bar())
         left.addWidget(self.body)
         prow = QHBoxLayout()
         prow.setSpacing(6)
@@ -513,6 +526,188 @@ class MailsTab(QWidget):
         self._mode_group.addButton(b)
         layout.addWidget(b)
         return b
+
+    # ---- v3.50: סרגל עיצוב (כמו ב-Gmail) ------------------------------------
+    _SIZES = [("קטן", 11), ("רגיל", 0), ("גדול", 15), ("ענק", 20)]
+
+    def _build_format_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setObjectName("fmtbar")
+        bar.setStyleSheet(_FMT_BAR_QSS)
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(2)
+        self._fmt_btns = {}
+
+        def tb(key, text, tip, slot, checkable=False, bold=False, italic=False,
+               underline=False, strike=False):
+            b = QToolButton()
+            b.setText(text)
+            b.setToolTip(tip)
+            b.setCheckable(checkable)
+            f = b.font()
+            f.setBold(bold); f.setItalic(italic); f.setUnderline(underline); f.setStrikeOut(strike)
+            b.setFont(f)
+            b.clicked.connect(slot)
+            lay.addWidget(b)
+            self._fmt_btns[key] = b
+            return b
+
+        def sep():
+            s = QFrame()
+            s.setFrameShape(QFrame.Shape.VLine)
+            s.setStyleSheet("color:#cbd5e1; margin:2px 4px;")
+            lay.addWidget(s)
+
+        tb("undo", "↶", "בטל", lambda: self.body.undo())
+        tb("redo", "↷", "בצע שוב", lambda: self.body.redo())
+        sep()
+        self.size_combo = QComboBox()
+        self.size_combo.setToolTip("גודל טקסט")
+        for name, _pt in self._SIZES:
+            self.size_combo.addItem(name)
+        self.size_combo.setCurrentIndex(1)
+        self.size_combo.activated.connect(self._apply_size)
+        lay.addWidget(self.size_combo)
+        sep()
+        tb("bold", "B", "מודגש (Ctrl+B)", self._toggle_bold, checkable=True, bold=True)
+        tb("italic", "I", "נטוי (Ctrl+I)", self._toggle_italic, checkable=True, italic=True)
+        tb("underline", "U", "קו תחתון (Ctrl+U)", self._toggle_underline, checkable=True, underline=True)
+        tb("strike", "S", "קו חוצה", self._toggle_strike, checkable=True, strike=True)
+        sep()
+        tb("color", "A", "צבע טקסט", self._pick_color, bold=True)
+        tb("bg", "🖍", "צבע הדגשה (מרקר)", self._pick_bg)
+        sep()
+        tb("right", "⇥", "יישור לימין", lambda: self._align(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute), checkable=True)
+        tb("center", "☰", "מרכוז", lambda: self._align(Qt.AlignmentFlag.AlignHCenter), checkable=True)
+        tb("left", "⇤", "יישור לשמאל", lambda: self._align(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignAbsolute), checkable=True)
+        sep()
+        tb("ul", "•≡", "רשימת נקודות", lambda: self._list(QTextListFormat.Style.ListDisc), checkable=True)
+        tb("ol", "1≡", "רשימה ממוספרת", lambda: self._list(QTextListFormat.Style.ListDecimal), checkable=True)
+        sep()
+        tb("link", "🔗", "הוסף קישור", self._insert_link)
+        tb("clear", "Tx", "נקה עיצוב", self._clear_format)
+        lay.addStretch()
+        return bar
+
+    def _body_markup(self) -> str:
+        """גוף ההודעה כפי שנשמר/נשלח: טקסט-רגיל, או HTML נקי כשיש עיצוב."""
+        return richtext.document_to_markup(self.body.document())
+
+    def _merge(self, fmt: QTextCharFormat):
+        cur = self.body.textCursor()
+        if not cur.hasSelection():
+            cur.select(QTextCursor.SelectionType.WordUnderCursor)
+        cur.mergeCharFormat(fmt)
+        self.body.mergeCurrentCharFormat(fmt)
+        self.body.setFocus()
+
+    def _toggle_bold(self):
+        f = QTextCharFormat()
+        on = self.body.fontWeight() < QFont.Weight.DemiBold.value
+        f.setFontWeight(QFont.Weight.Bold.value if on else QFont.Weight.Normal.value)
+        self._merge(f)
+
+    def _toggle_italic(self):
+        f = QTextCharFormat(); f.setFontItalic(not self.body.fontItalic()); self._merge(f)
+
+    def _toggle_underline(self):
+        f = QTextCharFormat(); f.setFontUnderline(not self.body.fontUnderline()); self._merge(f)
+
+    def _toggle_strike(self):
+        f = QTextCharFormat()
+        f.setFontStrikeOut(not self.body.currentCharFormat().fontStrikeOut())
+        self._merge(f)
+
+    def _apply_size(self, idx: int):
+        pt = self._SIZES[idx][1]
+        f = QTextCharFormat()
+        f.setFontPointSize(pt)   # 0 = "רגיל": בלי גודל מפורש (הגודל הבסיסי של העורך/המייל)
+        self._merge(f)
+
+    def _pick_color(self):
+        c = QColorDialog.getColor(self.body.textColor(), self, "צבע טקסט")
+        if c.isValid():
+            f = QTextCharFormat(); f.setForeground(c); self._merge(f)
+
+    def _pick_bg(self):
+        c = QColorDialog.getColor(QColor("#fff59d"), self, "צבע הדגשה")
+        if c.isValid():
+            f = QTextCharFormat(); f.setBackground(c); self._merge(f)
+
+    def _align(self, a):
+        self.body.setAlignment(a)
+        self.body.setFocus()
+        self._sync_format_bar()
+
+    def _list(self, style):
+        cur = self.body.textCursor()
+        lst = cur.currentList()
+        if lst is not None and lst.format().style() == style:
+            # כבר רשימה מהסוג הזה — לחיצה שנייה מבטלת
+            lst.remove(cur.block())
+            bf = cur.blockFormat(); bf.setIndent(0); cur.setBlockFormat(bf)
+        else:
+            cur.createList(style)
+        self.body.setFocus()
+        self._sync_format_bar()
+
+    def _insert_link(self):
+        cur = self.body.textCursor()
+        sel = cur.selectedText().strip()
+        url, okk = QInputDialog.getText(self, "הוסף קישור", "כתובת (למשל https://…):",
+                                        text=sel if sel.startswith("http") else "")
+        url = (url or "").strip()
+        if not okk or not url:
+            return
+        if not url.lower().startswith(("http://", "https://", "mailto:")):
+            url = "https://" + url
+        f = QTextCharFormat()
+        f.setAnchor(True); f.setAnchorHref(url)
+        f.setForeground(QColor("#0f766e")); f.setFontUnderline(True)
+        if cur.hasSelection():
+            cur.mergeCharFormat(f)
+        else:
+            cur.insertText(url, f)
+        cur.setCharFormat(QTextCharFormat())
+        self.body.setTextCursor(cur)
+        self.body.setCurrentCharFormat(QTextCharFormat())
+        self.body.setFocus()
+
+    def _clear_format(self):
+        cur = self.body.textCursor()
+        if not cur.hasSelection():
+            cur.select(QTextCursor.SelectionType.Document)
+        cur.setCharFormat(QTextCharFormat())
+        bf = cur.blockFormat(); bf.setAlignment(Qt.AlignmentFlag.AlignLeading); bf.setIndent(0)
+        cur.setBlockFormat(bf)
+        lst = cur.currentList()
+        if lst is not None:
+            lst.remove(cur.block())
+        self.body.setCurrentCharFormat(QTextCharFormat())
+        self.body.setFocus()
+        self._sync_format_bar()
+
+    def _sync_format_bar(self, *_a):
+        if not getattr(self, "_fmt_btns", None):
+            return
+        cf = self.body.currentCharFormat()
+        b = self._fmt_btns
+        b["bold"].setChecked(cf.fontWeight() >= QFont.Weight.DemiBold.value)
+        b["italic"].setChecked(cf.fontItalic())
+        b["underline"].setChecked(cf.fontUnderline() and not cf.isAnchor())
+        b["strike"].setChecked(cf.fontStrikeOut())
+        al = richtext.align_kind(self.body.alignment())
+        b["center"].setChecked(al == "center")
+        b["left"].setChecked(al == "left")
+        b["right"].setChecked(al == "")
+        lst = self.body.textCursor().currentList()
+        st = lst.format().style() if lst is not None else None
+        b["ul"].setChecked(st == QTextListFormat.Style.ListDisc)
+        b["ol"].setChecked(st == QTextListFormat.Style.ListDecimal)
+        ps = cf.fontPointSize()
+        idx = next((i for i, (_n, pt) in enumerate(self._SIZES) if pt and abs(pt - ps) < 0.5), 1)
+        self.size_combo.setCurrentIndex(idx)
 
     @staticmethod
     def _lbl(text):
@@ -687,7 +882,7 @@ class MailsTab(QWidget):
         ctx = dict(self._ctx(), fallback_name=first["name"] if first else "ישראל ישראלי")
         subj = mailer.render(self.subject.text(), rec, ctx)
         logo_url = QUrl.fromLocalFile(_logo_path()).toString() if _logo_path() else ""
-        body = mailer.html_body(mailer.render(self.body.toPlainText(), rec, ctx),
+        body = mailer.html_body(mailer.render(self._body_markup(), rec, ctx),
                                 self.chk_header.isChecked()).replace("src='cid:logo'", f"src='{logo_url}'")
         who = first["name"] if first else "נמען לדוגמה"
         self.lbl_preview_title.setText(f"כך זה ייראה אצל {who}")
@@ -715,10 +910,10 @@ class MailsTab(QWidget):
         t = next((x for x in self._templates if x["guid"] == guid), None)
         if t:
             self.subject.setText(t["subject"])
-            self.body.setPlainText(t["body"])
+            richtext.load_into(self.body, t["body"])
 
     def _save_template(self):
-        if not self.subject.text().strip() and not self.body.toPlainText().strip():
+        if not self.subject.text().strip() and not self.body.toPlainText().strip():  # noqa
             QMessageBox.information(self, "", "אין מה לשמור — כתוב נושא ותוכן קודם.")
             return
         cur = next((x for x in self._templates if x["guid"] == self._current_tpl_guid), None)
@@ -738,7 +933,7 @@ class MailsTab(QWidget):
                     return
                 guid = same["guid"]
         self._current_tpl_guid = db.upsert_mail_template(
-            name, self.subject.text(), self.body.toPlainText(), guid=guid)
+            name, self.subject.text(), self._body_markup(), guid=guid)
         self._load_templates()
 
     def _delete_template(self):
@@ -783,11 +978,11 @@ class MailsTab(QWidget):
 
     def _validate_message(self, subject: str | None = None, body: str | None = None) -> bool:
         subject = self.subject.text() if subject is None else subject
-        body = self.body.toPlainText() if body is None else body
+        body = self._body_markup() if body is None else body
         if not subject.strip():
             QMessageBox.warning(self, "", "חסר נושא להודעה.")
             return False
-        if not body.strip():
+        if not mailer.to_plain(body).strip():
             QMessageBox.warning(self, "", "ההודעה ריקה.")
             return False
         if not email_utils.is_configured():
@@ -806,8 +1001,9 @@ class MailsTab(QWidget):
         rec = self._recs.get(first["rec_id"]) if first and first.get("rec_id") is not None else None
         ctx = dict(self._ctx(), fallback_name=first["name"] if first else "ישראל ישראלי")
         subj = "[בדיקה] " + mailer.render(self.subject.text(), rec, ctx)
-        plain = mailer.render(self.body.toPlainText(), rec, ctx)
-        html = mailer.html_body(plain, self.chk_header.isChecked())
+        rendered = mailer.render(self._body_markup(), rec, ctx)
+        plain = mailer.to_plain(rendered)
+        html = mailer.html_body(rendered, self.chk_header.isChecked())
         attach = self._attachment or None
         logo = _logo_path() if self.chk_header.isChecked() else None
         # ברקע — חיבור לשרת (במיוחד מאחורי נטפרי) יכול לקחת דקות; המסך לא קופא
@@ -835,7 +1031,7 @@ class MailsTab(QWidget):
         # כך "שלח שוב לנכשלים" לא דורס את מה שהמפעיל כתב (גם כשהוא מבטל בחלון האישור).
         # v3.47: גם attachment/with_header מפורשים — שליחה-חוזרת עם הקובץ *המקורי*.
         subject = self.subject.text() if subject is None else subject
-        body = self.body.toPlainText() if body is None else body
+        body = self._body_markup() if body is None else body
         attachment = (self._attachment or "") if attachment is None else (attachment or "")
         with_header = self.chk_header.isChecked() if with_header is None else bool(with_header)
         if self._worker is not None or not self._validate_message(subject, body):
