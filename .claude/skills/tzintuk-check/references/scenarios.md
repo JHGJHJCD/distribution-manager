@@ -16,7 +16,7 @@
 | ו | סקר 77 ותשובות | `_CallbackWorker`, `merge_survey_answers`, `answer_windows`, `_refresh_answers`, `_auto_refresh_answers`, `answers_for_date` |
 | ז | הקלטה: TTS / העלאה / מאגר / בדיקה למנהל | `TtsDialog`, `LibraryDialog`, `upload_message_wav`, `run_test`, `_TestStatusDialog` |
 | ח | היסטוריה, ייצוא, משיכה מהשרת, שעה אישית | `answer_stats`, `best_hour`, `personal_hour`, `_sync_history`, `export_tzintuk_history_to_excel` |
-| ט | חיבור/שגיאות/רשת | `_http`, `_call`, `_DIAL_COMMANDS`, `_ERROR_HE`, `_run_blocking`, נפילה לשרת התאום |
+| ט | חיבור/שגיאות/רשת | `_http`, `_call`, `_DIAL_COMMANDS`, `_ERROR_HE`, `_run_blocking`, נפילה לשרת התאום  · בהגדרות: `_test_yemot_connection`/`_save_yemot_settings`/`_probe_yemot_chip` (כולם `_bg`, I50) · כלי חיצוני: סקיל `yemot-connect` (`connect.py`, קריאה בלבד) |
 
 ## ב. רשימת התרחישים — "מה קורה אם…"
 

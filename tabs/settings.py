@@ -792,9 +792,25 @@ class SettingsTab(QWidget):
         else:
             self.chip_sync.setText("●  סנכרון כבוי")
             self.chip_sync.setStyleSheet(_CHIP_QSS)
-        ym = yemot.is_configured()
-        self.chip_yemot.setText("●  ימות המשיח מחובר" if ym else "●  ימות המשיח לא חובר")
-        self.chip_yemot.setStyleSheet(_CHIP_GREEN if ym else _CHIP_AMBER)
+        # v3.49 — "מחובר" only after the server actually answered (a background
+        # GetSession, like the chip on the tzintukim screen since 3.22); typed
+        # credentials alone show "בודק…" until the probe returns.
+        if not yemot.is_configured():
+            self._ym_probe_ok = None
+            self.chip_yemot.setText("●  ימות המשיח לא חובר")
+            self.chip_yemot.setStyleSheet(_CHIP_AMBER)
+        else:
+            state = getattr(self, "_ym_probe_ok", None)
+            if state is None:
+                self.chip_yemot.setText("●  ימות המשיח — בודק חיבור…")
+                self.chip_yemot.setStyleSheet(_CHIP_QSS)
+                self._probe_yemot_chip()
+            elif state:
+                self.chip_yemot.setText("●  ימות המשיח מחובר")
+                self.chip_yemot.setStyleSheet(_CHIP_GREEN)
+            else:
+                self.chip_yemot.setText("●  ימות המשיח לא מגיב")
+                self.chip_yemot.setStyleSheet(_CHIP_RED)
         ml = email_utils.is_configured()
         if email_utils.google_connected():
             self.chip_mail.setText("●  Google מחובר")
@@ -802,6 +818,33 @@ class SettingsTab(QWidget):
             self.chip_mail.setText("●  מייל מוגדר" if ml else "●  מייל לא הוגדר")
         self.chip_mail.setStyleSheet(_CHIP_GREEN if ml else _CHIP_AMBER)
 
+
+    def _probe_yemot_chip(self):
+        """v3.49 — one background GetSession for the settings chip (never on
+        the UI thread; at most one probe in flight). Re-probed when the
+        credentials change (`_save_yemot_settings` resets `_ym_probe_ok`)."""
+        from utils import yemot
+        if getattr(self, "_ym_probing", False):
+            return
+        self._ym_probing = True
+
+        def _done(res):
+            self._ym_probing = False
+            self._ym_probe_ok = not isinstance(res, Exception)
+            self._refresh_header_chips()
+        worker = _BgWorker(yemot.session_info, self)
+        self._bg_workers = getattr(self, "_bg_workers", [])
+        self._bg_workers.append(worker)
+
+        def _finish(res):
+            try:
+                _done(res)
+            finally:
+                if worker in self._bg_workers:
+                    self._bg_workers.remove(worker)
+                worker.deleteLater()
+        worker.done.connect(_finish)
+        worker.start()
     def refresh(self):
         # Show the password masked with the RIGHT number of dots (matches the
         # real length) instead of a fixed 8. Length is recorded on login / change;
@@ -1484,30 +1527,44 @@ class SettingsTab(QWidget):
         if not silent and not password:
             QMessageBox.warning(self, "", "יש למלא סיסמה (או מפתח API) של ימות המשיח.")
             return
+        if (system != (db.get_setting(yemot.SET_SYSTEM) or "").strip()
+                or password != (db.get_setting(yemot.SET_PASSWORD) or "").strip()):
+            self._ym_probe_ok = None          # v3.49 — new credentials ⇒ re-probe the chip
         db.set_setting(yemot.SET_SYSTEM, system)
         db.set_setting(yemot.SET_PASSWORD, password)
         caller = self.ym_caller.text().strip()
         prev_caller = (db.get_setting(yemot.SET_CALLER_ID) or "").strip()
-        note = ""
-        if caller and caller != prev_caller and yemot.is_configured():
-            # v3.22 — the server honours only numbers approved for this line;
-            # a stranger's number would fail every send with error 120. Check
-            # it now (best effort) and keep the previous value when rejected.
-            with busy_cursor():
-                problem = yemot.caller_id_problem(caller)
-            if problem:
-                self.ym_caller.setText(prev_caller)
-                caller = prev_caller
-                QMessageBox.warning(self, "מספר מזוהה ביוצא",
-                                    problem + "\n\nהמספר לא נשמר; נשאר הערך הקודם.")
-                note = " (המספר המזוהה לא נשמר)"
-        db.set_setting(yemot.SET_CALLER_ID, caller)
         db.set_setting("gemini_api_key", self.ym_gemini_key.text().strip())
         self._save_survey_settings()      # v3.02 — labels + question text
         self._save_callback_settings(silent=True)   # v3.33 — callback server
         self._refresh_header_chips()
+        if caller and caller != prev_caller and yemot.is_configured():
+            # v3.22 — the server honours only numbers approved for this line;
+            # a stranger's number would fail every send with error 120.
+            # v3.49 — the check (GetCustomerData + GetApprovedCallerIDs, each
+            # with retry + twin host) runs OFF the UI thread: under busy_cursor
+            # it froze the window for minutes when NetFree/no-net swallowed
+            # the request. The new number is stored only once approved; until
+            # then the previous value stays.
+            def _after(problem):
+                if isinstance(problem, Exception):
+                    problem = ""            # network hiccup — server rejects a bad id at send (120)
+                if problem:
+                    self.ym_caller.setText(prev_caller)
+                    QMessageBox.warning(self, "מספר מזוהה ביוצא",
+                                        problem + "\n\nהמספר לא נשמר; נשאר הערך הקודם.")
+                    self.lbl_ym_status.setText("הפרטים נשמרו ✓ (המספר המזוהה לא נשמר)")
+                    return
+                db.set_setting(yemot.SET_CALLER_ID, caller)
+                if not silent:
+                    self.lbl_ym_status.setText(
+                        "הפרטים נשמרו ✓ — המספר המזוהה מאושר בקו. עכשיו לחץ \"בדוק חיבור\"")
+            self._bg(lambda: yemot.caller_id_problem(caller), _after,
+                     self.lbl_ym_status, "בודק את המספר המזוהה מול הקו…")
+            return
+        db.set_setting(yemot.SET_CALLER_ID, caller)
         if not silent:
-            self.lbl_ym_status.setText("הפרטים נשמרו ✓ — עכשיו לחץ \"בדוק חיבור\"" + note)
+            self.lbl_ym_status.setText("הפרטים נשמרו ✓ — עכשיו לחץ \"בדוק חיבור\"")
 
     # ── שרת המענה — חזרה-לצינתוק (v3.33) ──────────────────────────────────
 
@@ -1601,38 +1658,49 @@ class SettingsTab(QWidget):
         self._bg(cb.verify_extension, _done, self.lbl_cb_ext, "קורא את השלוחה מהקו…")
 
     def _test_yemot_connection(self):
+        """v3.49 — the whole probe (GetSession ×2, GetCustomerData,
+        GetApprovedCallerIDs — each with retry + twin host, up to ~40 s a
+        request) runs in a background worker; under busy_cursor a dead network
+        or a NetFree block froze the window ("לא מגיב") for minutes."""
         from utils import yemot
         self._save_yemot_settings(silent=True)
         if not yemot.is_configured():
             QMessageBox.warning(self, "בדיקת חיבור",
                                 "יש למלא מספר מערכת וסיסמה תחילה.")
             return
-        with busy_cursor():
+
+        def _probe():
+            yemot.check_connection()
+            msg = "החיבור לימות המשיח תקין ✓"
             try:
-                yemot.check_connection()
+                balance = yemot.get_balance()
+            except Exception:
                 balance = None
-                try:
-                    balance = yemot.get_balance()
-                except Exception:
-                    pass
-                ok, msg = True, "החיבור לימות המשיח תקין ✓"
-                if balance is not None:
-                    msg += f"\nיתרת יחידות במערכת: {balance:,.1f}"
-                try:                      # v3.22 — which caller-ids the line allows
-                    allowed = yemot.allowed_caller_ids()
-                    if allowed:
-                        msg += "\nמספרים מאושרים למספר מזוהה: " + ", ".join(allowed)
-                except Exception:
-                    pass
-            except yemot.YemotError as e:
-                ok, msg = False, str(e)
-            except Exception as e:
-                ok, msg = False, f"שגיאה לא צפויה: {e}"
-        self.lbl_ym_status.setText(("✓ " if ok else "✗ ") + msg.replace("\n", " · "))
-        if ok:
-            QMessageBox.information(self, "בדיקת חיבור", msg)
-        else:
-            QMessageBox.warning(self, "בדיקת חיבור", msg)
+            if balance is not None:
+                msg += f"\nיתרת יחידות במערכת: {balance:,.1f}"
+            try:                      # v3.22 — which caller-ids the line allows
+                allowed = yemot.allowed_caller_ids()
+                if allowed:
+                    msg += "\nמספרים מאושרים למספר מזוהה: " + ", ".join(allowed)
+            except Exception:
+                pass
+            return msg
+
+        def _done(res):
+            if isinstance(res, yemot.YemotError):
+                ok, msg = False, str(res)
+            elif isinstance(res, Exception):
+                ok, msg = False, f"שגיאה לא צפויה: {res}"
+            else:
+                ok, msg = True, res
+            self._ym_probe_ok = ok
+            self._refresh_header_chips()
+            self.lbl_ym_status.setText(("✓ " if ok else "✗ ") + msg.replace("\n", " · "))
+            if ok:
+                QMessageBox.information(self, "בדיקת חיבור", msg)
+            else:
+                QMessageBox.warning(self, "בדיקת חיבור", msg)
+        self._bg(_probe, _done, self.lbl_ym_status, "בודק חיבור לימות המשיח…")
 
     def _apply_font_percent(self):
         """Persist + apply the chosen UI text size to the WHOLE app right now

@@ -2662,6 +2662,76 @@ tab._run_blocking = _orig29["run_blocking"]; tab._push_list = _orig29["push"]
 tab._recording_ready = _orig29["rec_ready"]; tab._callback_ext_ready = _orig29["ext_ready"]
 tab._require_config = _orig29["require"]
 
+# ── 30. סקירה 15/9/2026 (ב) — חיבור לימות: "בדוק חיבור" ובדיקת המזוהה בהגדרות לא מקפיאים את המסך ──
+print("— חיבור לימות: הגדרות ברקע —")
+import tabs.settings as stmod
+_orig30 = {"info": stmod.QMessageBox.information, "warn": stmod.QMessageBox.warning,
+           "bg_start": stmod._BgWorker.start}
+stmod.QMessageBox.information = lambda *a, **k: None
+stmod.QMessageBox.warning = lambda *a, **k: None
+stmod._BgWorker.start = lambda self: None          # thread לא רץ ⇒ כל קריאה שנראית = על ה-UI
+stab = stmod.SettingsTab(None)
+db.set_setting(yemot.SET_SYSTEM, "0771234567")
+db.set_setting(yemot.SET_PASSWORD, "123456")
+db.set_setting(yemot.SET_CALLER_ID, "")
+stab.ym_system.setText("0771234567"); stab.ym_password.setText("123456"); stab.ym_caller.setText("")
+canned["GetSession"] = {"responseStatus": "OK", "units": 100}
+canned["GetCustomerData"] = {"responseStatus": "OK", "mainDid": "0771234567",
+                             "callerIds": [{"callerId": "0548434668"}]}
+# (א) "בדוק חיבור" — GetSession/GetCustomerData חייבים לרוץ ב-thread, לא תחת busy_cursor
+calls.clear()
+stab._test_yemot_connection()
+ok("'בדוק חיבור' לא קורא לשרת על ה-UI thread", not calls, [c[0] for c in calls])
+ok("…התווית מראה 'בודק'", "בודק" in stab.lbl_ym_status.text(), stab.lbl_ym_status.text())
+# ה-worker עצמו (כשירוץ) מחזיר את התוצאה המלאה — מריצים את run() ידנית
+_w = (getattr(stab, "_bg_workers", None) or [None])[-1]
+ok("…נפתח worker רקע", _w is not None)
+if _w is not None:
+    _w.run(); _app.processEvents()
+    ok("…בסיום: ✓ + יתרה + מספרים מאושרים", "✓" in stab.lbl_ym_status.text()
+       and "100" in stab.lbl_ym_status.text() and "0548434668" in stab.lbl_ym_status.text(),
+       stab.lbl_ym_status.text())
+    ok("…הקריאות יצאו רק בתוך ה-worker", [c[0] for c in calls][:2] == ["GetSession", "GetSession"]
+       or "GetSession" in [c[0] for c in calls], [c[0] for c in calls])
+# (ב) שגיאת רשת בבדיקה — הודעה בעברית, המסך לא נעול
+def _dead30(url, data):
+    raise urllib.error.URLError("timeout")
+yemot._TRANSPORT = _dead30
+stab._test_yemot_connection()
+_w = (getattr(stab, "_bg_workers", None) or [None])[-1]
+if _w is not None:
+    _w.run(); _app.processEvents()
+ok("רשת מתה — ✗ + הסבר בעברית", stab.lbl_ym_status.text().startswith("✗")
+   and "ימות" in stab.lbl_ym_status.text(), stab.lbl_ym_status.text())
+yemot._TRANSPORT = fake_transport
+# (ג) שמירת מספר-מזוהה חדש — הבדיקה מול הקו (GetCustomerData) גם היא ברקע
+calls.clear()
+stab.ym_caller.setText("0548434668")
+stab._save_yemot_settings()
+ok("שמירת מזוהה חדש לא קוראת לשרת על ה-UI thread", not calls, [c[0] for c in calls])
+_w = (getattr(stab, "_bg_workers", None) or [None])[-1]
+if _w is not None:
+    _w.run(); _app.processEvents()
+ok("…מזוהה מאושר נשמר אחרי הבדיקה ברקע", db.get_setting(yemot.SET_CALLER_ID) == "0548434668",
+   db.get_setting(yemot.SET_CALLER_ID))
+# מזוהה זר — נדחה, הערך הקודם נשאר
+stab.ym_caller.setText("0501112222")
+stab._save_yemot_settings()
+_w = (getattr(stab, "_bg_workers", None) or [None])[-1]
+if _w is not None:
+    _w.run(); _app.processEvents()
+ok("מזוהה לא-מאושר — לא נשמר, הקודם נשאר", db.get_setting(yemot.SET_CALLER_ID) == "0548434668"
+   and stab.ym_caller.text() == "0548434668", (db.get_setting(yemot.SET_CALLER_ID), stab.ym_caller.text()))
+# (ד) צ'יפ ימות בהגדרות — "מחובר" רק אחרי תשובה אמיתית מהשרת (כמו במסך הצינתוקים, 3.22)
+stab._refresh_header_chips()
+ok("צ'יפ לא אומר 'מחובר' לפני שהשרת ענה", "מחובר" not in stab.chip_yemot.text()
+   or getattr(stab, "_ym_probe_ok", None) is True, stab.chip_yemot.text())
+stmod.QMessageBox.information = _orig30["info"]; stmod.QMessageBox.warning = _orig30["warn"]
+stmod._BgWorker.start = _orig30["bg_start"]
+db.set_setting(yemot.SET_CALLER_ID, "")
+canned.pop("GetCustomerData", None)
+
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")

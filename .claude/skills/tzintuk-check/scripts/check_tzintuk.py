@@ -524,6 +524,22 @@ def run_tests() -> bool:
     return all_ok
 
 
+
+@lint("I50", "v3.49 — חיבור לימות בהגדרות ברקע: _test_yemot_connection ובדיקת המזוהה ב-_save_yemot_settings בלי busy_cursor (דרך _bg); הצ'יפ 'מחובר' רק אחרי probe (_ym_probe_ok); connect.py עם גדר חיוג")
+def _(y, t, test, rel):
+    st = _read("tabs/settings.py")
+    tst = _func_body(st, "_test_yemot_connection")
+    sav = _func_body(st, "_save_yemot_settings")
+    chips = _func_body(st, "_refresh_header_chips")
+    okk = tst and "with busy_cursor" not in tst and "self._bg(" in tst
+    okk = okk and "with busy_cursor" not in sav and "self._bg(" in sav and "caller_id_problem" in sav
+    okk = okk and "_ym_probe_ok" in chips and 'is_configured()\n        self.chip_yemot.setText("●  ימות המשיח מחובר" if ym' not in chips
+    okk = okk and "def _probe_yemot_chip" in st
+    con = _read(".claude/skills/yemot-connect/scripts/connect.py")
+    okk = okk and "yemot._call = _guard" in con and "_DIAL_COMMANDS" in con and "UploadPhoneList" in con
+    okk = okk and "'בדוק חיבור' לא קורא לשרת על ה-UI thread" in test
+    return bool(okk), ""
+
 if __name__ == "__main__":
     args = set(sys.argv[1:])
     ok = True
