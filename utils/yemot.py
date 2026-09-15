@@ -1887,6 +1887,27 @@ def _report_entries(camp: dict) -> list:
     return [e for e in entries or [] if isinstance(e, dict)]
 
 
+def merge_with_seed(seed: list, reported: list) -> list:
+    """v3.48 — the final report never DROPS a number the campaign was created
+    with. The server's status answer is authoritative for every number it
+    lists; a seeded number it does not mention (an empty/partial answer, a
+    number the server silently rejected, or one a STOPPED campaign never
+    reached and no longer reports) keeps its seed row ('pending' = not rung),
+    so it stays in the record, in "שלח שוב לנכשלים" after a stop, and in the
+    per-number survey windows — instead of vanishing from the history.
+    Pure — unit-tested."""
+    out = [e for e in reported or [] if isinstance(e, dict)]
+    seen = {normalize_phone(e.get("phone")) or str(e.get("phone") or "") for e in out}
+    for e in seed or []:
+        if not isinstance(e, dict):
+            continue
+        p = normalize_phone(e.get("phone")) or str(e.get("phone") or "")
+        if p and p not in seen:
+            seen.add(p)
+            out.append(dict(e))
+    return out
+
+
 def answers_for_date(dist_date: str) -> dict:
     """{phone: '1'/'2'/'3'} for the distribution date, from the synced campaign
     reports — the newest campaign's answer wins when a number was rung twice."""

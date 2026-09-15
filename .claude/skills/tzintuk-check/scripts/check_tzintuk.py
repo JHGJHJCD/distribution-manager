@@ -123,10 +123,12 @@ def _(y, t, test, rel):
     return "find_scheduled_by_template" in body and 'find_scheduled("")' not in body, ""
 
 
-@lint("I11", "ציור תוצאות רק דרך _results_belong_here ב-_on_tick וב-_on_cb_tick")
+@lint("I11", "ציור תוצאות רק דרך _results_belong_here ב-_on_tick (דרך _after_campaign_end, v3.48) וב-_on_cb_tick")
 def _(y, t, test, rel):
-    bad = [n for n in ("_on_tick", "_on_cb_tick")
+    bad = [n for n in ("_after_campaign_end", "_on_cb_tick")
            if "_results_belong_here(" not in _func_body(t, n, sig_hint="worker")]
+    if "self._after_campaign_end(worker)" not in _func_body(t, "_on_tick", sig_hint="worker"):
+        bad.append("_on_tick")
     return not bad, ", ".join(bad)
 
 
@@ -347,6 +349,38 @@ def _(y, t, test, rel):
            and "continue" in body)
     okk = okk and "fetch ריק לא מוחק תשובה שכבר נרשמה" in test
     okk = okk and "ריאטריביושן נשמר" in test
+    return okk, ""
+
+
+@lint("I47", "v3.48 — _send רושם את הרשומה ב-DB לפני הדחיפה לשרת המענה (_push_list אחרי add_tzintuk_campaign, פעם אחת); הבדיקה מכסה")
+def _(y, t, test, rel):
+    body = _func_body(t, "_send", sig_hint="self)")
+    i_add = body.find("db.add_tzintuk_campaign(")
+    i_push = body.find("self._push_list(")
+    okk = 0 <= i_add < i_push and body.count("self._push_list(") == 1
+    okk = okk and "בזמן הדחיפה לשרת המענה הרשומה כבר רשומה ב-DB" in test
+    return okk, f"add@{i_add} push@{i_push}"
+
+
+@lint("I48", "v3.48 — הדוח הסופי לא מאבד מספר שנזרע: yemot.merge_with_seed קיים ומשמש את _on_tick לפני סימון stopped")
+def _(y, t, test, rel):
+    tick = _func_body(t, "_on_tick", sig_hint="worker=None")
+    okk = "def merge_with_seed(" in y and "yemot.merge_with_seed(" in tick
+    okk = okk and tick.find("yemot.merge_with_seed(") < tick.find('e["stopped"] = True')
+    okk = okk and "דוח ריק מהשרת — המספרים שנזרעו נשארים ברשומה" in test
+    return okk, ""
+
+
+@lint("I49", "v3.48 — המעקב מכבד את הרשומה: 'stopping'/'done' מהמחשב השני נקלטים ב-_on_tick; שגיאת-שרת קבועה (permanent) לא מתחדשת כל דקה (_dead_polls)")
+def _(y, t, test, rel):
+    tick = _func_body(t, "_on_tick", sig_hint="worker=None")
+    done = _func_body(t, "_on_worker_done")
+    okk = ('camp.get("status") == "done"' in tick and 'camp.get("status") == "stopping"' in tick
+           and "worker.stopped_at = " in tick)
+    okk = okk and "self.permanent" in _class_body(t, "_PollWorker")
+    okk = okk and "permanent" in done and "_dead_polls.add(" in done
+    okk = okk and "in self._dead_polls" in _func_body(t, "_maybe_resume_tracking")
+    okk = okk and "'stopping' מהמחשב השני — המעקב שלנו מאמץ stopped_at" in test
     return okk, ""
 
 

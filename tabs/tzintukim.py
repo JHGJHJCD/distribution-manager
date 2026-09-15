@@ -88,6 +88,7 @@ class _PollWorker(QThread):
         self._stop = False
         self.timed_out = False            # poll budget ran out before the campaign ended
         self.failed = False               # gave up on repeated network errors
+        self.permanent = False            # v3.48 — …because the server itself rejects the id
         self.stopped_at = 0.0             # v3.23 — when "עצור שליחה" was accepted by the server
 
     def stop(self):
@@ -141,6 +142,12 @@ class _PollWorker(QThread):
                 errors += 1
                 if errors >= 5:
                     self.failed = True
+                    # v3.48 — the SERVER answered with an error (unknown campaign
+                    # id, wrong password…): retrying every minute for a week,
+                    # with the send buttons locked 40 s of every 100, helps no
+                    # one. A network/filter failure (-1/-3) stays transient.
+                    self.permanent = (isinstance(e, yemot.YemotError)
+                                      and int(getattr(e, "code", 0) or 0) > 0)
                     self.tick.emit(e)
                     return
                 time.sleep(8)
@@ -1437,6 +1444,7 @@ class TzintukimTab(QWidget):
         # would otherwise "belong" to whatever standalone list is loaded now.
         self._list_guids = set()
         self._chain_next = False  # the poll worker finished cleanly → look for the next due send
+        self._dead_polls = set()  # v3.48 — record guids whose campaign id the server rejects (this run)
         self._sched_checker = None   # worker probing the server for due schedules
         self._batch = None        # #9hgvi: past-distribution batch loaded as list
         self._free = None         # #1/9: standalone list [(phone, name), …]
@@ -2874,29 +2882,37 @@ class TzintukimTab(QWidget):
             QMessageBox.warning(self, "צינתוקים", f"השליחה נכשלה: {e}")
             self._update_metrics()
             return
-        # v3.33 — the dial went out; now hand this week's list to our callback
-        # server (off the UI thread, best effort — _push_week_list never raises,
-        # the families were already rung and a push failure must not undo that).
-        self._push_list(dist_date, phones, "הצינתוק יצא", mode=dlg.cb_mode or "")
+        # v3.48 — the dial went out: RECORD IT FIRST. The callback-server push
+        # below spins an event loop for up to ~10 s; a close/crash (or a sync
+        # refresh) inside it used to leave a real send with no record at all —
+        # blind double-send guard, no tracking, nothing in the history.
         from utils import sync
         name = self._campaign_name()
         sent_iso = datetime.now(timezone.utc).isoformat()   # survey answers count from now
+        cid = str(res.get("campaignId") or "")
+        total = int(res.get("entriesCount") or len(phones))
         if classic:
             # v2.96 — קלאסי: אין מענה לצלצול עצמו, אבל עוקבים חי אחרי מי
             # שמתקשר חזרה לקו; התשובה בסקר (77) נקראת מקובץ הנתונים של
             # השלוחה. לימות אין יומן שיחות עבר, לכן מעקב-החזרה חי בלבד.
-            tracker = yemot.CallbackTracker(phones)
             guid = db.add_tzintuk_campaign(
-                "צינתוק קלאסי — " + name, dist_date, template_id,
-                str(res.get("campaignId") or ""),
-                int(res.get("entriesCount") or len(phones)),
+                "צינתוק קלאסי — " + name, dist_date, template_id, cid, total,
                 device=sync.device_name() or "", status="sending")
             db.update_tzintuk_campaign(
                 guid, 0, 0, "sending",
-                json.dumps(tracker.entries(), ensure_ascii=False))
-            self._active_guid = guid
-            self._list_guids.add(guid)
-            self._refresh_history()
+                json.dumps(yemot.CallbackTracker(phones).entries(), ensure_ascii=False))
+        else:
+            guid = db.add_tzintuk_campaign(name, dist_date, template_id, cid, total,
+                                           device=sync.device_name() or "")
+            db.update_tzintuk_campaign(guid, 0, 0, "sending", self._seed_json(phones))
+        self._active_guid = guid
+        self._list_guids.add(guid)
+        self._refresh_history()
+        # v3.33 — hand this week's list to our callback server (off the UI
+        # thread, best effort — _push_week_list never raises: the families
+        # were already rung and a push failure must not undo that).
+        self._push_list(dist_date, phones, "הצינתוק יצא", mode=dlg.cb_mode or "")
+        if classic:
             if res.get("classic_fallback"):
                 ring_line = ("⚠ שירות הצינתוק אינו פעיל בקו, לכן נשלח צלצול קצר "
                              f"({yemot.CLASSIC_RING_SECONDS} שניות) — מי שמספיק לענות "
@@ -2912,16 +2928,7 @@ class TzintukimTab(QWidget):
                 guid, phones, time.time() + yemot.CLASSIC_TRACK_SECONDS,
                 since_iso=sent_iso)
             return
-        self._active_guid = db.add_tzintuk_campaign(
-            name, dist_date, template_id,
-            str(res.get("campaignId") or ""),
-            int(res.get("entriesCount") or len(phones)),
-            device=sync.device_name() or "")
-        db.update_tzintuk_campaign(self._active_guid, 0, 0, "sending",
-                                   self._seed_json(phones))
-        self._list_guids.add(self._active_guid)
-        self._refresh_history()
-        self._start_tracking(str(res.get("campaignId") or ""), len(phones), sent_iso)
+        self._start_tracking(cid, len(phones), sent_iso)
 
     def _publish_to_line(self):
         """#kx6wd — copy the current campaign recording into the line's central
@@ -3645,6 +3652,33 @@ class TzintukimTab(QWidget):
             self.lbl_prog.setText("החיבור למעקב נכשל — הקמפיין ממשיך לרוץ בימות; "
                                   "התוצאות יתעדכנו בכניסה הבאה ללשונית.")
             return
+        guid = getattr(worker, "guid", "") or self._active_guid
+        camp = db.get_tzintuk_campaign(guid) if guid else None
+        if worker is not None and camp is not None and not st.get("finished"):
+            # v3.48 — the RECORD may have moved on through the sync while our
+            # poll knows nothing: the other computer stopped the send
+            # ('stopping') or finished tracking it ('done'). Until now this
+            # poll went on for its whole hour with the buttons locked (a
+            # stopped campaign never reports 'finished' on the server).
+            if camp.get("status") == "done":
+                self._retire_trackers()
+                self.progress.setRange(0, max(1, int(camp.get("total") or 0)))
+                self.progress.setValue(int(camp.get("total") or 0))
+                self.lbl_prog.setText(
+                    f"הקמפיין נסגר מהמחשב השני ✓ — {int(camp.get('delivered') or 0)} "
+                    f"קיבלו את ההודעה, {int(camp.get('failed') or 0)} נכשלו. "
+                    f"התשובות בסקר (הקשה {yemot.SURVEY_EXT}) ממשיכות להתעדכן — "
+                    "כפתור \"רענן תשובות\" בהיסטוריה.")
+                self._after_campaign_end(worker)
+                self._update_metrics()
+                QTimer.singleShot(0, self._maybe_resume_tracking)   # a smart send's next group
+                return
+            if camp.get("status") == "stopping" and not getattr(worker, "stopped_at", 0.0):
+                at = yemot._parse_since(camp.get("status_ts") or "")
+                worker.stopped_at = at.timestamp() if at is not None else time.time()
+                self.lbl_prog.setText("⛔ השליחה נעצרה בשרת (מהמחשב השני) — "
+                                      "ממתין לתוצאות של מי שכבר צולצל…")
+                self._update_metrics()          # a stopped send no longer locks the buttons
         done = st["delivered"] + st["failed"]
         self.progress.setRange(0, max(1, st["total"]))
         self.progress.setValue(min(done, st["total"]))
@@ -3655,7 +3689,12 @@ class TzintukimTab(QWidget):
         # The DB (and the sync journal) get ONE update — at the end. Journaling
         # every 4-second tick would spam the shared Drive folder for nothing;
         # the live numbers live in this strip until then.
-        guid = getattr(worker, "guid", "") or self._active_guid
+        if st.get("finished") and camp is not None:
+            # v3.48 — a number the server's final answer does not mention (an
+            # empty/partial answer, a stopped campaign that no longer lists the
+            # un-dialed ones) keeps its seeded row instead of vanishing
+            st["entries"] = yemot.merge_with_seed(yemot._report_entries(camp),
+                                                  st.get("entries") or [])
         if st.get("finished") and st.get("stopped"):
             # v3.25 — mark the numbers the stopped send never reached: they
             # are offered for the resend, and never judged "לא הגיב"
@@ -3674,39 +3713,47 @@ class TzintukimTab(QWidget):
                 f"{head} {st['delivered']} קיבלו את ההודעה, "
                 f"{st['failed']} נכשלו. התשובות בסקר (הקשה {yemot.SURVEY_EXT}) "
                 "ממשיכות להתעדכן — כפתור \"רענן תשובות\" בהיסטוריה.")
-            if self._results_belong_here(worker):
-                self._last_final = True
-                # A smart send / resend = several campaigns on the SAME list —
-                # the table shows every finished campaign of this list merged,
-                # the newest CAMPAIGN winning per number (v3.20: by send time,
-                # not by the order the trackers happened to finish — a tracker
-                # retired by a second send and resumed afterwards used to
-                # overwrite the second send's results with the first's).
-                self._last_entries = self._list_results()
-                # "Resend to the failed" covers EVERY group of this list (a smart
-                # send finishes hour by hour); a number that succeeded in a later
-                # group is no longer failed (newest wins in the merge).
-                # v3.25 — after "עצור שליחה" the numbers never reached are
-                # offered for the resend too (that is why the operator stopped)
-                self._last_failed = [e for e in self._last_entries
-                                     if not e.get("ok")
-                                     and (e.get("failed") or e.get("stopped"))]
-                self._last_failed_date = getattr(worker, "dist_date", "") or ""
-                n_unrung = sum(1 for e in self._last_failed if e.get("stopped"))
-                self.btn_resend.setText(
-                    f"🔄 שלח שוב ל-{len(self._last_failed)} שנכשלו"
-                    + (f" / לא צולצלו" if n_unrung else ""))
-                self.btn_resend.setVisible(bool(self._last_failed))
-                self._apply_results_to_table(self._last_entries, final=True)
-            self._refresh_history()
-            # The confirmation badges on the "חלוקה ורישום" list come from the
-            # stored report — repaint it so they appear without a tab switch.
-            gt = getattr(self.main, "group_tab", None)
-            if gt is not None:
-                try:
-                    gt._populate()
-                except Exception:
-                    pass
+            self._after_campaign_end(worker)
+
+    def _after_campaign_end(self, worker):
+        """The screen after a tracked campaign's record is final (our own poll
+        finished it, or the other computer closed it): the merged per-number
+        results of this list, the "שלח שוב" offer, the history and the tags on
+        the distribution list. Results paint only when the campaign belongs
+        to the list on screen (v3.17)."""
+        if self._results_belong_here(worker):
+            self._last_final = True
+            # A smart send / resend = several campaigns on the SAME list —
+            # the table shows every finished campaign of this list merged,
+            # the newest CAMPAIGN winning per number (v3.20: by send time,
+            # not by the order the trackers happened to finish — a tracker
+            # retired by a second send and resumed afterwards used to
+            # overwrite the second send's results with the first's).
+            self._last_entries = self._list_results()
+            # "Resend to the failed" covers EVERY group of this list (a smart
+            # send finishes hour by hour); a number that succeeded in a later
+            # group is no longer failed (newest wins in the merge).
+            # v3.25 — after "עצור שליחה" the numbers never reached are
+            # offered for the resend too (that is why the operator stopped)
+            self._last_failed = [e for e in self._last_entries
+                                 if not e.get("ok")
+                                 and (e.get("failed") or e.get("stopped"))]
+            self._last_failed_date = getattr(worker, "dist_date", "") or ""
+            n_unrung = sum(1 for e in self._last_failed if e.get("stopped"))
+            self.btn_resend.setText(
+                f"🔄 שלח שוב ל-{len(self._last_failed)} שנכשלו"
+                + (f" / לא צולצלו" if n_unrung else ""))
+            self.btn_resend.setVisible(bool(self._last_failed))
+            self._apply_results_to_table(self._last_entries, final=True)
+        self._refresh_history()
+        # The confirmation badges on the "חלוקה ורישום" list come from the
+        # stored report — repaint it so they appear without a tab switch.
+        gt = getattr(self.main, "group_tab", None)
+        if gt is not None:
+            try:
+                gt._populate()
+            except Exception:
+                pass
 
     _ANSWER_STYLE = {"1": ("✓", "#166534"), "2": ("✗", "#b91c1c"), "3": ("?", "#b45309")}
 
@@ -3786,6 +3833,29 @@ class TzintukimTab(QWidget):
         self._worker = None
         self._update_metrics()
         if w is not None and getattr(w, "failed", False):
+            if getattr(w, "permanent", False):
+                # v3.48 — the SERVER rejects this campaign id: no minute-by-minute
+                # retry (that locked the send buttons 40 s of every 100 for a
+                # week). Skip the record for this run; an old one (the campaign
+                # is long over anyway) closes with unknown results — its
+                # seeded numbers stay for the survey refresh.
+                guid = getattr(w, "guid", "") or self._active_guid
+                camp = db.get_tzintuk_campaign(guid) if guid else None
+                if guid:
+                    self._dead_polls.add(guid)
+                sent = timefmt.to_israel((camp or {}).get("sent_at") or "")
+                old = sent is not None and time.time() - sent.timestamp() > 2 * 3600
+                if camp and camp.get("status") in ("sending", "stopping") and old:
+                    db.update_tzintuk_campaign(
+                        guid, int(camp.get("delivered") or 0),
+                        int(camp.get("failed") or 0), "done", camp.get("report_json") or "")
+                    self._refresh_history()
+                self.lbl_prog.setText(
+                    "השרת של ימות דוחה את המעקב אחרי הקמפיין הזה (המזהה לא מוכר לו) — "
+                    "המעקב הופסק. תשובות הסקר עדיין ייקלטו ב\"רענן תשובות\"."
+                    + ("" if old else " ינוסה שוב בהפעלה הבאה של התוכנה."))
+                QTimer.singleShot(0, self._maybe_resume_tracking)   # other due records
+                return
             # The poll gave up on repeated network errors; the record is still
             # 'sending'. Try again in a minute instead of leaving "המעקב נכשל"
             # on screen until the operator happens to revisit the tab.
@@ -3965,6 +4035,8 @@ class TzintukimTab(QWidget):
             sent = timefmt.to_israel(c.get("sent_at") or "")
             if sent is not None and sent < cutoff:
                 break
+            if c.get("guid") in self._dead_polls:
+                continue                 # v3.48 — the server rejects its id (this run)
             classic = (c.get("name") or "").startswith("צינתוק קלאסי")
             if classic and not self._is_own_campaign(c):
                 # v3.18 (user decision 5/9/2026): only the computer that SENT a

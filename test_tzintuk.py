@@ -2524,6 +2524,144 @@ _e28c = [{"phone": "0521234567", "answer": "", "answer_at": ""}]
 _m28c, _chg28c = yemot.merge_survey_answers(_e28c, [], since_iso="2026-09-16T10:00:00+00:00")
 ok("fetch ריק על 'נבדק ללא תשובה' — בלי שינוי", _chg28c is False, _chg28c)
 
+# ── 29. סקירה 15/9/2026 (v3.48) — רישום לפני הדחיפה · דוח לא מאבד מספרים · עצירה/סגירה מהמחשב השני · מעקב על מזהה שהשרת דוחה ──
+print("— סקירה 15/9: רישום לפני דחיפה, דוח שלם, מצב מהמחשב השני, מזהה שהשרת דוחה —")
+_close_all(); _calls.clear(); _msgs.clear()
+tab._retire_trackers()
+tab._free = None; tab._batch = None; tab._list_guids = set(); tab._list_loaded = True
+tab._rows = [{"rec": {"id": 7001, "full_name": "משפחה א"}, "phones": ["0521111111"],
+              "send": ["0521111111"], "checked": True, "why": "", "manual": False}]
+tab._populate()
+_orig29 = {"run_campaign": yemot.run_campaign, "ensure_template": yemot.ensure_template,
+           "info": tzmod.QMessageBox.information, "warn": tzmod.QMessageBox.warning,
+           "question": tzmod.QMessageBox.question, "send_exec": tzmod._SendModeDialog.exec,
+           "run_blocking": tab._run_blocking, "push": tab._push_list,
+           "rec_ready": tab._recording_ready, "ext_ready": tab._callback_ext_ready,
+           "require": tab._require_config, "sleep": tzmod.time.sleep}
+yemot.ensure_template = lambda: "1117319"
+yemot.run_campaign = lambda phones, *a, **k: (_calls.append(("run", dict(phones), k))
+                                              or {"campaignId": "c-29", "entriesCount": len(phones)})
+tzmod.QMessageBox.information = staticmethod(lambda *a, **k: _msgs.append(str(a[2]) if len(a) > 2 else "") or 0)
+tzmod.QMessageBox.warning = staticmethod(lambda *a, **k: _msgs.append(str(a[2]) if len(a) > 2 else "") or 0)
+tzmod.QMessageBox.question = staticmethod(lambda *a, **k: tzmod.QMessageBox.StandardButton.Yes)
+tab._run_blocking = lambda fn, text="": fn()
+tab._recording_ready = lambda title: True
+tab._callback_ext_ready = lambda title: True
+tab._require_config = lambda: True
+tzmod._SendModeDialog.exec = lambda self: (setattr(self, "mode", "voice") or 1)
+# (א) בזמן הדחיפה לשרת המענה (עד 10 שנ', לולאת אירועים פתוחה) הרשומה כבר חייבת
+#     להיות ב-DB — אחרת סגירה/קריסה באמצע = שליחה בלי רישום, ושומר-הכפילות עיוור.
+_seen_push = []
+tab._push_list = lambda dist_date, phones, what, **k: _seen_push.append(
+    (db.tzintuk_campaign_for_date(dist_date), dict(phones)))
+tab._send()
+ok("השליחה יצאה פעם אחת", [c[0] for c in _calls] == ["run"], str(_calls))
+ok("בזמן הדחיפה לשרת המענה הרשומה כבר רשומה ב-DB",
+   _seen_push and _seen_push[0][0] is not None
+   and _seen_push[0][0].get("guid") == tab._active_guid
+   and _seen_push[0][0].get("status") == "sending", str(_seen_push))
+_g29 = tab._active_guid
+_w29 = tab._worker
+ok("המעקב נפתח על הרשומה החדשה", _w29 is not None and getattr(_w29, "guid", "") == _g29)
+# (ב) הדוח הסופי מהשרת השמיט מספר שנזרע (או חזר ריק) — המספר לא נעלם מהרשומה
+tab._on_tick({"finished": True, "total": 1, "delivered": 0, "failed": 0, "pending": 0,
+              "entries": []}, _w29)
+_e29 = {e["phone"]: e for e in yemot._report_entries(_camp(_g29))}
+ok("דוח ריק מהשרת — המספרים שנזרעו נשארים ברשומה",
+   "0521111111" in _e29 and _e29["0521111111"].get("status") == "pending", _e29)
+ok("…ולא נשפט 'לא הגיב' (לא צולצל)", not yemot.was_rung(_e29.get("0521111111", {"ok": True})))
+tab._retire_trackers()
+_close_all()
+_gS29 = db.add_tzintuk_campaign("חלוקה ש", week, "1117319", "c-29b", 3)
+db.update_tzintuk_campaign(_gS29, 0, 0, "sending", tab._seed_json(
+    {"0521111111": "א", "0522222222": "ב", "0523333333": "ג"}))
+tab._active_guid = _gS29
+tab._start_tracking("c-29b", 3, "")
+_wS29 = tab._worker
+_wS29.stopped_at = _time.time() - 1
+tab._on_tick(_wS29._apply_stop({"finished": True, "total": 3, "delivered": 1, "failed": 1, "pending": 0,
+              "entries": [{"phone": "0521111111", "ok": True, "status": "done"},
+                          {"phone": "0522222222", "ok": False, "failed": True, "status": "no_answer"}]}),
+             _wS29)
+_e29b = {e["phone"]: e for e in yemot._report_entries(_camp(_gS29))}
+ok("שליחה שנעצרה — מספר שהשרת השמיט מהדוח מסומן 'לא צולצל'",
+   _e29b.get("0523333333", {}).get("stopped") is True and len(_e29b) == 3, _e29b)
+ok("…ומוצע ב'שלח שוב לנכשלים' יחד עם הנכשל",
+   {"0522222222", "0523333333"} <= {e["phone"] for e in tab._last_failed}
+   and "0521111111" not in {e["phone"] for e in tab._last_failed}, tab._last_failed)
+ok("…ומי שקיבל נשאר עם תוצאת השרת", _e29b["0521111111"].get("ok") is True)
+tab._retire_trackers()
+_close_all()
+# (ג) המחשב השני עצר את השליחה ('stopping' הגיע בסנכרון) — המעקב שלנו מאמץ
+#     את העצירה (הכפתורים נפתחים, הסיום אחרי החסד) במקום לסקור 60 דק' ולנעול
+_gP29 = db.add_tzintuk_campaign("חלוקה פ", week, "1117319", "c-29c", 1, device="אחר")
+db.update_tzintuk_campaign(_gP29, 0, 0, "sending", tab._seed_json({"0521111111": "א"}))
+tab._active_guid = _gP29
+tab._start_tracking("c-29c", 1, "")
+_wP29 = tab._worker
+ok("מעקב חי נועל את כפתור השליחה", not tab.btn_send.isEnabled())
+db.update_tzintuk_campaign(_gP29, 0, 0, "stopping", tab._seed_json({"0521111111": "א"}))   # מהמחשב השני
+tab._on_tick({"finished": False, "total": 1, "delivered": 0, "failed": 0, "pending": 1,
+              "entries": [{"phone": "0521111111", "status": "pending"}]}, _wP29)
+ok("'stopping' מהמחשב השני — המעקב שלנו מאמץ stopped_at", _wP29.stopped_at > 0, _wP29.stopped_at)
+ok("…והכפתורים נפתחים", tab.btn_send.isEnabled())
+ok("…והרצועה אומרת שהשליחה נעצרה", "נעצרה" in tab.lbl_prog.text(), tab.lbl_prog.text())
+# (ד) המחשב השני סגר את הרשומה ('done') — המעקב שלנו מסתיים מיד עם התוצאות שלו
+db.update_tzintuk_campaign(_gP29, 1, 0, "done", json.dumps(
+    [{"phone": "0521111111", "ok": True, "status": "done", "answer": "1"}], ensure_ascii=False))
+tab._on_tick({"finished": False, "total": 1, "delivered": 0, "failed": 0, "pending": 1,
+              "entries": [{"phone": "0521111111", "status": "pending"}]}, _wP29)
+ok("'done' מהמחשב השני — המעקב שלנו נסגר", tab._worker is None)
+ok("…הרשומה לא נדרסה (התוצאות של המחשב השני נשמרו)",
+   _camp(_gP29)["status"] == "done" and _camp(_gP29)["delivered"] == 1, _camp(_gP29))
+_t29 = tab.table.item(0, 3).text() if tab.table.item(0, 3) else ""
+ok("…והטבלה מציגה את התשובה שנקלטה שם", _t29.startswith("✓"), _t29)
+_close_all()
+# (ה) השרת דוחה את מזהה הקמפיין (שגיאת-שרת, לא רשת) — המעקב לא מתחדש כל דקה
+#     עם כפתורים נעולים; רשומה ותיקה נסגרת
+tzmod.time.sleep = lambda s: None
+_gD29 = db.add_tzintuk_campaign("חלוקה ד", week, "1117319", "c-dead", 1,
+                                sent_at=(datetime.now(_tz.utc) - _td(hours=3)).isoformat())
+db.update_tzintuk_campaign(_gD29, 0, 0, "sending", tab._seed_json({"0521111111": "א"}))
+tab._active_guid = _gD29
+tab._start_tracking("c-dead", 1, "")
+_wD29 = tab._worker
+_gcs = yemot.get_campaign_status
+yemot.get_campaign_status = lambda cid: (_ for _ in ()).throw(yemot.YemotError("הקמפיין לא נמצא", 100))
+_wD29.run()
+yemot.get_campaign_status = _gcs
+ok("5 שגיאות-שרת — המעקב נכנע ומסומן קבוע", _wD29.failed and getattr(_wD29, "permanent", False))
+tab._on_worker_done()
+ok("…המזהה לא ינוסה שוב בהפעלה הזו", _gD29 in tab._dead_polls)
+ok("…רשומה בת 3 שעות נסגרת (התוצאות לא ידועות, המספרים נשמרים)",
+   _camp(_gD29)["status"] == "done" and "0521111111" in [e["phone"] for e in yemot._report_entries(_camp(_gD29))],
+   _camp(_gD29))
+ok("…והכפתורים נפתחים", tab.btn_send.isEnabled())
+tab._maybe_resume_tracking()
+ok("…ו-_maybe_resume_tracking לא פותח אותו מחדש", tab._worker is None)
+# שגיאת רשת (-1) נשארת זמנית — מתחדשת כרגיל
+_gN29 = db.add_tzintuk_campaign("חלוקה נ", week, "1117319", "c-net", 1)
+db.update_tzintuk_campaign(_gN29, 0, 0, "sending", tab._seed_json({"0521111111": "א"}))
+tab._active_guid = _gN29
+tab._start_tracking("c-net", 1, "")
+_wN29 = tab._worker
+yemot.get_campaign_status = lambda cid: (_ for _ in ()).throw(yemot.YemotError("אין חיבור", -1))
+_wN29.run()
+yemot.get_campaign_status = _gcs
+ok("שגיאת רשת — לא 'קבוע'", _wN29.failed and not getattr(_wN29, "permanent", False))
+tab._on_worker_done()
+ok("…הרשומה נשארת 'sending' לחידוש", _camp(_gN29)["status"] == "sending" and _gN29 not in tab._dead_polls)
+tab._retire_trackers()
+tab._dead_polls.clear()
+_close_all(); _calls.clear(); _msgs.clear()
+tzmod.time.sleep = _orig29["sleep"]
+yemot.run_campaign = _orig29["run_campaign"]; yemot.ensure_template = _orig29["ensure_template"]
+tzmod.QMessageBox.information = _orig29["info"]; tzmod.QMessageBox.warning = _orig29["warn"]
+tzmod.QMessageBox.question = _orig29["question"]; tzmod._SendModeDialog.exec = _orig29["send_exec"]
+tab._run_blocking = _orig29["run_blocking"]; tab._push_list = _orig29["push"]
+tab._recording_ready = _orig29["rec_ready"]; tab._callback_ext_ready = _orig29["ext_ready"]
+tab._require_config = _orig29["require"]
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")
