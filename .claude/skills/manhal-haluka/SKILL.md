@@ -124,28 +124,11 @@ the manual chain — same result, step by step:
 Give one plain-Hebrew release note: what changed and what it gives the user. Update
 `דיווח_תקלות.html` if the version/structure changed (see memory `reference-bug-report-file`).
 
-## 5. Talking to the kupa manager (feature requests / follow-up questions)
+## 5. Talking to the kupa manager (Ron, `ka230846@gmail.com`)
 
-The manager of the kupa ("קופה של צדקה נוף הגליל") sends requests by e-mail to Yehuda from
-**`ka230846@gmail.com`** (short, one-line asks such as "שיהיה אופציה לסמן נתמך חגים"). When Yehuda
-says "שלח לו" / "תשאל אותו" / "תענה לו במייל":
-
-1. Find the original thread: `mcp__gmail__search_emails` with a quoted phrase from the request
-   (e.g. `"נתמך חגים" newer_than:14d`) → note the message ID (= thread ID for a one-mail thread).
-2. Reply **in that thread** with `mcp__gmail__send_email`: `to=["ka230846@gmail.com"]`,
-   `subject="Re: <original subject>"`, `threadId` + `inReplyTo` = the message ID.
-   **Always HTML + RTL** — plain-text mail renders left-aligned in Gmail (Yehuda rejected it 15/9/2026):
-   `mimeType="text/html"`, `htmlBody='<div dir="rtl" style="text-align:right;font-family:Arial,sans-serif">…</div>'`
-   with `<p>`/`<ol><li>` for the questions, and the same text in `body` as the plain fallback.
-   (Load the tools first: `ToolSearch "select:mcp__gmail__search_emails,mcp__gmail__read_email,mcp__gmail__send_email"`.)
-3. Style: plain Hebrew, numbered short questions, one question per unknown.
-   The mail goes out from Yehuda's own Gmail (xvxv99996@gmail.com), so **say it was written by Claude**
-   (Yehuda's decision 15/9/2026): open with a one-line note such as
-   "הודעה זו נכתבה ע"י קלוד, העוזר של יהודה בפיתוח התוכנה" and sign
-   "קלוד (בשם יהודה)". Never present the mail as if Yehuda typed it himself.
-4. Sending needs an explicit "שלח" from Yehuda in chat; drafting/asking first is fine.
-
-First use: 15/9/2026 — follow-up on "נתמך חגים" (flag per recipient + filter), thread "אשמח".
+Every e-mail to Ron goes through the dedicated skill **`reply-to-ron`** (16/9/2026): HTML RTL,
+as short as possible, first line bold "🤖 הודעה מקלוד (העוזר של יהודה)", signed "קלוד (בשם יהודה)",
+reply inside the original thread, sent only on Yehuda's explicit word. Don't re-derive the format here.
 
 ## Quick reference
 
