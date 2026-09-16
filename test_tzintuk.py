@@ -2331,7 +2331,7 @@ ok("recording_line נוקב בשם ההקלטה", "פרשת נצבים" in yemot
 ok("הקלטה חדשה מהשליחה האחרונה — בלי אזהרה", yemot.recording_older_than_last_send() is None)
 _seen25 = []
 def _exec_capture25(self):
-    _seen25.append(self.findChild(tzmod.QLabel).text()); self.mode = "voice"; return 1
+    _seen25.append(self.dialog_text()); self.mode = "voice"; return 1   # v3.54: facts grid
 tzmod._SendModeDialog.exec = _exec_capture25
 tab._send()
 ok("חלון אישור השליחה נוקב באיזו הקלטה תושמע",

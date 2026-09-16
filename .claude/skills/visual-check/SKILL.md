@@ -90,6 +90,10 @@ to exercise the thing you changed.
   if the PNG is under ~40KB, `styles.apply_app_theme(app, pct)` + `widget.repaint()` +
   12× `processEvents()` → grab again (up to 4 tries, then `AssertionError`). Gemini says
   "התמונה ריקה לחלוטין (שחורה)" when you forgot this.
+- **A `setCellWidget` built from a layout looks clipped in the grab (v3.54):** the view hands
+  it a stale inset geometry before the first real show, so a label+button cell paints as a
+  sliver — Gemini reports "הטקסט חתוך וגולש". That is real (first show looks the same), not a
+  grab artifact: use a text item + `cellClicked` instead of a cell widget.
 - **Selecting a table row in a probe:** `table.selectRow(n)` silently does nothing
   in dialog tables here — use `table.setCurrentCell(n, 0)` (with SelectRows
   behavior it highlights the whole row and fires `itemSelectionChanged`).

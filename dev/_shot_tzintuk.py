@@ -68,11 +68,11 @@ _done("חלוקת פרשת שופטים", 18,
       entries_ok[:1] + [{"phone": "0541112233", "name": "מזרחי רחל", "status": "pending",
                          "stopped": True}], dl=3, fl=1)
 db.add_tzintuk_campaign("צינתוק מתוזמן — חלוקה של השבוע", week, "5001", "s-0", 8,
-                        sent_at=(now + timedelta(hours=26)).isoformat(),
+                        sent_at=((datetime.now().astimezone() + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)).isoformat(),
                         device="מחשב המנהל", status="scheduled")
 
 from PyQt6.QtCore import Qt, QPoint
-from PyQt6.QtWidgets import QScrollArea
+from PyQt6.QtWidgets import QScrollArea, QPushButton
 win.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
 win.resize(1360, 900)
 win.show()
@@ -130,9 +130,15 @@ assert "«חלוקת פרשת כי-תבוא»" in tz.lbl_rec_name.text(), tz.lbl
 assert tz.btn_play_local.isVisible(), "a local copy exists → the play button shows"
 assert not tz.btn_send.isEnabled()
 assert "טען רשימת נמענים" in tz.lbl_summary.text(), tz.lbl_summary.text()
+# v3.54 — one "later ▾" menu button; the two schedule buttons live on as hidden attributes
+assert tz.btn_later.isVisible() and not tz.btn_later.isEnabled(), "later menu (empty)"
+assert tz.btn_sched.isHidden() and tz.btn_smart.isHidden()
+assert tz.chips_row.isVisible() and tz.lbl_ok.parentWidget() is tz.chips_row
+assert "יתרה: 1,834 יחידות" in tz.lbl_ok.text(), tz.lbl_ok.text()
+assert tz.btn_hist_sync.text() == "רענן עכשיו", tz.btn_hist_sync.text()
 assert scroll.horizontalScrollBar().maximum() == 0, "no horizontal scroll (empty)"
 assert "משפחות" in tz.lbl_tile_week.text(), tz.lbl_tile_week.text()
-grab_ok(tz, os.path.join(out,"tzintuk_v353_empty.png"))
+grab_ok(tz, os.path.join(out,"tzintuk_v354_empty.png"))
 
 # ── רשימה טעונה ─────────────────────────────────────────────────────────────
 tz._load_week_list()
@@ -150,7 +156,10 @@ assert "☑ 7 נמענים" in tz.lbl_summary.text() and "חריג" in tz.lbl_su
 rows_names = [tz.table.item(r, 1).text() for r in range(tz.table.rowCount())]
 i_bad = next(r for r, n in enumerate(rows_names) if n.startswith("אברהם"))
 assert tz.table.item(i_bad, 3).text().startswith("⚠ אין מספר"), tz.table.item(i_bad, 3).text()
+assert "תקן…" in tz.table.item(i_bad, 3).text(), tz.table.item(i_bad, 3).text()
+assert tz.btn_later.isEnabled(), "later menu enabled with a loaded list"
 i_ok = next(r for r, row in enumerate(tz._rows) if row["checked"] and row["send"])
+assert "תקן" not in tz.table.item(i_ok, 3).text()
 assert tz.table.item(i_ok, 3).text() == "● מוכן", tz.table.item(i_ok, 3).text()
 # צ'יפ החריגים כמסנן
 tz.m_bad["frame"].setChecked(True); pump(3)
@@ -176,8 +185,20 @@ assert any("לא הגיבו" in tz.hist.item(r, 6).text() for r in range(tz.hist
 assert scroll.horizontalScrollBar().maximum() == 0, "no horizontal scroll (loaded)"
 for w in (tz.chip_ready, tz.chip_msg, tz.chip_sched, tz.lbl_ok, tz.btn_send, tz.btn_switch):
     assert fits(w, tz), f"{w.objectName() or w.text()} overflows"
-grab_ok(tz, os.path.join(out,"tzintuk_v353_loaded.png"))
-grab_ok(scroll.widget(), os.path.join(out, "tzintuk_v353_fullpage.png"))
+grab_ok(tz, os.path.join(out,"tzintuk_v354_loaded.png"))
+grab_ok(scroll.widget(), os.path.join(out, "tzintuk_v354_fullpage.png"))
+
+# ── חלון האישור (v3.54: כרטיס-עובדות + שני אריחים, קלאסי כברירת מחדל) ───────
+facts, warns = tz._send_facts(7, 9, 1, None)
+dlg = tzmod._SendModeDialog("סיכום", tz, facts=facts, warnings=warns)
+dlg.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+dlg.resize(620, dlg.sizeHint().height()); dlg.show(); pump(8)
+assert dlg.rb_classic.isChecked() and not dlg.rb_voice.isChecked(), "classic is the default"
+assert dlg.btn_cancel.isDefault() and not dlg.btn_ok.isDefault()
+dlg.rb_voice.setChecked(True); pump(2)
+assert dlg._tiles[dlg.rb_voice].property("on") == "true"
+grab_ok(dlg, os.path.join(out, "tzintuk_v354_confirm.png"))
+dlg.close()
 
 # ── בזמן שליחה (רצועת ההתקדמות; ויזואלי בלבד) ───────────────────────────────
 tz.prog_frame.setVisible(True)
@@ -187,7 +208,7 @@ tz.lbl_ans.setText(tz._answers_html({"1": 1, "2": 0, "3": 0, "": 0}))
 tz.lbl_done.setText("הצליחו 4"); tz.lbl_fail.setText("נכשלו 1"); tz.lbl_wait.setText("ממתינים 4")
 tz.btn_stop_send.setVisible(True)
 pump(6)
-grab_ok(tz, os.path.join(out,"tzintuk_v353_sending.png"))
+grab_ok(tz, os.path.join(out,"tzintuk_v354_sending.png"))
 tz.prog_frame.setVisible(False); tz.btn_stop_send.setVisible(False)
 
 # ── 130% גודל-טקסט — הפריסה לא נשברת ─────────────────────────────────────────
@@ -197,9 +218,11 @@ pump(10)
 tz.refresh(); tz._apply_conn_state({"ok": True, "units": 1834})
 pump(12)
 assert scroll.horizontalScrollBar().maximum() == 0, "130%: no horizontal scroll"
-for w in (tz.chip_ready, tz.chip_msg, tz.chip_sched, tz.lbl_ok, tz.btn_send, tz.btn_switch):
+for w in (tz.chip_ready, tz.chip_msg, tz.chip_sched, tz.lbl_ok, tz.btn_send, tz.btn_switch,
+          tz.btn_later, tz.lbl_summary):
     assert fits(w, tz), f"130%: {w.text()} overflows"
-grab_ok(tz, os.path.join(out,"tzintuk_v353_130.png"))
+print("chips row height @130%:", tz.chips_row.height(), "one chip:", tz.lbl_ok.height())
+grab_ok(tz, os.path.join(out,"tzintuk_v354_130.png"))
 print("scroll content height:", scroll.widget().height(), "viewport:", scroll.viewport().height())
 print("table rows:", tz.table.rowCount(), "hist rows:", tz.hist.rowCount())
 print("OK")

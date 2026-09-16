@@ -33,7 +33,7 @@ from PyQt6.QtWidgets import (
 
 import database as db
 from utils import call_history, netblock, timefmt, tts, yemot
-from utils.ui import busy_cursor, enable_touch_scroll, line_icon
+from utils.ui import busy_cursor, enable_touch_scroll, line_icon, FlowLayout
 # v3.22 — microphone recording (RecordDialog). Imported at module level so
 # PyInstaller bundles the QtMultimedia backend; the dialog itself degrades to a
 # clear message when the module is missing.
@@ -582,29 +582,89 @@ class _SendModeDialog(QDialog):
     """אישור שליחה + בחירת סוג הצינתוק (#1/9): רגיל (משמיע הודעה למי שעונה)
     או קלאסי (צלצול קצר בלי מענה — מי שמתקשר חזרה שומע את ההודעה)."""
 
-    def __init__(self, summary: str, parent=None):
+    _TILE = ("QFrame#tz-mode{background:#fafcfe; border:1.5px solid #e6eaf2; border-radius:12px;}"
+             "QFrame#tz-mode[on=\"true\"]{background:#f0faf6; border:2px solid #0f9d78;}")
+
+    def __init__(self, summary: str, parent=None, facts=None, warnings=None):
+        """`facts` (v3.54) = [(label, value), …] rendered as a clear grid;
+        `warnings` = amber notes under it. Without `facts` the plain `summary`
+        text is shown (older callers / tests)."""
         super().__init__(parent)
         self.setWindowTitle("אישור שליחה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.mode = None               # 'voice' | 'classic'
         self.cb_mode = None            # v3.37 — callback mode (None = server off)
-        from PyQt6.QtWidgets import QRadioButton
+        from PyQt6.QtWidgets import QRadioButton, QGridLayout
         lay = QVBoxLayout(self)
-        lay.setSpacing(8)
-        lbl = QLabel(summary)
-        lbl.setWordWrap(True)
-        lay.addWidget(lbl)
-        self.rb_voice = QRadioButton("צינתוק עם הודעה (רגיל) — מי שעונה שומע "
-                                     "את ההודעה מיד")
-        self.rb_voice.setChecked(True)
-        lay.addWidget(self.rb_voice)
-        self.rb_classic = QRadioButton("צינתוק קלאסי — צלצול קצר בלי מענה "
-                                       "(כמעט בלי עלות)")
-        lay.addWidget(self.rb_classic)
-        note = QLabel("בצינתוק קלאסי הטלפון מצלצל ומתנתק — אי אפשר לענות "
-                      "לשיחה. " + TzintukimTab._callback_line() +
-                      " אחרי השליחה התוכנה עוקבת כחצי שעה בזמן אמת מי חזר "
-                      f"לשיחה ומה ענה בסקר (הקשה {yemot.SURVEY_EXT}).")
+        lay.setSpacing(10)
+        if facts:
+            head = QLabel("עומד לשלוח צינתוק — בדוק שהכל נכון:")
+            head.setStyleSheet("font-weight:800; font-size:15px;")
+            lay.addWidget(head)
+            grid_frame = QFrame()
+            grid_frame.setStyleSheet("QFrame{background:#f8fafc; border:1px solid #e6eaf2;"
+                                     " border-radius:10px;}")
+            grid = QGridLayout(grid_frame)
+            grid.setContentsMargins(14, 8, 14, 8)
+            grid.setHorizontalSpacing(14)
+            grid.setVerticalSpacing(4)
+            for r, (k, v) in enumerate(facts):
+                kl = QLabel(k)
+                kl.setStyleSheet("color:#64748b; border:none; background:transparent;")
+                kl.setAlignment(Qt.AlignmentFlag.AlignTop)
+                vl = QLabel(v)
+                vl.setStyleSheet("color:#0f172a; font-weight:700; border:none; background:transparent;")
+                vl.setWordWrap(True)
+                grid.addWidget(kl, r, 0)
+                grid.addWidget(vl, r, 1)
+            grid.setColumnStretch(1, 1)
+            lay.addWidget(grid_frame)
+            for w in warnings or []:
+                wl = QLabel("⚠ " + w)
+                wl.setWordWrap(True)
+                wl.setStyleSheet("background:#fdf0d5; color:#92600a; border-radius:8px;"
+                                 " padding:6px 10px; font-weight:600;")
+                lay.addWidget(wl)
+        else:
+            lbl = QLabel(summary)
+            lbl.setWordWrap(True)
+            lay.addWidget(lbl)
+        # v3.54 — the two kinds as two tiles (a radio + one line each).
+        # Classic is the default (user decision 1/9/2026: cost).
+        self.rb_classic = QRadioButton("צינתוק קלאסי — ברירת המחדל")
+        self.rb_voice = QRadioButton("צינתוק עם הודעה")
+        self.rb_classic.setChecked(True)
+        tiles = QHBoxLayout()
+        tiles.setSpacing(10)
+        self._tiles = {}
+        for rb, desc in ((self.rb_classic,
+                          "צלצול קצר ומתנתק — אי אפשר לענות. כעשירית יחידה למספר. "
+                          "מי שחוזר לקו שומע לפי הבחירה למטה."),
+                         (self.rb_voice,
+                          "מי שעונה שומע את ההודעה מיד. עלות של שיחה לכל מי שענה.")):
+            fr = QFrame()
+            fr.setObjectName("tz-mode")
+            fr.setStyleSheet(self._TILE)
+            fr.setCursor(Qt.CursorShape.PointingHandCursor)
+            fl = QVBoxLayout(fr)
+            fl.setContentsMargins(12, 8, 12, 10)
+            fl.setSpacing(3)
+            rb.setStyleSheet("font-weight:800; background:transparent;")
+            fl.addWidget(rb)
+            d = QLabel(desc)
+            d.setWordWrap(True)
+            d.setStyleSheet("color:#64748b; font-size:12.5px; background:transparent; border:none;")
+            fl.addWidget(d)
+            fr.mousePressEvent = lambda _e, b=rb: b.setChecked(True)
+            self._tiles[rb] = fr
+            rb.toggled.connect(self._paint_tiles)
+            tiles.addWidget(fr, 1)
+        lay.addLayout(tiles)
+        self._paint_tiles()
+        note = QLabel(TzintukimTab._callback_line() +
+                      f" מי שיחייג חזרה ויקיש {yemot.SURVEY_EXT} יסומן בתוכנה לפי "
+                      "תשובתו (1 מגיע / 2 לא מגיע / 3 לא יודע); התוכנה עוקבת "
+                      "אחרי התשובות כחצי שעה בזמן אמת.")
         note.setObjectName("subtitle")
         note.setWordWrap(True)
         lay.addWidget(note)
@@ -621,6 +681,17 @@ class _SendModeDialog(QDialog):
         btns.addStretch()
         lay.addLayout(btns)
         _safe_default(ok, cancel)      # v3.26 — Enter never dials 360 people
+
+    def dialog_text(self) -> str:
+        """Everything the operator reads in this window (facts, warnings,
+        notes) as one string — for the tests that check what it says."""
+        return "\n".join(w.text() for w in self.findChildren(QLabel) if w.text())
+
+    def _paint_tiles(self, *_a):
+        for rb, fr in self._tiles.items():
+            fr.setProperty("on", "true" if rb.isChecked() else "false")
+            fr.style().unpolish(fr)
+            fr.style().polish(fr)
 
     def _accept(self):
         self.mode = "classic" if self.rb_classic.isChecked() else "voice"
@@ -1651,15 +1722,20 @@ class TzintukimTab(QWidget):
         s_lay.addWidget(scroll, 1)
 
         # ── Header: title · subtitle · live status chips ─────────────────────
-        head = QHBoxLayout()
-        head.setSpacing(10)
+        # v3.54 — two rows: the title line, and UNDER it the chips in a flow
+        # layout that wraps instead of pushing a chip out of the row at 130%.
+        title_row = QHBoxLayout()
+        title_row.setSpacing(10)
         title = QLabel("צינתוקים")
         title.setStyleSheet("color:#064e3b; font-size:22px; font-weight:800; " + _LBL)
-        head.addWidget(title)
-        sub = QLabel("הודעה קולית לזכאי החלוקה דרך ימות המשיח")
+        title_row.addWidget(title)
+        sub = QLabel("הודעה קולית לזכאי החלוקה דרך קו הטלפון (ימות המשיח)")
         sub.setStyleSheet("color:#64748b; font-size:13px; " + _LBL)
-        head.addWidget(sub)
-        head.addStretch()
+        title_row.addWidget(sub)
+        title_row.addStretch()
+        lay.addLayout(title_row)
+        self.chips_row = QWidget()
+        head = FlowLayout(self.chips_row, h_spacing=8, v_spacing=6)
         # Live connection chip (v3.22: a real server probe, not "credentials
         # typed") — grey while checking, green when the server answered, red
         # when it did not. Shown only when credentials exist.
@@ -1695,7 +1771,7 @@ class TzintukimTab(QWidget):
         self.chip_sched.setStyleSheet(_HCHIP_AMBER)
         self.chip_sched.setVisible(False)
         head.addWidget(self.chip_sched)
-        lay.addLayout(head)
+        lay.addWidget(self.chips_row)
 
         # ── ① נמענים ──────────────────────────────────────────────────────────
         card, c_lay, c_head = _step_card("1", "נמענים", "מי יקבל את הצינתוק")
@@ -1835,10 +1911,12 @@ class TzintukimTab(QWidget):
         self.table.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.table.itemChanged.connect(self._on_item_changed)
         self.table.cellDoubleClicked.connect(self._open_row_card)      # v3.53
+        self.table.cellClicked.connect(self._on_cell_clicked)          # v3.54
         lf_lay.addWidget(self.table)
-        hint = QLabel("☑ = יקבל צינתוק · כל המספרים של כל משפחה מצולצלים · "
-                      "מספר משותף לשני מקבלים מצולצל פעם אחת · חריגים לא נשלחים · "
-                      "לחיצה כפולה על שורה פותחת את כרטיס המקבל (לתיקון מספר)")
+        # v3.54 — one short line; the fine print lives in the tooltip.
+        hint = QLabel("☑ = יקבל צינתוק · לחיצה כפולה על שורה (או \"תקן…\") פותחת את כרטיס המקבל")
+        hint.setToolTip("כל המספרים של כל משפחה מצולצלים · מספר משותף לשני מקבלים "
+                        "מצולצל פעם אחת · חריגים (בלי מספר / מספר שבור) לא נשלחים")
         hint.setStyleSheet("color:#94a3b8; font-size:12px; " + _LBL)
         hint.setWordWrap(True)
         lf_lay.addWidget(hint)
@@ -1922,14 +2000,8 @@ class TzintukimTab(QWidget):
         row.addWidget(self.btn_library)
         row.addStretch()
         acts.addLayout(row)
-        menu_hint = QLabel("בתפריט \"הודעה חדשה\": <b>הקלטה במיקרופון</b> · "
-                           "<b>יצירה מטקסט</b> (המחשב מקריא בקול טבעי) · "
-                           "<b>העלאת קובץ שמע</b>")
-        menu_hint.setTextFormat(Qt.TextFormat.RichText)
-        menu_hint.setStyleSheet("color:#64748b; font-size:12.5px; background:#fafcfe;"
-                                " border:1px dashed #cbd5e1; border-radius:9px; padding:6px 10px;")
-        menu_hint.setWordWrap(True)
-        acts.addWidget(menu_hint)
+        # (v3.54: the box that repeated the menu's items was dropped — the
+        # menu itself, with tooltips, says it.)
         tip = QLabel("💡 כדאי לומר בסוף ההקלטה: \"לאישור הגעה חייגו חזרה לקו "
                      f"והקישו {yemot.SURVEY_EXT}: 1 מגיע, 2 לא מגיע, 3 לא יודע. "
                      "מי שלא יקיש — ייחשב כמי שלא שיתף פעולה\". התשובות מופיעות "
@@ -1978,13 +2050,24 @@ class TzintukimTab(QWidget):
         btn_detail.clicked.connect(self._open_history_details)
         self.btn_hist_detail = btn_detail
         c_head.addWidget(btn_detail)
-        c_head.addWidget(btn_srv)
         c_head.addWidget(btn_ans)
         c_head.addWidget(btn_hist_xls)
+        # v3.54 — "היסטוריה מהשרת" runs by itself once a day; it left the header
+        # and sits as a small link next to its own status line.
+        btn_srv.setText("רענן עכשיו")
+        btn_srv.setIcon(QIcon())
+        btn_srv.setStyleSheet("QPushButton{background:transparent; color:#64748b; border:none;"
+                              " font-size:12px; text-decoration:underline; padding:0 4px;}"
+                              "QPushButton:hover{color:#0f766e;}")
+        btn_srv.setCursor(Qt.CursorShape.PointingHandCursor)
+        sync_row = QHBoxLayout()
+        sync_row.setSpacing(6)
         self.lbl_hist_sync = QLabel("")
         self.lbl_hist_sync.setStyleSheet("color:#94a3b8; font-size:12px; " + _LBL)
         self.lbl_hist_sync.setWordWrap(True)
-        c_lay.addWidget(self.lbl_hist_sync)
+        sync_row.addWidget(self.lbl_hist_sync, 1)
+        sync_row.addWidget(btn_srv)
+        c_lay.addLayout(sync_row)
         self._hist_worker = None
         self._hist_prog = ""
         self._refresh_hist_sync_label()
@@ -2105,35 +2188,41 @@ class TzintukimTab(QWidget):
         p_lay.addLayout(counters)
         self.prog_frame.setVisible(False)
         bar.addWidget(self.prog_frame)
+        # v3.54 — ③ in two rows: the readiness line on its own, and under it
+        # ONE primary button + ONE "later ▾" menu (the two schedule buttons
+        # stay as hidden attributes — same slots, same enabled-state).
         act = QHBoxLayout()
         act.setSpacing(12)
-        act.addWidget(_step_badge("3"))
-        # v3.53 — the readiness line: what is ready, what is still missing
-        # (rich text, see _refresh_summary).
+        summary_row = QHBoxLayout()
+        summary_row.setSpacing(10)
+        summary_row.addWidget(_step_badge("3"))
         self.lbl_summary = QLabel("")
         self.lbl_summary.setStyleSheet("color:#334155; font-size:14px; font-weight:700; " + _LBL)
         self.lbl_summary.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_summary.setWordWrap(True)
-        act.addWidget(self.lbl_summary, 1)
+        summary_row.addWidget(self.lbl_summary, 1)
+        bar.addLayout(summary_row)
         self.btn_sched = QPushButton("  תזמן שליחה…")
-        self.btn_sched.setStyleSheet(_BTN_GHOST)
-        self.btn_sched.setIcon(QIcon(line_icon("calendar", 18, "#475569")))
-        self.btn_sched.setMinimumHeight(46)
-        self.btn_sched.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_sched.setToolTip("קובעים תאריך ושעה — והצינתוק יוצא לבד "
                                   "מהשרת של ימות המשיח, גם כשהמחשב כבוי")
         self.btn_sched.clicked.connect(self._schedule)
-        act.addWidget(self.btn_sched)
+        self.btn_sched.setVisible(False)
         self.btn_smart = QPushButton("  שגר לפי השעה של כל אחד…")
-        self.btn_smart.setStyleSheet(_BTN_GHOST)
-        self.btn_smart.setIcon(QIcon(line_icon("users", 18, "#475569")))
-        self.btn_smart.setMinimumHeight(46)
-        self.btn_smart.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_smart.setToolTip(
             "מפזר את השליחה לאורך היום — כל נמען מצולצל בשעה שבה הכי קל להשיג "
             "אותו לפי ההיסטוריה. יוצא מהשרת של ימות המשיח גם כשהמחשב כבוי.")
         self.btn_smart.clicked.connect(self._smart_schedule)
-        act.addWidget(self.btn_smart)
+        self.btn_smart.setVisible(False)
+        act.addStretch()
+        self.btn_later = QPushButton("  שלח מאוחר יותר  ▾")
+        self.btn_later.setStyleSheet(_BTN_GHOST + _MENU_BTN_QSS)
+        self.btn_later.setIcon(QIcon(line_icon("calendar", 18, "#475569")))
+        self.btn_later.setMinimumHeight(46)
+        self.btn_later.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_later.setToolTip("הצינתוק יוצא לבד מהשרת של ימות המשיח במועד שתבחר — "
+                                  "גם כשהמחשב כבוי")
+        self.btn_later.setMenu(self._later_menu())
+        act.addWidget(self.btn_later)
         self.btn_send = QPushButton("")
         self.btn_send.setObjectName("primary")
         self.btn_send.setStyleSheet(_BTN_PRINT)
@@ -2162,6 +2251,19 @@ class TzintukimTab(QWidget):
         a = m.addAction("📝  רשימה עצמאית…")
         a.setToolTip("מדביקים מספרי טלפון או טוענים קובץ אקסל — בלי קשר לחלוקות")
         a.triggered.connect(self._load_free_list)
+        return m
+
+    def _later_menu(self) -> QMenu:
+        """v3.54 — the 'שלח מאוחר יותר ▾' menu: the two schedule flows."""
+        m = QMenu(self)
+        m.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        m.setToolTipsVisible(True)
+        a = m.addAction("📅  במועד קבוע…")
+        a.setToolTip(self.btn_sched.toolTip())
+        a.triggered.connect(self._schedule)
+        a = m.addAction("👥  לכל אחד בשעה שלו…")
+        a.setToolTip(self.btn_smart.toolTip())
+        a.triggered.connect(self._smart_schedule)
         return m
 
     def _new_message_menu(self) -> QMenu:
@@ -2294,7 +2396,7 @@ class TzintukimTab(QWidget):
             if i < self.table.rowCount():
                 self.table.setRowHidden(i, only and not row["why"])
         self._fit_table_height()
-        b.setText((f"חריגים {bad} · " + ("הצג את כולם" if only else "הצג רק אותם"))
+        b.setText((f"⚠ {bad} חריגים · " + ("הצג את כולם" if only else "הצג רק אותם"))
                   if bad else "חריגים 0")
         b.setEnabled(bad > 0)
 
@@ -2317,7 +2419,22 @@ class TzintukimTab(QWidget):
             if row["rec"].get("id") is not None:
                 it.setToolTip("לחיצה כפולה על השורה פותחת את כרטיס המקבל — "
                               "אפשר לתקן את המספר כאן")
+        # v3.54 — an exception row carries its remedy in the cell itself:
+        # "⚠ אין מספר טלפון  ·  תקן…" — ONE click on the cell opens the
+        # recipient's card (see _on_cell_clicked; a cell widget would be
+        # clipped by the view before it is shown on screen).
+        if row["why"] and row["rec"].get("id") is not None:
+            it.setText(txt + "   ·   תקן…")
+            f = it.font()
+            f.setBold(True)
+            it.setFont(f)
+            it.setToolTip("לחיצה כאן פותחת את כרטיס המקבל כדי להוסיף או לתקן מספר טלפון")
         self.table.setItem(i, 3, it)
+
+    def _on_cell_clicked(self, r: int, c: int):
+        """v3.54 — one click on the 'תקן…' status cell of an exception row."""
+        if c == 3 and 0 <= r < len(self._rows) and self._rows[r]["why"]:
+            self._open_row_card(r, c)
 
     def _refresh_summary(self):
         """v3.53 — the readiness line of ③: what is ready and what is missing."""
@@ -2717,6 +2834,37 @@ class TzintukimTab(QWidget):
         return (f"\n\n⚠ שים לב: {verb} לרשימה הזו "
                 f"({when}, מ{src}). שליחה נוספת תצלצל לאנשים פעם שנייה!")
 
+    def _send_facts(self, n_rows: int, n_phones: int, bad: int, prev) -> tuple:
+        """v3.54 — the confirmation dialog as (label, value) rows + amber
+        warnings, instead of one paragraph. Same facts as the old summary."""
+        facts = [("חלוקה", self._campaign_name()),
+                 ("משפחות", f"{n_rows}"),
+                 ("מספרי טלפון", f"{n_phones} (כל המספרים של כל משפחה)"),
+                 ("חריגים שלא יישלחו", f"{bad}")]
+        info = yemot.recording_info()
+        if info:
+            when = timefmt.datetime_str(info.get("at") or "")
+            src = info.get("device") or ""
+            facts.append(("ההודעה שתושמע",
+                          f"«{info['name']}» (הועלתה {when}" + (f" מ{src}" if src else "") + ")"))
+        elif yemot.has_recording():
+            facts.append(("ההודעה שתושמע", "ההקלטה שהועלתה לפני גרסה 3.26 (שמה לא ידוע)"))
+        else:
+            facts.append(("ההודעה שתושמע", "עדיין לא הועלתה הודעה"))
+        warns = []
+        old = yemot.recording_older_than_last_send()
+        if old is not None:
+            when = timefmt.datetime_str(old.get("sent_at") or "")
+            warns.append(f"ההקלטה הזו כבר הושמעה בצינתוק של {when} — "
+                         "ודא שזו ההודעה הנכונה ולא ההודעה של הפעם הקודמת.")
+        elif info is None and yemot.has_recording():
+            warns.append("לא ידוע איזו הקלטה נמצאת בשרת — שלח בדיקה למספר שלך "
+                         "לפני שליחה לכולם.")
+        extra = self._already_sent_line(prev)
+        if extra:
+            warns.append(extra.strip().lstrip("⚠ ").strip())
+        return facts, warns
+
     @staticmethod
     def _recording_lines() -> str:
         """Which message will play + a warning when it is older than the last
@@ -2896,6 +3044,7 @@ class TzintukimTab(QWidget):
         self.btn_send.setEnabled(ready > 0 and not busy)
         self.btn_sched.setEnabled(ready > 0 and not busy)
         self.btn_smart.setEnabled(ready > 0 and not busy)
+        self.btn_later.setEnabled(ready > 0 and not busy)        # v3.54
 
     def _ready_rows(self):
         return [r for r in self._rows if r["checked"] and r["send"]]
@@ -3077,11 +3226,14 @@ class TzintukimTab(QWidget):
         self._conn_state = True
         units = (res or {}).get("units") if isinstance(res, dict) else None
         txt = "●  מחובר לימות המשיח"
+        tip = f"השרת ענה ב-{when}. נבדק שוב אוטומטית כל כמה דקות."
         if units is not None:
-            txt += f"  ·  יתרה {units:,.0f} יח'"
+            txt += f"  ·  יתרה: {units:,.0f} יחידות"
+            tip += ("\nיחידות = היתרה שטעונה בקו של ימות. צינתוק קלאסי עולה "
+                    "כעשירית יחידה לכל מספר.")
         self.lbl_ok.setText(txt)
         self.lbl_ok.setStyleSheet(_CHIP_GREEN)
-        self.lbl_ok.setToolTip(f"השרת ענה ב-{when}. נבדק שוב אוטומטית כל כמה דקות.")
+        self.lbl_ok.setToolTip(tip)
 
     def _add_person(self):
         dlg = _AddPersonDialog({r["rec"].get("id") for r in self._rows}, self)
@@ -3405,7 +3557,8 @@ class TzintukimTab(QWidget):
                    f"מי שיחייג חזרה ויקיש {yemot.SURVEY_EXT} יסומן בתוכנה לפי "
                    "תשובתו: 1 מגיע / 2 לא מגיע / 3 לא יודע; "
                    f"מי שלא יקיש — \"לא הגיב\".{extra}")
-        dlg = _SendModeDialog(summary, self)
+        facts, warns = self._send_facts(len(rows), len(phones), bad, prev)
+        dlg = _SendModeDialog(summary, self, facts=facts, warnings=warns)
         if not dlg.exec() or not dlg.mode:
             return
         classic = dlg.mode == "classic"

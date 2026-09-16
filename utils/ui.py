@@ -1,7 +1,7 @@
 """Small UI helpers for keeping the interface responsive during heavy work."""
 from contextlib import contextmanager
 
-from PyQt6.QtWidgets import (QApplication, QLabel, QStyledItemDelegate, QStyle,
+from PyQt6.QtWidgets import (QApplication, QLabel, QStyledItemDelegate, QStyle, QLayout,
                              QDialog, QVBoxLayout, QHBoxLayout, QFrame, QPushButton,
                              QScrollArea, QWidget)
 from PyQt6.QtCore import Qt, QObject, QEvent, QRect, QRectF
@@ -916,3 +916,70 @@ class UpdateOfferDialog(QDialog):
         """Convenience: show the dialog; True = install now."""
         dlg = UpdateOfferDialog(parent, new_version, current_version, notes)
         return dlg.exec() == QDialog.DialogCode.Accepted
+
+
+# ── Flow layout (v3.54) ──────────────────────────────────────────────────────
+class FlowLayout(QLayout):
+    """A layout that lays its items in rows and WRAPS to the next row when the
+    width runs out — for rows of status chips that must survive a large text
+    size (at 130% five chips no longer fit one header line). Honours RTL: in a
+    right-to-left widget the first item hugs the right edge."""
+
+    def __init__(self, parent=None, h_spacing: int = 8, v_spacing: int = 6):
+        super().__init__(parent)
+        self._items = []
+        self._hs, self._vs = h_spacing, v_spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):                       # noqa: N802 (Qt API)
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):                           # noqa: N802
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):                           # noqa: N802
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):                 # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self):                   # noqa: N802
+        return True
+
+    def heightForWidth(self, w):                   # noqa: N802
+        return self._layout(QRect(0, 0, w, 0), dry=True)
+
+    def setGeometry(self, rect):                   # noqa: N802
+        super().setGeometry(rect)
+        self._layout(rect, dry=False)
+
+    def sizeHint(self):                            # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self):                         # noqa: N802
+        from PyQt6.QtCore import QSize
+        s = QSize()
+        for it in self._items:
+            s = s.expandedTo(it.minimumSize())
+        return s
+
+    def _layout(self, rect, dry: bool) -> int:
+        from PyQt6.QtCore import QPoint
+        x = y = 0
+        line_h = 0
+        rtl = bool(self.parentWidget() and self.parentWidget().isRightToLeft())
+        for it in self._items:
+            if it.widget() is not None and it.widget().isHidden():
+                continue
+            sz = it.sizeHint()
+            if x and x + sz.width() > rect.width():
+                x, y, line_h = 0, y + line_h + self._vs, 0
+            if not dry:
+                left = (rect.right() - x - sz.width() + 1) if rtl else rect.x() + x
+                it.setGeometry(QRect(QPoint(left, rect.y() + y), sz))
+            x += sz.width() + self._hs
+            line_h = max(line_h, sz.height())
+        return y + line_h

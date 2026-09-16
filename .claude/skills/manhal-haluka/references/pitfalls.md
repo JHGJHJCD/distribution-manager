@@ -107,6 +107,11 @@ Traps that have cost us time before. Check the relevant one before touching that
   `ResizeToContents` ignores cell widgets and clips them.
 - Never rebuild the table synchronously from the combo's own signal (`currentTextChanged` →
   repopulate destroys the emitting combo mid-emit) — defer with `QTimer.singleShot(0, ...)`.
+- **A cell widget built with a layout (label + button) is clipped before the table is shown
+  on screen (v3.54):** the view assigns it a stale, smaller geometry (inset ~14px, 17px tall)
+  and the button paints as a thin sliver — in the grab AND on first show. For a "click to fix"
+  affordance prefer a plain item whose text carries the action ("⚠ אין מספר · תקן…") plus
+  `cellClicked` on that column; no widget, no Fixed-width games, `ResizeToContents` keeps working.
 
 ## רקע מ-QSS `background-image` נכשל בשקט (נלמד 31/08/2026, #uvee0)
 - `setStyleSheet("background-image:url(...)")` על ווידג'ט רגיל עלול פשוט לא להציג כלום —
