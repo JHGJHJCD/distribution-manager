@@ -460,6 +460,10 @@ def init_db():
             # identity (history / print / sync) and is kept = first + ' ' + last.
             ("first_name",         "TEXT DEFAULT ''"),
             ("last_name",          "TEXT DEFAULT ''"),
+            # v3.52: נתמך חגים — general mark + optional per-holiday subset
+            # (see holidays.py). Synced like every other recipient field.
+            ("holiday_support",    "INTEGER DEFAULT 0"),
+            ("holidays",           "TEXT DEFAULT ''"),
         ]
         newly_added = set()
         for col, definition in _migrations:
@@ -757,9 +761,11 @@ _RECIPIENT_FIELDS = [
     "housing_expenses", "medical_expenses", "income", "per_soul",
     "work_scope", "parent_type", "occupation", "representative",
     "priority", "priority_raw",
+    "holiday_support", "holidays",
 ]
 
-_INT_FIELDS = {"souls", "children_home", "children_married", "children_total"}
+_INT_FIELDS = {"souls", "children_home", "children_married", "children_total",
+               "holiday_support"}
 # Nullable integer fields — '' / None stays NULL instead of being coerced to 0.
 _NULLABLE_INT_FIELDS = {"priority"}
 
@@ -1244,6 +1250,9 @@ def get_filtered_list(criteria: dict = None, area_filter: str = "הכל"):
     for r in rows:
         r["days_since"] = recency_days(r)
         r["_filtered"] = True
+    # v3.52: a holiday distribution is a HARD gate — people not marked as
+    # holiday-supported never enter, not even as a community top-up.
+    rows = selection.holiday_filter(rows, criteria)
     balance = (criteria or {}).get("balance_communities", True)
     try:
         products = int(get_setting("available_products") or 0)
@@ -2228,7 +2237,7 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
                  "marital_status", "email", "synagogue",
                  "housing_expenses", "medical_expenses", "income", "per_soul",
                  "work_scope", "parent_type", "occupation", "representative",
-                 "priority", "priority_raw"]
+                 "priority", "priority_raw", "holiday_support", "holidays"]
     phone_fields = ("phone1", "phone2", "phone3")
 
     def _is_empty(val) -> bool:
@@ -2317,7 +2326,7 @@ _IMPORT_DIFF_FIELDS = [
     "children_total", "marital_status", "email", "synagogue",
     "housing_expenses", "medical_expenses", "income", "per_soul",
     "work_scope", "parent_type", "occupation", "representative",
-    "priority", "priority_raw",
+    "priority", "priority_raw", "holiday_support", "holidays",
 ]
 
 

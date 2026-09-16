@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLineEdit, QLabel, QComboBox,
     QDialog, QFormLayout, QMessageBox, QFileDialog, QSpinBox,
-    QTextEdit, QAbstractItemView, QMenu
+    QTextEdit, QAbstractItemView, QMenu, QCheckBox, QGridLayout
 )
 from PyQt6.QtCore import Qt, QDate, QTimer
 from widgets import DateEdit
@@ -11,6 +11,7 @@ from collections import Counter
 import re
 from pathlib import Path
 import database as db
+import holidays
 from styles import SUSPENDED_FG, ENDED_FG
 
 # ── Validation helpers ────────────────────────────────────────────────────────
@@ -154,11 +155,13 @@ class ImportReviewDialog(QDialog):
                 keep.setdefault(rid, {})[field] = ch
         return [{"id": rid, "changes": chs} for rid, chs in keep.items()]
 from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state,
-                      BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, search_icon,
-                      ALIGN_RIGHT, rtl_text_area, enable_touch_scroll,
+                      BadgeDelegate, PRIORITY_BADGES, STATUS_BADGES, HOLIDAY_BADGES,
+                      search_icon, ALIGN_RIGHT, rtl_text_area, enable_touch_scroll,
                       apply_header_icons)
 
-COLS = ["מס'", "שם פרטי", "שם משפחה", "עדיפות", "טלפון 1", "טלפון 2", "טלפון 3",
+_HOLIDAY_FILTER = "נתמך חגים"   # v3.52: filter label next to קבוע/ראשונה/שנייה
+
+COLS = ["מס'", "שם פרטי", "שם משפחה", "עדיפות", "נתמך חגים", "טלפון 1", "טלפון 2", "טלפון 3",
         "כתובת", "אזור", "נפשות", "תדירות", "חלוקה אחרונה",
         "חלוקה הבאה", "סטטוס", "הערות",
         "מס' מזהה", "מקור", "ת. לידה", "ת. לידה בן/בת זוג",
@@ -168,7 +171,7 @@ COLS = ["מס'", "שם פרטי", "שם משפחה", "עדיפות", "טלפון
         "הוצ' דיור", "הוצ' רפואיות", "הכנסות", "פנוי לנפש",
         "היקף משרה", "סוג הורה", "עיסוק בעל", "שם נציג"]
 
-COL_KEYS = ["id", "first_name", "last_name", "priority", "phone1", "phone2", "phone3",
+COL_KEYS = ["id", "first_name", "last_name", "priority", "holidays", "phone1", "phone2", "phone3",
             "address", "area", "souls", "frequency", "last_distribution",
             "next_distribution", "status", "notes",
             "external_id", "source", "birth_date", "spouse_birth_date",
@@ -285,6 +288,9 @@ class RecipientsTab(QWidget):
             ("קבוע", 4),
             ("עדיפות ראשונה", 3),
             ("עדיפות שנייה", 2),
+            # v3.52 (kupa manager, 16/9/2026): the holiday mark is filtered right
+            # here next to קבוע — the code 'holiday' is not a priority number.
+            (_HOLIDAY_FILTER, "holiday"),
         ]
         self.priority_filter.addItems([o[0] for o in self._PRIORITY_FILTERS])
         # Colour the dropdown options as rounded pills, same palette as the table's
@@ -293,6 +299,7 @@ class RecipientsTab(QWidget):
             "קבוע":          PRIORITY_BADGES["קבוע"],
             "עדיפות ראשונה": PRIORITY_BADGES["ראשונה"],
             "עדיפות שנייה":  PRIORITY_BADGES["שנייה"],
+            _HOLIDAY_FILTER: HOLIDAY_BADGES["חגים"],
         }
         self.priority_filter.setItemDelegate(
             BadgeDelegate(_prio_chip, self.priority_filter))
@@ -302,6 +309,17 @@ class RecipientsTab(QWidget):
         self.priority_filter.currentTextChanged.connect(self._tint_priority_filter)
         self.priority_filter.currentTextChanged.connect(self.refresh)
         top.addWidget(self.priority_filter)
+
+        # Which holiday — enabled only while 'נתמך חגים' is chosen (v3.52).
+        self.holiday_filter = QComboBox()
+        self.holiday_filter.addItem("כל החגים")
+        self.holiday_filter.addItems(holidays.HOLIDAYS)
+        self.holiday_filter.setToolTip("סינון לפי חג מסוים — רלוונטי רק ל'נתמך חגים'")
+        self.holiday_filter.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.holiday_filter.currentTextChanged.connect(self.refresh)
+        self.priority_filter.currentTextChanged.connect(self._sync_holiday_filter)
+        top.addWidget(self.holiday_filter)
+        self._sync_holiday_filter()
 
         btn_add = QPushButton("+ הוסף מקבל")
         btn_add.setObjectName("primary")
@@ -357,8 +375,9 @@ class RecipientsTab(QWidget):
         attach_empty_state(self.table, "אין מקבלים להצגה")
         # coloured pill badges for priority + status columns (shifted +1 by the
         # name-column split: priority col 2→3, status col 12→13).
+        # v3.52: the 'נתמך חגים' column at 4 shifts status 13→14.
         self.table.setItemDelegateForColumn(3, BadgeDelegate(PRIORITY_BADGES, self.table))
-        self.table.setItemDelegateForColumn(13, BadgeDelegate(STATUS_BADGES, self.table))
+        self.table.setItemDelegateForColumn(14, BadgeDelegate(STATUS_BADGES, self.table))
 
         # Bottom bar — the per-row action buttons (הפעל/השהה/מחק) were removed
         # (#wtfnh, redundant) and moved to a right-click menu on the row. What
@@ -478,6 +497,14 @@ class RecipientsTab(QWidget):
         else:
             self.priority_filter.setStyleSheet("")
 
+    def _sync_holiday_filter(self, *_):
+        on = self.priority_filter.currentText() == _HOLIDAY_FILTER
+        if not on:
+            self.holiday_filter.blockSignals(True)
+            self.holiday_filter.setCurrentIndex(0)
+            self.holiday_filter.blockSignals(False)
+        self.holiday_filter.setEnabled(on)
+
     def refresh(self):
         sf = self.status_filter.currentText()
         status = sf if sf != "הכל" else None
@@ -485,7 +512,10 @@ class RecipientsTab(QWidget):
         # Priority filter (in-memory) — match the selected priority code.
         pcode = next((c for label, c in self._PRIORITY_FILTERS
                       if label == self.priority_filter.currentText()), None)
-        if pcode is not None:
+        if pcode == "holiday":
+            h = self.holiday_filter.currentText()
+            rows = [r for r in rows if holidays.supports(r, "" if h == "כל החגים" else h)]
+        elif pcode is not None:
             rows = [r for r in rows if r.get("priority") == pcode]
         self._rows_data = rows
         self._populate(self._rows_data)
@@ -517,6 +547,7 @@ class RecipientsTab(QWidget):
             if not _first and not _last:
                 _first, _last = db.split_full_name(rec.get("full_name") or "")
             vals = [str(rec_id or ""), _first, _last, _priority_display(rec),
+                    holidays.display(rec),
                     rec.get("phone1", ""), rec.get("phone2", ""), rec.get("phone3", ""),
                     rec.get("address", ""), rec.get("area", ""),
                     str(rec.get("souls", "") or ""), rec.get("frequency", ""),
@@ -852,6 +883,26 @@ class RecipientDialog(QDialog):
         self.f_notes.setPlaceholderText("הערות")
         rtl_text_area(self.f_notes)
 
+        # נתמך חגים (v3.52): a general yes/no mark and — when on — which holidays.
+        # No holiday ticked = every holiday (the common case, one click).
+        self.f_holiday = QCheckBox("נתמך חגים")
+        self.f_holiday.setToolTip("סימון כללי: המשפחה נתמכת בחלוקות החגים. "
+                                  "אפשר לצמצם לחגים מסוימים בשורה שמתחת.")
+        self.f_holiday_boxes = {}
+        self._holiday_row = QWidget()
+        hl = QGridLayout(self._holiday_row)   # 3 per row — keeps the form narrow
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setHorizontalSpacing(12)
+        hl.setVerticalSpacing(2)
+        for i, name in enumerate(holidays.HOLIDAYS):
+            cb = QCheckBox(name)
+            self.f_holiday_boxes[name] = cb
+            hl.addWidget(cb, i // 3, i % 3)
+        hint = QLabel("לא סומן אף חג = כל החגים")
+        hint.setStyleSheet("color:#64748b; font-size:11.5px;")
+        hl.addWidget(hint, 2, 0, 1, 3)
+        self.f_holiday.toggled.connect(self._toggle_holiday_row)
+
         self.f_freq.currentTextChanged.connect(self._suggest_next)
         self.f_last_dist.dateChanged.connect(self._suggest_next)
         # Frequency is a קבוע-only concept — show/hide its row with the priority,
@@ -889,6 +940,8 @@ class RecipientDialog(QDialog):
         f1.addRow("עדיפות:", self.f_priority)
         f1.addRow("תדירות:", self.f_freq)
         f1.addRow("סטטוס:", self.f_status)
+        f1.addRow("חגים:", self.f_holiday)
+        f1.addRow("אילו חגים:", self._holiday_row)
         # On ADD these are meaningless and only add noise: 'חלוקה אחרונה' is set
         # automatically when a distribution is recorded (a new recipient has none
         # yet) and 'חלוקה הבאה' is auto-computed from the frequency (✦). Keep them
@@ -980,6 +1033,9 @@ class RecipientDialog(QDialog):
             self.f_freq.setCurrentIndex(max(0, self.f_freq.findText(rec.get("frequency") or "")))
             self.f_status.setCurrentIndex(max(0, self.f_status.findText(rec.get("status") or "פעיל")))
             self.f_notes.setPlainText(rec.get("notes") or "")
+            self.f_holiday.setChecked(holidays.is_supported(rec))
+            for name in holidays.parse_list(rec.get("holidays")):
+                self.f_holiday_boxes[name].setChecked(True)
             self.f_last_dist.set_from_iso(rec.get("last_distribution") or "")
             self.f_next_dist.set_from_iso(rec.get("next_distribution") or "")
 
@@ -1039,8 +1095,13 @@ class RecipientDialog(QDialog):
         # Set the initial visibility of the frequency row (setCurrentIndex above
         # doesn't fire the signal when the value was already index 0 = ללא).
         self._toggle_frequency_row()
+        self._toggle_holiday_row()
         # Collapse the extra phone rows; on edit, keep any already-filled ones open.
         self._init_phone_rows()
+
+    def _toggle_holiday_row(self, *_):
+        """The per-holiday row only matters while the general mark is on."""
+        self._form1.setRowVisible(self._holiday_row, self.f_holiday.isChecked())
 
     def _init_phone_rows(self):
         """Show only 'טלפון' by default; reveal 'טלפון נוסף' rows that already hold
@@ -1211,5 +1272,9 @@ class RecipientDialog(QDialog):
             "representative":     self.f_representative.text().strip(),
             "priority":           _PRIORITY_OPTIONS[self.f_priority.currentIndex()][1],
             "priority_raw":       _PRIORITY_OPTIONS[self.f_priority.currentIndex()][2],
+            "holiday_support":    1 if self.f_holiday.isChecked() else 0,
+            "holidays":           (holidays.to_field(n for n, cb in self.f_holiday_boxes.items()
+                                                     if cb.isChecked())
+                                   if self.f_holiday.isChecked() else ""),
         }
 

@@ -213,8 +213,47 @@ def to_number(val):
         return None
 
 
+# v3.52: criteria key for a HOLIDAY distribution (kupa manager, 16/9/2026).
+#   ''            → not a holiday distribution (no gate)
+#   HOLIDAY_ANY   → everyone marked "נתמך חגים" (general mark)
+#   '<holiday>'   → only people whose mark covers that holiday (see holidays.py)
+HOLIDAY_KEY = "holiday"
+HOLIDAY_ANY = "*"
+
+
+def holiday_criterion(criteria: dict) -> str:
+    return str((criteria or {}).get(HOLIDAY_KEY) or "").strip()
+
+
+def holiday_matches(rec: dict, criteria: dict) -> bool:
+    """Hard gate: does this recipient pass the holiday criterion (if any)?"""
+    want = holiday_criterion(criteria)
+    if not want:
+        return True
+    import holidays
+    return holidays.supports(rec, "" if want == HOLIDAY_ANY else want)
+
+
+def holiday_filter(rows: list, criteria: dict) -> list:
+    """Rows that pass the holiday gate; unchanged when no holiday criterion. Pure."""
+    if not holiday_criterion(criteria):
+        return list(rows)
+    return [r for r in rows if holiday_matches(r, criteria)]
+
+
+def holiday_label(criteria: dict) -> str:
+    """Hebrew text of the holiday criterion for chips/summaries ('' when off)."""
+    want = holiday_criterion(criteria)
+    if not want:
+        return ""
+    return "נתמכי חגים" if want == HOLIDAY_ANY else f"נתמכי {want}"
+
+
 def criteria_is_active(criteria: dict) -> bool:
-    """True if at least one field has a real (min or max) bound set."""
+    """True if at least one field has a real (min or max) bound set, or a
+    holiday criterion is chosen."""
+    if holiday_criterion(criteria):
+        return True
     for field, _label in FILTER_FIELDS:
         b = (criteria or {}).get(field) or {}
         if b.get("min") is not None or b.get("max") is not None:
@@ -228,7 +267,10 @@ def matches_criteria(rec: dict, criteria: dict) -> bool:
     A recipient whose value for a CONSTRAINED field is missing/unparseable is
     EXCLUDED — we can't confirm it falls inside the requested range, and this is a
     hard eligibility filter (unlike need-scoring, where missing data only lowers
-    rank). Fields with no bound set are ignored."""
+    rank). Fields with no bound set are ignored. The holiday criterion (v3.52)
+    is part of the same AND."""
+    if not holiday_matches(rec, criteria):
+        return False
     for field, _label in FILTER_FIELDS:
         b = (criteria or {}).get(field) or {}
         lo, hi = b.get("min"), b.get("max")

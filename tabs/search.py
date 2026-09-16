@@ -8,8 +8,9 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
 import database as db
 from utils.ui import (search_icon, busy_cursor, line_icon, enable_touch_scroll,
-                      PRIORITY_BADGES, STATUS_BADGES, ALIGN_RIGHT, reveal_in_folder,
-                      apply_header_icons)
+                      PRIORITY_BADGES, STATUS_BADGES, HOLIDAY_BADGES, ALIGN_RIGHT,
+                      reveal_in_folder, apply_header_icons)
+import holidays
 from utils.excel_utils import export_recipients_to_excel
 from utils.print_view import print_recipient_card
 
@@ -366,6 +367,7 @@ class SearchTab(QWidget):
         name_lbl.setWordWrap(True)
         self._hdr_lay.addWidget(name_lbl)
         for text, colors in ((_priority_display(rec), PRIORITY_BADGES),
+                             ("חגים" if holidays.is_supported(rec) else "", HOLIDAY_BADGES),
                              (rec.get("status", ""), STATUS_BADGES)):
             badge = _make_badge(text, colors)
             if badge is not None:
@@ -397,6 +399,7 @@ class SearchTab(QWidget):
         self._add_detail_row("area", "אזור", rec.get("area"))
         self._add_detail_row("users", "נפשות", rec.get("souls"))
         self._add_detail_row("freq", "תדירות", rec.get("frequency"))
+        self._add_detail_row("calendar", "נתמך חגים", holidays.display(rec))
         self._add_detail_row("calendar", "חלוקה אחרונה", _fdate(rec.get("last_distribution") or ""))
         self._add_detail_row("calendar", "חלוקה הבאה", _fdate(rec.get("next_distribution") or ""))
         self._add_detail_row("hash", "סה״כ חלוקות", len(hist))

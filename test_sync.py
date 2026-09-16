@@ -117,13 +117,18 @@ ok("B last_distribution rolled back",
    not db.get_recipient(b_id1)["last_distribution"])
 
 # ── New recipient on B → appears on A; delete propagates back ────────────────
-new_id = db.add_recipient({"full_name": "רחל אברהם", "phone1": "0503333333"})
+# v3.52: the 'נתמך חגים' mark travels with the card (general mark + subset).
+new_id = db.add_recipient({"full_name": "רחל אברהם", "phone1": "0503333333",
+                           "holiday_support": 1, "holidays": "פסח,סוכות"})
 sync.run_sync()
 use_machine(dir_a)
 sync.run_sync()
 names_a = {r["full_name"] for r in db.get_all_recipients()}
 ok("A received B's new recipient", "רחל אברהם" in names_a, str(names_a))
 a_new = [r for r in db.get_all_recipients() if r["full_name"] == "רחל אברהם"][0]
+ok("A received the holiday mark (v3.52)",
+   int(a_new.get("holiday_support") or 0) == 1 and a_new.get("holidays") == "פסח,סוכות",
+   f"{a_new.get('holiday_support')!r}/{a_new.get('holidays')!r}")
 db.delete_recipient(a_new["id"])
 sync.run_sync()
 use_machine(dir_b)

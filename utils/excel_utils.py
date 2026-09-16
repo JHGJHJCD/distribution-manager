@@ -240,6 +240,11 @@ def import_app_export(path: str) -> List[Dict]:
         for key in col_map:
             if key == "priority":
                 continue
+            if key == "holidays":
+                # v3.52: 'נתמך חגים' text → general mark + subset
+                import holidays
+                rec["holiday_support"], rec["holidays"] = holidays.from_text(cell(key))
+                continue
             if key in _DATE_KEYS:
                 rec[key] = _ddmmyyyy_to_iso(cell(key))
             elif key in _INT_KEYS:
@@ -559,7 +564,7 @@ def export_distribution_to_excel(recipients: List[Dict], dist_date: str) -> str:
 # Full recipient field set for the detailed export (key, Hebrew header).
 _FULL_FIELDS = [
     ("full_name", "שם מלא"), ("first_name", "שם פרטי"), ("last_name", "שם משפחה"),
-    ("priority", "עדיפות"),
+    ("priority", "עדיפות"), ("holidays", "נתמך חגים"),
     ("phone1", "טלפון 1"), ("phone2", "טלפון 2"), ("phone3", "טלפון 3"),
     ("address", "כתובת"), ("area", "אזור"), ("souls", "נפשות"),
     ("frequency", "תדירות"), ("last_distribution", "חלוקה אחרונה"),
@@ -584,6 +589,12 @@ def _priority_text(rec: Dict) -> str:
     if pr in _PRIORITY_LABELS:
         return _PRIORITY_LABELS[pr]
     return "חובת בירור" if "בירור" in (rec.get("priority_raw") or "") else ""
+
+
+def _holidays_text(rec: Dict) -> str:
+    """v3.52: 'נתמך חגים' column — '' / 'כל החגים' / 'פסח, סוכות'."""
+    import holidays
+    return holidays.display(rec)
 
 
 def _fmt_date(v) -> str:
@@ -653,6 +664,8 @@ def export_full_distribution_to_excel(recipients: List[Dict], dist_date: str,
         for key, _ in _FULL_FIELDS:
             if key == "priority":
                 row.append(_priority_text(rec))
+            elif key == "holidays":
+                row.append(_holidays_text(rec))
             elif key in _DATE_KEYS:
                 row.append(_fmt_date(rec.get(key)))
             else:
@@ -735,6 +748,8 @@ def export_recipients_to_excel(recipients: List[Dict]) -> str:
         for key, _ in _FULL_FIELDS:
             if key == "priority":
                 row.append(_priority_text(rec))
+            elif key == "holidays":
+                row.append(_holidays_text(rec))
             elif key in _DATE_KEYS:
                 row.append(_fmt_date(rec.get(key)))
             else:
@@ -809,6 +824,8 @@ def export_single_recipient_to_excel(rec: Dict,
     for key, _ in _FULL_FIELDS:
         if key == "priority":
             row.append(_priority_text(rec))
+        elif key == "holidays":
+            row.append(_holidays_text(rec))
         elif key in _DATE_KEYS:
             row.append(_fmt_date(rec.get(key)))
         else:
@@ -923,6 +940,8 @@ def export_history_to_excel(rows: List[Dict], title: str,
         for key, _ in _FULL_FIELDS:
             if key == "priority":
                 row.append(_priority_text(rec))
+            elif key == "holidays":
+                row.append(_holidays_text(rec))
             elif key in _DATE_KEYS:
                 row.append(_fmt_date(rec.get(key)))
             else:

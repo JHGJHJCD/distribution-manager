@@ -32,6 +32,10 @@ PRIORITY_BADGES = {
     "שנייה":  ("#fff8e1", "#e65100"),
     "בירור":  ("#f3e5f5", "#7b1fa2"),
 }
+# v3.52: the 'נתמך חגים' mark (filter chip + card badge).
+HOLIDAY_BADGES = {
+    "חגים":   ("#fce7f3", "#9d174d"),
+}
 STATUS_BADGES = {
     "פעיל":   ("#e8f5e9", "#1b5e20"),
     "מושהה":  ("#fff8e1", "#8b6914"),

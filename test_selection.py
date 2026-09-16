@@ -340,6 +340,38 @@ _lim3 = [{"id": i, "full_name": f"מ{i}"} for i in range(1, 6)]
 ok("L3 products=0 → no limit (everyone stays)",
    len(selection.limit_to_products(_lim3, 0, 5)) == 5)
 
+# ── v3.52: נתמך חגים — general mark + per-holiday subset, holiday gate ───────
+import holidays
+_h_all  = {"id": 1, "full_name": "כללי",  "holiday_support": 1, "holidays": ""}
+_h_some = {"id": 2, "full_name": "חלקי",  "holiday_support": 1, "holidays": "פסח,סוכות"}
+_h_none = {"id": 3, "full_name": "לא",    "holiday_support": 0, "holidays": "פסח"}
+_h_pool = [_h_all, _h_some, _h_none]
+ok("H1 general mark: supports() any holiday when subset empty",
+   holidays.supports(_h_all) and holidays.supports(_h_all, "חנוכה"))
+ok("H2 subset: only the listed holidays",
+   holidays.supports(_h_some, "פסח") and not holidays.supports(_h_some, "חנוכה")
+   and holidays.supports(_h_some))
+ok("H3 mark off → never supported, even with a subset text",
+   not holidays.supports(_h_none) and not holidays.supports(_h_none, "פסח"))
+ok("H4 display text", holidays.display(_h_all) == "כל החגים"
+   and holidays.display(_h_some) == "סוכות, פסח" and holidays.display(_h_none) == "")
+ok("H5 to_field: all ticked = '' ; canonical order; unknown dropped",
+   holidays.to_field(holidays.HOLIDAYS) == "" and holidays.to_field(["פסח", "סוכות", "זבל"]) == "סוכות,פסח")
+ok("H6 from_text round-trip (Excel import)",
+   holidays.from_text("כל החגים") == (1, "") and holidays.from_text("פסח, סוכות") == (1, "סוכות,פסח")
+   and holidays.from_text("") == (0, "") and holidays.from_text("לא") == (0, ""))
+ok("H7 criteria: no holiday key → no gate, not active",
+   len(selection.holiday_filter(_h_pool, {})) == 3 and not selection.criteria_is_active({}))
+ok("H8 criteria '*' → everyone with the mark; active",
+   [r["id"] for r in selection.holiday_filter(_h_pool, {"holiday": "*"})] == [1, 2]
+   and selection.criteria_is_active({"holiday": "*"}))
+ok("H9 criteria 'חנוכה' → only marks covering it; matches_criteria ANDs it",
+   [r["id"] for r in selection.holiday_filter(_h_pool, {"holiday": "חנוכה"})] == [1]
+   and not selection.matches_criteria(_h_some, {"holiday": "חנוכה"})
+   and selection.matches_criteria(_h_some, {"holiday": "פסח"}))
+ok("H10 holiday_label", selection.holiday_label({"holiday": "*"}) == "נתמכי חגים"
+   and selection.holiday_label({"holiday": "פסח"}) == "נתמכי פסח" and selection.holiday_label({}) == "")
+
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

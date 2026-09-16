@@ -16,6 +16,7 @@ from datetime import date
 from widgets import DateEdit
 import database as db
 import selection
+import holidays
 from utils.backup import auto_backup_async
 from utils.excel_utils import (export_distribution_to_excel, export_full_distribution_to_excel,
                                export_volunteer_checklist_to_excel, import_volunteer_checklist)
@@ -248,6 +249,28 @@ class FilterCriteriaDialog(QDialog):
             self._boxes[field] = (min_e, max_e)
         outer.addLayout(grid)
 
+        # ── Holiday distribution (v3.52, kupa manager 16/9/2026): only people
+        # marked 'נתמך חגים' (optionally for one specific holiday) get in. A hard
+        # gate on top of the numeric bounds — not a community top-up candidate.
+        outer.addSpacing(8)
+        hrow = QHBoxLayout()
+        hlbl = QLabel("חלוקת חג — רק נתמכי חגים:")
+        hlbl.setStyleSheet("font-weight:600;")
+        hrow.addWidget(hlbl)
+        self.holiday_combo = QComboBox()
+        self.holiday_combo.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._holiday_opts = [("לא (חלוקה רגילה)", ""), ("כל נתמכי החגים", selection.HOLIDAY_ANY)]
+        self._holiday_opts += [(f"נתמכי {h}", h) for h in holidays.HOLIDAYS]
+        for label, _code in self._holiday_opts:
+            self.holiday_combo.addItem(label)
+        cur = selection.holiday_criterion(criteria)
+        self.holiday_combo.setCurrentIndex(
+            next((i for i, (_l, c) in enumerate(self._holiday_opts) if c == cur), 0))
+        self.holiday_combo.setToolTip("מי שלא סומן 'נתמך חגים' בכרטיס המקבל לא ייכנס "
+                                      "לרשימה — גם לא כהשלמת קהילה.")
+        hrow.addWidget(self.holiday_combo, 1)
+        outer.addLayout(hrow)
+
         # ── Community balance (#lejmr) — on by default, off-switch in the dialog ─
         outer.addSpacing(8)
         self.chk_balance = QCheckBox("איזון בין קהילות — כל קהילה (לפי שם נציג) מקבלת "
@@ -299,6 +322,7 @@ class FilterCriteriaDialog(QDialog):
         for min_e, max_e in self._boxes.values():
             min_e.clear()
             max_e.clear()
+        self.holiday_combo.setCurrentIndex(0)
 
     def _open_assign(self):
         CommunityAssignDialog(self).exec()
@@ -316,6 +340,7 @@ class FilterCriteriaDialog(QDialog):
             hi = selection.to_number(max_e.text())
             out[field] = {"min": lo, "max": hi}
         out["balance_communities"] = self.chk_balance.isChecked()
+        out[selection.HOLIDAY_KEY] = self._holiday_opts[self.holiday_combo.currentIndex()][1]
         return out
 
 
@@ -510,13 +535,22 @@ class _ManualAddDialog(QDialog):
 
         # Quick filters (#4v4gt): by priority tier and by frequency.
         self._prio_filter = QComboBox()
-        for label in ("כולם", "כל העדיפויות", "קבוע", "ראשונה", "שנייה", "ללא עדיפות"):
+        for label in ("כולם", "כל העדיפויות", "קבוע", "ראשונה", "שנייה", "ללא עדיפות",
+                      "נתמך חגים"):
             self._prio_filter.addItem(label)
         self._prio_filter.setToolTip("«כולם» = כל הרשימה · «כל העדיפויות» = רק "
-                                     "קבוע / ראשונה / שנייה")
+                                     "קבוע / ראשונה / שנייה · «נתמך חגים» = מי שסומן כך בכרטיס")
         self._prio_filter.currentIndexChanged.connect(self._refill)
         self._prio_filter.currentIndexChanged.connect(self._sync_freq_filter)
         top.addWidget(self._prio_filter)
+
+        # Which holiday (v3.52) — enabled only while the filter is 'נתמך חגים'.
+        self._holiday_filter = QComboBox()
+        self._holiday_filter.addItem("כל החגים")
+        self._holiday_filter.addItems(holidays.HOLIDAYS)
+        self._holiday_filter.currentIndexChanged.connect(self._refill)
+        self._holiday_filter.setToolTip("סינון לפי חג מסוים — רלוונטי רק ל'נתמך חגים'")
+        top.addWidget(self._holiday_filter)
 
         # Frequency is a REGULARS-only notion (#dy39u): the combo is enabled
         # only while the priority filter is 'קבוע'; otherwise it resets and greys out.
@@ -579,6 +613,10 @@ class _ManualAddDialog(QDialog):
             # explicit 'ללא עדיפות' option still reveals them (operator request).
             if pr not in (2, 3, 4):
                 return False
+        elif p == "נתמך חגים":
+            h = self._holiday_filter.currentText()
+            if not holidays.supports(rec, "" if h == "כל החגים" else h):
+                return False
         else:
             want = {"קבוע": pr == 4, "ראשונה": pr == 3, "שנייה": pr == 2,
                     "ללא עדיפות": pr not in (2, 3, 4)}
@@ -595,6 +633,12 @@ class _ManualAddDialog(QDialog):
         return True
 
     def _sync_freq_filter(self, *_):
+        is_holiday = self._prio_filter.currentText() == "נתמך חגים"
+        if not is_holiday:
+            self._holiday_filter.blockSignals(True)
+            self._holiday_filter.setCurrentIndex(0)
+            self._holiday_filter.blockSignals(False)
+        self._holiday_filter.setEnabled(is_holiday)
         is_regular = self._prio_filter.currentText() == "קבוע"
         if not is_regular:
             self._freq_filter.blockSignals(True)
@@ -1073,21 +1117,26 @@ def _field(label_text: str, widget, maxw: int = None):
     return box
 
 
+_BADGE_QSS = ("QLabel{background:#0f9d78; color:#ffffff; border:none;"
+              " border-radius:14px; font-size:14px; font-weight:800;}")
+
+
 def _step_badge(num: str) -> QLabel:
     """A round green step number (① ② ③) — the visual thread of the flow.
     Shared with the צינתוקים screen so both read as one wizard."""
     b = QLabel(num)
     b.setFixedSize(28, 28)
     b.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    b.setStyleSheet("QLabel{background:#0f9d78; color:#ffffff; border:none;"
-                    " border-radius:14px; font-size:14px; font-weight:800;}")
+    b.setStyleSheet(_BADGE_QSS)
     return b
 
 
 def _step_card(num: str, title: str, hint: str = ""):
     """A white card headed by a step badge, a title and a muted hint. Returns
     (frame, body_layout, header_layout) — widgets added to header_layout land on
-    its far (left) side, past the stretch."""
+    its far (left) side, past the stretch. The badge and title label hang on
+    the frame (`frame.badge`, `frame.title_lbl`) so a screen can mark a step as
+    done (prepared for the tzintukim screen redesign)."""
     frame = QFrame()
     frame.setObjectName("ui-card")
     frame.setStyleSheet(_CARD_QSS)
@@ -1097,9 +1146,12 @@ def _step_card(num: str, title: str, hint: str = ""):
     outer.setSpacing(10)
     head = QHBoxLayout()
     head.setSpacing(10)
+    frame.badge = None
     if num:
-        head.addWidget(_step_badge(num))
+        frame.badge = _step_badge(num)
+        head.addWidget(frame.badge)
     tl = QLabel(title)
+    frame.title_lbl = tl
     tl.setStyleSheet("color:#064e3b; font-size:15px; font-weight:800; " + _LBL)
     head.addWidget(tl)
     if hint:
@@ -1842,7 +1894,13 @@ class GroupUpdateTab(QWidget):
                   "filter": "סינון מותאם"}
         mode = self._current_mode()
         if mode in labels:
-            self.chip_mode.setText("●  " + labels[mode])
+            text = labels[mode]
+            if mode == "filter":
+                # v3.52: a holiday distribution is named in the chip.
+                hl = selection.holiday_label(db.get_filter_criteria())
+                if hl:
+                    text += " · " + hl
+            self.chip_mode.setText("●  " + text)
             self.chip_mode.setVisible(True)
         else:
             self.chip_mode.setVisible(False)
@@ -2997,6 +3055,7 @@ class GroupUpdateTab(QWidget):
             self._checked_ids.clear()
             self._seen_ids.clear()
             self.refresh()
+            self._refresh_header_chips()
             if self.main_win:
                 self.main_win.status_msg("סינון מותאם עודכן")
             return True

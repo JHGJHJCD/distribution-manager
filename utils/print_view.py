@@ -386,6 +386,11 @@ def _priority_text(rec: Dict) -> str:
     return "חובת בירור" if "בירור" in (rec.get("priority_raw") or "") else ""
 
 
+def _holidays_text(rec: Dict) -> str:
+    import holidays
+    return holidays.display(rec)
+
+
 def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
     """A single recipient's printable card: details block + distribution history."""
     def _v(key):
@@ -399,6 +404,7 @@ def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
         ("אזור", _v("area")),
         ("נפשות", _esc(rec.get("souls") or "")),
         ("עדיפות", _esc(_priority_text(rec))),
+        ("נתמך חגים", _esc(_holidays_text(rec))),
         ("תדירות", _v("frequency")),
         ("סטטוס", _v("status")),
         ("חלוקה אחרונה", _esc(_fmt(rec.get("last_distribution")))),
