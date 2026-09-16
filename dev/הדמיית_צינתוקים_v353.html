@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>הדמיה — מסך צינתוקים (v3.42)</title>
+<style>
+  :root{--p:#0f9d78;--p2:#0f766e;--bg:#f5f7fb;--card:#fff;--line:#e6eaf2;--txt:#1e293b;--mut:#64748b;--amb:#f59e0b;--ambbg:#fdf0d5;--ambtx:#92600a;--grn:#d3ede1;--red:#fde2e2;--redtx:#991b1b}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);font-family:"Segoe UI",Arial,sans-serif;color:var(--txt);font-size:14px}
+  .wrap{max-width:1320px;margin:0 auto;padding:12px 20px 0}
+  .toolbar{display:flex;gap:8px;justify-content:center;padding:8px;background:#e2e8f0;position:sticky;top:0;z-index:5}
+  .toolbar button{border:1px solid #94a3b8;background:#fff;border-radius:8px;padding:6px 14px;cursor:pointer;font-family:inherit}
+  .toolbar button.on{background:var(--p);color:#fff;border-color:var(--p)}
+  h1{font-size:22px;font-weight:800;color:#064e3b;margin:0}
+  .sub{color:var(--mut);font-size:13px}
+  .head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  .head .sp{flex:1}
+  .chip{display:inline-flex;align-items:center;gap:6px;border-radius:16px;padding:5px 12px;font-size:13px;font-weight:600;background:#eef2f8;color:#475569}
+  .chip.g{background:var(--grn);color:#0f6e56}.chip.a{background:var(--ambbg);color:var(--ambtx)}.chip.r{background:var(--red);color:var(--redtx)}.chip.grey{background:#e5e7eb;color:#374151}
+  .chip b{font-size:15px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin-bottom:12px}
+  .card.done{border-color:#bfe3d3}
+  .ch{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .badge{width:30px;height:30px;border-radius:50%;background:var(--p);color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center;font-size:15px}
+  .badge.ok{background:#16a34a}
+  .badge.wait{background:#cbd5e1;color:#475569}
+  .ch h2{margin:0;font-size:17px}
+  .ch .hint{color:var(--mut);font-size:12.5px}
+  .ch .sp{flex:1}
+  .btn{border:1px solid #cbd5e1;background:#fff;border-radius:9px;padding:8px 14px;font-family:inherit;font-size:13.5px;cursor:pointer;color:#334155}
+  .btn.primary{background:var(--p);color:#fff;border-color:var(--p);font-weight:700}
+  .btn.hero{background:linear-gradient(180deg,#12b184,#0f9d78);color:#fff;border:none;font-weight:800;font-size:16px;padding:12px 28px;border-radius:12px;min-width:240px}
+  .btn.hero:disabled{background:#cbd5e1;color:#64748b}
+  .btn.accent{background:#fff4e5;border-color:#fcd9a6;color:#7c2d12;font-weight:600}
+  .btn.link{border:none;background:transparent;color:#b45309;text-decoration:underline}
+  .btn.stop{background:#fee2e2;border-color:#fca5a5;color:#991b1b}
+  .btn.sm{padding:5px 10px;font-size:12.5px}
+  /* empty-state tiles */
+  .tiles{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:12px}
+  .tile{border:1.5px solid var(--line);border-radius:12px;padding:16px;cursor:pointer;background:#fafcfe}
+  .tile.main{border-color:var(--p);background:#f0faf6;box-shadow:inset 0 0 0 1px var(--p)}
+  .tile .t{font-weight:800;font-size:16px;margin-bottom:4px}
+  .tile .d{color:var(--mut);font-size:13px;min-height:36px}
+  .tile .k{margin-top:10px}
+  /* source strip */
+  .src{display:flex;align-items:center;gap:10px;background:#eef2ff;border:1px solid #c7d2fe;border-radius:9px;padding:6px 12px;color:#3730a3;font-weight:600;margin-bottom:8px}
+  .src .sp{flex:1}
+  .tools{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .tools .sp{flex:1}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th{text-align:right;color:#475569;font-weight:700;background:#f8fafc;border-bottom:1px solid var(--line);padding:8px 10px;font-size:12.5px}
+  td{padding:0 10px;height:40px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+  tr.bad td{background:#fffbeb}
+  .st{display:inline-flex;align-items:center;gap:6px;border-radius:14px;padding:3px 10px;font-size:12.5px;font-weight:600}
+  .st.ok{background:var(--grn);color:#0f6e56}.st.warn{background:var(--ambbg);color:var(--ambtx)}.st.off{background:#f1f5f9;color:#64748b}.st.fail{background:var(--red);color:var(--redtx)}
+  .fix{color:#b45309;font-size:12.5px;text-decoration:underline;cursor:pointer;margin-inline-start:8px}
+  .foot{color:#94a3b8;font-size:12px;margin-top:6px}
+  /* message card */
+  .msg{display:grid;grid-template-columns:1.4fr 1fr;gap:14px}
+  .now{border:1px solid #cfe9df;background:#f0f9f6;border-radius:12px;padding:12px 14px}
+  .now.none{border-color:#efdead;background:#fdf7e7}
+  .now .l{font-size:12px;color:var(--mut);font-weight:700;letter-spacing:.3px}
+  .now .n{font-size:17px;font-weight:800;margin:4px 0 2px}
+  .now .m{color:var(--mut);font-size:13px;margin-bottom:10px}
+  .acts{display:flex;flex-direction:column;gap:8px;justify-content:center}
+  .acts .row{display:flex;gap:8px;flex-wrap:wrap}
+  .menu{border:1px dashed #cbd5e1;border-radius:9px;padding:8px 10px;font-size:12.5px;color:var(--mut);background:#fafcfe}
+  .menu b{color:#334155}
+  /* history */
+  .hist td{height:36px}
+  .mini{display:inline-flex;gap:4px;align-items:center}
+  .mini span{border-radius:10px;padding:1px 8px;font-size:12px;font-weight:700}
+  .mini .y{background:var(--grn);color:#0f6e56}.mini .n{background:var(--red);color:var(--redtx)}.mini .q{background:#e5e7eb;color:#374151}.mini .z{color:#94a3b8;font-weight:500}
+  /* bottom bar */
+  .bottom{position:sticky;bottom:0;background:var(--bg);padding:4px 20px 12px;margin:0 -20px}
+  .bar{background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px 16px;max-width:1280px;margin:0 auto}
+  .strip{border-radius:9px;padding:6px 12px;margin-bottom:8px;font-weight:600;display:flex;align-items:center;gap:10px}
+  .strip.sched{background:#fdf7e7;border:1px solid #efdead;color:#8a6410}
+  .strip.prog{background:#f0f9f6;border:1px solid #cfe9df;color:#0f766e;flex-direction:column;align-items:stretch;gap:6px}
+  .strip .sp{flex:1}
+  .pbar{height:10px;border-radius:5px;background:#e2e8f0;overflow:hidden}.pbar i{display:block;height:100%;width:45%;background:var(--p)}
+  .act{display:flex;align-items:center;gap:12px}
+  .ready{display:flex;gap:14px;align-items:center;font-weight:700;font-size:14px}
+  .ready .ok{color:#15803d}.ready .no{color:var(--ambtx)}
+  .ready small{font-weight:500;color:var(--mut)}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  מצב להדמיה:
+  <button class="on" onclick="show('loaded',this)">רשימה טעונה + הודעה מוכנה</button>
+  <button onclick="show('empty',this)">מסך ריק (עוד לא נטענה רשימה)</button>
+  <button onclick="show('sending',this)">בזמן שליחה</button>
+</div>
+
+<div class="wrap">
+  <!-- כותרת + צ'יפים חיים -->
+  <div class="head">
+    <div><h1>צינתוקים</h1><div class="sub">הודעה קולית לזכאי החלוקה דרך ימות המשיח</div></div>
+    <div class="sp"></div>
+    <span class="chip g" id="c-conn">● מחובר לימות המשיח · 1,834 יח'</span>
+    <span class="chip" id="c-list"><b>7</b> מוכנים לשליחה</span>
+    <span class="chip g" id="c-msg">🔊 הודעה מוכנה</span>
+    <span class="chip a" id="c-sched">🕒 תזמון ממתין: 1</span>
+  </div>
+
+  <!-- ① נמענים -->
+  <div class="card done" id="card1">
+    <div class="ch">
+      <div class="badge ok" id="b1">✓</div>
+      <h2>נמענים</h2><span class="hint">מי יקבל את הצינתוק</span>
+      <div class="sp"></div>
+      <span class="s-loaded"><button class="btn sm">החלף רשימה ▾</button></span>
+    </div>
+
+    <!-- מצב ריק: שלושה אריחים -->
+    <div class="s-empty hidden">
+      <div class="tiles">
+        <div class="tile main">
+          <div class="t">📋 רשימת החלוקה הנוכחית</div>
+          <div class="d">הזכאים ממסך "חלוקה ורישום" (בלי הרזרבות) — <b>8 משפחות השבוע</b></div>
+          <div class="k"><button class="btn primary">טען את הרשימה</button></div>
+        </div>
+        <div class="tile">
+          <div class="t">🗂 חלוקה קודמת…</div>
+          <div class="d">בחירה מרשימת החלוקות שנרשמו — למשל להזכיר למי שלא הגיע</div>
+          <div class="k"><button class="btn">בחר חלוקה</button></div>
+        </div>
+        <div class="tile">
+          <div class="t">📝 רשימה עצמאית…</div>
+          <div class="d">מדביקים מספרי טלפון או טוענים אקסל — בלי קשר לחלוקות</div>
+          <div class="k"><button class="btn">הדבק / טען אקסל</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- מצב טעון -->
+    <div class="s-loaded">
+      <div class="src">📋 רשימת החלוקה הנוכחית — חלוקת פרשת כי-תבוא (16/09/2026)<div class="sp"></div><span style="font-weight:500;color:#4338ca;font-size:12.5px">מתעדכנת לבד עם מסך "חלוקה ורישום"</span></div>
+      <div class="tools">
+        <span class="chip"><b>8</b> זכאים</span>
+        <span class="chip g"><b>7</b> מוכנים לשליחה</span>
+        <span class="chip a" title="לחיצה מציגה רק את החריגים"><b>1</b> חריגים · הצג רק אותם</span>
+        <div class="sp"></div>
+        <button class="btn sm">סמן את כולם</button><button class="btn sm">נקה סימון</button>
+        <button class="btn sm accent">＋ הוסף אדם</button>
+      </div>
+      <table>
+        <thead><tr><th style="width:36px"></th><th>שם</th><th style="width:330px">טלפון</th><th style="width:230px">מצב</th></tr></thead>
+        <tbody>
+          <tr><td>☑</td><td>כהן יוסף</td><td>052-1234567, 053-9876543</td><td><span class="st ok">● מוכן</span></td></tr>
+          <tr><td>☑</td><td>לוי שרה</td><td>050-7654321</td><td><span class="st ok">● מוכן</span></td></tr>
+          <tr><td>☑</td><td>פרידמן משה</td><td>04-6543210</td><td><span class="st ok">● מוכן</span></td></tr>
+          <tr class="bad"><td>☐</td><td>אברהם דוד</td><td>—</td><td><span class="st warn">⚠ אין מספר טלפון</span><span class="fix">פתח כרטיס</span></td></tr>
+          <tr><td>☑</td><td>מזרחי רחל</td><td>054-1112233</td><td><span class="st ok">● מוכן</span></td></tr>
+          <tr><td>☑</td><td>ביטון אליהו</td><td>058-4445566 <span style="color:#94a3b8">(052-1234567 — של כהן, יצולצל פעם אחת)</span></td><td><span class="st ok">● מוכן</span></td></tr>
+          <tr><td>☑</td><td>שלום חנה</td><td>053-7778899</td><td><span class="st ok">● מוכן</span></td></tr>
+          <tr><td>☐</td><td>גולדברג יעקב</td><td>050-2223344</td><td><span class="st off">לא נשלח (לא מסומן)</span></td></tr>
+        </tbody>
+      </table>
+      <div class="foot">☑ = יקבל צינתוק · כל המספרים של כל משפחה מצולצלים · מספר משותף מצולצל פעם אחת · חריגים לא נשלחים</div>
+    </div>
+  </div>
+
+  <!-- ② ההודעה -->
+  <div class="card done" id="card2">
+    <div class="ch">
+      <div class="badge ok" id="b2">✓</div>
+      <h2>ההודעה המושמעת</h2><span class="hint">מה ישמעו בטלפון</span>
+      <div class="sp"></div>
+      <button class="btn link sm">פרסם בשלוחה 1…</button>
+    </div>
+    <div class="msg">
+      <div class="now" id="now">
+        <div class="l">ההודעה הנוכחית</div>
+        <div class="n">🔊 «חלוקת פרשת כי-תבוא»</div>
+        <div class="m">הועלתה לפני 3 ימים ממחשב המנהל · 41 שניות</div>
+        <button class="btn">📞 שלח בדיקה למספר שלי</button>
+        <button class="btn sm" style="margin-inline-start:6px">▶ השמע במחשב</button>
+      </div>
+      <div class="acts">
+        <div class="row">
+          <button class="btn primary">🎙 הודעה חדשה ▾</button>
+          <button class="btn">🎵 מאגר הקלטות</button>
+        </div>
+        <div class="menu">תפריט "הודעה חדשה": <b>הקלט במיקרופון</b> · <b>צור מטקסט (המחשב מקריא)</b> · <b>העלה קובץ שמע</b></div>
+        <div class="foot">💡 בסוף ההקלטה: "לאישור הגעה חייגו חזרה לקו והקישו 77: 1 מגיע, 2 לא מגיע, 3 לא יודע". התשובות יופיעו ליד כל שם.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- היסטוריה -->
+  <div class="card">
+    <div class="ch">
+      <div class="badge wait">🕘</div>
+      <h2>היסטוריית צינתוקים</h2><span class="hint">כל השליחות, משני המחשבים · לחיצה כפולה = פירוט לפי שם</span>
+      <div class="sp"></div>
+      <button class="btn sm">פירוט לפי שם ומספר</button>
+      <button class="btn sm">רענן תשובות</button>
+      <button class="btn sm">היסטוריה מהשרת</button>
+      <button class="btn sm">ייצוא לאקסל</button>
+    </div>
+    <div class="foot" style="margin:0 0 6px">היסטוריה מהשרת נמשכה לפני 2 שעות · רץ לבד פעם ביום</div>
+    <table class="hist">
+      <thead><tr><th>מתי</th><th>הצינתוק</th><th style="width:130px">מצב</th><th style="width:70px">נשלחו</th><th style="width:70px">הצליחו</th><th style="width:70px">נכשלו</th><th style="width:260px">תשובות בסקר (1 מגיע · 2 לא · 3 לא יודע)</th></tr></thead>
+      <tbody>
+        <tr><td>מחר 09:00 <small style="color:#94a3b8">(מחשב המנהל)</small></td><td>חלוקה של השבוע</td><td><span class="st warn">⏳ מתוזמן</span></td><td>8</td><td>—</td><td>—</td><td><span class="mini z">—</span></td></tr>
+        <tr><td>לפני 4 ימים <small style="color:#94a3b8">(מחשב המנהל)</small></td><td>חלוקת פרשת כי-תבוא</td><td><span class="st ok">הסתיים</span></td><td>8</td><td>6</td><td>2</td><td><span class="mini"><span class="y">✓ 1 מגיע</span><span class="n">✗ 1 לא</span><span class="q">? 0</span><span class="z">· 4 לא הגיבו</span></span></td></tr>
+        <tr><td>לפני 11 ימים <small style="color:#94a3b8">(מחשב המנהל)</small></td><td>חלוקת פרשת כי-תצא</td><td><span class="st ok">הסתיים</span></td><td>8</td><td>6</td><td>2</td><td><span class="mini"><span class="y">✓ 1 מגיע</span><span class="n">✗ 1 לא</span><span class="q">? 0</span><span class="z">· 4 לא הגיבו</span></span></td></tr>
+        <tr><td>לפני 18 ימים <small style="color:#94a3b8">(מחשב המזכירה)</small></td><td>חלוקת פרשת שופטים</td><td><span class="st fail">נעצר ⛔</span></td><td>8</td><td>3</td><td>1</td><td><span class="mini"><span class="y">✓ 1 מגיע</span><span class="n">✗ 0 לא</span><span class="q">? 0</span><span class="z">· 2 לא הגיבו</span></span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div style="height:8px"></div>
+</div>
+
+<!-- ③ סרגל תחתון -->
+<div class="bottom"><div class="bar">
+  <div class="strip sched s-loaded s-empty">🕒 צינתוק מתוזמן למחר 09:00 — 8 נמענים, "חלוקה של השבוע". המחשב לא חייב להיות דלוק.<div class="sp"></div><button class="btn sm">בטל תזמון</button></div>
+  <div class="strip prog s-sending hidden">
+    <div style="display:flex;align-items:center;gap:10px">📡 שולח עכשיו — "חלוקת פרשת כי-תבוא" · 9 מספרים<div class="sp"></div><button class="btn sm stop">⛔ עצור שליחה</button></div>
+    <div class="pbar"><i></i></div>
+    <div style="display:flex;gap:14px;font-weight:600"><span style="color:#0f6e56">✓ 4 קיבלו</span><span style="color:#a32d2d">✗ 1 נכשלו</span><span style="color:#5f6d69">⏳ 4 ממתינים</span><span class="sp"></span><span>תשובות בסקר: <span class="mini"><span class="y">✓ 1</span><span class="n">✗ 0</span><span class="q">? 0</span></span></span></div>
+  </div>
+  <div class="act">
+    <div class="badge" id="b3">3</div>
+    <div class="ready" id="ready">
+      <span class="ok">☑ 7 נמענים</span><span class="ok">☑ הודעה «חלוקת פרשת כי-תבוא»</span><small>· 1 חריג לא יישלח</small>
+    </div>
+    <div class="sp"></div>
+    <button class="btn">📅 תזמן שליחה…</button>
+    <button class="btn">👥 שגר לפי השעה של כל אחד…</button>
+    <button class="btn hero" id="send">✈ שלח עכשיו ל-7</button>
+  </div>
+</div></div>
+
+<script>
+function show(state, el){
+  document.querySelectorAll('.toolbar button').forEach(b=>b.classList.remove('on')); el.classList.add('on');
+  const empty = state==='empty', sending = state==='sending';
+  document.querySelectorAll('.s-empty').forEach(e=>e.classList.toggle('hidden',!empty));
+  document.querySelectorAll('.s-loaded').forEach(e=>e.classList.toggle('hidden',empty));
+  document.querySelectorAll('.s-sending').forEach(e=>e.classList.toggle('hidden',!sending));
+  // schedule strip: show in loaded/empty, hide while sending
+  document.querySelector('.strip.sched').classList.toggle('hidden', sending);
+  const b1=document.getElementById('b1'), c1=document.getElementById('card1');
+  b1.textContent = empty?'1':'✓'; b1.className = 'badge'+(empty?'':' ok'); c1.classList.toggle('done',!empty);
+  document.getElementById('c-list').innerHTML = empty?'☐ עוד לא נטענה רשימה':'<b>7</b> מוכנים לשליחה';
+  document.getElementById('c-list').className = 'chip'+(empty?' grey':' g');
+  const r=document.getElementById('ready'), s=document.getElementById('send');
+  if(empty){ r.innerHTML='<span class="no">☐ טען רשימת נמענים (למעלה, שלב 1)</span><span class="ok">☑ הודעה מוכנה</span>'; s.disabled=true; s.textContent='✈ שלח עכשיו'; }
+  else if(sending){ r.innerHTML='<span class="ok">☑ 7 נמענים</span><span class="ok">☑ הודעה</span><small>· השליחה רצה — הכפתורים נעולים עד הסיום</small>'; s.disabled=true; s.textContent='שולח…'; }
+  else { r.innerHTML='<span class="ok">☑ 7 נמענים</span><span class="ok">☑ הודעה «חלוקת פרשת כי-תבוא»</span><small>· 1 חריג לא יישלח</small>'; s.disabled=false; s.textContent='✈ שלח עכשיו ל-7'; }
+}
+</script>
+</body>
+</html>

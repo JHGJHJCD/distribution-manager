@@ -2731,6 +2731,64 @@ stmod._BgWorker.start = _orig30["bg_start"]
 db.set_setting(yemot.SET_CALLER_ID, "")
 canned.pop("GetCustomerData", None)
 
+# ── 31. v3.53 — שומר השליחה-הכפולה מזהה רשומה *חדשה* לפי מזהה, לא לפי "החדשה ביותר לפי שעה" ──
+print("— v3.53: מרוץ בזמן חלון האישור כשהרשומה החדשה של המחשב השני נושאת שעה ישנה יותר —")
+tab._retire_trackers()
+for _c in db.get_tzintuk_campaigns():
+    if _c.get("status") in ("sending", "stopping", "scheduled"):
+        db.update_tzintuk_campaign(_c["guid"], 0, 0, "done")
+_day31 = "2031-03-05"                     # תאריך קבוע — לא תלוי ביום בשבוע שבו הבדיקה רצה
+tab.load_batch({"id": 3131, "dist_name": "חלוקת פורים", "dist_date": _day31})
+tab._rows = [{"rec": {"id": 7401, "full_name": "משפחה ל"}, "phones": ["0521111111"],
+              "send": ["0521111111"], "checked": True, "why": "", "manual": False}]
+# רשומה קיימת לתאריך הזה עם שעת-שליחה *מאוחרת* (תזמון שרץ ונסגר) — עד עכשיו היא
+# הסתירה כל שליחה חדשה של המחשב השני שנרשמה עם שעה מוקדמת ממנה.
+_late31 = (datetime.now(_tz.utc) + _td(hours=5)).isoformat()
+_g_old31 = db.add_tzintuk_campaign("תזמון שרץ", _day31, "1117319", "c-old31", 3,
+                                   sent_at=_late31, device="אחר")
+db.update_tzintuk_campaign(_g_old31, 3, 0, "done")
+_calls31, _msgs31 = [], []
+_orig31 = {"run": yemot.run_campaign, "ensure": yemot.ensure_template,
+           "exec": tzmod._SendModeDialog.exec, "info": tzmod.QMessageBox.information,
+           "warn": tzmod.QMessageBox.warning, "question": tzmod.QMessageBox.question,
+           "run_blocking": tab._run_blocking}
+yemot.ensure_template = lambda: "1117319"
+yemot.run_campaign = lambda phones, *a, **k: (_calls31.append(("run", dict(phones)))
+                                              or {"campaignId": "c-31", "entriesCount": len(phones)})
+tzmod.QMessageBox.information = staticmethod(lambda *a, **k: _msgs31.append(str(a[2]) if len(a) > 2 else "") or 0)
+tzmod.QMessageBox.warning = staticmethod(lambda *a, **k: _msgs31.append(str(a[2]) if len(a) > 2 else "") or 0)
+tzmod.QMessageBox.question = staticmethod(lambda *a, **k: tzmod.QMessageBox.StandardButton.Yes)
+tab._run_blocking = lambda fn, text="": fn()
+_early31 = (datetime.now(_tz.utc) - _td(minutes=10)).isoformat()   # שעון המחשב השני מפגר
+
+
+def _exec_peer_early(self):
+    db.add_tzintuk_campaign("שליחה מהמחשב השני (שעון מפגר)", _day31, "1117319", "c-peer31", 3,
+                            sent_at=_early31, device="אחר")
+    self.mode = "voice"
+    return 1
+
+
+tzmod._SendModeDialog.exec = _exec_peer_early
+tab._send()
+ok("v3.53: שליחת המחשב השני עם שעה ישנה יותר מזוהה — השליחה נעצרת",
+   not any(c[0] == "run" for c in _calls31), str(_calls31))
+ok("…עם הסבר על צינתוק שנקלט בזמן החלון", any("נקלט צינתוק" in m for m in _msgs31), str(_msgs31[-1:]))
+_calls31.clear(); _msgs31.clear()
+tzmod._SendModeDialog.exec = lambda self: (setattr(self, "mode", "voice") or 1)
+tab._send()
+ok("…ובלי שינוי בזמן החלון — השליחה יוצאת (השומר לא חוסם סתם)",
+   [c[0] for c in _calls31] == ["run"], str(_calls31) + " " + str(_msgs31[-1:]))
+tab._retire_trackers()
+for _c in db.get_tzintuk_campaigns():
+    if _c.get("dist_date") == _day31 and _c.get("status") in ("sending", "stopping"):
+        db.update_tzintuk_campaign(_c["guid"], 0, 0, "done")
+yemot.run_campaign = _orig31["run"]; yemot.ensure_template = _orig31["ensure"]
+tzmod._SendModeDialog.exec = _orig31["exec"]; tzmod.QMessageBox.information = _orig31["info"]
+tzmod.QMessageBox.warning = _orig31["warn"]; tzmod.QMessageBox.question = _orig31["question"]
+tab._run_blocking = _orig31["run_blocking"]
+tab._clear_batch()
+
 
 print()
 if fails:

@@ -540,6 +540,17 @@ def _(y, t, test, rel):
     okk = okk and "'בדוק חיבור' לא קורא לשרת על ה-UI thread" in test
     return bool(okk), ""
 
+@lint("I51", "v3.53 — שומר השליחה-הכפולה מזהה רשומה חדשה לפי מזהה: _date_campaign_guids נלקח לפני הדיאלוג ב-_send/_schedule/_smart_schedule ומועבר ל-_changed_meanwhile(seen_before)")
+def _(y, t, test, rel):
+    okk = "seen_before" in _func_body(t, "_changed_meanwhile") and "def _date_campaigns" in t
+    for n in ("_send", "_schedule", "_smart_schedule"):
+        body = _func_body(t, n)
+        okk = okk and ("seen = self._date_campaign_guids(dist_date)" in body
+                       and "_changed_meanwhile(dist_date, pending, prev, seen)" in body)
+    okk = okk and "שעה ישנה יותר מזוהה" in test
+    return bool(okk), ""
+
+
 if __name__ == "__main__":
     args = set(sys.argv[1:])
     ok = True

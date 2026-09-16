@@ -83,6 +83,13 @@ to exercise the thing you changed.
   (`styles.apply_app_theme(app, pct)` repolishes and wakes the content), run 4+
   `processEvents()`, and for a full-page proof grab the INNER widget directly:
   `tab.findChild(QScrollArea).widget().grab()` — that render is always clean.
+- **A whole-tab grab that comes out BLACK (v3.53, צינתוקים):** the same WA_DontShowOnScreen
+  paint artifact can produce an all-black PNG (~9KB instead of ~150KB) — and it is flaky:
+  one run paints, the next does not. Never trust a grab by its existence; check the file
+  size and retry. The idiom in `dev/_shot_tzintuk.py` is `grab_ok(widget, path)`: grab →
+  if the PNG is under ~40KB, `styles.apply_app_theme(app, pct)` + `widget.repaint()` +
+  12× `processEvents()` → grab again (up to 4 tries, then `AssertionError`). Gemini says
+  "התמונה ריקה לחלוטין (שחורה)" when you forgot this.
 - **Selecting a table row in a probe:** `table.selectRow(n)` silently does nothing
   in dialog tables here — use `table.setCurrentCell(n, 0)` (with SelectRows
   behavior it highlights the whole row and fires `itemSelectionChanged`).
