@@ -789,12 +789,18 @@ class RecipientsTab(QWidget):
 
 # ─── Add/Edit dialog ──────────────────────────────────────────────────────────
 
+from utils.mailer import valid_email as _email_valid
+
+
 class RecipientDialog(QDialog):
     def __init__(self, parent=None, rec: dict = None):
         super().__init__(parent)
         self.setWindowTitle("הוספת מקבל" if rec is None else "עריכת מקבל")
         self.setMinimumSize(600, 560)
-        self.resize(640, 620)
+        # גבוה מספיק כדי שכל "פרטים בסיסיים" ייראה בלי גלילה (מוגבל לגובה המסך).
+        scr = self.screen().availableGeometry().height() if self.screen() else 800
+        self.resize(640, max(560, min(780, scr - 80)))
+        self._orig_area = ""
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._build(rec)
 
@@ -803,6 +809,7 @@ class RecipientDialog(QDialog):
         outer = QVBoxLayout(self)
 
         tabs = QTabWidget()
+        self.tabs = tabs
         tabs.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         # The 4 tab titles didn't fit the dialog width → the last tab ('מידע מנהלי')
         # was clipped to 'מידע' behind scroll-arrows (bug #7y8o0). Let the bar share
@@ -926,20 +933,29 @@ class RecipientDialog(QDialog):
             "QPushButton:hover{color:#0b5c55; text-decoration:underline;}")
         self.btn_add_phone.clicked.connect(self._reveal_next_phone)
 
-        f1.addRow("שם פרטי:", self.f_first)
-        f1.addRow("שם משפחה:", self.f_last)
-        f1.addRow("טלפון:", self.f_phone1)
+        # זוגות בשורה אחת — כדי שכל "פרטים בסיסיים" ייכנס בלי גלילה גם במסך נמוך.
+        def _pair(w1, label2, w2):
+            box = QWidget()
+            hb = QHBoxLayout(box)
+            hb.setContentsMargins(0, 0, 0, 0)
+            hb.setSpacing(8)
+            hb.addWidget(w1, 1)
+            hb.addWidget(QLabel(label2))
+            hb.addWidget(w2, 1)
+            return box
+        f1.addRow("שם פרטי *:", _pair(self.f_first, "משפחה:", self.f_last))
+        f1.addRow("טלפון:", _pair(self.f_phone1, "כתובת:", self.f_address))
         f1.addRow("טלפון נוסף:", self.f_phone2)
         f1.addRow("טלפון נוסף:", self.f_phone3)
         f1.addRow("", self.btn_add_phone)
-        f1.addRow("כתובת:", self.f_address)
-        f1.addRow("אזור:", self.f_area)
-        f1.addRow("נפשות:", self.f_souls)
+        # 'אזור' ירד מהטופס (הכרעת המשתמש 17/9/2026 — שדה לא רלוונטי). הווידג'ט נשאר
+        # לא-מוצג והערך הקיים נשמר כמו שהוא ב-get_data (self._orig_area).
+        self.f_area.setVisible(False)
+        f1.addRow("נפשות:", _pair(self.f_souls, "סטטוס:", self.f_status))
         # עדיפות מעל תדירות (#3jiq8): התדירות נגזרת מהעדיפות ונפתחת רק כשהיא 'קבוע',
         # לכן העדיפות באה קודם — ואז שורת התדירות מופיעה/נעלמת מתחתיה.
         f1.addRow("עדיפות:", self.f_priority)
         f1.addRow("תדירות:", self.f_freq)
-        f1.addRow("סטטוס:", self.f_status)
         f1.addRow("חגים:", self.f_holiday)
         f1.addRow("אילו חגים:", self._holiday_row)
         # On ADD these are meaningless and only add noise: 'חלוקה אחרונה' is set
@@ -948,8 +964,7 @@ class RecipientDialog(QDialog):
         # only when editing an existing recipient (to view or correct). The widgets
         # are still created above, so get_data()/validation keep working.
         if rec is not None:
-            f1.addRow("חלוקה אחרונה:", self.f_last_dist)
-            f1.addRow("חלוקה הבאה ✦:", self.f_next_dist)
+            f1.addRow("חלוקה אחרונה:", _pair(self.f_last_dist, "הבאה ✦:", self.f_next_dist))
         f1.addRow("הערות:", self.f_notes)
 
         # ── Tab 2: פרטים אישיים ─────────────────────────────────────────────
@@ -1028,7 +1043,7 @@ class RecipientDialog(QDialog):
             self.f_phone2.setText(rec.get("phone2") or "")
             self.f_phone3.setText(rec.get("phone3") or "")
             self.f_address.setText(rec.get("address") or "")
-            self.f_area.setCurrentIndex(max(0, self.f_area.findText(rec.get("area") or "")))
+            self._orig_area = rec.get("area") or ""
             self.f_souls.setValue(int(rec.get("souls") or 0))
             self.f_freq.setCurrentIndex(max(0, self.f_freq.findText(rec.get("frequency") or "")))
             self.f_status.setCurrentIndex(max(0, self.f_status.findText(rec.get("status") or "פעיל")))
@@ -1084,6 +1099,7 @@ class RecipientDialog(QDialog):
         btns = QHBoxLayout()
         btn_ok = QPushButton("שמור")
         btn_ok.setObjectName("primary")
+        btn_ok.setDefault(True)
         btn_ok.clicked.connect(self._validate_and_accept)
         btn_cancel = QPushButton("ביטול")
         btn_cancel.setObjectName("neutral")
@@ -1098,6 +1114,11 @@ class RecipientDialog(QDialog):
         self._toggle_holiday_row()
         # Collapse the extra phone rows; on edit, keep any already-filled ones open.
         self._init_phone_rows()
+        self.f_email.textChanged.connect(
+            lambda t: _mark(self.f_email, bool(t.strip()) and not _email_valid(t),
+                            "כתובת מייל לא תקינה — מיילים לא יישלחו אליה"))
+        self.f_email.textChanged.emit(self.f_email.text())   # סמן גם כתובת שגויה קיימת
+        self.f_first.setFocus()
 
     def _toggle_holiday_row(self, *_):
         """The per-holiday row only matters while the general mark is on."""
@@ -1157,6 +1178,8 @@ class RecipientDialog(QDialog):
     def _validate_and_accept(self):
         errors = self._collect_errors()
         if errors:
+            # קפוץ ללשונית של השגיאה הראשונה — אחרת המשתמש לא רואה את השדה האדום.
+            self.tabs.setCurrentIndex(0)
             QMessageBox.warning(self, "יש לתקן לפני שמירה",
                                 "• " + "\n• ".join(errors))
             return
@@ -1243,7 +1266,7 @@ class RecipientDialog(QDialog):
             "phone2":             self.f_phone2.text().strip(),
             "phone3":             self.f_phone3.text().strip(),
             "address":            self.f_address.text().strip(),
-            "area":               self.f_area.currentText(),
+            "area":               self._orig_area,
             "souls":              self.f_souls.value(),
             "frequency":          self._effective_frequency(),
             "status":             self.f_status.currentText(),
