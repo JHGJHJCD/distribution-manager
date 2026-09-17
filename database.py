@@ -499,10 +499,12 @@ def init_db():
             conn.execute("ALTER TABLE distributions ADD COLUMN guid TEXT DEFAULT ''")
         # v3.60 back-fill (once): a card date that no history row explains came
         # from the Excel import / was typed — remember it as the base.
-        if "last_dist_base" in newly_added:
-            for r in conn.execute(
-                    "SELECT id FROM recipients WHERE COALESCE(last_distribution,'')!=''").fetchall():
-                _adopt_last_base(conn, r["id"])
+        # Every start re-derives last/next for everyone (cheap; ~500 rows): a card
+        # left stale by an older version (a peer's edit rolled the date back) heals
+        # itself instead of waiting for the next write to that recipient.
+        for r in conn.execute("SELECT id FROM recipients").fetchall():
+            _adopt_last_base(conn, r["id"])
+            _recompute_recipient_dates(conn, r["id"])
         batch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dist_batches)")}
         if "guid" not in batch_cols:
             conn.execute("ALTER TABLE dist_batches ADD COLUMN guid TEXT DEFAULT ''")
@@ -753,6 +755,8 @@ def bulk_insert_recipients(rows: list) -> int:
             cur = conn.execute(sql, vals)
             conn.execute("UPDATE recipients SET guid=?, updated_at=? WHERE id=?",
                          (uuid.uuid4().hex, _utc_now(), cur.lastrowid))
+            _adopt_last_base(conn, cur.lastrowid)
+            _recompute_recipient_dates(conn, cur.lastrowid)
             new_ids.append(cur.lastrowid)
             count += 1
     for rid in new_ids:
@@ -1648,8 +1652,11 @@ def _valid_iso(s) -> str:
 def _history_last(conn, rec_id) -> str:
     # received=1 only: a recorded no-show must never become someone's
     # "last distribution" — they didn't actually receive anything.
+    # Only real ISO dates compete: one junk legacy value ("26/08/2026") sorts above
+    # every ISO string and would otherwise hide the whole history.
     row = conn.execute("SELECT MAX(dist_date) AS m FROM distributions "
-                       "WHERE recipient_id=? AND received=1", (rec_id,)).fetchone()
+                       "WHERE recipient_id=? AND received=1 AND dist_date GLOB "
+                       "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'", (rec_id,)).fetchone()
     return _valid_iso(row["m"] if row else "")
 
 
@@ -1685,7 +1692,8 @@ def _recompute_recipient_dates(conn, rec_id):
     if base and hist and base > (date.today() + timedelta(days=7)).isoformat():
         base = ""
     last = max(hist, base)
-    if last and freq and freq != "חד-פעמי":
+    if freq and freq != "חד-פעמי":
+        # never served → due at the upcoming Wednesday (same answer get_weekly_list gives)
         nxt = calculate_next_dist(last, freq).isoformat()
     else:
         nxt = ""
@@ -2212,7 +2220,8 @@ def undo_incoming(incoming_id: int):
                         force_delete_recipient(local["id"])
             else:
                 fields = {k: v for k, v in before.items()
-                          if k not in ("id", "updated_at", "created_at")}
+                          if k not in ("id", "updated_at", "created_at",
+                                       "last_distribution", "next_distribution")}
                 if local:
                     update_recipient(local["id"], fields)
                 else:
@@ -2328,6 +2337,7 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
         added = 0
         updated = 0
         conflicts = []
+        touched = []      # ids to send to the other computer once committed
         for row_idx, row in enumerate(rows, start=1):
             name = (row.get("full_name") or "").strip()
             if not name:
@@ -2365,6 +2375,9 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
                     sets = ", ".join(f"{k}=?" for k in updates)
                     vals = list(updates.values()) + [ex["id"]]
                     conn.execute(f"UPDATE recipients SET {sets} WHERE id=?", vals)
+                    conn.execute("UPDATE recipients SET updated_at=? WHERE id=?",
+                                 (_utc_now(), ex["id"]))
+                    touched.append(ex["id"])
                     ex.update(updates)
                     updated += 1
                     _adopt_last_base(conn, ex["id"])
@@ -2384,11 +2397,22 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
                     f"VALUES ({','.join(['?']*len(insert_cols))})",
                     insert_vals
                 )
+                conn.execute("UPDATE recipients SET guid=?, updated_at=? WHERE id=?",
+                             (uuid.uuid4().hex, _utc_now(), cur.lastrowid))
+                touched.append(cur.lastrowid)
                 _adopt_last_base(conn, cur.lastrowid)
                 _recompute_recipient_dates(conn, cur.lastrowid)
                 existing[name] = {"id": cur.lastrowid, "full_name": name,
                                   **{c: row.get(c, "") for c in insert_cols if c != "full_name"}}
                 added += 1
+    if touched:
+        with get_connection() as conn:     # one read for all (500-row imports)
+            marks = ",".join("?" * len(touched))
+            recs = [dict(r) for r in conn.execute(
+                f"SELECT * FROM recipients WHERE id IN ({marks})", touched)]
+        for rec in recs:
+            _sync_log("rec_upsert", {"guid": rec.get("guid") or "",
+                                     "data": {k: v for k, v in rec.items() if k != "id"}})
     return added, updated, conflicts
 
 

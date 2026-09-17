@@ -585,6 +585,68 @@ check("S4 a stale date riding on a card edit can't roll the dates back",
       db.get_recipient(_sid)["last_distribution"] == _wed.isoformat()
       and db.get_recipient(_sid)["next_distribution"] == calculate_next_dist(_wed.isoformat(), "חודשי").isoformat())
 
+# v3.61 — /בודק-באגים "מקור אמת אחד", סבב שני
+import json as _json
+_g = lambda i: db.get_recipient(i)
+_h = db.add_recipient({"full_name": "אמת ישן", "phone1": "0507770003", "frequency": "דו-שבועי",
+                       "status": "פעיל", "priority": 4})
+db.bulk_add_distributions([_g(_h)], _wed.isoformat(), "", 1, "", dist_name="S5")
+_stale = (_wed - timedelta(days=14)).isoformat()
+with db.get_connection() as _c:
+    _c.execute("UPDATE recipients SET last_distribution=?, next_distribution=? WHERE id=?",
+               (_stale, _wed.isoformat(), _h))
+db.init_db()
+check("S5 a card left stale by an older version heals at startup",
+      _g(_h)["last_distribution"] == _wed.isoformat()
+      and _g(_h)["next_distribution"] == calculate_next_dist(_wed.isoformat(), "דו-שבועי").isoformat(),
+      str(_g(_h)["last_distribution"]))
+with db.get_connection() as _c:
+    _c.execute("INSERT INTO distributions (recipient_id, recipient_name, dist_date, received) "
+               "VALUES (?,?,?,1)", (_h, "אמת ישן", "26/08/2026"))
+    db._recompute_recipient_dates(_c, _h)
+check("S6 a junk (non-ISO) history date can't hide the real history",
+      _g(_h)["last_distribution"] == _wed.isoformat(), repr(_g(_h)["last_distribution"]))
+_n = db.add_recipient({"full_name": "אמת חדש", "phone1": "0507770004", "frequency": "שבועי",
+                       "status": "פעיל", "priority": 4})
+_n1 = _g(_n)["next_distribution"]
+db.get_weekly_list()
+_n2 = _g(_n)["next_distribution"]
+db.update_recipient(_n, {"notes": "x"})
+check("S7 never-served regular: same 'next' from add / weekly list / edit",
+      _n1 == _n2 == _g(_n)["next_distribution"] == _wed.isoformat(), f"{_n1}/{_n2}")
+_before = dict(_g(_sid))
+_before["last_distribution"] = _imported          # what the card said back then
+_before["last_dist_base"] = ""
+with db.get_connection() as _c:
+    _c.execute("UPDATE recipients SET last_dist_base='' WHERE id=?", (_sid,))
+    _cur = _c.execute("INSERT INTO sync_incoming (op, target_guid, before_json) VALUES (?,?,?)",
+                      ("rec_upsert", _before["guid"], _json.dumps(_before)))
+    _inc = _cur.lastrowid
+db.undo_incoming(_inc)
+check("S9 undoing a peer's edit doesn't turn an old derived date into a base",
+      (_g(_sid)["last_dist_base"] or "") == "" and _g(_sid)["last_distribution"] == _wed.isoformat(),
+      repr(_g(_sid)["last_dist_base"]))
+_log = []
+_orig_log = db._sync_log
+db._sync_log = lambda op, p: _log.append((op, (p.get("data") or {}).get("full_name")))
+try:
+    db.import_recipients_from_list([
+        {"full_name": "אמת ממוזג", "frequency": "שבועי", "last_distribution": _imported},
+        {"full_name": "אמת חדש", "address": "רחוב 1"}])
+    _cnt = db.bulk_insert_recipients([{"full_name": "אמת מוחלף", "frequency": "שבועי",
+                                       "last_distribution": _imported}])
+finally:
+    db._sync_log = _orig_log
+_m = [r for r in db.get_all_recipients() if r["full_name"] == "אמת ממוזג"][0]
+check("S10 merge-import: new card gets guid + stamp and both cards reach the other computer",
+      bool(_m.get("guid")) and bool(_m.get("updated_at"))
+      and ("rec_upsert", "אמת ממוזג") in _log and ("rec_upsert", "אמת חדש") in _log, str(_log))
+_r = [r for r in db.get_all_recipients() if r["full_name"] == "אמת מוחלף"][0]
+_rb = db.bulk_add_distributions([_r], _wed.isoformat(), "", 1, "", dist_name="S11")
+db.delete_batch(_rb)
+check("S11 replace-import keeps the Excel date as the base (survives a batch delete)",
+      _g(_r["id"])["last_distribution"] == _imported, repr(_g(_r["id"])["last_distribution"]))
+
 
 # ══════════════════════════════════════════════════
 # סיכום
