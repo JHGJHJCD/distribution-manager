@@ -548,3 +548,5 @@ M45 (3.46) הגן על סגירת החלון, אבל `settings._on_downloaded` �
 הדפסת-לוג לעולם לא מפילה שחרור — `release.py` עושה `reconfigure(errors="replace")` ל-stdout/stderr (תו לא-מקודד
 → "?"). אם `ship` נקטע אחרי הבנייה: `version.py` כבר עודכן וה-EXE בנוי — להמשיך מהשלב הידני 4 (סעיף 3b), לא להריץ
 `ship` שוב.
+
+- **`gh release create` נתקע בהעלאת ה-EXE (17/9/2026, v3.60):** נשאר draft בלי asset יותר מ-20 דקות ואז יצא בשקט. תרופה: `gh release upload vX.Y dist/Manhal-Haluka.exe --clobber` (20 שניות) ואז `gh release edit vX.Y --draft=false --latest`. אחרי `ship` — תמיד לוודא `gh release view --json isDraft,assets`.
