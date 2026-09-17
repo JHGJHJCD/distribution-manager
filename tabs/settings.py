@@ -304,8 +304,7 @@ class SettingsTab(QWidget):
         self.no_show_spin.setToolTip(
             "מי שנרשם לו \"לא הגיע\" כך-וכך פעמים ברצף יסומן באדום ברשימת החלוקה "
             "ובכרטיס המקבל. 0 = בלי התראות.")
-        self.no_show_spin.valueChanged.connect(
-            lambda v: db.set_setting("no_show_alert_threshold", str(v)))
+        self.no_show_spin.valueChanged.connect(self._on_no_show_changed)
         g.addWidget(_flabel("התראה על מי שלא הגיע"), 1, 0)
         g.addWidget(self.no_show_spin, 1, 1)
         g.addWidget(_hint("0 = בלי התראות"), 1, 2)
@@ -854,7 +853,16 @@ class SettingsTab(QWidget):
         except (ValueError, TypeError):
             plen = 0
         self.lbl_password.setText("•" * plen if plen > 0 else "•••• (מוגדרת)")
-        self._load_weights()
+        # רענון שמגיע מסנכרון בזמן שהמסך פתוח לא דורס ערכים שהוקלדו וטרם נשמרו.
+        if not getattr(self, "_weights_dirty", False):
+            self._load_weights()
+        try:                      # הסף מסונכרן — ייתכן שהשתנה במחשב השני
+            self.no_show_spin.blockSignals(True)
+            self.no_show_spin.setValue(db.get_no_show_threshold())
+        except Exception:
+            pass
+        finally:
+            self.no_show_spin.blockSignals(False)
 
         folder = db.get_setting("backup_folder") or ""
         if folder:
@@ -878,15 +886,15 @@ class SettingsTab(QWidget):
             self.lbl_last_backup.setStyleSheet("color:#9ca3af;")
         self.lbl_last_backup.setText(last_backup)
 
-        self.org_title.setText(db.get_setting("org_title") or "")
-        self.org_subtitle.setText(db.get_setting("org_subtitle") or "")
+        self._set_text_safe(self.org_title, db.get_setting("org_title") or "")
+        self._set_text_safe(self.org_subtitle, db.get_setting("org_subtitle") or "")
         self._refresh_logo_status()
 
         self._refresh_google_status()
         cfg = email_utils.get_smtp_config()
-        self.mail_email.setText(cfg["email"])
-        self.mail_password.setText(cfg["app_password"])
-        self.mail_file_pw.setText(email_utils.get_checklist_password())
+        self._set_text_safe(self.mail_email, cfg["email"])
+        self._set_text_safe(self.mail_password, cfg["app_password"])
+        self._set_text_safe(self.mail_file_pw, email_utils.get_checklist_password())
         if email_utils.is_configured():
             self.lbl_mail_status.setText("מוגדר ✓")
             self.lbl_mail_status.setStyleSheet("color:#334155;")
@@ -933,7 +941,34 @@ class SettingsTab(QWidget):
             out[k] += 1
         return out
 
+    @staticmethod
+    def _set_text_safe(edit, value: str):
+        """טוען ערך לשדה — אלא אם המשתמש באמצע הקלדה בו (ערך שונה שטרם נשמר)."""
+        if edit.isModified() and edit.text() != value:
+            return
+        edit.setText(value)
+
+    def hideEvent(self, e):
+        # יצאו מהמסך בלי לשמור — בכניסה הבאה נטענים הערכים השמורים.
+        self._weights_dirty = False
+        for w in (self.org_title, self.org_subtitle, self.mail_email,
+                  self.mail_password, self.mail_file_pw):
+            w.setModified(False)
+        super().hideEvent(e)
+
+    def _mark_others_stale(self):
+        """הגדרה שמשפיעה על מסכים אחרים (סף אי-הגעה, מכסות קהילה) — מסמנת
+        אותם לרענון בכניסה הבאה."""
+        for tab in getattr(self.main_win, "_leaf_tabs", []) or []:
+            if tab is not self:
+                tab._needs_refresh = True
+
+    def _on_no_show_changed(self, v):
+        db.set_setting("no_show_alert_threshold", str(v))
+        self._mark_others_stale()
+
     def _load_weights(self):
+        self._weights_dirty = False
         weights = db.get_need_weights()
         keys = [f["key"] for f in db.NEED_FACTORS]
         self._balancing = True
@@ -951,6 +986,7 @@ class SettingsTab(QWidget):
         (so raising one lowers the rest, which is what users expect)."""
         if self._balancing:
             return
+        self._weights_dirty = True
         self._balancing = True
         try:
             keys = [f["key"] for f in db.NEED_FACTORS]
@@ -982,6 +1018,7 @@ class SettingsTab(QWidget):
 
     def _save_weights(self):
         db.set_need_weights({k: s.value() for k, s in self._weight_spins.items()})
+        self._weights_dirty = False
         if self.main_win:
             self.main_win.status_msg("משקלי הניקוד נשמרו")
             self.main_win.refresh_all()
@@ -1120,6 +1157,7 @@ class SettingsTab(QWidget):
     # ── Community balance percentages (#lejmr) ───────────────────────────────
     def _open_community_quotas(self):
         CommunityQuotasDialog(self).exec()
+        self._mark_others_stale()      # המכסות משנות את רשימת "סינון מותאם"
 
     # ── Two-computer sync ────────────────────────────────────────────────────
     def _set_sync_dot(self, color: str):

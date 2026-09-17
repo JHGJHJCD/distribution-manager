@@ -52,6 +52,7 @@ def _make_badge(text: str, colors: dict):
 class SearchTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.main_win = parent      # היה חסר — מחיקת רישום חלוקה קרסה ב-AttributeError
         self._all_rows: list = []
         self._results: list = []
         self._current_rec_id = None
@@ -241,14 +242,14 @@ class SearchTab(QWidget):
     # ── data ───────────────────────────────────────────────────────────────────
     def refresh(self):
         self._all_rows = db.get_all_recipients()
-        self._run_search()
+        self._run_search(keep_id=self._current_rec_id)
 
-    def _run_search(self):
+    def _run_search(self, keep_id=None):
         query = self.search_input.text()
         self._results = db.filter_recipients(self._all_rows, query)
-        self._populate_results()
+        self._populate_results(keep_id)
 
-    def _populate_results(self):
+    def _populate_results(self, keep_id=None):
         self.results_list.blockSignals(True)
         self.results_list.clear()
         for rec in self._results:
@@ -263,7 +264,12 @@ class SearchTab(QWidget):
         self.count_lbl.setText(f"נמצאו: {len(self._results)}")
 
         if self._results:
-            self.results_list.setCurrentRow(0)   # auto-show the best match
+            # רענון (סנכרון/שמירה במסך אחר) לא מחליף את הכרטיס שהמשתמש קורא:
+            # אם המקבל המוצג עדיין בתוצאות — נשארים עליו; אחרת ההתאמה הטובה ביותר.
+            keep = keep_id if keep_id is not None else None
+            row = next((i for i, r in enumerate(self._results)
+                        if keep is not None and r.get("id") == keep), 0)
+            self.results_list.setCurrentRow(row)
         else:
             self._current_rec_id = None
             self.btn_print_card.setEnabled(False)
@@ -507,7 +513,12 @@ class SearchTab(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
         db.delete_distribution(dist_id)
-        self._show_recipient(self._current_rec_id)   # re-render the history
+        # המחיקה משנה את "חלוקה אחרונה/הבאה" של המקבל — רשימת השבוע, כל המקבלים
+        # וחלוקות קודמות חייבים להתרענן, לא רק הכרטיס הזה.
+        if self.main_win:
+            self.main_win.refresh_all()
+        else:
+            self._show_recipient(self._current_rec_id)
         if self.main_win:
             self.main_win.status_msg("רישום החלוקה נמחק")
 

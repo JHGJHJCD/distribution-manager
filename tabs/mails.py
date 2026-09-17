@@ -805,9 +805,7 @@ class MailsTab(QWidget):
         self.btn_mode_all.setText(f"{self._MODE_TEXT['all']} · {len(active)}")
         gt = getattr(self.main, "group_tab", None)
         try:
-            reserve_ids = getattr(gt, "_reserve_ids", set()) or set()
-            cur_n = sum(1 for r in (gt._rows_data or [])
-                        if not r.get("_reserve") and r.get("id") not in reserve_ids)
+            cur_n = len(gt.week_rows())
         except Exception:
             cur_n = None
         self.btn_mode_current.setText(self._MODE_TEXT["current"] + (f" · {cur_n}" if cur_n else ""))
@@ -828,13 +826,9 @@ class MailsTab(QWidget):
             if gt is None:
                 return []
             try:
-                if not gt._rows_data:
-                    gt.refresh()
+                ids = [r.get("id") for r in gt.week_rows()]
             except Exception:
-                pass
-            reserve_ids = getattr(gt, "_reserve_ids", set()) or set()
-            ids = [r.get("id") for r in (gt._rows_data or [])
-                   if not r.get("_reserve") and r.get("id") not in reserve_ids]
+                ids = []
             out = []
             for i in ids:
                 rec = db.get_recipient(i)

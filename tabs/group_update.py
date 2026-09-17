@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QMessageBox, QAbstractItemView, QFileDialog, QSizePolicy,
     QFrame, QGridLayout, QGraphicsDropShadowEffect, QScrollArea, QListView,
     QStyledItemDelegate, QDialog, QFormLayout, QListWidget, QListWidgetItem,
-    QToolButton, QCheckBox
+    QToolButton, QCheckBox, QApplication, QAbstractItemDelegate
 )
 from PyQt6.QtCore import (Qt, QTimer, QThread, pyqtSignal, QSize, QEvent, QObject, QRect,
                           QRectF, QPropertyAnimation, QEasingCurve, pyqtProperty)
@@ -1371,7 +1371,11 @@ class GroupUpdateTab(QWidget):
             out = []
             for rid in sorted(ids):
                 rec = db.get_recipient(rid)
-                g = (rec or {}).get("guid") or ""
+                if not rec:
+                    # נמחק בינתיים (למשל מהמחשב השני) — מספר מקומי חשוף היה
+                    # מסתנכרן ומצביע במחשב השני על אדם אחר.
+                    continue
+                g = rec.get("guid") or ""
                 out.append(g if g else str(rid))
             return ",".join(out)
         db.set_setting("weekly_extra_ids", _guids(self._extra_ids))
@@ -2163,6 +2167,14 @@ class GroupUpdateTab(QWidget):
         # Re-read the one-time picks: they are a synced setting, so a pick made
         # on the other computer arrives through the sync refresh.
         self._load_extras()
+        # מצב החלוקה הוא הגדרה מסונכרנת — אם המחשב השני החליף מצב, הקומבו והצ'יפ
+        # כאן חייבים לעקוב (אחרת המסך מציג מצב אחד והחישובים ב-DB רצים לפי אחר).
+        saved_idx = self.mode_combo.findData(db.get_regulars_mode())
+        if saved_idx >= 0 and saved_idx != self.mode_combo.currentIndex():
+            self.mode_combo.blockSignals(True)
+            self.mode_combo.setCurrentIndex(saved_idx)
+            self.mode_combo.blockSignals(False)
+            self._update_mode_controls()
         mode = self._current_mode()
         if mode == "none":
             base = []
@@ -2230,6 +2242,35 @@ class GroupUpdateTab(QWidget):
         self._checked_ids &= live      # forget ticks for people no longer listed
         self._populate()
         self._update_leftover_hint()
+        self._refresh_header_chips()
+        self._mark_dependents_stale()
+
+    def _mark_dependents_stale(self):
+        """צינתוקים ומיילים בונים את הרשימה שלהם מ-`_rows_data` — כל בנייה מחדש
+        כאן (הוספת מקבל, שינוי מוצרים/מצב, חלוקה חדשה) מסמנת אותם לרענון בכניסה
+        הבאה, אחרת הם ממשיכים להציג (ולחייג ל-) רשימה ישנה."""
+        mw = getattr(self, "main_win", None)
+        if mw is None:
+            return
+        try:
+            cur = mw._current_leaf()
+        except Exception:
+            cur = None
+        for name in ("tzintukim_tab", "mails_tab"):
+            tab = getattr(mw, name, None)
+            if tab is not None and tab is not cur:
+                tab._needs_refresh = True
+
+    def week_rows(self) -> list:
+        """מקור-אמת יחיד ל"רשימת השבוע בלי רזרבות" עבור מסכים אחרים (צינתוקים,
+        מיילים). מרענן קודם אם הרשימה סומנה כמיושנת (`refresh_all` רק מסמן מסך
+        שאינו מוצג) — אחרת מקבל שנערך/נוסף/נמחק במסך אחר לא היה מגיע לשם."""
+        if getattr(self, "_needs_refresh", False) or not self._rows_data:
+            self.refresh()
+            self._needs_refresh = False
+        reserve_ids = self._reserve_ids or set()
+        return [r for r in (self._rows_data or [])
+                if not r.get("_reserve") and r.get("id") not in reserve_ids]
 
     def _visible_rows(self):
         """The list rows currently shown — the whole list, or the quick-search
@@ -2288,7 +2329,22 @@ class GroupUpdateTab(QWidget):
             bg, fg = QColor(WEEK_BG), QColor(WEEK_FG)
         return bg, fg, freq, _fdate(nd)
 
+    def _commit_open_editor(self):
+        """רענון (למשל סנכרון מהמחשב השני) באמצע הקלדת הערה בטבלה היה הורס את
+        תיבת העריכה לפני שהטקסט נשמר — קודם שומרים את מה שהוקלד."""
+        try:
+            if self.table.state() != QAbstractItemView.State.EditingState:
+                return
+            fw = QApplication.focusWidget()
+            if fw is not None and self.table.isAncestorOf(fw):
+                self.table.commitData(fw)
+                self.table.closeEditor(
+                    fw, QAbstractItemDelegate.EndEditHint.NoHint)
+        except Exception:                        # noqa: BLE001
+            pass
+
     def _populate(self):
+        self._commit_open_editor()
         rows = self._visible_rows()
         # No-show alert badges (v2.60): who is currently on a run of recorded
         # "לא הגיע" at/over the operator-set threshold (0 disables).
@@ -3054,9 +3110,14 @@ class GroupUpdateTab(QWidget):
             db.set_filter_criteria(dlg.get_criteria())
             self._checked_ids.clear()
             self._seen_ids.clear()
-            self.refresh()
-            self._refresh_header_chips()
             if self.main_win:
+                self.main_win.refresh_all()
                 self.main_win.status_msg("סינון מותאם עודכן")
+            else:
+                self.refresh()
             return True
+        # גם בביטול: חלון שיוך הקהילות שבתוכו כותב נציגים לכרטיסים מיד —
+        # הרשימה כאן ושאר המסכים חייבים לראות אותם.
+        if self.main_win:
+            self.main_win.refresh_all()
         return False

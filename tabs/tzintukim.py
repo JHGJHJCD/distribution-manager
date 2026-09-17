@@ -2358,9 +2358,10 @@ class TzintukimTab(QWidget):
         right now (cheap: reads what the main screen already built)."""
         base = "הזכאים ממסך \"חלוקה ורישום\" (בלי הרזרבות) — הבחירה הרגילה"
         gt = getattr(self.main, "group_tab", None)
-        rows = getattr(gt, "_rows_data", None) or []
-        reserve_ids = getattr(gt, "_reserve_ids", set()) or set()
-        n = sum(1 for r in rows if not r.get("_reserve") and r.get("id") not in reserve_ids)
+        try:
+            n = len(gt.week_rows()) if gt is not None else 0
+        except Exception:                        # noqa: BLE001
+            n = 0
         self.lbl_tile_week.setText(
             base + (f"<br><b>{n} משפחות ברשימה של השבוע</b>" if n else ""))
 
@@ -2517,13 +2518,23 @@ class TzintukimTab(QWidget):
         manual_ids = {r["rec"].get("id") for r in manual}
         # A refresh arrives every time the other computer syncs a change —
         # the operator's V marks must survive it (rows are rebuilt from scratch).
-        prev_checked = {self._row_key(r): r["checked"] for r in self._rows}
+        # שורת-חריג (בלי מספר/מספר כפול) אינה "בחירה של המפעיל" — אם הכרטיס תוקן
+        # היא חוזרת מסומנת, ולא נשארת "לא נשלח (לא מסומן)".
+        prev_checked = {self._row_key(r): r["checked"] for r in self._rows
+                        if not r.get("why")}
         self._rows = []
         for rec in base:
             if rec.get("id") in manual_ids:
                 manual = [m for m in manual if m["rec"].get("id") != rec.get("id")]
             self._rows.append(self._make_row(rec))
-        self._rows.extend(manual)      # keep hand-added people across refreshes
+        # hand-added people survive a refresh — rebuilt from the CURRENT card
+        # (a fixed phone shows up; a recipient deleted meanwhile is dropped).
+        for m in manual:
+            rid = m["rec"].get("id")
+            fresh = db.get_recipient(rid) if rid is not None else None
+            if rid is not None and not fresh:
+                continue
+            self._rows.append(self._make_row(dict(fresh), manual=True) if fresh else m)
         for r in self._rows:
             k = self._row_key(r)
             if k in prev_checked and r["phones"]:
@@ -2551,13 +2562,9 @@ class TzintukimTab(QWidget):
         if gt is None:
             return []
         try:
-            if not gt._rows_data:
-                gt.refresh()
+            return [dict(r) for r in gt.week_rows()]
         except Exception:
-            pass
-        reserve_ids = getattr(gt, "_reserve_ids", set()) or set()
-        return [dict(r) for r in (gt._rows_data or [])
-                if not r.get("_reserve") and r.get("id") not in reserve_ids]
+            return []
 
     # ── Past-distribution mode (#9hgvi) ───────────────────────────────────────
 

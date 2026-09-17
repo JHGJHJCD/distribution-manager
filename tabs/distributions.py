@@ -323,6 +323,10 @@ class DistributionsTab(QWidget):
         if reply != QMessageBox.StandardButton.Yes:
             return
         db.delete_batch(b.get("id"))
-        self.refresh()
+        # מחיקת חלוקה מחזירה את הקבועים שלה לתור — כל המסכים מתרעננים.
+        if self.main_win:
+            self.main_win.refresh_all()
+        else:
+            self.refresh()
         if self.main_win:
             self.main_win.status_msg("החלוקה נמחקה")

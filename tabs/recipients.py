@@ -482,8 +482,6 @@ class RecipientsTab(QWidget):
         dlg.exec()
         self.refresh()   # a duplicate may have been deleted
 
-        self._rows_data = []
-
     def _tint_priority_filter(self, label: str):
         """Paint the closed priority-filter combo in the chosen badge's colours
         (#7b5i3); back to the normal look on 'כל העדיפויות'."""
@@ -518,7 +516,19 @@ class RecipientsTab(QWidget):
         elif pcode is not None:
             rows = [r for r in rows if r.get("priority") == pcode]
         self._rows_data = rows
-        self._populate(self._rows_data)
+        # רענון (שמירת כרטיס / סנכרון מהמחשב השני) שומר על מה שהמשתמש רואה:
+        # טקסט החיפוש ממשיך לסנן, השורה הנבחרת והגלילה נשארות במקומן.
+        keep_id = self._selected_id()
+        bar = self.table.verticalScrollBar()
+        pos = bar.value()
+        self._apply_filter()
+        if keep_id is not None:
+            for r in range(self.table.rowCount()):
+                it = self.table.item(r, 0)
+                if it is not None and it.data(Qt.ItemDataRole.UserRole) == keep_id:
+                    self.table.setCurrentCell(r, 1)
+                    break
+        bar.setValue(pos)
 
     @staticmethod
     def _sv(rec: dict, key: str) -> str:
