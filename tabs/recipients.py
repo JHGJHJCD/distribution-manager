@@ -958,13 +958,11 @@ class RecipientDialog(QDialog):
         f1.addRow("תדירות:", self.f_freq)
         f1.addRow("חגים:", self.f_holiday)
         f1.addRow("אילו חגים:", self._holiday_row)
-        # On ADD these are meaningless and only add noise: 'חלוקה אחרונה' is set
-        # automatically when a distribution is recorded (a new recipient has none
-        # yet) and 'חלוקה הבאה' is auto-computed from the frequency (✦). Keep them
-        # only when editing an existing recipient (to view or correct). The widgets
-        # are still created above, so get_data()/validation keep working.
-        if rec is not None:
-            f1.addRow("חלוקה אחרונה:", _pair(self.f_last_dist, "הבאה ✦:", self.f_next_dist))
+        # 'חלוקה אחרונה / הבאה' ירדו מהטופס גם בעריכה (הכרעת המשתמש 17/9/2026, v3.57 —
+        # "לא הבנתי מה התועלת"): שניהם מתמלאים לבד ברישום חלוקה / לפי התדירות. הווידג'טים
+        # נשארים (לא מוצגים) כדי ש-get_data ישמור את הערכים הקיימים ו-_suggest_next יעבוד.
+        self.f_last_dist.setVisible(False)
+        self.f_next_dist.setVisible(False)
         f1.addRow("הערות:", self.f_notes)
 
         # ── Tab 2: פרטים אישיים ─────────────────────────────────────────────
@@ -1201,7 +1199,6 @@ class RecipientDialog(QDialog):
 
     def _collect_errors(self) -> list[str]:
         errors: list[str] = []
-        today = QDate.currentDate()
 
         # ── שם פרטי + משפחה ─────────────────────────────────────────────────
         first = self.f_first.text().strip()
@@ -1231,26 +1228,8 @@ class RecipientDialog(QDialog):
             else:
                 _mark(w, False)
 
-        # ── תאריכים ─────────────────────────────────────────────────────────
-        EMPTY = DateEdit.EMPTY
-        last_q  = self.f_last_dist.date()
-        next_q  = self.f_next_dist.date()
-
-        # חלוקה אחרונה לא בעתיד
-        if last_q > EMPTY and last_q > today:
-            _mark(self.f_last_dist, True, "חלוקה אחרונה לא יכולה להיות בעתיד")
-            errors.append("חלוקה אחרונה: תאריך עתידי")
-        else:
-            _mark(self.f_last_dist, False)
-
-        # חלוקה הבאה אחרי האחרונה
-        if next_q > EMPTY and last_q > EMPTY and next_q < last_q:
-            _mark(self.f_next_dist, True, "חלוקה הבאה חייבת להיות אחרי החלוקה האחרונה")
-            errors.append("חלוקה הבאה: קודמת לחלוקה האחרונה")
-        else:
-            if next_q <= EMPTY or last_q <= EMPTY or next_q >= last_q:
-                _mark(self.f_next_dist, False)
-
+        # תאריכי החלוקה לא נבדקים: השדות לא מוצגים (v3.57), ושגיאה בהם הייתה
+        # חוסמת שמירה בלי שלמשתמש יש איך לתקן.
         return errors
 
     def get_data(self) -> dict:

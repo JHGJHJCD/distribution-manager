@@ -28,10 +28,17 @@ assert dlg.f_first.hasFocus() or True
 
 # edit mode keeps an existing area — even one that was never in the old combo
 rec = {"full_name": "כהן ישראל", "first_name": "ישראל", "last_name": "כהן", "priority": 4,
-       "frequency": "שבועי", "status": "פעיל", "area": "מרכז", "email": "bad-address"}
+       "frequency": "שבועי", "status": "פעיל", "area": "מרכז", "email": "bad-address",
+       "last_distribution": "2026-09-09", "next_distribution": "2026-09-16"}
 dlg2 = RecipientDialog(None, rec)
 show(dlg2, "recipient_edit.png")
 assert dlg2.get_data()["area"] == "מרכז"
+# v3.57: שורת התאריכים ירדה גם בעריכה — הערכים הקיימים נשמרים כמו שהם
+assert not dlg2.f_last_dist.isVisible() and not dlg2.f_next_dist.isVisible()
+assert dlg2.get_data()["last_distribution"] == "2026-09-09"
+assert dlg2.get_data()["next_distribution"] == "2026-09-16"
+from PyQt6.QtWidgets import QLabel
+assert not any("חלוקה אחרונה" in l.text() for l in dlg2.findChildren(QLabel))
 assert dlg2.f_email.toolTip(), "bad email should be marked"
 assert dlg2._collect_errors() == [], "bad imported email must not block saving"
 dlg2.f_email.setText("a@b.co"); assert not dlg2.f_email.toolTip()
