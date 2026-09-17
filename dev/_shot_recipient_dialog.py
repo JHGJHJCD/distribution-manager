@@ -55,3 +55,23 @@ for d_ in (dlg, dlg2):
 x = lambda w: w.mapTo(dlg2, w.rect().topLeft()).x()
 print("first x:", x(dlg2.f_first), "last x:", x(dlg2.f_last))
 assert x(dlg2.f_first) > x(dlg2.f_last) and x(dlg2.f_phone1) > x(dlg2.f_address)
+
+# v3.58: כותרת חיה, קישור "עוד מספר" בתוך שורת הטלפון, הערות גבוהות, 130%
+assert dlg.lbl_title.text() == "מקבל חדש" and dlg2.chip_state.text() == "קבוע"
+dlg.f_first.setText("משה"); dlg.f_last.setText("לוי")
+assert dlg.lbl_title.text() == "לוי משה"
+dlg.f_status.setCurrentText("מושהה"); assert "מושהה" in dlg.chip_state.text()
+dlg.f_priority.setCurrentText("ללא"); assert "לא בחלוקה" in dlg.chip_state.text()
+assert dlg.btn_add_phone.isVisible() and not dlg.f_phone2.isVisible()
+assert abs(dlg.btn_add_phone.mapTo(dlg, dlg.btn_add_phone.rect().center()).y()
+           - dlg.f_phone1.mapTo(dlg, dlg.f_phone1.rect().center()).y()) < 6
+dlg.btn_add_phone.click(); dlg.btn_add_phone.click(); app.processEvents()
+assert dlg.f_phone3.isVisible() and not dlg.btn_add_phone.isVisible()
+assert dlg.f_notes.height() >= 84
+apply_app_theme(app, 130)
+dlg3 = RecipientDialog(None, dict(rec, holiday_support=1, phone2="0501234567", phone3="041234567"))
+show(dlg3, "recipient_edit_130.png")
+sb = dlg3.tabs.widget(0).horizontalScrollBar()
+print("130% h-scroll:", sb.maximum(), "v-scroll:", dlg3.tabs.widget(0).verticalScrollBar().maximum())
+assert sb.maximum() == 0, "אין גלילה אופקית גם ב-130%"
+print("OK v3.58")

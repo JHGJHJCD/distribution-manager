@@ -796,10 +796,10 @@ class RecipientDialog(QDialog):
     def __init__(self, parent=None, rec: dict = None):
         super().__init__(parent)
         self.setWindowTitle("הוספת מקבל" if rec is None else "עריכת מקבל")
-        self.setMinimumSize(600, 560)
+        self.setMinimumSize(640, 560)
         # גבוה מספיק כדי שכל "פרטים בסיסיים" ייראה בלי גלילה (מוגבל לגובה המסך).
         scr = self.screen().availableGeometry().height() if self.screen() else 800
-        self.resize(640, max(560, min(780, scr - 80)))
+        self.resize(700, max(560, min(780, scr - 80)))
         self._orig_area = ""
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._build(rec)
@@ -807,9 +807,28 @@ class RecipientDialog(QDialog):
     def _build(self, rec):
         from PyQt6.QtWidgets import QScrollArea, QTabWidget
         outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 14, 16, 14)
+        outer.setSpacing(10)
+
+        # v3.58: כותרת חיה בשפת שאר המסכים — שם המקבל + צ'יפ עדיפות/סטטוס.
+        head = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(0)
+        self.lbl_title = QLabel()
+        self.lbl_title.setStyleSheet("font-size:19px; font-weight:800; color:#0f172a;")
+        self.lbl_sub = QLabel("שדה חובה אחד בלבד: שם פרטי. את השאר אפשר להשלים אחר כך."
+                              if rec is None else "עריכת הפרטים — השינויים נשמרים בלחיצה על שמור.")
+        self.lbl_sub.setStyleSheet("font-size:12px; color:#64748b;")
+        titles.addWidget(self.lbl_title)
+        titles.addWidget(self.lbl_sub)
+        head.addLayout(titles, 1)
+        self.chip_state = QLabel()
+        head.addWidget(self.chip_state, 0, Qt.AlignmentFlag.AlignVCenter)
+        outer.addLayout(head)
 
         tabs = QTabWidget()
         self.tabs = tabs
+        tabs.setProperty("subtabs", True)   # פילים בהירים כמו באזור "אנשים"
         tabs.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         # The 4 tab titles didn't fit the dialog width → the last tab ('מידע מנהלי')
         # was clipped to 'מידע' behind scroll-arrows (bug #7y8o0). Let the bar share
@@ -838,8 +857,8 @@ class RecipientDialog(QDialog):
             return form
 
         def field(placeholder=""):
+            # v3.58: בלי placeholder — הוא רק חזר על התווית שליד השדה (טקסט כפול).
             w = QLineEdit()
-            w.setPlaceholderText(placeholder)
             w.setAlignment(Qt.AlignmentFlag.AlignRight)
             return w
 
@@ -886,7 +905,8 @@ class RecipientDialog(QDialog):
         self.f_next_dist.setToolTip("מחושב אוטומטית לפי תדירות — ניתן לשנות")
 
         self.f_notes = QTextEdit()
-        self.f_notes.setMaximumHeight(60)
+        self.f_notes.setMinimumHeight(84)
+        self.f_notes.setMaximumHeight(110)
         self.f_notes.setPlaceholderText("הערות")
         rtl_text_area(self.f_notes)
 
@@ -924,7 +944,7 @@ class RecipientDialog(QDialog):
         # Most recipients have one number — show a single 'טלפון' field by default
         # and reveal the extra two only on demand, so the form isn't cluttered with
         # three phone rows (#4y193). The '+ הוסף מספר' link reveals the next one.
-        self.btn_add_phone = QPushButton("＋ הוסף מספר")
+        self.btn_add_phone = QPushButton("＋ עוד מספר")
         self.btn_add_phone.setObjectName("neutral")
         self.btn_add_phone.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_add_phone.setStyleSheet(
@@ -947,7 +967,9 @@ class RecipientDialog(QDialog):
         f1.addRow("טלפון:", _pair(self.f_phone1, "כתובת:", self.f_address))
         f1.addRow("טלפון נוסף:", self.f_phone2)
         f1.addRow("טלפון נוסף:", self.f_phone3)
-        f1.addRow("", self.btn_add_phone)
+        # v3.58: הקישור יושב בתוך שורת הטלפון האחרונה (לא שורה ריקה משלו שנראתה כרווח).
+        ph_box = self.f_phone1.parentWidget().layout()
+        ph_box.insertWidget(1, self.btn_add_phone)
         # 'אזור' ירד מהטופס (הכרעת המשתמש 17/9/2026 — שדה לא רלוונטי). הווידג'ט נשאר
         # לא-מוצג והערך הקיים נשמר כמו שהוא ב-get_data (self._orig_area).
         self.f_area.setVisible(False)
@@ -1094,16 +1116,27 @@ class RecipientDialog(QDialog):
             self.f_freq.setCurrentText("שבועי")
             self.f_priority.setCurrentText("קבוע")
 
+        for w in (self.f_first, self.f_last):
+            w.textChanged.connect(self._refresh_header)
+        self.f_priority.currentIndexChanged.connect(self._refresh_header)
+        self.f_status.currentIndexChanged.connect(self._refresh_header)
+        self._is_new = rec is None
+        self._refresh_header()
+
         btns = QHBoxLayout()
+        btns.setSpacing(10)
         btn_ok = QPushButton("שמור")
+        btn_ok.setMinimumHeight(42)
+        btn_ok.setToolTip("Enter")
         btn_ok.setObjectName("primary")
         btn_ok.setDefault(True)
         btn_ok.clicked.connect(self._validate_and_accept)
         btn_cancel = QPushButton("ביטול")
         btn_cancel.setObjectName("neutral")
+        btn_cancel.setMinimumHeight(42)
         btn_cancel.clicked.connect(self.reject)
-        btns.addWidget(btn_ok)
-        btns.addWidget(btn_cancel)
+        btns.addWidget(btn_ok, 2)       # הפעולה הראשית רחבה יותר
+        btns.addWidget(btn_cancel, 1)
         outer.addLayout(btns)
 
         # Set the initial visibility of the frequency row (setCurrentIndex above
@@ -1118,6 +1151,26 @@ class RecipientDialog(QDialog):
         self.f_email.textChanged.emit(self.f_email.text())   # סמן גם כתובת שגויה קיימת
         self.f_first.setFocus()
 
+    def _refresh_header(self, *_):
+        """כותרת חיה: שם המקבל + צ'יפ 'עדיפות · סטטוס' (תצוגה בלבד)."""
+        name = (self.f_last.text().strip() + " " + self.f_first.text().strip()).strip()
+        self.lbl_title.setText(name or ("מקבל חדש" if self._is_new else "עריכת מקבל"))
+        pr = self.f_priority.currentText()
+        st = self.f_status.currentText()
+        active = st == "פעיל"
+        in_dist = bool(self._effective_frequency())
+        text = (pr if in_dist else "לא בחלוקה") + ("" if active else f" · {st}")
+        if not active:
+            fg, bg = "#b45309", "#fef3c7"
+        elif in_dist:
+            fg, bg = "#0f766e", "#d1fae5"
+        else:
+            fg, bg = "#475569", "#e2e8f0"
+        self.chip_state.setText(text)
+        self.chip_state.setStyleSheet(
+            f"color:{fg}; background:{bg}; border-radius:11px; padding:4px 12px;"
+            " font-size:12px; font-weight:700;")
+
     def _toggle_holiday_row(self, *_):
         """The per-holiday row only matters while the general mark is on."""
         self._form1.setRowVisible(self._holiday_row, self.f_holiday.isChecked())
@@ -1131,7 +1184,7 @@ class RecipientDialog(QDialog):
         show2 = show2 or show3
         self._form1.setRowVisible(self.f_phone2, show2)
         self._form1.setRowVisible(self.f_phone3, show3)
-        self._form1.setRowVisible(self.btn_add_phone, not (show2 and show3))
+        self.btn_add_phone.setVisible(not (show2 and show3))
 
     def _reveal_next_phone(self):
         """Reveal the next hidden phone row (phone2, then phone3)."""
@@ -1143,7 +1196,7 @@ class RecipientDialog(QDialog):
             self.f_phone3.setFocus()
         # Hide the link once all three are showing.
         if self._form1.isRowVisible(self.f_phone2) and self._form1.isRowVisible(self.f_phone3):
-            self._form1.setRowVisible(self.btn_add_phone, False)
+            self.btn_add_phone.setVisible(False)
 
     def _is_regular_selected(self) -> bool:
         """True when the priority combo currently points at 'קבוע' (4)."""
