@@ -935,6 +935,14 @@ def calculate_next_dist(last_date_str: str, frequency: str) -> date:
     except ValueError:
         last = date.today()
 
+    # A distribution dated Thu–Sat belongs to the cycle of the Wednesday just
+    # before it (the operator recorded it a day or so late — the date field
+    # defaults to today). Without snapping back, "at least 14 days" from a
+    # Thursday lands 3 weeks out, so a bi-weekly regular silently skipped a turn
+    # (and a tri-weekly one waited 4 weeks).
+    if last.weekday() in (3, 4, 5):
+        last -= timedelta(days=last.weekday() - 2)
+
     if frequency == "שבועי":
         return next_wednesday(last + timedelta(days=1))
     elif frequency == "דו-שבועי":
@@ -942,7 +950,8 @@ def calculate_next_dist(last_date_str: str, frequency: str) -> date:
     elif frequency == "תלת-שבועי":
         return next_wednesday(last + timedelta(days=20))
     elif frequency == "חודשי":
-        return next_wednesday(last + timedelta(days=29))
+        # every 4 weeks (user decision 17/9/2026) — +29 landed 5 weeks out
+        return next_wednesday(last + timedelta(days=27))
     else:
         # חד-פעמי or empty — use next Wednesday from today
         return next_wednesday()
@@ -997,6 +1006,20 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
                 nd = base_wed
                 r["next_distribution"] = nd.isoformat()
                 updates.append((r["next_distribution"], r["id"]))
+            # Self-heal a turn that was stored LATER than the rule gives (monthly
+            # used to be 5 weeks; a late-recorded bi-weekly was pushed a week) —
+            # next_distribution is always derived, never typed by the operator.
+            ld_heal = (r.get("last_distribution") or "").strip()
+            if ld_heal and (r.get("frequency") or ""):
+                try:
+                    date.fromisoformat(ld_heal)
+                    due = calculate_next_dist(ld_heal, r["frequency"])
+                    if nd > due:
+                        nd = due
+                        r["next_distribution"] = nd.isoformat()
+                        updates.append((r["next_distribution"], r["id"]))
+                except ValueError:
+                    pass
             r["_status"] = r.get("weekly_status", "") or ""
             r["days_left"] = (nd - today).days
             # A regular is on this week's list if their turn is due by the cutoff,
@@ -1395,12 +1418,27 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
                  rec.get("notes", ""), batch_id, row_guid)
             )
             freq = rec.get("frequency", "")
-            nw = "" if freq == "חד-פעמי" else calculate_next_dist(dist_date, freq).isoformat()
+            # Recording an OLDER distribution after the fact must not roll the
+            # recipient's "last distribution" backwards (the other computer derives
+            # it as MAX(dist_date) via _recompute_recipient_dates — keep both equal).
+            cur_row = conn.execute("SELECT last_distribution FROM recipients WHERE id=?",
+                                   (rec.get("id"),)).fetchone()
+            cur_last = ((cur_row["last_distribution"] if cur_row else "") or "").strip()
+            last_date = dist_date
+            if len(cur_last) == 10 and cur_last > dist_date:
+                try:
+                    # a stray far-future date (typo) is NOT kept — recording a
+                    # real distribution is the only way left to heal it.
+                    if date.fromisoformat(cur_last) <= date.today() + timedelta(days=7):
+                        last_date = cur_last
+                except ValueError:
+                    pass
+            nw = "" if freq == "חד-פעמי" else calculate_next_dist(last_date, freq).isoformat()
             # Reset the weekly checkmark — it belongs to the cycle that just ended,
             # so it must not bleed into the next week's distribution list.
             conn.execute(
                 "UPDATE recipients SET last_distribution=?, next_distribution=?, weekly_status='' WHERE id=?",
-                (dist_date, nw, rec.get("id"))
+                (last_date, nw, rec.get("id"))
             )
             sync_rows.append({"guid": row_guid, "rec_guid": _rec_guid(conn, rec),
                               "recipient_name": rec.get("full_name", ""),

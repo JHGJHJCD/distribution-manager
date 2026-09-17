@@ -70,11 +70,31 @@ check("דו-שבועי ≥ +13 ימים", (d5 - wed).days >= 13)
 
 # calculate_next_dist: חודשי
 d6 = calculate_next_dist("2026-06-03", "חודשי")
-check("חודשי ≥ +29 ימים", (d6 - wed).days >= 29)
+check("חודשי = כל 4 שבועות (+28)", (d6 - wed).days == 28, f"got {d6}")
 
 # calculate_next_dist: חד-פעמי → רביעי הקרוב מהיום (לא מתאריך ניתן)
 d7 = calculate_next_dist("2026-06-03", "חד-פעמי")
 check("חד-פעמי → רביעי הקרוב מהיום", d7.weekday() == 2)
+
+# חלוקה שנרשמה באיחור (חמישי–שבת אחרי רביעי) שייכת למחזור של אותו רביעי —
+# אסור שתדחה את התור הבא בשבוע שלם (דו-שבועי הפך ל-3 שבועות, תלת-שבועי ל-4).
+for _late in ("2026-06-04", "2026-06-05", "2026-06-06"):   # חמישי / שישי / שבת
+    check(f"שבועי שנרשם באיחור ({_late}) → רביעי 10/06",
+          calculate_next_dist(_late, "שבועי") == date(2026, 6, 10))
+    check(f"דו-שבועי שנרשם באיחור ({_late}) → רביעי 17/06",
+          calculate_next_dist(_late, "דו-שבועי") == date(2026, 6, 17),
+          f"got {calculate_next_dist(_late, 'דו-שבועי')}")
+    check(f"תלת-שבועי שנרשם באיחור ({_late}) → רביעי 24/06",
+          calculate_next_dist(_late, "תלת-שבועי") == date(2026, 6, 24),
+          f"got {calculate_next_dist(_late, 'תלת-שבועי')}")
+    check(f"חודשי שנרשם באיחור ({_late}) → כמו מרביעי",
+          calculate_next_dist(_late, "חודשי") == d6,
+          f"got {calculate_next_dist(_late, 'חודשי')}")
+# ראשון–שלישי לפני החלוקה: ההתנהגות הקיימת נשמרת (לא משתנה בתיקון)
+check("דו-שבועי מיום שלישי → רביעי שאחרי שבועיים",
+      calculate_next_dist("2026-06-02", "דו-שבועי") == date(2026, 6, 17))
+check("שבועי מיום ראשון → רביעי הקרוב (חלוקה מיוחדת לא מבטלת את רביעי)",
+      calculate_next_dist("2026-05-31", "שבועי") == date(2026, 6, 3))
 
 # ══════════════════════════════════════════════════
 # רובד B — Migration: DB ישן בלי עמודת weekly_status
@@ -185,6 +205,33 @@ conn_check2.close()
 check("recipient deleted", rec_after is None)
 check("distributions deleted", dist_after == 0, f"({dist_after} remain)")
 check("change_log deleted", log_after == 0, f"({log_after} remain)")
+
+
+# ══════════════════════════════════════════════════
+# רובד D2 — רישום חלוקה ישנה בדיעבד לא מחזיר את "חלוקה אחרונה" אחורה
+# ══════════════════════════════════════════════════
+print("\n=== D2: רישום חלוקה בדיעבד ===")
+rid_bd = db.add_recipient({"full_name": "בדיעבד", "status": "פעיל", "frequency": "דו-שבועי"})
+_bd = [{"id": rid_bd, "full_name": "בדיעבד", "frequency": "דו-שבועי"}]
+db.bulk_add_distributions(_bd, "2026-06-17", "עוף", 1, "")
+db.bulk_add_distributions(_bd, "2026-06-03", "עוף", 1, "")   # נרשמה באיחור — חלוקה ישנה יותר
+_r = db.get_recipient(rid_bd)
+check("חלוקה אחרונה נשארת החדשה (17/06)", _r["last_distribution"] == "2026-06-17",
+      f"got {_r['last_distribution']}")
+check("חלוקה הבאה לפי החדשה (01/07)", _r["next_distribution"] == "2026-07-01",
+      f"got {_r['next_distribution']}")
+
+# חודשי שהתור שלו נשמר לפי הכלל הישן (5 שבועות) — מתקן את עצמו ונכנס לרשימה אחרי 4
+_today = date.today()
+_bw = _today if _today.weekday() == 2 else next_wednesday(_today)
+rid_m = db.add_recipient({"full_name": "חודשי-ישן", "status": "פעיל", "frequency": "חודשי"})
+_c = sqlite3.connect(db.DB_PATH)
+_c.execute("UPDATE recipients SET last_distribution=?, next_distribution=? WHERE id=?",
+           ((_bw - timedelta(days=28)).isoformat(), (_bw + timedelta(days=7)).isoformat(), rid_m))
+_c.commit(); _c.close()
+check("חודשי אחרי 4 שבועות ברשימת השבוע (תיקון-עצמי של תור ישן)",
+      any(r["id"] == rid_m for r in db.get_weekly_list()))
+check("התור התעדכן ב-DB", db.get_recipient(rid_m)["next_distribution"] == _bw.isoformat())
 
 
 # ══════════════════════════════════════════════════
