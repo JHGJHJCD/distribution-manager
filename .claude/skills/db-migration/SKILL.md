@@ -90,6 +90,13 @@ a bad migration breaks.
 
 ## Traps
 
+- **Derived columns never travel as values (v3.60).** `recipients.last_distribution` /
+  `next_distribution` are a cache of (history + `last_dist_base` + frequency), written ONLY by
+  `db._recompute_recipient_dates`. They rode inside the `rec_upsert` card payload, so a card
+  edited on a computer that hadn't pulled a new batch rolled the dates back on the other one.
+  Rule: a denormalized/derived field is stripped in the applier and re-derived locally; only
+  its true inputs sync. Before adding any "cached" column — decide who derives it, in ONE function.
+
 - A test script that runs `init_db()` on the **real** DB can leak settings — clean with
   `DELETE FROM settings WHERE key LIKE 'need_w_%'` (see `references/pitfalls.md` in the
   `manhal-haluka` skill). Tests should point `db.DB_PATH` at a temp file.

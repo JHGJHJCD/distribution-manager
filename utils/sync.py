@@ -578,6 +578,9 @@ def _diff_summary(before: dict, fields: dict) -> str:
     return " · ".join(changed[:6]) + (" ועוד…" if len(changed) > 6 else "")
 
 
+_DERIVED_DATE_FIELDS = ("last_distribution", "next_distribution")
+
+
 def _apply_rec_upsert(conn, rec: dict):
     guid = rec.get("guid") or ""
     data = rec.get("data") or {}
@@ -599,9 +602,15 @@ def _apply_rec_upsert(conn, rec: dict):
         if local_ts and incoming_ts and incoming_ts <= local_ts:
             return
         before = dict(local)
+        # last/next are DERIVED locally (history + base + frequency) — a card edit
+        # made on a computer that hadn't yet pulled a new distribution must not
+        # roll our dates back (v3.60). Only the base travels with the card.
+        for k in _DERIVED_DATE_FIELDS:
+            fields.pop(k, None)
         sets = ", ".join(f"{k}=?" for k in fields)
         conn.execute(f"UPDATE recipients SET {sets} WHERE id=?",
                      list(fields.values()) + [local["id"]])
+        db._recompute_recipient_dates(conn, local["id"])
         if _RECORD_INCOMING:
             _record_incoming(conn, "rec_upsert", guid, name,
                              _diff_summary(before, fields), before, fields, rec.get("dev"))
@@ -611,6 +620,10 @@ def _apply_rec_upsert(conn, rec: dict):
         conn.execute(
             f"INSERT INTO recipients ({','.join(keys)}) VALUES ({','.join(['?'] * len(keys))})",
             [fields[k] for k in keys])
+        new_id = _find_recipient_by_guid(conn, guid)["id"]
+        if "last_dist_base" not in data:     # card from a pre-3.60 computer
+            db._adopt_last_base(conn, new_id)
+        db._recompute_recipient_dates(conn, new_id)
         if _RECORD_INCOMING:
             _record_incoming(conn, "rec_upsert", guid, name,
                              f"נוסף מקבל חדש: {name}", None, fields, rec.get("dev"))

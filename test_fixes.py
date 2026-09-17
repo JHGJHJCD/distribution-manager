@@ -50,16 +50,19 @@ ok("#7 general note NOT duplicated into recipients",
 # ── #4: deleting the batch rolls back last/next distribution ───────────────────
 db.delete_batch(bid)
 regs = [r for r in db.get_all_recipients() if r["frequency"] != "חד-פעמי"]
-ok("#4 delete_batch clears last_distribution", all(not r["last_distribution"] for r in regs))
-ok("#4 delete_batch clears next_distribution", all(not r["next_distribution"] for r in regs))
+# v3.60: the rollback lands on the pre-history (imported) date, not on blank.
+ok("#4 delete_batch rolls last_distribution back to the imported date",
+   all(r["last_distribution"] == "2026-06-01" for r in regs))
+ok("#4 delete_batch re-derives next_distribution from it",
+   all(r["next_distribution"] == db.calculate_next_dist("2026-06-01", "שבועי").isoformat() for r in regs))
 
 # ── #4 (single record): delete_distribution rolls back too ─────────────────────
 r0 = regs[0]["id"]
 b2 = db.bulk_add_distributions([db.get_recipient(r0)], "2026-07-01", "", 0, "מחלק", dist_name="ב")
 did = db.get_distributions_for_recipient(r0)[0]["id"]
 db.delete_distribution(did)
-ok("#4 delete_distribution clears the recipient's last_distribution",
-   not db.get_recipient(r0)["last_distribution"])
+ok("#4 delete_distribution rolls the recipient's last_distribution back",
+   db.get_recipient(r0)["last_distribution"] == "2026-06-01")
 db.delete_batch(b2)
 
 # ── #12: scored mode (group tab base) ranks regulars only — one-timers join only

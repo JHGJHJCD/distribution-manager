@@ -320,6 +320,35 @@ ok("B received the setting through the compacted journal", db.get_setting("yemot
 sync.run_sync()
 ok("second pull applies nothing new (no replay loop)", sync.run_sync().get("applied", 0) == 0)
 
+# ── v3.60: card dates are derived, not synced — a stale card can't roll them back ──
+use_machine(dir_a)
+sid = db.add_recipient({"full_name": "נגזר תאריכים", "phone1": "0503330001",
+                        "frequency": "שבועי", "priority": 4, "last_distribution": "2026-07-01"})
+sguid = db.get_recipient(sid)["guid"]
+sync.run_sync()
+use_machine(dir_b); sync.run_sync()
+sid_b = [r for r in db.get_all_recipients() if r["guid"] == sguid][0]["id"]
+ok("B got the imported base date", db.get_recipient(sid_b)["last_distribution"] == "2026-07-01")
+use_machine(dir_a)
+db.bulk_add_distributions([db.get_recipient(sid)], "2026-09-16", "", 1, "", dist_name="נגזר")
+want = (db.get_recipient(sid)["last_distribution"], db.get_recipient(sid)["next_distribution"])
+sync.run_sync()
+use_machine(dir_b)
+time.sleep(1.1)
+db.update_recipient(sid_b, {"phone2": "0503330002"})    # B hasn't pulled the batch yet
+sync.run_sync(); sync.run_sync()
+got_b = (db.get_recipient(sid_b)["last_distribution"], db.get_recipient(sid_b)["next_distribution"])
+use_machine(dir_a); sync.run_sync()
+got_a = (db.get_recipient(sid)["last_distribution"], db.get_recipient(sid)["next_distribution"])
+ok("A keeps its dates after B's stale card edit", got_a == want, f"{got_a} != {want}")
+ok("A and B agree on the dates", got_a == got_b, f"{got_a} vs {got_b}")
+ok("B's phone edit still arrived", db.get_recipient(sid)["phone2"] == "0503330002")
+bid_s = [b for b in db.get_distribution_batches() if b["dist_name"] == "נגזר"][0]["id"]
+db.delete_batch(bid_s); sync.run_sync()
+use_machine(dir_b); sync.run_sync()
+ok("batch delete → both fall back to the base date",
+   db.get_recipient(sid_b)["last_distribution"] == "2026-07-01", db.get_recipient(sid_b)["last_distribution"])
+
 print()
 if fails:
     print(f"✗ {len(fails)} FAILED: {fails}")

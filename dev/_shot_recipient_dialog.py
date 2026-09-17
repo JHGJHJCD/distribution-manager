@@ -35,8 +35,9 @@ show(dlg2, "recipient_edit.png")
 assert dlg2.get_data()["area"] == "מרכז"
 # v3.57: שורת התאריכים ירדה גם בעריכה — הערכים הקיימים נשמרים כמו שהם
 assert not dlg2.f_last_dist.isVisible() and not dlg2.f_next_dist.isVisible()
-assert dlg2.get_data()["last_distribution"] == "2026-09-09"
-assert dlg2.get_data()["next_distribution"] == "2026-09-16"
+# v3.60: החלון לא כותב אותם בכלל — הם נגזרים ב-database
+assert "last_distribution" not in dlg2.get_data()
+assert "next_distribution" not in dlg2.get_data()
 from PyQt6.QtWidgets import QLabel
 assert not any("חלוקה אחרונה" in l.text() for l in dlg2.findChildren(QLabel))
 assert dlg2.f_email.toolTip(), "bad email should be marked"

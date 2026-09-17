@@ -311,7 +311,9 @@ RID_WEEKLY = db.add_recipient({"full_name": "__weekly_test__", "status": "\u05e4
 _before_weekly = db.get_recipient(RID_WEEKLY)["next_distribution"]
 _weekly_rows = db.get_weekly_list(365)
 _after_weekly = db.get_recipient(RID_WEEKLY)["next_distribution"]
-check("weekly list persists missing next_distribution", _before_weekly in ("", None) and bool(_after_weekly))
+# v3.60: next_distribution is derived the moment the card is written.
+check("next_distribution derived at add and kept by the weekly list",
+      bool(_before_weekly) and _after_weekly == _before_weekly)
 db.update_recipient(RID_WEEKLY, {"weekly_status": "\u2713"})
 _weekly_rows = db.get_weekly_list(365)
 check("weekly status returned", any(r.get("id") == RID_WEEKLY and r.get("_status") == "\u2713" for r in _weekly_rows))

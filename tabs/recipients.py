@@ -1302,9 +1302,9 @@ class RecipientDialog(QDialog):
             "souls":              self.f_souls.value(),
             "frequency":          self._effective_frequency(),
             "status":             self.f_status.currentText(),
-            "last_distribution":  self.f_last_dist.get_iso(),
-            "next_distribution":  self.f_next_dist.get_iso(),
-            "notes":              self.f_notes.toPlainText().strip(),
+            # v3.60: חלוקה אחרונה/הבאה לא נכתבות מהחלון — נגזרות ב-database
+            # (_recompute_recipient_dates); ערך ישן מהחלון היה דורס רישום טרי.
+            "notes":             self.f_notes.toPlainText().strip(),
             "birth_date":         self.f_birth_date.get_iso(),
             "spouse_birth_date":  self.f_spouse_birth_date.get_iso(),
             "id_number":          self.f_id_number.text().strip(),

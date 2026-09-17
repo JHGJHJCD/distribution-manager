@@ -560,6 +560,33 @@ check("even_split sums to total", sum(SettingsTab._even_split(100, ["a", "b", "c
 
 
 # ══════════════════════════════════════════════════
+# v3.60 — מקור אמת אחד לתאריכי החלוקה בכרטיס
+# ══════════════════════════════════════════════════
+_wed = date.today() if date.today().weekday() == 2 else next_wednesday(date.today())
+_imported = (_wed - timedelta(days=7)).isoformat()
+_sid = db.add_recipient({"full_name": "אמת מיובא", "phone1": "0507770001", "frequency": "שבועי",
+                         "status": "פעיל", "priority": 4, "last_distribution": _imported})
+check("S1 imported last kept + next derived on add",
+      db.get_recipient(_sid)["last_distribution"] == _imported
+      and db.get_recipient(_sid)["next_distribution"] == calculate_next_dist(_imported, "שבועי").isoformat())
+_sb = db.bulk_add_distributions([db.get_recipient(_sid)], _wed.isoformat(), "", 1, "", dist_name="S")
+db.delete_batch(_sb)
+check("S2 deleting the only batch falls back to the imported date (not blank)",
+      db.get_recipient(_sid)["last_distribution"] == _imported,
+      str(db.get_recipient(_sid)["last_distribution"]))
+db.bulk_add_distributions([db.get_recipient(_sid)], _wed.isoformat(), "", 1, "", dist_name="S")
+db.update_recipient(_sid, {"frequency": "חודשי"})
+check("S3 frequency change re-derives next_distribution",
+      db.get_recipient(_sid)["next_distribution"] == calculate_next_dist(_wed.isoformat(), "חודשי").isoformat(),
+      str(db.get_recipient(_sid)["next_distribution"]))
+db.update_recipient(_sid, {"phone2": "0507770002", "last_distribution": _imported,
+                           "next_distribution": "2020-01-01"})
+check("S4 a stale date riding on a card edit can't roll the dates back",
+      db.get_recipient(_sid)["last_distribution"] == _wed.isoformat()
+      and db.get_recipient(_sid)["next_distribution"] == calculate_next_dist(_wed.isoformat(), "חודשי").isoformat())
+
+
+# ══════════════════════════════════════════════════
 # סיכום
 # ══════════════════════════════════════════════════
 print()

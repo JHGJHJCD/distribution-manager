@@ -464,6 +464,10 @@ def init_db():
             # (see holidays.py). Synced like every other recipient field.
             ("holiday_support",    "INTEGER DEFAULT 0"),
             ("holidays",           "TEXT DEFAULT ''"),
+            # v3.60: "חלוקה אחרונה" שהגיעה מחוץ להיסטוריה (אקסל / הוקלדה) — הבסיס
+            # שאליו חוזרים כשאין היסטוריה. last/next בכרטיס תמיד *נגזרים* ממנו +
+            # מטבלת distributions (ראה _recompute_recipient_dates).
+            ("last_dist_base",     "TEXT DEFAULT ''"),
         ]
         newly_added = set()
         for col, definition in _migrations:
@@ -493,6 +497,12 @@ def init_db():
             conn.execute("ALTER TABLE distributions ADD COLUMN received INTEGER DEFAULT 1")
         if "guid" not in dist_cols:
             conn.execute("ALTER TABLE distributions ADD COLUMN guid TEXT DEFAULT ''")
+        # v3.60 back-fill (once): a card date that no history row explains came
+        # from the Excel import / was typed — remember it as the base.
+        if "last_dist_base" in newly_added:
+            for r in conn.execute(
+                    "SELECT id FROM recipients WHERE COALESCE(last_distribution,'')!=''").fetchall():
+                _adopt_last_base(conn, r["id"])
         batch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dist_batches)")}
         if "guid" not in batch_cols:
             conn.execute("ALTER TABLE dist_batches ADD COLUMN guid TEXT DEFAULT ''")
@@ -753,7 +763,7 @@ def bulk_insert_recipients(rows: list) -> int:
 _RECIPIENT_FIELDS = [
     "full_name", "first_name", "last_name", "phone1", "phone2", "phone3", "address", "area",
     "souls", "frequency", "start_date", "last_distribution", "next_distribution",
-    "status", "notes",
+    "last_dist_base", "status", "notes",
     "external_id", "source", "birth_date", "spouse_birth_date",
     "id_number", "spouse_id_number",
     "children_home", "children_married", "children_total",
@@ -846,6 +856,8 @@ def add_recipient(data: dict) -> int:
         rec_id = cur.lastrowid
         conn.execute("UPDATE recipients SET guid=?, updated_at=?, representative_auto=? WHERE id=?",
                      (guid, stamp, int(data.get("representative_auto") or 0), rec_id))
+        _adopt_last_base(conn, rec_id)
+        _recompute_recipient_dates(conn, rec_id)
     _sync_log("rec_upsert", _rec_sync_payload(rec_id))
     return rec_id
 
@@ -853,6 +865,13 @@ def add_recipient(data: dict) -> int:
 def update_recipient(rec_id: int, data: dict):
     data = _apply_name_fields(data)
     old = get_recipient(rec_id)
+    # last/next are DERIVED (history + base + frequency) — never written directly.
+    # A deliberately changed "last distribution" (import / script) becomes the base.
+    data.pop("next_distribution", None)
+    if "last_distribution" in data:
+        new_last = (data.pop("last_distribution") or "").strip()
+        if old is not None and new_last != (old.get("last_distribution") or "").strip():
+            data["last_dist_base"] = new_last
     tracked_fields = {"status": "סטטוס"}
     cols = [k for k in data if k != "id"]
     if not cols:
@@ -878,6 +897,7 @@ def update_recipient(rec_id: int, data: dict):
         if "updated_at" not in data:
             conn.execute("UPDATE recipients SET updated_at=? WHERE id=?",
                          (_utc_now(), rec_id))
+        _recompute_recipient_dates(conn, rec_id)   # e.g. frequency changed → new turn
     _sync_log("rec_upsert", _rec_sync_payload(rec_id))
 
 
@@ -1417,29 +1437,14 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
                  what_dist, quantity, distributor,
                  rec.get("notes", ""), batch_id, row_guid)
             )
-            freq = rec.get("frequency", "")
-            # Recording an OLDER distribution after the fact must not roll the
-            # recipient's "last distribution" backwards (the other computer derives
-            # it as MAX(dist_date) via _recompute_recipient_dates — keep both equal).
-            cur_row = conn.execute("SELECT last_distribution FROM recipients WHERE id=?",
-                                   (rec.get("id"),)).fetchone()
-            cur_last = ((cur_row["last_distribution"] if cur_row else "") or "").strip()
-            last_date = dist_date
-            if len(cur_last) == 10 and cur_last > dist_date:
-                try:
-                    # a stray far-future date (typo) is NOT kept — recording a
-                    # real distribution is the only way left to heal it.
-                    if date.fromisoformat(cur_last) <= date.today() + timedelta(days=7):
-                        last_date = cur_last
-                except ValueError:
-                    pass
-            nw = "" if freq == "חד-פעמי" else calculate_next_dist(last_date, freq).isoformat()
-            # Reset the weekly checkmark — it belongs to the cycle that just ended,
-            # so it must not bleed into the next week's distribution list.
-            conn.execute(
-                "UPDATE recipients SET last_distribution=?, next_distribution=?, weekly_status='' WHERE id=?",
-                (last_date, nw, rec.get("id"))
-            )
+            # last/next are re-derived from the history that now exists (single
+            # source of truth — the same function the other computer runs), so an
+            # OLDER distribution recorded after the fact never rolls "last" back.
+            # The weekly checkmark belongs to the cycle that just ended.
+            if rec.get("id") is not None:
+                _recompute_recipient_dates(conn, rec.get("id"))
+                conn.execute("UPDATE recipients SET weekly_status='' WHERE id=?",
+                             (rec.get("id"),))
             sync_rows.append({"guid": row_guid, "rec_guid": _rec_guid(conn, rec),
                               "recipient_name": rec.get("full_name", ""),
                               "area": rec.get("area", ""), "souls": rec.get("souls", 0),
@@ -1631,27 +1636,55 @@ def find_matching_batch(dist_date, dist_name, recipient_ids):
     return None
 
 
-def _recompute_recipient_dates(conn, rec_id):
-    """Re-derive a recipient's last_distribution / next_distribution from the
-    distribution rows that REMAIN for them, after some history was deleted.
+def _valid_iso(s) -> str:
+    s = (s or "").strip()
+    try:
+        date.fromisoformat(s)
+        return s if len(s) == 10 else ""
+    except ValueError:
+        return ""
 
-    This keeps the two stores in sync: the `distributions` history table and the
-    denormalized `recipients.last_distribution` field. Without it, deleting a
-    distribution left the recipient's last_distribution pointing at an event that
-    no longer exists — so the one-time / weekly lists still showed them as
-    "received" on a date whose record was gone (the 'two data sources out of
-    sync' bug). last becomes the newest remaining dist_date (or empty if none);
-    next is recomputed from it by the recipient's frequency."""
-    row = conn.execute("SELECT frequency FROM recipients WHERE id=?", (rec_id,)).fetchone()
+
+def _history_last(conn, rec_id) -> str:
+    # received=1 only: a recorded no-show must never become someone's
+    # "last distribution" — they didn't actually receive anything.
+    row = conn.execute("SELECT MAX(dist_date) AS m FROM distributions "
+                       "WHERE recipient_id=? AND received=1", (rec_id,)).fetchone()
+    return _valid_iso(row["m"] if row else "")
+
+
+def _adopt_last_base(conn, rec_id):
+    """A card whose last_distribution is LATER than anything the history explains
+    got that date from outside (Excel import / typed) — keep it as the base, so
+    deleting history later falls back to it instead of wiping it."""
+    row = conn.execute("SELECT last_distribution, last_dist_base FROM recipients WHERE id=?",
+                       (rec_id,)).fetchone()
+    if not row:
+        return
+    last = _valid_iso(row["last_distribution"])
+    if last and last > max(_valid_iso(row["last_dist_base"]), _history_last(conn, rec_id)):
+        conn.execute("UPDATE recipients SET last_dist_base=? WHERE id=?", (last, rec_id))
+
+
+def _recompute_recipient_dates(conn, rec_id):
+    """THE single place that writes recipients.last_distribution / next_distribution.
+
+    Both are derived, never typed and never synced as values:
+      last = the newest of (received history rows, last_dist_base)
+      next = calculate_next_dist(last, frequency)   ('' for one-time / no frequency)
+    Every write path (record / delete / sync apply / card edit / import) calls this,
+    so the card can't drift from the history and both computers reach the same
+    answer. A far-future base (typo) is ignored once real history exists."""
+    row = conn.execute("SELECT frequency, last_dist_base FROM recipients WHERE id=?",
+                       (rec_id,)).fetchone()
     if not row:
         return
     freq = row["frequency"] or ""
-    # received=1 only: a recorded no-show must never become someone's
-    # "last distribution" — they didn't actually receive anything.
-    last_row = conn.execute(
-        "SELECT MAX(dist_date) AS m FROM distributions WHERE recipient_id=? AND received=1", (rec_id,)
-    ).fetchone()
-    last = (last_row["m"] if last_row else "") or ""
+    hist = _history_last(conn, rec_id)
+    base = _valid_iso(row["last_dist_base"])
+    if base and hist and base > (date.today() + timedelta(days=7)).isoformat():
+        base = ""
+    last = max(hist, base)
     if last and freq and freq != "חד-פעמי":
         nxt = calculate_next_dist(last, freq).isoformat()
     else:
@@ -2334,6 +2367,8 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
                     conn.execute(f"UPDATE recipients SET {sets} WHERE id=?", vals)
                     ex.update(updates)
                     updated += 1
+                    _adopt_last_base(conn, ex["id"])
+                    _recompute_recipient_dates(conn, ex["id"])
             else:
                 row = _apply_name_fields(row)   # derive first/last (#aka27)
                 insert_cols = _RECIPIENT_FIELDS
@@ -2349,6 +2384,8 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
                     f"VALUES ({','.join(['?']*len(insert_cols))})",
                     insert_vals
                 )
+                _adopt_last_base(conn, cur.lastrowid)
+                _recompute_recipient_dates(conn, cur.lastrowid)
                 existing[name] = {"id": cur.lastrowid, "full_name": name,
                                   **{c: row.get(c, "") for c in insert_cols if c != "full_name"}}
                 added += 1
