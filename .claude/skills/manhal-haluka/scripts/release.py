@@ -40,6 +40,16 @@ TESTS = [
 ]
 
 
+# The Windows console is cp1255: a character outside it (✓, ☑, emoji) in a commit
+# message crashed the log line *between build and commit* (v3.55). Logging must
+# never be able to abort a release — unencodable characters become "?".
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(errors="replace")
+    except Exception:                                  # noqa: BLE001
+        pass
+
+
 def log(msg):
     print("[release] " + msg, flush=True)
 
