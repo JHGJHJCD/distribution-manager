@@ -441,7 +441,7 @@ ok("mailer.resendable מזהה שיש למי לשלוח שוב", mailer.resendab
 # (ב) כפתור "שלח שוב לנכשלים" מופיע גם כשנכשלו=0 (עצירה ידנית / נקטע)
 tab2._refresh_history()
 idx8 = next(i for i, c in enumerate(tab2._camps) if c["guid"] == g8)
-w8 = tab2.hist.cellWidget(idx8, 5)
+w8 = tab2.hist.cellWidget(idx8, tab2._HIST_ACT)
 btns8 = [b.text() for b in w8.findChildren(mmod.QPushButton)] if w8 else []
 ok("היסטוריה: כפתור 'שלח שוב לנכשלים' מופיע לשליחה שנקטעה בלי כישלונות", "שלח שוב לנכשלים" in btns8, btns8)
 # שליחה חוזרת אוספת בדיוק את 2 המדולגים

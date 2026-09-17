@@ -29,10 +29,12 @@ from PyQt6.QtWidgets import (
 
 import database as db
 from utils import email_utils, mailer, richtext, sync, timefmt
-from utils.ui import busy_cursor, enable_touch_scroll
+from utils.ui import busy_cursor, enable_touch_scroll, FlowLayout
 from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _CHIP_AMBER, _LBL,
                                _BTN_PRIMARY, _BTN_GHOST, _BTN_PRINT, _BTN_ACCENT,
                                _BTN_DANGER, _step_badge, _step_card, _metric, _set_metric)
+from tabs.tzintukim import (_set_step_done, _CARD_DONE_QSS, _HCHIP_GREEN, _HCHIP_AMBER,
+                            _CHIPBTN_AMBER)
 
 _CHIP_RED = ("QLabel{background:#fde2e2; color:#991b1b; border:none; border-radius:16px;"
              " padding:5px 13px; font-size:12.5px; font-weight:700;}")
@@ -243,6 +245,8 @@ class _HistoryDetailDialog(QDialog):
 
 class MailsTab(QWidget):
     MODE_ALL, MODE_CURRENT, MODE_MANUAL = "all", "current", "manual"
+    _HIST_ACT = 6            # עמודת הפעולות בהיסטוריה (v3.55: נוספה עמודת "מצב")
+    _MODE_TEXT = {"all": "כל המקבלים", "current": "רשימת החלוקה הנוכחית", "manual": "בחירה ידנית"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -259,6 +263,7 @@ class MailsTab(QWidget):
         self._active_guid = ""
         self._templates = []
         self._current_tpl_guid = ""
+        self._preview_idx = 0    # v3.55: איזה נמען מוצג בתצוגה המקדימה ("נמען אחר")
         self._build_ui()
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
@@ -302,21 +307,37 @@ class MailsTab(QWidget):
         sub.setStyleSheet("color:#64748b; font-size:13px; " + _LBL)
         head.addWidget(sub)
         head.addStretch()
-        self.chip_with_mail = QLabel("")
-        self.chip_with_mail.setStyleSheet(_CHIP_QSS)
-        head.addWidget(self.chip_with_mail)
-        self.chip_account = QLabel("")
-        self.chip_account.setStyleSheet(_CHIP_GREEN)
-        head.addWidget(self.chip_account)
-        self.btn_settings = QPushButton("פתח הגדרות")
-        self.btn_settings.setStyleSheet(_BTN_GHOST)
+        self.btn_settings = QPushButton("חבר חשבון מייל בהגדרות  ←")
+        self.btn_settings.setStyleSheet(_BTN_ACCENT)
         self.btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_settings.clicked.connect(self._goto_settings)
         head.addWidget(self.btn_settings)
         lay.addLayout(head)
+        # v3.55: החיוויים החיים בשורה משלהם, עוטפים לשורה נוספת בגודל-טקסט גדול
+        self.chips_row = QWidget()
+        chips = FlowLayout(self.chips_row, 8, 6)
+        self.chip_account = QLabel("")
+        self.chip_account.setStyleSheet(_HCHIP_GREEN)
+        chips.addWidget(self.chip_account)
+        self.chip_with_mail = QLabel("")
+        self.chip_with_mail.setStyleSheet(_CHIP_QSS)
+        chips.addWidget(self.chip_with_mail)
+        self.chip_ready = QLabel("")
+        self.chip_ready.setStyleSheet(_HCHIP_AMBER)
+        chips.addWidget(self.chip_ready)
+        self.chip_msg = QLabel("")
+        self.chip_msg.setStyleSheet(_HCHIP_AMBER)
+        chips.addWidget(self.chip_msg)
+        self.chip_sending = QLabel("")
+        self.chip_sending.setStyleSheet(_HCHIP_AMBER)
+        self.chip_sending.hide()
+        chips.addWidget(self.chip_sending)
+        lay.addWidget(self.chips_row)
 
         # ① למי
         card, c_lay, c_head = _step_card("1", "למי שולחים?", "הרשימה נבנית מהכרטיסים — רק מי שיש לו מייל יקבל")
+        card.setStyleSheet(_CARD_DONE_QSS)
+        self.card_list = card
         modes = QHBoxLayout()
         modes.setSpacing(8)
         self._mode_group = QButtonGroup(self)
@@ -345,16 +366,35 @@ class MailsTab(QWidget):
         self.m_bad = _metric("בלי מייל", _CHIP_AMBER)
         for m in (self.m_total, self.m_ok, self.m_bad):
             mrow.addWidget(m["frame"])
-        self.btn_show_bad = QPushButton("מי בלי מייל?")
-        self.btn_show_bad.setStyleSheet(_BTN_LINK)
+        # v3.55: "בלי מייל" = מסנן בלחיצה (במקום חלון נפרד) + חיפוש ברשימה
+        self.btn_show_bad = QPushButton("⚠ הצג רק את מי שבלי מייל")
+        self.btn_show_bad.setCheckable(True)
+        self.btn_show_bad.setStyleSheet(_CHIPBTN_AMBER)
         self.btn_show_bad.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_show_bad.clicked.connect(self._show_bad)
+        self.btn_show_bad.setToolTip("מסנן את הרשימה למי שלא יקבל — לחיצה כפולה על שורה פותחת את הכרטיס להוספת מייל")
+        self.btn_show_bad.toggled.connect(self._apply_filter)
         mrow.addWidget(self.btn_show_bad)
         mrow.addStretch()
+        self.list_search = QLineEdit()
+        self.list_search.setPlaceholderText("🔍 חיפוש ברשימה — שם או מייל")
+        self.list_search.setClearButtonEnabled(True)
+        self.list_search.setMinimumWidth(260)
+        self.list_search.textChanged.connect(self._apply_filter)
+        mrow.addWidget(self.list_search)
         c_lay.addLayout(mrow)
+
+        self.lbl_list_empty = QLabel("")
+        self.lbl_list_empty.setWordWrap(True)
+        self.lbl_list_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_list_empty.setStyleSheet("QLabel{background:#fafcfe; border:1.5px dashed #cbd5e1; border-radius:12px;"
+                                          " color:#475569; font-size:14px; padding:22px;}")
+        self.lbl_list_empty.hide()
+        c_lay.addWidget(self.lbl_list_empty)
 
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["שם", "מייל", "מצב", ""])
+        self.table.cellClicked.connect(self._on_cell_clicked)
+        self.table.cellDoubleClicked.connect(self._open_row_card)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.table.verticalHeader().setVisible(False)
@@ -366,10 +406,15 @@ class MailsTab(QWidget):
         self.table.setColumnWidth(3, 80)
         self.table.setStyleSheet("QTableWidget{background:#fff; border:1px solid #e6eaf2; border-radius:8px;}")
         c_lay.addWidget(self.table)
+        self.lbl_list_hint = QLabel("לחיצה כפולה על שורה פותחת את כרטיס המקבל — להוספה או לתיקון של כתובת המייל.")
+        self.lbl_list_hint.setStyleSheet("color:#94a3b8; font-size:12px; " + _LBL)
+        c_lay.addWidget(self.lbl_list_hint)
         lay.addWidget(card)
 
         # ② ההודעה
         card, c_lay, c_head = _step_card("2", "מה כותבים?", "אפשר לשמור כתבנית לפעם הבאה")
+        card.setStyleSheet(_CARD_DONE_QSS)
+        self.card_msg = card
         two = QHBoxLayout()
         two.setSpacing(18)
         left = QVBoxLayout()
@@ -439,8 +484,17 @@ class MailsTab(QWidget):
 
         right = QVBoxLayout()
         right.setSpacing(6)
+        ptitle = QHBoxLayout()
         self.lbl_preview_title = self._lbl("כך זה ייראה")
-        right.addWidget(self.lbl_preview_title)
+        ptitle.addWidget(self.lbl_preview_title)
+        ptitle.addStretch()
+        self.btn_preview_next = QPushButton("נמען אחר ◂")
+        self.btn_preview_next.setStyleSheet(_BTN_LINK)
+        self.btn_preview_next.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_preview_next.setToolTip("הצג איך ההודעה תיראה אצל הנמען הבא ברשימה")
+        self.btn_preview_next.clicked.connect(self._preview_next)
+        ptitle.addWidget(self.btn_preview_next)
+        right.addLayout(ptitle)
         self.preview = QTextBrowser()
         self.preview.setMinimumWidth(300)
         self.preview.setOpenExternalLinks(False)
@@ -454,17 +508,17 @@ class MailsTab(QWidget):
 
         # היסטוריה
         card, c_lay, c_head = _step_card("", "היסטוריית שליחות", "כל מייל שנשלח מהתוכנה, משני המחשבים")
-        self.hist = QTableWidget(0, 6)
-        self.hist.setHorizontalHeaderLabels(["תאריך", "נושא", "למי", "נשלחו", "נכשלו", ""])
+        self.hist = QTableWidget(0, 7)
+        self.hist.setHorizontalHeaderLabels(["מתי", "נושא", "למי", "מצב", "נשלחו", "נכשלו", ""])
         self.hist.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.hist.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.hist.verticalHeader().setVisible(False)
         hh = self.hist.horizontalHeader()
-        for i in (0, 2, 3, 4):
+        for i in (0, 2, 3, 4, 5):
             hh.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hh.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.hist.setColumnWidth(5, 230)
+        hh.setSectionResizeMode(self._HIST_ACT, QHeaderView.ResizeMode.Fixed)
+        self.hist.setColumnWidth(self._HIST_ACT, 230)
         self.hist.setStyleSheet("QTableWidget{background:#fff; border:1px solid #e6eaf2; border-radius:8px;}")
         self.hist.cellDoubleClicked.connect(lambda r, _c: self._show_details(r))
         c_lay.addWidget(self.hist)
@@ -481,13 +535,18 @@ class MailsTab(QWidget):
         b_lay = QVBoxLayout(bar)
         b_lay.setContentsMargins(20, 10, 20, 10)
         b_lay.setSpacing(6)
-        row = QHBoxLayout()
-        row.setSpacing(12)
-        row.addWidget(_step_badge("3"))
+        srow = QHBoxLayout()
+        srow.setSpacing(12)
+        srow.addWidget(_step_badge("3"))
         self.lbl_summary = QLabel("")
+        self.lbl_summary.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_summary.setStyleSheet("color:#334155; font-size:13.5px; " + _LBL)
         self.lbl_summary.setWordWrap(True)
-        row.addWidget(self.lbl_summary, 1)
+        srow.addWidget(self.lbl_summary, 1)
+        b_lay.addLayout(srow)
+        row = QHBoxLayout()
+        row.setSpacing(12)
+        row.addStretch()
         self.btn_test = QPushButton("שלח בדיקה אליי")
         self.btn_test.setStyleSheet(_BTN_ACCENT)
         self.btn_test.setToolTip("שולח את ההודעה (עם השם של הנמען הראשון) לכתובת של חשבון הקופה")
@@ -729,21 +788,36 @@ class MailsTab(QWidget):
 
     def _refresh_account(self):
         if email_utils.google_connected():
-            self.chip_account.setText("✓ Google: " + (email_utils.sender_email() or "מחובר"))
-            self.chip_account.setStyleSheet(_CHIP_GREEN)
+            self.chip_account.setText("✓ מחובר ל-Google: " + (email_utils.sender_email() or "מחובר"))
+            self.chip_account.setStyleSheet(_HCHIP_GREEN)
         elif email_utils.smtp_configured():
-            self.chip_account.setText("✓ שולח מ: " + email_utils.sender_email())
-            self.chip_account.setStyleSheet(_CHIP_GREEN)
+            self.chip_account.setText("✓ שולח מהחשבון " + email_utils.sender_email())
+            self.chip_account.setStyleSheet(_HCHIP_GREEN)
         else:
             self.chip_account.setText("●  עוד לא חובר חשבון מייל")
-            self.chip_account.setStyleSheet(_CHIP_AMBER)
+            self.chip_account.setStyleSheet(_HCHIP_AMBER)
         self.btn_settings.setVisible(not email_utils.is_configured())
-        n = sum(1 for r in db.get_all_recipients("פעיל") if (r.get("email") or "").strip())
-        self.chip_with_mail.setText(f"{n} מקבלים עם כתובת מייל")
+        active = db.get_all_recipients("פעיל")
+        n = sum(1 for r in active if (r.get("email") or "").strip())
+        self.chip_with_mail.setText(f"{n} מתוך {len(active)} מקבלים עם כתובת מייל")
+        self.chip_with_mail.setToolTip("כמה מהמקבלים הפעילים רשומים עם כתובת מייל בכרטיס")
+        # v3.55: כל כפתור-מקור אומר כמה אנשים יש בו — לפני שלוחצים
+        self.btn_mode_all.setText(f"{self._MODE_TEXT['all']} · {len(active)}")
+        gt = getattr(self.main, "group_tab", None)
+        try:
+            reserve_ids = getattr(gt, "_reserve_ids", set()) or set()
+            cur_n = sum(1 for r in (gt._rows_data or [])
+                        if not r.get("_reserve") and r.get("id") not in reserve_ids)
+        except Exception:
+            cur_n = None
+        self.btn_mode_current.setText(self._MODE_TEXT["current"] + (f" · {cur_n}" if cur_n else ""))
 
     def _set_mode(self, mode):
         self._mode = mode
         self._removed.clear()
+        self._preview_idx = 0
+        self.list_search.clear()
+        self.btn_show_bad.setChecked(False)
         self._rebuild_targets()
 
     def _source_recs(self) -> list[dict]:
@@ -802,36 +876,141 @@ class MailsTab(QWidget):
             name = QTableWidgetItem(tg["name"] + ("  (חיצוני)" if tg.get("external") else ""))
             t.setItem(i, 0, name)
             t.setItem(i, 1, QTableWidgetItem(tg["email"]))
-            st = QTableWidgetItem("✓ יקבל" if tg["ok"] else "⚠ " + tg["reason"])
-            st.setForeground(Qt.GlobalColor.darkGreen if tg["ok"] else Qt.GlobalColor.darkYellow)
+            fixable = not tg["ok"] and tg.get("rec_id") is not None
+            st = QTableWidgetItem("● יקבל" if tg["ok"] else
+                                  "⚠ " + tg["reason"] + (" · תקן…" if fixable else ""))
+            st.setForeground(QColor("#15803d") if tg["ok"] else QColor("#92600a"))
+            if fixable:
+                st.setToolTip("לחיצה פותחת את כרטיס המקבל — להוספה או לתיקון של כתובת המייל")
             t.setItem(i, 2, st)
-            b = QPushButton("הסר")
-            b.setStyleSheet(_BTN_LINK)
-            b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.clicked.connect(lambda _c, tg=tg: self._remove_target(tg))
-            t.setCellWidget(i, 3, b)
-        rows = min(len(self._targets), _MAX_TABLE_ROWS)
+            # v3.55: פריט-טקסט + cellClicked במקום 500 כפתורים (מהיר, ולא נחתך בתא)
+            rm = QTableWidgetItem("✕ הסר")
+            rm.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            rm.setForeground(QColor("#0f766e"))
+            rm.setToolTip("הסר מהשליחה הזו (הכרטיס עצמו לא נמחק)")
+            t.setItem(i, 3, rm)
+            if not tg["ok"]:                       # שורת-חריג כולה בענבר בהיר
+                for c in range(4):
+                    t.item(i, c).setBackground(QColor("#fff8e6"))
+        self._apply_filter()
+
+    def _apply_filter(self, *_a):
+        """v3.55 — חיפוש ברשימה + "הצג רק את מי שבלי מייל"; גובה הטבלה לפי השורות הגלויות."""
+        t = self.table
+        text = self.list_search.text().strip().lower()
+        only_bad = self.btn_show_bad.isChecked()
+        shown = 0
+        for i, tg in enumerate(self._targets):
+            hide = (only_bad and tg["ok"]) or bool(
+                text and text not in tg["name"].lower() and text not in (tg["email"] or "").lower())
+            t.setRowHidden(i, hide)
+            shown += 0 if hide else 1
+        rows = min(shown, _MAX_TABLE_ROWS)
         h = t.horizontalHeader().height() + rows * (t.verticalHeader().defaultSectionSize()) + 6
         t.setFixedHeight(max(h, 60))
+        empty = not self._targets
+        if empty:
+            self.lbl_list_empty.setText(
+                "הרשימה ריקה — בחר אנשים עם <b>＋ הוסף אדם</b>, או הוסף <b>כתובת מייל חיצונית</b>."
+                if self._mode == self.MODE_MANUAL else
+                "אין כרגע רשימת חלוקה — הכן את החלוקה במסך \"חלוקה\", או בחר \"כל המקבלים\"."
+                if self._mode == self.MODE_CURRENT else "אין עדיין מקבלים פעילים בתוכנה.")
+        self.lbl_list_empty.setVisible(empty)
+        t.setVisible(not empty)
+        self.lbl_list_hint.setVisible(not empty)
+        self.list_search.setVisible(len(self._targets) > 8 or bool(text))
+
+    def _on_cell_clicked(self, r: int, c: int):
+        if not (0 <= r < len(self._targets)):
+            return
+        tg = self._targets[r]
+        if c == 3:
+            self._remove_target(tg)
+        elif c == 2 and not tg["ok"]:
+            self._open_row_card(r, c)
+
+    def _open_row_card(self, r: int, c: int = 0):
+        """v3.55 — פותח את כרטיס המקבל מתוך הרשימה, כדי להוסיף/לתקן מייל בלי לעזוב את המסך."""
+        if c == 3 or not (0 <= r < len(self._targets)):
+            return
+        rec_id = self._targets[r].get("rec_id")
+        rec = db.get_recipient(rec_id) if rec_id is not None else None
+        if not rec:
+            return
+        from tabs.recipients import RecipientDialog
+        from utils.backup import auto_backup_async
+        dlg = RecipientDialog(self, rec)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        db.update_recipient(rec_id, dlg.get_data())
+        auto_backup_async()
+        if self.main is not None and hasattr(self.main, "refresh_all"):
+            self.main.refresh_all()
+        self.refresh()
 
     def _update_metrics(self):
         ok = sum(1 for t in self._targets if t["ok"])
         _set_metric(self.m_total, len(self._targets))
         _set_metric(self.m_ok, ok)
         _set_metric(self.m_bad, len(self._targets) - ok)
-        self.btn_show_bad.setVisible(len(self._targets) - ok > 0)
-        sender = email_utils.sender_email()
-        if not email_utils.is_configured():
-            self.lbl_summary.setText("כדי לשלוח צריך קודם לחבר חשבון מייל בהגדרות (\"התחבר עם Google\").")
-        elif ok == 0:
-            self.lbl_summary.setText("אין אף נמען עם כתובת מייל ברשימה.")
-        else:
-            self.lbl_summary.setText(
-                f"יישלחו <b>{ok}</b> מיילים אישיים (כל אחד רואה רק את עצמו) מהחשבון <b>{sender}</b>")
+        bad = len(self._targets) - ok
+        if not bad and self.btn_show_bad.isChecked():
+            self.btn_show_bad.setChecked(False)
+        self.btn_show_bad.setVisible(bad > 0)
         sending = self._worker is not None
+        has_subj = bool(self.subject.text().strip())
+        has_body = bool(self.body.toPlainText().strip())     # noqa — רק "ריק?", התוכן דרך _body_markup
+        # חיוויי הכותרת + ✓ ירוק בתגי השלבים
+        if ok:
+            self.chip_ready.setText(f"✓ {ok} יקבלו מייל")
+            self.chip_ready.setStyleSheet(_HCHIP_GREEN)
+        else:
+            self.chip_ready.setText("●  אין עדיין נמענים")
+            self.chip_ready.setStyleSheet(_HCHIP_AMBER)
+        if has_subj and has_body:
+            self.chip_msg.setText("✓ ההודעה מוכנה")
+            self.chip_msg.setStyleSheet(_HCHIP_GREEN)
+        else:
+            self.chip_msg.setText("●  " + ("עוד לא נכתבה הודעה" if not (has_subj or has_body)
+                                           else "חסר נושא" if not has_subj else "חסר תוכן"))
+            self.chip_msg.setStyleSheet(_HCHIP_AMBER)
+        self.chip_sending.setVisible(sending)
+        if sending:
+            self.chip_sending.setText("✉ שליחה רצה עכשיו…")
+        _set_step_done(self.card_list, "1", ok > 0)
+        _set_step_done(self.card_msg, "2", has_subj and has_body)
+        self._refresh_summary(ok, bad, has_subj, has_body, sending)
         testing = getattr(self, "_test_worker", None) is not None
         self.btn_send.setEnabled(email_utils.is_configured() and ok > 0 and not sending)
         self.btn_test.setEnabled(email_utils.is_configured() and not sending and not testing)
+
+    def _refresh_summary(self, ok, bad, has_subj, has_body, sending):
+        """v3.55 — שורת המוכנות של ③: מה מוכן ומה חסר (כמו בצינתוקים)."""
+        good, warn, mut = "#15803d", "#92600a", "#64748b"
+
+        def part(done, yes, no):
+            return (f"<span style='color:{good}'>☑ {yes}</span>" if done
+                    else f"<span style='color:{warn}'>☐ {no}</span>")
+
+        parts = [part(email_utils.is_configured(),
+                      "מהחשבון " + html.escape(email_utils.sender_email() or ""),
+                      "חבר חשבון מייל בהגדרות (\"התחבר עם Google\")"),
+                 part(ok > 0, f"{ok} נמענים — כל אחד מקבל מייל אישי ורואה רק את עצמו",
+                      "אין נמענים עם כתובת מייל (שלב 1)"),
+                 part(has_subj and has_body, "ההודעה כתובה",
+                      "כתוב נושא ותוכן (שלב 2)" if not (has_subj or has_body)
+                      else "חסר נושא (שלב 2)" if not has_subj else "חסר תוכן (שלב 2)")]
+        if self._attachment:
+            parts.append(f"<span style='color:{mut}'>📎 {html.escape(os.path.basename(self._attachment))}</span>")
+        tail = ""
+        if sending:
+            tail = "השליחה רצה — הכפתורים נעולים עד הסיום"
+        elif bad:
+            tail = f"{bad} בלי כתובת מייל — לא יישלח להם"
+        if tail:
+            parts.append(f"<span style='color:{mut}'>{tail}</span>")
+        self.lbl_summary.setText(" &nbsp;·&nbsp; ".join(parts))
+        self.btn_send.setText(f"שלח עכשיו ל-{ok}  ✉" if ok else "שלח עכשיו  ✉")
 
     def _remove_target(self, tg):
         if tg.get("external"):
@@ -877,7 +1056,9 @@ class MailsTab(QWidget):
 
     def _update_preview(self):
         self._update_metrics()
-        first = next((t for t in self._targets if t["ok"]), None)
+        oks = [t for t in self._targets if t["ok"]]
+        first = oks[self._preview_idx % len(oks)] if oks else None
+        self.btn_preview_next.setVisible(len(oks) > 1)
         rec = self._recs.get(first["rec_id"]) if first and first.get("rec_id") is not None else None
         ctx = dict(self._ctx(), fallback_name=first["name"] if first else "ישראל ישראלי")
         subj = mailer.render(self.subject.text(), rec, ctx)
@@ -888,6 +1069,10 @@ class MailsTab(QWidget):
         self.lbl_preview_title.setText(f"כך זה ייראה אצל {who}")
         self.preview.setHtml(f"<div dir='rtl'><div style='color:#64748b;font-size:12px'>נושא:</div>"
                              f"<div style='font-weight:700;margin-bottom:10px'>{html.escape(subj)}</div>{body}</div>")
+
+    def _preview_next(self):
+        self._preview_idx += 1
+        self._update_preview()
 
     def _load_templates(self):
         self._templates = db.get_mail_templates()
@@ -961,6 +1146,7 @@ class MailsTab(QWidget):
         self._attachment = path or ""
         self.lbl_attach.setText(os.path.basename(path) if path else "")
         self.btn_attach_clear.setVisible(bool(path))
+        self._update_metrics()
 
     # ── sending ───────────────────────────────────────────────────────────────
 
@@ -1043,10 +1229,17 @@ class MailsTab(QWidget):
             QMessageBox.warning(self, "", "הקובץ המצורף לא נמצא (נמחק או הועבר). הסר אותו או צרף מחדש.")
             return
         audience = audience or self._audience_text()
-        msg = (f"לשלוח את ההודעה <b>\"{html.escape(subject.strip())}\"</b><br>"
-               f"ל-<b>{len(targets)}</b> נמענים ({audience})<br>"
-               f"מהחשבון <b>{email_utils.sender_email()}</b>?"
-               + ("<br>עם קובץ מצורף: " + html.escape(os.path.basename(attachment)) if attachment else ""))
+        facts = [("נושא", html.escape(subject.strip())),
+                 ("נמענים", f"<b>{len(targets)}</b> — {html.escape(audience)}"),
+                 ("מהחשבון", html.escape(email_utils.sender_email() or "")),
+                 ("כותרת עם לוגו", "כן" if with_header else "לא")]
+        if attachment:
+            facts.append(("קובץ מצורף", "📎 " + html.escape(os.path.basename(attachment))))
+        msg = ("<div dir='rtl'><b style='font-size:15px'>לשלוח את המייל עכשיו?</b>"
+               "<table cellspacing='0' cellpadding='4' style='margin-top:8px'>"
+               + "".join(f"<tr><td style='color:#64748b'>{k}</td><td>{v}</td></tr>" for k, v in facts)
+               + "</table><div style='color:#64748b; margin-top:6px'>כל נמען מקבל מייל אישי ורואה רק את עצמו."
+                 " אפשר לעצור באמצע.</div></div>")
         if QMessageBox.question(self, "אישור שליחה", msg) != QMessageBox.StandardButton.Yes:
             return
         self._active_guid = db.add_mail_campaign(
@@ -1199,6 +1392,10 @@ class MailsTab(QWidget):
 
     _STATUS_HE = {"sending": "בתהליך…", "done": "הושלם", "stopped": "נעצר",
                   "interrupted": "נקטע", "failed": "נכשל"}
+    # v3.55: עמודת "מצב" בהיסטוריה — (טקסט, צבע)
+    _HIST_STATUS = {"sending": ("⏳ נשלח עכשיו…", "#92600a"), "done": ("✓ הושלם", "#15803d"),
+                    "stopped": ("⛔ נעצר באמצע", "#b45309"), "interrupted": ("⚠ נקטע באמצע", "#b45309"),
+                    "failed": ("✗ נכשל", "#b91c1c")}
 
     def _refresh_history(self):
         self._camps = db.get_mail_campaigns(limit=200)
@@ -1206,15 +1403,28 @@ class MailsTab(QWidget):
         h.setRowCount(0)
         h.setRowCount(len(self._camps))
         for i, c in enumerate(self._camps):
-            h.setItem(i, 0, QTableWidgetItem(timefmt.datetime_str(c.get("sent_at", ""))))
-            h.setItem(i, 1, QTableWidgetItem(c.get("subject", "")))
+            full = timefmt.datetime_str(c.get("sent_at", ""))
+            when = QTableWidgetItem(timefmt.relative(c.get("sent_at", "")) or full)
+            when.setToolTip(full)
+            h.setItem(i, 0, when)
+            subj = QTableWidgetItem(("📎 " if (c.get("attachment") or "").strip() else "") + c.get("subject", ""))
+            subj.setToolTip("לחיצה כפולה — פירוט לפי נמען")
+            h.setItem(i, 1, subj)
             h.setItem(i, 2, QTableWidgetItem(c.get("audience", "")))
-            st = self._STATUS_HE.get(c.get("status", ""), "")
-            h.setItem(i, 3, QTableWidgetItem(f"{c.get('sent', 0)}" + (f"  ({st})" if st and st != "הושלם" else "")))
-            f = QTableWidgetItem(str(c.get("failed", 0)))
+            txt, color = self._HIST_STATUS.get(c.get("status", ""), ("", "#334155"))
+            if c.get("status") == "done" and c.get("failed"):
+                txt, color = "✓ הושלם, חלק נכשלו", "#b45309"
+            st = QTableWidgetItem(txt)
+            st.setForeground(QColor(color))
+            h.setItem(i, 3, st)
+            n_sent = QTableWidgetItem(f"{c.get('sent', 0)} מתוך {c.get('total', 0) or c.get('sent', 0)}")
+            n_sent.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            h.setItem(i, 4, n_sent)
+            f = QTableWidgetItem(str(c.get("failed", 0)) if c.get("failed") else "—")
+            f.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if c.get("failed"):
-                f.setForeground(Qt.GlobalColor.red)
-            h.setItem(i, 4, f)
+                f.setForeground(QColor("#b91c1c"))
+            h.setItem(i, 5, f)
             w = QWidget()
             wl = QHBoxLayout(w)
             wl.setContentsMargins(0, 0, 0, 0)
@@ -1234,7 +1444,7 @@ class MailsTab(QWidget):
                 b2.clicked.connect(lambda _c, r=i: self._resend_failed(r))
                 wl.addWidget(b2)
             wl.addStretch()
-            h.setCellWidget(i, 5, w)
+            h.setCellWidget(i, self._HIST_ACT, w)
         rows = min(len(self._camps), 8)
         hh = h.horizontalHeader().height() + rows * h.verticalHeader().defaultSectionSize() + 6
         h.setFixedHeight(max(hh, 40))

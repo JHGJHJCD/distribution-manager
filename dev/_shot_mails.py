@@ -93,9 +93,84 @@ assert "3" in tab.lbl_summary.text()
 assert tab.hist.rowCount() == 2
 from PyQt6.QtWidgets import QPushButton
 _row_stopped = next(i for i, c in enumerate(tab._camps) if c["guid"] == g2)
-_btns = [b.text() for b in tab.hist.cellWidget(_row_stopped, 5).findChildren(QPushButton)]
+_btns = [b.text() for b in tab.hist.cellWidget(_row_stopped, tab._HIST_ACT).findChildren(QPushButton)]
 assert "שלח שוב לנכשלים" in _btns, _btns          # v3.43: גם כשנכשלו=0
 assert tab.lbl_preview_title.text().startswith("כך זה ייראה אצל ") and len(tab.lbl_preview_title.text()) > 18, tab.lbl_preview_title.text()
+
+# ── v3.55: המסך המעוצב — חיוויים, ✓ בשלבים, מסנן, חיפוש, מצבים, 130% ────────────
+import styles   # noqa: E402
+from PyQt6.QtCore import QPoint   # noqa: E402
+
+
+def pump(n=6):
+    for _ in range(n):
+        app.processEvents()
+
+
+def grab_ok(widget, path, min_bytes=40_000, pct=100):
+    for _attempt in range(4):
+        widget.grab().save(path)
+        if os.path.getsize(path) >= min_bytes:
+            return
+        styles.apply_app_theme(app, pct)
+        widget.repaint()
+        pump(12)
+    raise AssertionError(f"blank grab: {path}")
+
+
+def fits(w, host):
+    p = w.mapTo(host, QPoint(0, 0))
+    return p.x() >= 0 and p.x() + w.width() <= host.width() + 1
+
+
+assert "3" in tab.chip_ready.text() and "יקבלו" in tab.chip_ready.text(), tab.chip_ready.text()
+assert "מוכנה" in tab.chip_msg.text(), tab.chip_msg.text()
+assert tab.card_list.badge.text() == "✓" and tab.card_msg.badge.text() == "✓"
+assert "ל-3" in tab.btn_send.text(), tab.btn_send.text()
+assert "☑" in tab.lbl_summary.text() and "☐" not in tab.lbl_summary.text(), tab.lbl_summary.text()
+assert "6" in tab.btn_mode_all.text(), tab.btn_mode_all.text()
+assert tab.hist.columnCount() == 7 and "נעצר" in tab.hist.item(_row_stopped, 3).text()
+assert tab.btn_preview_next.isVisible()
+_t0 = tab.lbl_preview_title.text(); tab._preview_next(); pump()
+assert tab.lbl_preview_title.text() != _t0, "preview should move to another recipient"
+# מסנן "בלי מייל" + חיפוש
+assert tab.btn_show_bad.isVisible()
+tab.btn_show_bad.setChecked(True); pump()
+_vis = [i for i in range(tab.table.rowCount()) if not tab.table.isRowHidden(i)]
+assert len(_vis) == 3 and all(not tab._targets[i]["ok"] for i in _vis), _vis
+assert "תקן" in tab.table.item(_vis[0], 2).text()
+grab_ok(inner, "dev/_shots/mails_v355_filter.png")
+tab.btn_show_bad.setChecked(False)
+tab.list_search.setVisible(True); tab.list_search.setText("לוי"); pump()
+assert sum(1 for i in range(tab.table.rowCount()) if not tab.table.isRowHidden(i)) == 1
+tab.list_search.clear()
+# הסרה בלחיצה על "✕ הסר"
+tab._on_cell_clicked(0, 3); pump()
+assert len(tab._targets) == 5
+tab._set_mode(tab.MODE_ALL); pump()
+assert len(tab._targets) == 6
+for w_ in (tab.btn_send, tab.btn_test, tab.chips_row, tab.table, tab.hist, tab.preview):
+    assert fits(w_, tab), w_
+grab_ok(inner, "dev/_shots/mails_v355_loaded.png")
+grab_ok(tab, "dev/_shots/mails_v355_window.png")
+
+# מצב ריק: בחירה ידנית, בלי נושא/תוכן
+tab.btn_mode_manual.click(); tab.tpl_combo.setCurrentIndex(0)
+tab.subject.clear(); tab.body.clear(); tab._update_preview(); pump()
+assert tab.lbl_list_empty.isVisible() and not tab.table.isVisible()
+assert tab.card_list.badge.text() == "1" and tab.card_msg.badge.text() == "2"
+assert "☐" in tab.lbl_summary.text() and not tab.btn_send.isEnabled()
+assert "אין עדיין" in tab.chip_ready.text() and "עוד לא" in tab.chip_msg.text()
+grab_ok(inner, "dev/_shots/mails_v355_empty.png")
+
+# 130% — שום דבר לא חורג מרוחב החלון
+tab.btn_mode_all.click(); tab.tpl_combo.setCurrentIndex(1)
+styles.apply_app_theme(app, 130); pump(12)
+tab._update_preview(); pump(8)
+for w_ in (tab.btn_send, tab.btn_test, tab.chips_row, tab.table, tab.hist, tab.preview, tab.lbl_summary):
+    assert fits(w_, tab), ("130%", w_)
+grab_ok(tab, "dev/_shots/mails_v355_130.png", pct=130)
+styles.apply_app_theme(app, 100); pump(8)
 
 # הגדרות — כרטיס Google
 st = win.settings_tab

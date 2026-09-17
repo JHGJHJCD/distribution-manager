@@ -438,7 +438,8 @@ def _(c):
 
 @lint("M42", "send_batch ו-_send_test מעבירים text_body=הטקסט המרונדר (אותה זרימה בשני המקומות)")
 def _(c):
-    return ("text_body=plain" in _func_body(c["ml"], "send_batch")
+    sb = _func_body(c["ml"], "send_batch")      # v3.50: send_batch עבר ל-to_plain(rendered)
+    return (("text_body=plain" in sb or "text_body=to_plain(" in sb)
             and "text_body=plain" in _func_body(c["m"], "_send_test")), ""
 
 
