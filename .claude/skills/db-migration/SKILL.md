@@ -97,6 +97,13 @@ a bad migration breaks.
   Rule: a denormalized/derived field is stripped in the applier and re-derived locally; only
   its true inputs sync. Before adding any "cached" column — decide who derives it, in ONE function.
 
+- **Journals are read per device, not by global time (v3.63).** A peer's snapshot written
+  BEFORE a delete can be applied AFTER the `rec_delete` (glob order of device ids) and
+  resurrect the row. Every insert-on-missing applier must consult `sync._deleted_after`
+  (local table `sync_deleted`, filled by `db._remember_delete` + `_apply_rec_delete`).
+  `rec_change` (card change-history, v3.63) is the model for an **append-only, one-op-per-
+  action** record: payload with a list, per-row guids, idempotent insert, grouped seed with a
+  time window (`CHANGE_LOG_SEED_MONTHS`) so the compacted head stays small.
 - A test script that runs `init_db()` on the **real** DB can leak settings — clean with
   `DELETE FROM settings WHERE key LIKE 'need_w_%'` (see `references/pitfalls.md` in the
   `manhal-haluka` skill). Tests should point `db.DB_PATH` at a temp file.

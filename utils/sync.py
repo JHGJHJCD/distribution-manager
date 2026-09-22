@@ -31,7 +31,7 @@ import glob
 import socket
 import subprocess
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import database as db
 
@@ -520,16 +520,7 @@ def _adopt_match(conn, data: dict):
 
 
 # Human labels for the change-log summary (#5rhe9).
-_FIELD_LABELS_HE = {
-    "full_name": "שם", "first_name": "שם פרטי", "last_name": "שם משפחה",
-    "phone1": "טלפון", "phone2": "טלפון 2", "phone3": "טלפון 3",
-    "address": "כתובת", "area": "אזור", "souls": "נפשות", "frequency": "תדירות",
-    "status": "סטטוס", "notes": "הערות", "priority": "עדיפות",
-    "id_number": "ת.ז. בעל", "spouse_id_number": "ת.ז. אשה",
-    "children_total": "מספר ילדים", "marital_status": "מצב אישי",
-    "email": "אימייל", "synagogue": "בית כנסת", "income": "הכנסות",
-    "representative": "נציג", "external_id": "מס' מזהה",
-}
+_FIELD_LABELS_HE = db.FIELD_LABELS_HE   # v3.63: one label table, in database.py
 
 
 def _record_incoming(conn, op, guid, name, summary, before, after, dev):
@@ -615,6 +606,11 @@ def _apply_rec_upsert(conn, rec: dict):
             _record_incoming(conn, "rec_upsert", guid, name,
                              _diff_summary(before, fields), before, fields, rec.get("dev"))
     else:
+        # v3.63 — a card OLDER than a delete we already applied must not resurrect
+        # the recipient: journals are read per device, so a third computer's
+        # snapshot (written before the delete) can arrive AFTER the delete op.
+        if _deleted_after(conn, guid, data.get("updated_at") or rec.get("ts") or ""):
+            return
         fields["guid"] = guid
         keys = list(fields.keys())
         conn.execute(
@@ -629,7 +625,24 @@ def _apply_rec_upsert(conn, rec: dict):
                              f"נוסף מקבל חדש: {name}", None, fields, rec.get("dev"))
 
 
+def _deleted_after(conn, guid: str, card_ts: str) -> bool:
+    """True when a delete of this guid was applied/made here at or after the
+    card's own stamp (v3.63 resurrection guard). Unknown stamps never block."""
+    if not guid or not card_ts:
+        return False
+    row = conn.execute("SELECT ts FROM sync_deleted WHERE guid=?", (guid,)).fetchone()
+    return bool(row and (row["ts"] or "") >= card_ts)
+
+
+def remember_delete(conn, guid: str, ts: str = ""):
+    """Record that `guid` was deleted (own delete or one applied from a peer)."""
+    if guid:
+        conn.execute("INSERT OR REPLACE INTO sync_deleted (guid, ts) VALUES (?,?)",
+                     (guid, ts or _utc_now()))
+
+
 def _apply_rec_delete(conn, rec: dict):
+    remember_delete(conn, rec.get("guid") or "", rec.get("ts") or "")
     local = _find_recipient_by_guid(conn, rec.get("guid") or "")
     if local is None:
         return
@@ -638,7 +651,8 @@ def _apply_rec_delete(conn, rec: dict):
     deleted = False
     if rec.get("force"):
         conn.execute("DELETE FROM distributions WHERE recipient_id=?", (rid,))
-        conn.execute("DELETE FROM change_log WHERE recipient_id=?", (rid,))
+        conn.execute("DELETE FROM change_log WHERE recipient_id=? OR (rec_guid=? AND rec_guid<>'')",
+                     (rid, rec.get("guid") or ""))
         conn.execute("DELETE FROM recipients WHERE id=?", (rid,))
         deleted = True
     else:
@@ -796,6 +810,23 @@ def _apply_fb_add(conn, rec: dict):
          rec.get("version", ""), body, rec.get("created_at", "")))
 
 
+def _apply_rec_change(conn, rec: dict):
+    """One recipient's change-history entry (v3.63) from another computer:
+    'field X was A, became B, when, on which computer'. Append-only, idempotent
+    by row guid (db._insert_changes). The recipient is matched by guid; the local
+    numeric id is filled in only for display joins. Only the computer where the
+    edit happened writes these — _apply_rec_upsert never does, so a change is
+    recorded exactly once across both machines."""
+    if not rec.get("rec_guid") or not rec.get("changes"):
+        return
+    # History of a recipient deleted after these changes (another journal, read
+    # later) must not come back — same guard as the card itself.
+    if _deleted_after(conn, rec["rec_guid"], rec.get("changed_at") or rec.get("ts") or ""):
+        return
+    local = _find_recipient_by_guid(conn, rec["rec_guid"])
+    db._insert_changes(conn, local["id"] if local else 0, rec)
+
+
 def _apply_fb_status(conn, rec: dict):
     """A handled/open mark on a feedback message from another computer (#ce6a0).
     LWW by status_ts."""
@@ -940,6 +971,7 @@ def _apply_mtpl_upsert(conn, rec: dict):
 _APPLIERS = {
     "rec_upsert":   _apply_rec_upsert,
     "rec_delete":   _apply_rec_delete,
+    "rec_change":   _apply_rec_change,
     "batch_add":    _apply_batch_add,
     "batch_delete": _apply_batch_delete,
     "dist_delete":  _apply_dist_delete,
@@ -1202,6 +1234,33 @@ def _snapshot_body(include_settings: bool = True) -> int:
             log_change("fb_status", {"guid": fb.get("guid") or "",
                                      "status": "done", "ts": fb.get("status_ts", "")})
             n += 1
+    # Change history of the cards (v3.63) — last CHANGE_LOG_SEED_MONTHS only, one
+    # op per (recipient, moment, source) so the head stays small. Rows without a
+    # recipient guid predate the sync and cannot be matched on a peer — skipped.
+    since = (datetime.now(timezone.utc)
+             - timedelta(days=30 * db.CHANGE_LOG_SEED_MONTHS)).strftime("%Y-%m-%d")
+    with db.get_connection() as conn:
+        chs = [dict(r) for r in conn.execute(
+            "SELECT * FROM change_log WHERE rec_guid<>'' AND guid<>'' AND changed_at>=? "
+            "ORDER BY rec_guid, changed_at, source, id", (since,))]
+    group, key = None, None
+    for ch in chs + [None]:
+        k = ch and (ch["rec_guid"], ch["changed_at"], ch.get("source") or "")
+        if ch is None or k != key:
+            if group:
+                log_change("rec_change", group)
+                n += 1
+            if ch is None:
+                break
+            key = k
+            group = {"guid": ch["guid"], "rec_guid": ch["rec_guid"],
+                     "rec_name": ch.get("recipient_name") or "",
+                     "changed_at": ch["changed_at"], "device": ch.get("device") or "",
+                     "source": ch.get("source") or "", "changes": []}
+        group["changes"].append({"guid": ch["guid"], "field": ch.get("field") or "",
+                                 "label": ch.get("field_changed") or "",
+                                 "old": ch.get("old_value") or "",
+                                 "new": ch.get("new_value") or ""})
     # Tzintuk-campaign history (v2.81) — so a joining computer sees past sends
     # and its double-send guard covers campaigns sent from this machine.
     with db.get_connection() as conn:

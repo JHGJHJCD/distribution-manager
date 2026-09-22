@@ -124,9 +124,14 @@ check("status change logged", any(
 db.update_recipient(RID, {"status": "פעיל"})   # חזרה לפעיל (גם זו נרשמת)
 log_after_restore = db.get_change_log()
 _count_before = len(log_after_restore)
-db.update_recipient(RID, {"souls": 7})          # שדה לא מעוקב — לא אמור להירשם
+db.update_recipient(RID, {"souls": 7})          # v3.63: כל שדה בכרטיס נרשם (בקשת רון)
 log2 = db.get_change_log()
-check("non-tracked field not logged", len(log2) == _count_before)
+check("card field (souls) logged with old/new", len(log2) == _count_before + 1
+      and log2[0]["field"] == "souls" and log2[0]["new_value"] == "7")
+db.update_recipient(RID, {"souls": 7})          # אותו ערך — לא נרשם
+check("unchanged value not logged", len(db.get_change_log()) == _count_before + 1)
+db.update_recipient(RID, {"weekly_status": "x"})  # לא שדה-כרטיס — לא נרשם
+check("non-card field not logged", len(db.get_change_log()) == _count_before + 1)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

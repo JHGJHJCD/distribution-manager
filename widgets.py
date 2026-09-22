@@ -15,7 +15,8 @@ DateEdit — QDateEdit backed by WednesdayCalendar:
 from PyQt6.QtWidgets import (QCalendarWidget, QDateEdit, QAbstractItemView,
                              QWidget, QVBoxLayout, QHBoxLayout, QLineEdit,
                              QSpinBox, QPushButton, QLabel, QSizePolicy, QLayout,
-                             QGraphicsOpacityEffect)
+                             QGraphicsOpacityEffect, QDialog, QComboBox, QTableWidget,
+                             QTableWidgetItem, QHeaderView)
 from PyQt6.QtCore import Qt, QDate, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QTextCharFormat, QBrush, QColor, QPainter, QFont
 
@@ -345,3 +346,108 @@ class ProductsEditor(QWidget):
 
     def is_empty(self) -> bool:
         return not self.products_list()
+
+
+# ─── היסטוריית שינויים בכרטיס (v3.63, בקשת רון 22/9/2026) ───────────────────
+from database import change_source_label   # noqa: E402  (pure, shared with Excel)
+
+
+def change_line(ch: dict, with_when: bool = True) -> str:
+    """One change as a short Hebrew line: 'הכנסות: 1,000 → 2,000' (+ מתי/מחשב)."""
+    old = ch.get("old_value") or "—"
+    new = ch.get("new_value") or "—"
+    label = ch.get("field_changed") or ch.get("field") or ""
+    core = f"{label}: {old} ← {new}"
+    if not with_when:
+        return core
+    from utils import timefmt
+    when = timefmt.datetime_str(ch.get("changed_at") or "")
+    dev = ch.get("device") or ""
+    return f"{when} · {core}" + (f" ({dev})" if dev else "")
+
+
+class ChangeHistoryDialog(QDialog):
+    """כל השינויים שנעשו בכרטיס של מקבל אחד — מתי, איזה שדה, מה היה, מה הפך,
+    איך (עריכה/ייבוא/ביטול/אוטומטי) ובאיזה מחשב. תצוגה בלבד."""
+
+    _COLS = ["מתי", "שדה", "היה", "הפך ל", "איך", "מחשב"]
+
+    def __init__(self, rec: dict, parent=None, changes: list | None = None):
+        super().__init__(parent)
+        import database as db
+        self.setWindowTitle("היסטוריית שינויים")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.resize(820, 520)
+        self._changes = changes if changes is not None else db.get_changes_for_recipient(
+            rec.get("id") or 0, rec.get("guid") or "")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(8)
+        title = QLabel(f"היסטוריית שינויים — {rec.get('full_name') or ''}")
+        title.setStyleSheet("font-size:18px; font-weight:800; color:#0f172a;")
+        lay.addWidget(title)
+        self.lbl_sub = QLabel()
+        self.lbl_sub.setStyleSheet("font-size:12px; color:#64748b;")
+        lay.addWidget(self.lbl_sub)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("הצג שדה:"))
+        self.cmb_field = QComboBox()
+        self.cmb_field.addItem("כל השדות", "")
+        seen = []
+        for ch in self._changes:
+            key = ch.get("field") or ch.get("field_changed") or ""
+            if key and key not in seen:
+                seen.append(key)
+                self.cmb_field.addItem(ch.get("field_changed") or key, key)
+        self.cmb_field.currentIndexChanged.connect(self._fill)
+        row.addWidget(self.cmb_field)
+        row.addStretch()
+        lay.addLayout(row)
+        self.table = QTableWidget(0, len(self._COLS))
+        self.table.setHorizontalHeaderLabels(self._COLS)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(30)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        lay.addWidget(self.table, 1)
+        self.lbl_empty = QLabel("עדיין לא נרשמו שינויים בכרטיס הזה.\n"
+                                "מעכשיו כל שינוי בפרטים יירשם כאן — מה היה, מה הפך ומתי.")
+        self.lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_empty.setStyleSheet("color:#64748b; font-size:13.5px; padding:24px;")
+        lay.addWidget(self.lbl_empty)
+        btn = QPushButton("סגור")
+        btn.setObjectName("neutral")
+        btn.setMinimumHeight(38)
+        btn.clicked.connect(self.accept)
+        b = QHBoxLayout(); b.addStretch(); b.addWidget(btn); lay.addLayout(b)
+        self._fill()
+
+    def _fill(self):
+        from utils import timefmt
+        key = self.cmb_field.currentData() or ""
+        rows = [c for c in self._changes
+                if not key or (c.get("field") or c.get("field_changed")) == key]
+        self.table.setRowCount(0)
+        self.table.setRowCount(len(rows))
+        for r, ch in enumerate(rows):
+            when = QTableWidgetItem(timefmt.datetime_str(ch.get("changed_at") or ""))
+            when.setToolTip(timefmt.relative(ch.get("changed_at") or ""))
+            vals = [when, QTableWidgetItem(ch.get("field_changed") or ch.get("field") or ""),
+                    QTableWidgetItem(ch.get("old_value") or "—"),
+                    QTableWidgetItem(ch.get("new_value") or "—"),
+                    QTableWidgetItem(change_source_label(ch.get("source"))),
+                    QTableWidgetItem(ch.get("device") or "")]
+            vals[3].setForeground(QBrush(QColor("#0f766e")))
+            f = vals[3].font(); f.setBold(True); vals[3].setFont(f)
+            for c, it in enumerate(vals):
+                self.table.setItem(r, c, it)
+        n = len(self._changes)
+        self.lbl_sub.setText("אין שינויים רשומים" if not n else
+                             f"{n} שינויים" + (f" · מוצגים {len(rows)}" if len(rows) != n else ""))
+        self.table.setVisible(bool(rows))
+        self.lbl_empty.setVisible(not rows)

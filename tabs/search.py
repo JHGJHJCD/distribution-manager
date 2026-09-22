@@ -238,6 +238,20 @@ class SearchTab(QWidget):
         self.lbl_mails.setWordWrap(True)
         self.lbl_mails.setStyleSheet("color:#475569; font-size:12.5px; background:transparent;")
         right_panel.addWidget(self.lbl_mails)
+        # v3.63 — היסטוריית שינויים בכרטיס (בקשת רון): השינויים האחרונים + "הכל…"
+        chg_row = QHBoxLayout()
+        chg_row.setSpacing(8)
+        self.lbl_changes = QLabel("")
+        self.lbl_changes.setWordWrap(True)
+        self.lbl_changes.setStyleSheet("color:#475569; font-size:12.5px; background:transparent;")
+        chg_row.addWidget(self.lbl_changes, 1)
+        self.btn_changes = QPushButton("היסטוריית שינויים…")
+        self.btn_changes.setObjectName("neutral")
+        self.btn_changes.setToolTip("כל השינויים שנעשו בכרטיס: מה היה, מה הפך, מתי ובאיזה מחשב")
+        self.btn_changes.clicked.connect(self._open_changes)
+        self.btn_changes.setEnabled(False)
+        chg_row.addWidget(self.btn_changes, 0, Qt.AlignmentFlag.AlignTop)
+        right_panel.addLayout(chg_row)
 
     # ── data ───────────────────────────────────────────────────────────────────
     def refresh(self):
@@ -346,6 +360,9 @@ class SearchTab(QWidget):
         self.hist_title.setText("היסטוריית חלוקות")
         if hasattr(self, "btn_del_hist"):
             self.btn_del_hist.setEnabled(False)
+        if hasattr(self, "lbl_changes"):
+            self.lbl_changes.setText("")
+            self.btn_changes.setEnabled(False)
         if hasattr(self, "btn_export_card"):
             self.btn_export_card.setEnabled(False)
 
@@ -466,6 +483,18 @@ class SearchTab(QWidget):
                 f"{last['subject']}" + (" (נכשל)" if last.get('status') == 'failed' else ""))
         else:
             self.lbl_mails.setText("")
+        # v3.63 — the last card changes, newest first (full list in the dialog).
+        try:
+            changes = db.get_changes_for_recipient(rec["id"], rec.get("guid") or "")
+        except Exception:
+            changes = []
+        if changes:
+            from widgets import change_line
+            self.lbl_changes.setText(
+                f"📝 שינויים בכרטיס: {len(changes)} · אחרון: {change_line(changes[0])}")
+        else:
+            self.lbl_changes.setText("📝 עדיין לא נרשמו שינויים בכרטיס")
+        self.btn_changes.setEnabled(True)
         self.hist_table.clearContents()
         self.hist_table.setRowCount(0)
         self.hist_table.setRowCount(len(hist))
@@ -546,6 +575,16 @@ class SearchTab(QWidget):
         hist = db.get_distributions_for_recipient(self._current_rec_id)
         print_recipient_card(rec, hist, self)
 
+    def _open_changes(self):
+        """v3.63 — the full change history of the shown recipient."""
+        if not self._current_rec_id:
+            return
+        rec = db.get_recipient(self._current_rec_id)
+        if not rec:
+            return
+        from widgets import ChangeHistoryDialog
+        ChangeHistoryDialog(rec, self).exec()
+
     def _export_card(self):
         """Export the selected recipient — all fields + distribution history — to
         its own Excel file in the recipients export folder."""
@@ -559,7 +598,8 @@ class SearchTab(QWidget):
         try:
             from utils.excel_utils import export_single_recipient_to_excel
             with busy_cursor():
-                path = export_single_recipient_to_excel(rec, hist)
+                path = export_single_recipient_to_excel(
+                    rec, hist, db.get_changes_for_recipient(rec["id"], rec.get("guid") or ""))
             reveal_in_folder(path)
             QMessageBox.information(self, "ייצוא הושלם",
                                    f"פרטי המקבל נשמרו בקובץ Excel נפרד ונפתחה התיקייה:\n{path}")

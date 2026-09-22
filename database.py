@@ -307,6 +307,10 @@ def init_db():
             created_at      TEXT DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS sync_deleted (
+            guid    TEXT PRIMARY KEY,
+            ts      TEXT
+        );
         CREATE TABLE IF NOT EXISTS change_log (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             recipient_id    INTEGER,
@@ -515,6 +519,19 @@ def init_db():
             conn.execute("ALTER TABLE mail_campaigns ADD COLUMN attachment TEXT DEFAULT ''")
         if "with_header" not in mail_cols:
             conn.execute("ALTER TABLE mail_campaigns ADD COLUMN with_header INTEGER DEFAULT 1")
+        # v3.63 — היסטוריית שינויים בכרטיס (בקשת רון 22/9/2026): change_log הפך
+        # מ"סטטוס בלבד, מקומי" ליומן של כל שדה בכרטיס שמסונכרן בין המחשבים.
+        # field = מפתח השדה (field_changed נשאר התווית העברית — תאימות), guid =
+        # זהות השורה לסנכרון, rec_guid = המקבל (id מקומי = אדם אחר במחשב השני),
+        # device/source = מי ואיך (edit/import/undo/auto).
+        cl_cols = {row["name"] for row in conn.execute("PRAGMA table_info(change_log)")}
+        for col, decl in (("field", "TEXT DEFAULT ''"), ("guid", "TEXT DEFAULT ''"),
+                          ("rec_guid", "TEXT DEFAULT ''"), ("device", "TEXT DEFAULT ''"),
+                          ("source", "TEXT DEFAULT ''")):
+            if col not in cl_cols:
+                conn.execute(f"ALTER TABLE change_log ADD COLUMN {col} {decl}")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_change_log_rec_guid "
+                     "ON change_log(rec_guid)")
 
         # Back-fill stable guids (v2.61, cross-computer sync): every row gets a
         # random identity ONCE; new rows get theirs at insert time.
@@ -524,6 +541,16 @@ def init_db():
             for rid in missing:
                 conn.execute(f"UPDATE {table} SET guid=? WHERE id=?",
                              (uuid.uuid4().hex, rid))
+        # v3.63 back-fill (once): old status-only change_log rows get a guid, the
+        # field key and the recipient's guid so they display (and sync) like new rows.
+        for r in conn.execute("SELECT id, recipient_id, field_changed FROM change_log "
+                              "WHERE COALESCE(guid,'')=''").fetchall():
+            rg = conn.execute("SELECT guid FROM recipients WHERE id=?",
+                              (r["recipient_id"],)).fetchone()
+            conn.execute(
+                "UPDATE change_log SET guid=?, rec_guid=?, field=?, source='edit' WHERE id=?",
+                (uuid.uuid4().hex, (rg["guid"] if rg else "") or "",
+                 "status" if r["field_changed"] == "סטטוס" else "", r["id"]))
 
         # Indexes are created AFTER the column migrations so that an older DB
         # (missing a column an index references) is upgraded first, not crashed.
@@ -800,6 +827,121 @@ def _coerce(field: str, val):
     return val if val is not None else ""
 
 
+# ─── היסטוריית שינויים בכרטיס (v3.63, בקשת רון 22/9/2026) ────────────────────
+# תוויות עברית לכל שדה בכרטיס — משמשות גם את יומן-המנהל של הסנכרון (sync._diff_summary).
+FIELD_LABELS_HE = {
+    "full_name": "שם", "first_name": "שם פרטי", "last_name": "שם משפחה",
+    "phone1": "טלפון", "phone2": "טלפון 2", "phone3": "טלפון 3",
+    "address": "כתובת", "area": "אזור", "souls": "נפשות", "frequency": "תדירות",
+    "start_date": "תאריך התחלה", "status": "סטטוס", "notes": "הערות",
+    "external_id": "מס' מזהה", "source": "מקור", "birth_date": "תאריך לידה",
+    "spouse_birth_date": "תאריך לידה בת-זוג", "id_number": "ת.ז. בעל",
+    "spouse_id_number": "ת.ז. אשה", "children_home": "ילדים בבית",
+    "children_married": "ילדים נשואים", "children_total": "מספר ילדים",
+    "marital_status": "מצב אישי", "email": "אימייל", "synagogue": "בית כנסת",
+    "housing_expenses": "הוצאות דיור", "medical_expenses": "הוצאות רפואיות",
+    "income": "הכנסות", "per_soul": "לנפש", "work_scope": "היקף עבודה",
+    "parent_type": "סוג הורות", "occupation": "עיסוק", "representative": "נציג",
+    "priority": "עדיפות", "priority_raw": "עדיפות (מקור)",
+    "holiday_support": "נתמך חגים", "holidays": "חגים",
+    "last_distribution": "חלוקה אחרונה", "next_distribution": "חלוקה הבאה",
+}
+# מה נרשם בהיסטוריה: כל שדה בכרטיס חוץ מהנגזרים (תאריכי החלוקה — יש להם היסטוריה
+# משלהם ב-distributions; last_dist_base הוא קלט טכני שלהם).
+_UNTRACKED_FIELDS = {"last_distribution", "next_distribution", "last_dist_base"}
+_TRACKED_FIELDS = [f for f in _RECIPIENT_FIELDS if f not in _UNTRACKED_FIELDS]
+# כמה זמן אחורה נזרעת ההיסטוריה למחשב שמצטרף (snapshot) — ראו sync._snapshot_body.
+CHANGE_LOG_SEED_MONTHS = 24
+# מקור השינוי (עמודת source) → תווית עברית (חלון ההיסטוריה, אקסל).
+CHANGE_SOURCE_HE = {"edit": "עריכה", "import": "ייבוא מאקסל", "undo": "ביטול (מנהל)",
+                    "auto": "שיוך אוטומטי"}
+
+
+def change_source_label(source: str) -> str:
+    return CHANGE_SOURCE_HE.get(source or "", source or "עריכה")
+
+
+def _hist_norm(v) -> str:
+    return "" if v is None else str(v).strip()
+
+
+def _device() -> str:
+    """Which computer made the change: the sync device name, else the hostname
+    (sync not set up yet) — so the 'מחשב' column is never blank."""
+    try:
+        from utils import sync
+        name = sync.device_name() or ""
+    except Exception:
+        name = ""
+    if not name:
+        try:
+            import socket
+            name = socket.gethostname()
+        except Exception:
+            name = ""
+    return name
+
+
+def _log_changes(conn, rec_id: int, old: dict, new: dict, source: str) -> dict | None:
+    """Write one change_log row per tracked field whose value really changed
+    (after normalisation: '' ≡ None, ints ≡ their str). Returns the `rec_change`
+    sync payload (one op per recipient per action — not per field, so a 500-row
+    import doesn't blow the journal past its compaction limit), or None when
+    nothing changed. Runs inside the caller's connection; the caller sends the
+    payload with _sync_log AFTER its `with` block."""
+    if not old:
+        return None
+    changes = []
+    for field in _TRACKED_FIELDS:
+        if field not in new:
+            continue
+        o, n = _hist_norm(old.get(field)), _hist_norm(new.get(field))
+        if o == n:
+            continue
+        changes.append({"guid": uuid.uuid4().hex, "field": field,
+                        "label": FIELD_LABELS_HE.get(field, field), "old": o, "new": n})
+    if not changes:
+        return None
+    when = _utc_now()
+    payload = {"guid": uuid.uuid4().hex, "rec_guid": old.get("guid") or "",
+               "rec_name": old.get("full_name") or "", "changed_at": when,
+               "device": _device(), "source": source, "changes": changes}
+    _insert_changes(conn, rec_id, payload)
+    return payload
+
+
+def _insert_changes(conn, rec_id, payload: dict):
+    """Insert the rows of one rec_change payload (local write AND remote apply).
+    Idempotent by row guid — the sync head is replayed on peers that have it."""
+    for ch in payload.get("changes") or []:
+        g = ch.get("guid") or ""
+        if not g or conn.execute("SELECT 1 FROM change_log WHERE guid=?", (g,)).fetchone():
+            continue
+        conn.execute(
+            "INSERT INTO change_log (recipient_id, recipient_name, field_changed, "
+            "old_value, new_value, changed_at, field, guid, rec_guid, device, source) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (rec_id, payload.get("rec_name", ""), ch.get("label") or ch.get("field", ""),
+             ch.get("old", ""), ch.get("new", ""), payload.get("changed_at") or _utc_now(),
+             ch.get("field", ""), g, payload.get("rec_guid", ""),
+             payload.get("device", ""), payload.get("source", "")))
+
+
+def get_changes_for_recipient(rec_id: int, guid: str = "", limit: int = 0) -> list[dict]:
+    """The change history of one recipient, newest first. Matched by guid (the
+    only identity that means the same person on both computers); the local id is
+    a fallback for rows that predate guids."""
+    sql = ("SELECT * FROM change_log WHERE (rec_guid=? AND rec_guid<>'') "
+           "OR (COALESCE(rec_guid,'')='' AND recipient_id=?) "
+           "ORDER BY changed_at DESC, id DESC")
+    args: list = [guid or "", rec_id]
+    if limit:
+        sql += " LIMIT ?"
+        args.append(limit)
+    with get_connection() as conn:
+        return [dict(r) for r in conn.execute(sql, args).fetchall()]
+
+
 def _rec_sync_payload(rec_id: int) -> dict:
     """The full recipient row (minus the local numeric id) — the unit the sync
     journal carries so another computer can upsert an identical card by guid."""
@@ -866,7 +1008,9 @@ def add_recipient(data: dict) -> int:
     return rec_id
 
 
-def update_recipient(rec_id: int, data: dict):
+def update_recipient(rec_id: int, data: dict, source: str = "edit"):
+    """`source` tags the change-history rows: edit (card/UI), undo (manager
+    revert), auto (inferred community), import (Excel merge)."""
     data = _apply_name_fields(data)
     old = get_recipient(rec_id)
     # last/next are DERIVED (history + base + frequency) — never written directly.
@@ -876,17 +1020,11 @@ def update_recipient(rec_id: int, data: dict):
         new_last = (data.pop("last_distribution") or "").strip()
         if old is not None and new_last != (old.get("last_distribution") or "").strip():
             data["last_dist_base"] = new_last
-    tracked_fields = {"status": "סטטוס"}
     cols = [k for k in data if k != "id"]
     if not cols:
         return
     with get_connection() as conn:
-        for field, label in tracked_fields.items():
-            if field in data and old and str(data[field]) != str(old.get(field, "")):
-                conn.execute(
-                    "INSERT INTO change_log (recipient_id, recipient_name, field_changed, old_value, new_value) VALUES (?,?,?,?,?)",
-                    (rec_id, old["full_name"], label, old.get(field, ""), data[field])
-                )
+        change = _log_changes(conn, rec_id, old, data, source)   # v3.63 history
         # A manual edit of the נציג clears the 'שויך אוטומטית' mark — the operator
         # has now decided the community by hand.
         if ("representative" in data and old
@@ -903,6 +1041,16 @@ def update_recipient(rec_id: int, data: dict):
                          (_utc_now(), rec_id))
         _recompute_recipient_dates(conn, rec_id)   # e.g. frequency changed → new turn
     _sync_log("rec_upsert", _rec_sync_payload(rec_id))
+    if change:
+        _sync_log("rec_change", change)
+
+
+def _remember_delete(conn, rec):
+    """v3.63 — remember a deleted guid (local table) so a peer's older copy of
+    the card, arriving later through another journal, can't resurrect it."""
+    if rec and rec.get("guid"):
+        conn.execute("INSERT OR REPLACE INTO sync_deleted (guid, ts) VALUES (?,?)",
+                     (rec["guid"], _utc_now()))
 
 
 def delete_recipient(rec_id: int):
@@ -918,6 +1066,7 @@ def delete_recipient(rec_id: int):
                 "לא ניתן למחוק — שנה סטטוס ל'הסתיים' במקום."
             )
         conn.execute("DELETE FROM recipients WHERE id=?", (rec_id,))
+        _remember_delete(conn, rec)
     if rec and rec.get("guid"):
         _sync_log("rec_delete", {"guid": rec["guid"], "force": False})
 
@@ -927,8 +1076,10 @@ def force_delete_recipient(rec_id: int):
     rec = get_recipient(rec_id)
     with get_connection() as conn:
         conn.execute("DELETE FROM distributions WHERE recipient_id=?", (rec_id,))
-        conn.execute("DELETE FROM change_log WHERE recipient_id=?", (rec_id,))
+        conn.execute("DELETE FROM change_log WHERE recipient_id=? OR (rec_guid=? AND rec_guid<>'')",
+                     (rec_id, (rec or {}).get("guid") or ""))
         conn.execute("DELETE FROM recipients WHERE id=?", (rec_id,))
+        _remember_delete(conn, rec)
     if rec and rec.get("guid"):
         _sync_log("rec_delete", {"guid": rec["guid"], "force": True})
 
@@ -1365,7 +1516,7 @@ def apply_inferred_representatives() -> int:
     rows = get_all_recipients(status_filter="פעיל")
     suggestions = selection.infer_communities(rows)
     for rid, rep in suggestions.items():
-        update_recipient(rid, {"representative": rep, "representative_auto": 1})
+        update_recipient(rid, {"representative": rep, "representative_auto": 1}, source="auto")
     return len(suggestions)
 
 
@@ -2223,7 +2374,7 @@ def undo_incoming(incoming_id: int):
                           if k not in ("id", "updated_at", "created_at",
                                        "last_distribution", "next_distribution")}
                 if local:
-                    update_recipient(local["id"], fields)
+                    update_recipient(local["id"], fields, source="undo")
                 else:
                     add_recipient(before)          # vanished locally → recreate
         elif op == "rec_delete":
@@ -2294,6 +2445,7 @@ def reset_all_data(tzintuk: bool = False):
         conn.execute("DELETE FROM distributions")
         conn.execute("DELETE FROM dist_batches")
         conn.execute("DELETE FROM change_log")
+        conn.execute("DELETE FROM sync_deleted")
         conn.execute("DELETE FROM recipients")
         # v3.27 — the voice-call history goes too: it holds the phone numbers
         # of the recipients just deleted and drives the "already sent for
@@ -2338,6 +2490,7 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
         updated = 0
         conflicts = []
         touched = []      # ids to send to the other computer once committed
+        change_ops = []   # v3.63: rec_change payloads (history of merged fields)
         for row_idx, row in enumerate(rows, start=1):
             name = (row.get("full_name") or "").strip()
             if not name:
@@ -2372,6 +2525,9 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
                     if not _is_empty(new_val) and _is_empty(ex.get(field)):
                         updates[field] = _coerce(field, new_val) if field == "souls" else new_val
                 if updates:
+                    ch = _log_changes(conn, ex["id"], ex, updates, "import")  # v3.63
+                    if ch:
+                        change_ops.append(ch)
                     sets = ", ".join(f"{k}=?" for k in updates)
                     vals = list(updates.values()) + [ex["id"]]
                     conn.execute(f"UPDATE recipients SET {sets} WHERE id=?", vals)
@@ -2413,6 +2569,8 @@ def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]
         for rec in recs:
             _sync_log("rec_upsert", {"guid": rec.get("guid") or "",
                                      "data": {k: v for k, v in rec.items() if k != "id"}})
+    for ch in change_ops:
+        _sync_log("rec_change", ch)
     return added, updated, conflicts
 
 

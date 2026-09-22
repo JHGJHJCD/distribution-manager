@@ -786,7 +786,8 @@ def export_recipients_to_excel(recipients: List[Dict]) -> str:
 
 
 def export_single_recipient_to_excel(rec: Dict,
-                                     history: Optional[List[Dict]] = None) -> str:
+                                     history: Optional[List[Dict]] = None,
+                                     changes: Optional[List[Dict]] = None) -> str:
     """Export ONE recipient to its own Excel file. Sheet 'פרטי מקבל' is a WIDE
     (horizontal) sheet — one header row with every field as a column and a single
     data row for this recipient — identical in layout to the recipients list
@@ -882,6 +883,31 @@ def export_single_recipient_to_excel(rec: Dict,
         for col, width in enumerate([14, 22, 10, 18, 30], 1):
             hs.column_dimensions[get_column_letter(col)].width = width
         hs.freeze_panes = "A2"
+
+    # Optional third sheet — card change history (v3.63).
+    if changes:
+        from utils import timefmt
+        from database import change_source_label
+        cs = wb.create_sheet("היסטוריית שינויים")
+        cs.sheet_view.rightToLeft = True
+        cs.append(["מתי", "שדה", "היה", "הפך ל", "איך", "מחשב"])
+        for cell in cs[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="right", vertical="center")
+            cell.border = border
+        cs.row_dimensions[1].height = 20
+        for idx, ch in enumerate(changes, 2):
+            cs.append([timefmt.datetime_str(ch.get("changed_at") or ""),
+                       ch.get("field_changed") or ch.get("field") or "",
+                       ch.get("old_value") or "", ch.get("new_value") or "",
+                       change_source_label(ch.get("source") or ""), ch.get("device") or ""])
+            for cell in cs[idx]:
+                cell.alignment = cell_align
+                cell.border = border
+        for col, width in enumerate([20, 16, 24, 24, 14, 16], 1):
+            cs.column_dimensions[get_column_letter(col)].width = width
+        cs.freeze_panes = "A2"
 
     exports_dir = export_dir("recipients")
     _name = (rec.get("full_name") or "מקבל").strip()

@@ -155,6 +155,9 @@ json.dump(st, open(state_path, "w", encoding="utf-8"))
 db.update_recipient(rid1, {"address": "כתובת שנכתבה בלי אינטרנט"})
 ok("offline change buffered", sync.last_run_info()["pending"] >= 1,
    str(sync.last_run_info()))
+# Re-read the state: the offline write bumped `seq` — restoring the stale copy
+# would roll the counter back and reuse sequence numbers (v3.63 test fix).
+st = json.load(open(state_path, encoding="utf-8"))
 st["folder"] = real_folder
 json.dump(st, open(state_path, "w", encoding="utf-8"))
 sync.run_sync()
@@ -348,6 +351,51 @@ db.delete_batch(bid_s); sync.run_sync()
 use_machine(dir_b); sync.run_sync()
 ok("batch delete → both fall back to the base date",
    db.get_recipient(sid_b)["last_distribution"] == "2026-07-01", db.get_recipient(sid_b)["last_distribution"])
+
+# ── v3.63: היסטוריית שינויים בכרטיס נוסעת בין המחשבים — פעם אחת בדיוק ────────
+use_machine(dir_a)
+ch_id = db.add_recipient({"full_name": "היסטוריה בדיקה", "phone1": "0507777777", "income": "1000"})
+ch_guid = db.get_recipient(ch_id)["guid"]
+sync.run_sync()
+use_machine(dir_b); sync.run_sync()
+ch_b = db.get_recipient_by_guid(ch_guid)
+ok("B has the recipient before the edit", ch_b is not None)
+use_machine(dir_a)
+db.update_recipient(ch_id, {"income": "2000", "address": "רחוב ב 7"})
+sync.run_sync()
+use_machine(dir_b); sync.run_sync()
+chs_b = db.get_changes_for_recipient(ch_b["id"], ch_guid)
+ok("B received the change history (2 fields)", len(chs_b) == 2, str([(c["field"], c["old_value"], c["new_value"]) for c in chs_b]))
+ok("B's row is matched by guid and carries the local id",
+   all(c["rec_guid"] == ch_guid and c["recipient_id"] == ch_b["id"] for c in chs_b))
+sync.run_sync()
+ok("re-pull does not duplicate history rows", len(db.get_changes_for_recipient(ch_b["id"], ch_guid)) == 2)
+# B edits too → A sees B's change exactly once, and B's own copy stays single
+db.update_recipient(ch_b["id"], {"income": "3000"})
+sync.run_sync()
+use_machine(dir_a); sync.run_sync()
+chs_a = db.get_changes_for_recipient(ch_id, ch_guid)
+ok("A has all 3 changes (its 2 + B's 1), no duplicates",
+   len(chs_a) == 3 and chs_a[0]["field"] == "income" and chs_a[0]["new_value"] == "3000",
+   str([(c["field"], c["new_value"]) for c in chs_a]))
+ok("applying B's card (rec_upsert) did not log a second history row on A",
+   sum(1 for c in chs_a if c["new_value"] == "3000") == 1)
+# a computer joining later gets the history from the snapshot
+dir_c = os.path.join(root, "pc_c"); os.makedirs(dir_c)
+use_machine(dir_a); sync.enable_sync(shared, seed=True)
+use_machine(dir_c); db.init_db(); sync.enable_sync(shared, seed=False); sync.run_sync()
+ch_c = db.get_recipient_by_guid(ch_guid)
+ok("joining computer received the history via snapshot",
+   ch_c is not None and len(db.get_changes_for_recipient(ch_c["id"], ch_guid)) == 3,
+   str(len(db.get_changes_for_recipient(ch_c["id"], ch_guid)) if ch_c else None))
+# force delete on A clears the history on B
+use_machine(dir_a); db.force_delete_recipient(ch_id); sync.run_sync()
+use_machine(dir_b); sync.run_sync()
+ok("force delete cleared the history on B", db.get_changes_for_recipient(ch_b["id"], ch_guid) == [])
+# C's snapshot (written BEFORE the delete, read AFTER it — journals are per device)
+# must neither resurrect the card nor bring its history back (v3.63 guard).
+ok("deleted recipient did not come back from C's older snapshot",
+   db.get_recipient_by_guid(ch_guid) is None)
 
 print()
 if fails:

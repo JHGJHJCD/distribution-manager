@@ -461,7 +461,8 @@ class RecipientsTab(QWidget):
         hist = db.get_distributions_for_recipient(rec_id)
         try:
             with busy_cursor():
-                path = export_single_recipient_to_excel(rec, hist)
+                path = export_single_recipient_to_excel(
+                    rec, hist, db.get_changes_for_recipient(rec_id, rec.get("guid") or ""))
             reveal_in_folder(path)
             QMessageBox.information(self, "ייצוא הושלם",
                                    f"פרטי המקבל נשמרו בקובץ Excel נפרד ונפתחה התיקייה:\n{path}")
@@ -1147,6 +1148,15 @@ class RecipientDialog(QDialog):
         btn_cancel.clicked.connect(self.reject)
         btns.addWidget(btn_ok, 2)       # הפעולה הראשית רחבה יותר
         btns.addWidget(btn_cancel, 1)
+        # v3.63 — היסטוריית שינויים (רק בעריכה: למקבל חדש אין עבר).
+        self.btn_changes = QPushButton("היסטוריית שינויים…")
+        self.btn_changes.setObjectName("neutral")
+        self.btn_changes.setMinimumHeight(42)
+        self.btn_changes.setToolTip("מה היה בכרטיס לפני כל שינוי, מתי ובאיזה מחשב")
+        self.btn_changes.clicked.connect(self._open_changes)
+        self.btn_changes.setVisible(rec is not None and bool(rec.get("id")))
+        self._rec_for_history = rec
+        btns.addWidget(self.btn_changes, 1)
         outer.addLayout(btns)
 
         # Set the initial visibility of the frequency row (setCurrentIndex above
@@ -1235,6 +1245,12 @@ class RecipientDialog(QDialog):
             return
         nd = db.calculate_next_dist(self.f_last_dist.get_iso(), freq)
         self.f_next_dist.setDate(QDate(nd.year, nd.month, nd.day))
+
+    def _open_changes(self):
+        """v3.63 — the card's change history (read-only)."""
+        from widgets import ChangeHistoryDialog
+        rec = self._rec_for_history or {}
+        ChangeHistoryDialog(rec, self).exec()
 
     def _validate_and_accept(self):
         errors = self._collect_errors()

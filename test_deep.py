@@ -649,6 +649,62 @@ check("S11 replace-import keeps the Excel date as the base (survives a batch del
 
 
 # ══════════════════════════════════════════════════
+# CH — היסטוריית שינויים בכרטיס (v3.63, בקשת רון 22/9/2026)
+# ══════════════════════════════════════════════════
+print("\n=== CH: היסטוריית שינויים בכרטיס ===")
+_ch_id = db.add_recipient({"full_name": "הלוי חיים", "phone1": "0501234567",
+                           "income": "1000", "souls": 4, "priority": 4, "frequency": "שבועי"})
+_ch_rec = db.get_recipient(_ch_id)
+check("CH1 מקבל חדש — בלי היסטוריה (אין 'קודם')",
+      db.get_changes_for_recipient(_ch_id, _ch_rec["guid"]) == [])
+db.update_recipient(_ch_id, {"income": "2000", "souls": 4, "address": "רחוב א 5"})
+_chs = db.get_changes_for_recipient(_ch_id, _ch_rec["guid"])
+_by = {c["field"]: c for c in _chs}
+check("CH2 הכנסה 1000→2000 נרשמה עם תווית עברית",
+      _by.get("income", {}).get("old_value") == "1000" and _by["income"]["new_value"] == "2000"
+      and _by["income"]["field_changed"] == "הכנסות", str(_by.get("income")))
+check("CH3 כתובת ריקה→ערך נרשמה; נפשות ללא שינוי לא נרשמו",
+      "address" in _by and "souls" not in _by and len(_chs) == 2, str(sorted(_by)))
+check("CH4 לשורה יש guid/rec_guid/source=edit/changed_at",
+      all(c["guid"] and c["rec_guid"] == _ch_rec["guid"] and c["source"] == "edit"
+          and c["changed_at"] for c in _chs))
+db.update_recipient(_ch_id, {"income": "2000 "})     # אותו ערך אחרי רווח — לא שינוי
+check("CH5 ערך זהה (רווחים) לא נרשם", len(db.get_changes_for_recipient(_ch_id, _ch_rec["guid"])) == 2)
+db.update_recipient(_ch_id, {"frequency": "חודשי"})   # מחשב מחדש next — נגזרים לא נרשמים
+_chs = db.get_changes_for_recipient(_ch_id, _ch_rec["guid"])
+check("CH6 תדירות נרשמה, תאריכי-חלוקה נגזרים לא",
+      any(c["field"] == "frequency" for c in _chs)
+      and not any(c["field"] in ("last_distribution", "next_distribution", "last_dist_base")
+                  for c in _chs))
+check("CH7 החדש ראשון (DESC) ו-limit עובד",
+      db.get_changes_for_recipient(_ch_id, _ch_rec["guid"], limit=1)[0]["field"] == "frequency")
+# ייבוא-מיזוג ממלא שדה ריק → נרשם עם source=import
+_a, _u, _c = db.import_recipients_from_list(
+    [{"full_name": "הלוי חיים", "phone1": "0501234567", "synagogue": "בית אל"}])
+_imp = [c for c in db.get_changes_for_recipient(_ch_id, _ch_rec["guid"]) if c["source"] == "import"]
+check("CH8 ייבוא-מיזוג רושם שינוי עם source=import",
+      _u == 1 and len(_imp) == 1 and _imp[0]["field"] == "synagogue" and _imp[0]["old_value"] == "",
+      f"updated={_u} imp={_imp}")
+# מחיקה כפויה מנקה את ההיסטוריה (גם לפי guid)
+db.force_delete_recipient(_ch_id)
+check("CH9 מחיקה כפויה מנקה את ההיסטוריה",
+      db.get_changes_for_recipient(_ch_id, _ch_rec["guid"]) == [])
+# ייצוא אקסל של מקבל בודד — גיליון שלישי
+_x_id = db.add_recipient({"full_name": "אקסל בדיקה", "phone1": "0509999999", "income": "5"})
+db.update_recipient(_x_id, {"income": "6"})
+_xr = db.get_recipient(_x_id)
+from utils.excel_utils import export_single_recipient_to_excel as _exp1
+_xp = _exp1(_xr, [], db.get_changes_for_recipient(_x_id, _xr["guid"]))
+_xwb = openpyxl.load_workbook(_xp)
+check("CH10 ייצוא מקבל בודד כולל גיליון 'היסטוריית שינויים'",
+      "היסטוריית שינויים" in _xwb.sheetnames
+      and _xwb["היסטוריית שינויים"].cell(2, 3).value == "5"
+      and _xwb["היסטוריית שינויים"].cell(2, 4).value == "6", str(_xwb.sheetnames))
+try: os.unlink(_xp)
+except OSError: pass
+
+
+# ══════════════════════════════════════════════════
 # סיכום
 # ══════════════════════════════════════════════════
 print()
