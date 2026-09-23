@@ -96,6 +96,44 @@ check("דו-שבועי מיום שלישי → רביעי שאחרי שבועי�
 check("שבועי מיום ראשון → רביעי הקרוב (חלוקה מיוחדת לא מבטלת את רביעי)",
       calculate_next_dist("2026-05-31", "שבועי") == date(2026, 6, 3))
 
+# ── A2: דו-שבועי שקיבל שבוע שעבר לא חוזר לרשימת השבוע — גם אם החלוקה נרשמה
+#        באיחור (חמישי/שישי/ראשון). זו הייתה תקלה חמורה: חלון "6 ימים אחורה"
+#        גרר את כל מקבלי השבוע שעבר (דו-שבועי/חודשי) חזרה לרשימה השבוע. ─────────
+from datetime import timedelta as _td
+_a2_prev = db.DB_PATH                       # רץ על DB מבודד כדי לא לזהם רבדים אחרים
+_a2_fd, _a2_db = tempfile.mkstemp(suffix=".db"); os.close(_a2_fd)
+db.DB_PATH = _a2_db
+db.init_db()
+_today = date.today()
+_base_wed = _today if _today.weekday() == 2 else next_wednesday(_today)
+_last_wed = _base_wed - _td(days=7)
+def _mk_bw(name):
+    return db.add_recipient({"full_name": name, "status": "פעיל", "souls": 3,
+                             "frequency": "דו-שבועי", "priority": 4})
+def _serve(rid, name, d):
+    db.bulk_add_distributions(
+        [{"id": rid, "full_name": name, "frequency": "דו-שבועי", "souls": 3, "area": ""}],
+        d.isoformat(), "", 1, "בודק", dist_name="A2")
+for _off, _lbl in ((0, "רביעי"), (1, "חמישי"), (4, "ראשון")):
+    _n = f"דושב-שבוע-שעבר-{_lbl}"
+    _r = _mk_bw(_n)
+    _serve(_r, _n, _last_wed + _td(days=_off))
+    _wk = {x["full_name"] for x in db.get_weekly_list()}
+    check(f"דו-שבועי שקיבל שבוע שעבר ({_lbl}) לא ברשימת השבוע", _n not in _wk,
+          f"appears; next={db.get_recipient(_r)['next_distribution']}")
+# מנגד: מקבל שקיבל את מחזור השבוע (רביעי הקרוב) כן נשאר ברשימה — כדי שלא ייעלם
+# מיד אחרי הרישום ואפשר עדיין לתת לו סבב נוסף.
+_wn = "דושב-השבוע"
+_wr = _mk_bw(_wn)
+_serve(_wr, _wn, _base_wed)
+check("דו-שבועי שקיבל את מחזור השבוע כן נשאר ברשימת השבוע",
+      _wn in {x["full_name"] for x in db.get_weekly_list()})
+db.DB_PATH = _a2_prev                        # החזרת ה-DB המשותף לרבדים הבאים
+try:
+    os.remove(_a2_db)
+except OSError:
+    pass
+
 # ══════════════════════════════════════════════════
 # רובד B — Migration: DB ישן בלי עמודת weekly_status
 # ══════════════════════════════════════════════════

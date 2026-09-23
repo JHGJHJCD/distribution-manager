@@ -1095,6 +1095,19 @@ def next_wednesday(from_date: date = None) -> date:
     return d + timedelta(days=days_ahead)
 
 
+def cycle_wednesday(d: date) -> date:
+    """The distribution-cycle Wednesday a given date belongs to.
+
+    Distributions are anchored to Wednesdays. A date belongs to the most recent
+    Wednesday on-or-before it: recorded on time it carries that Wednesday; any day
+    after (Thu … the following Tue) is that same cycle recorded late. So the whole
+    week Wed→Tue maps to one Wednesday, and only the next Wednesday opens a new
+    cycle. This lets 'served for THIS cycle' be tested by cycle equality instead
+    of a raw day-count window that leaked into the previous week and dragged
+    bi-weekly/monthly recipients back onto every week's list."""
+    return d - timedelta(days=(d.weekday() - 2) % 7)   # Wednesday = 2
+
+
 def calculate_next_dist(last_date_str: str, frequency: str) -> date:
     """Return the correct next distribution date based on frequency."""
     if not last_date_str:
@@ -1207,17 +1220,17 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
                 ld2 = date.fromisoformat(ld_str2) if ld_str2 else None
             except ValueError:
                 ld2 = None
-            # "Served for this cycle" = last_distribution falls anywhere from the
-            # last 6 days up to the UPCOMING distribution Wednesday (base_wed).
-            # Including that near-future window is essential: the operator normally
-            # dates a distribution on the coming Wednesday, which pushes
-            # next_distribution a week out — without this the regular would vanish
-            # from the list the instant the distribution is saved (bug: קבועים
-            # disappear after one distribution). Dates BEYOND base_wed (a real
-            # data-entry error) are still excluded, so a stray far-future date
-            # can't pin someone to every week's list forever.
-            served_recently = (ld2 is not None
-                               and (today - timedelta(days=6)) <= ld2 <= base_wed)
+            # "Served for THIS cycle" = the distribution's cycle-Wednesday equals
+            # the upcoming distribution Wednesday (base_wed). This keeps a regular
+            # on the list the moment their distribution is recorded (the operator
+            # normally dates it on the coming Wednesday, which pushes
+            # next_distribution a week out — without this the person would vanish
+            # from the list the instant it is saved). Using cycle equality instead
+            # of a raw "last 6 days" window is what stops LAST week's distribution
+            # — especially one recorded a day or two LATE (Thu-Sat), which is
+            # normal — from dragging every bi-weekly/monthly recipient back onto
+            # THIS week's list (they'd look like their frequency was ignored).
+            served_recently = (ld2 is not None and cycle_wednesday(ld2) == base_wed)
             if nd <= cutoff or served_recently:
                 result.append(r)
         if updates:
