@@ -585,6 +585,7 @@ class MainWindow(QMainWindow):
 
     def _build_tabs(self):
         self.tabs = QTabWidget()
+        self.tabs.setObjectName("main-tabs")   # v3.66: rounded pills over the wallpaper
         self.tabs.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.tabs.setMovable(True)   # tabs can be reordered by dragging
 

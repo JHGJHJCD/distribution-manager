@@ -138,6 +138,47 @@ QTabBar::tab:left:selected:hover, QTabBar::tab:right:selected:hover {
     color: #ffffff;
 }
 
+/* ════ Main top tabs over the wallpaper (v3.66) ════
+   The page-surfaces go transparent on the soft picture background; the top tab
+   row must too, so the tabs read as free-floating, fully-rounded pills over the
+   picture instead of sitting inside an opaque white box. Scoped to #main-tabs so
+   dialogs and the inner sub-tabs keep their normal look. */
+QTabWidget#main-tabs::pane {
+    border: none;
+    background: transparent;
+    top: 4px;
+}
+QTabWidget#main-tabs > QTabBar {
+    background: transparent;
+}
+QTabWidget#main-tabs > QTabBar::tab {
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    border-radius: 18px;
+    margin: 3px 4px 8px 4px;
+    padding: 9px 20px;
+}
+QTabWidget#main-tabs > QTabBar::tab:!selected:hover,
+QTabWidget#main-tabs > QTabBar::tab:top:!selected:hover {
+    background: rgba(255, 255, 255, 0.85);
+    color: $blue_700;
+}
+QTabWidget#main-tabs > QTabBar::tab:selected,
+QTabWidget#main-tabs > QTabBar::tab:top:selected,
+QTabWidget#main-tabs > QTabBar::tab:bottom:selected {
+    /* the #main-tabs rule above is more specific than the generic
+       QTabBar::tab:selected, so it would overwrite the green fill with the
+       white pill — restate the green gradient here. */
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3dd6bf, stop:0.49 #16b096, stop:0.51 #109a80, stop:1 $blue_700);
+    color: #ffffff;
+    border: 1px solid transparent;
+    border-radius: 18px;
+}
+QTabWidget#main-tabs > QTabBar::tab:selected:hover,
+QTabWidget#main-tabs > QTabBar::tab:top:selected:hover {
+    color: #ffffff;
+}
+
 /* ════ Inner sub-tabs (v2.59: 3 top-level areas hold the old tabs) ════
    Lighter, smaller pills so the second row reads as sub-navigation and not as
    a duplicate of the main tab bar. */
