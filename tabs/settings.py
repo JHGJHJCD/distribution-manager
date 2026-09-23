@@ -221,6 +221,7 @@ class SettingsTab(QWidget):
         surface = QWidget()
         surface.setObjectName("st-surface")
         surface.setStyleSheet(f"QWidget#st-surface{{background:{_BG};}}"
+                              "QWidget#st-surface[wallpaper=\"true\"]{background:transparent;}"
                               "QWidget#st-surface QLabel{background:transparent; border:none;}")
         root.addWidget(surface, 1)
         s_lay = QVBoxLayout(surface)
@@ -320,7 +321,7 @@ class SettingsTab(QWidget):
         _place(row, card, body)
 
         # ── שם הארגון ולוגו ──
-        card, body, _h = _card("שם הארגון ולוגו", "building", "הכיתוב והלוגו שבראש התוכנה")
+        card, body, _h = _card("שם הארגון, לוגו ורקע", "building", "הכיתוב והלוגו שבראש התוכנה, ותמונת הרקע")
         body.addWidget(_desc("מתאים את התוכנה לכל קופת צדקה — הכותרת מופיעה בסרגל העליון, "
                              "הלוגו גם בהדפסות."))
         form = _form()
@@ -345,6 +346,44 @@ class SettingsTab(QWidget):
         self.btn_logo_reset = _btn("אפס", _BTN_GHOST, self._reset_logo, small=True)
         logo_row.addWidget(self.btn_logo_reset)
         body.addLayout(logo_row)
+
+        # ── רקע התוכנה (v3.65, #lbxii): picture · strength · default / none ──
+        bg_row = QHBoxLayout()
+        bg_row.setSpacing(8)
+        bg_row.addWidget(_flabel("רקע התוכנה"))
+        self.lbl_bg_status = QLabel("")
+        self.lbl_bg_status.setStyleSheet(_CHIP_QSS)
+        bg_row.addWidget(self.lbl_bg_status)
+        bg_row.addStretch()
+        bg_row.addWidget(_btn("החלף תמונה…", _BTN_GHOST, self._choose_bg,
+                             "בחר תמונה משלך לרקע כל המסכים", small=True))
+        self.btn_bg_default = _btn("ברירת מחדל", _BTN_GHOST, self._bg_default,
+                                   "חזרה לתמונת הרקע המובנית", small=True)
+        bg_row.addWidget(self.btn_bg_default)
+        self.btn_bg_none = _btn("בלי רקע", _BTN_GHOST, self._bg_none,
+                                "רקע חלק בלי תמונה", small=True)
+        bg_row.addWidget(self.btn_bg_none)
+        body.addLayout(bg_row)
+        op_row = QHBoxLayout()
+        op_row.setSpacing(8)
+        op_row.addWidget(_flabel("עוצמת התמונה"))
+        self.bg_opacity_spin = QSpinBox()
+        self.bg_opacity_spin.setRange(0, 100)
+        self.bg_opacity_spin.setSingleStep(5)
+        self.bg_opacity_spin.setSuffix(" %")
+        self.bg_opacity_spin.setFixedWidth(110)
+        self.bg_opacity_spin.setMinimumHeight(_INPUT_H)
+        self.bg_opacity_spin.setToolTip("כמה התמונה נראית מבעד לרקע — 100% = בעוצמה מלאה, "
+                                        "0% = כמעט לא רואים אותה. משתנה מיד.")
+        self._bg_apply_timer = QTimer(self)
+        self._bg_apply_timer.setSingleShot(True)
+        self._bg_apply_timer.setInterval(300)
+        self._bg_apply_timer.timeout.connect(self._apply_bg_opacity)
+        self.bg_opacity_spin.valueChanged.connect(lambda *_: self._bg_apply_timer.start())
+        op_row.addWidget(self.bg_opacity_spin)
+        op_row.addWidget(_hint("עדין = 30–50%"))
+        op_row.addStretch()
+        body.addLayout(op_row)
         body.addLayout(_btn_row(_btn("שמור", _BTN_PRIMARY, self._save_branding)))
         _place(row, card, body)
 
@@ -909,6 +948,7 @@ class SettingsTab(QWidget):
         self._set_text_safe(self.org_title, db.get_setting("org_title") or "")
         self._set_text_safe(self.org_subtitle, db.get_setting("org_subtitle") or "")
         self._refresh_logo_status()
+        self._refresh_bg_status()
 
         self._refresh_google_status()
         cfg = email_utils.get_smtp_config()
@@ -1441,6 +1481,51 @@ class SettingsTab(QWidget):
         if mw is not None and hasattr(mw, "_load_appbar_logo"):
             mw._load_appbar_logo()
         self._refresh_logo_status()
+
+    # ── רקע התוכנה (v3.65) ──
+    def _choose_bg(self):
+        from utils import wallpaper
+        path, _ = QFileDialog.getOpenFileName(self, "בחר תמונת רקע לתוכנה", "",
+                                              wallpaper.IMAGE_FILTER)
+        if not path:
+            return
+        err = wallpaper.set_custom(path)
+        if err:
+            QMessageBox.warning(self, "תמונת רקע", err)
+            return
+        self._apply_bg_change()
+
+    def _bg_default(self):
+        from utils import wallpaper
+        wallpaper.use_default()
+        self._apply_bg_change()
+
+    def _bg_none(self):
+        from utils import wallpaper
+        wallpaper.use_none()
+        self._apply_bg_change()
+
+    def _apply_bg_opacity(self):
+        from utils import wallpaper
+        wallpaper.set_opacity(self.bg_opacity_spin.value())
+        self._apply_bg_change()
+
+    def _apply_bg_change(self):
+        mw = self.main_win
+        if mw is not None and hasattr(mw, "apply_wallpaper"):
+            mw.apply_wallpaper()
+        self._refresh_bg_status()
+
+    def _refresh_bg_status(self):
+        from utils import wallpaper
+        m = wallpaper.mode()
+        self.lbl_bg_status.setText(wallpaper.describe())
+        self.btn_bg_default.setEnabled(m != "default")
+        self.btn_bg_none.setEnabled(m != "none")
+        self.bg_opacity_spin.setEnabled(m != "none")
+        self.bg_opacity_spin.blockSignals(True)
+        self.bg_opacity_spin.setValue(wallpaper.opacity())
+        self.bg_opacity_spin.blockSignals(False)
 
     def _refresh_logo_status(self):
         import os

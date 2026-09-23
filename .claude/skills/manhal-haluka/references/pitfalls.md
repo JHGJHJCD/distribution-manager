@@ -550,3 +550,8 @@ M45 (3.46) הגן על סגירת החלון, אבל `settings._on_downloaded` �
 `ship` שוב.
 
 - **`gh release create` נתקע בהעלאת ה-EXE (17/9/2026, v3.60):** נשאר draft בלי asset יותר מ-20 דקות ואז יצא בשקט. תרופה: `gh release upload vX.Y dist/Manhal-Haluka.exe --clobber` (20 שניות) ואז `gh release edit vX.Y --draft=false --latest`. אחרי `ship` — תמיד לוודא `gh release view --json isDraft,assets`.
+
+## qt-material דורס גובה QSpinBox בכל פוליש — `setFixedHeight` לא מספיק (v3.65, 23/9/2026)
+- **מה קרה:** תיבת "מוצרים זמינים" (`setFixedHeight(76)`) צוירה 76px אבל הלייאאוט הקצה לה רק 42px, והתווית "קבועים השבוע" מתחתיה נחתכה (Gemini זיהה בצילום). הסיבה: `QSpinBox{height:36px}` של qt-material הופך ב-`QStyleSheetStyle::polish` ל-`maximumSize` (42) — וזה רץ **אחרי** הבנייה בכל `setStyleSheet` של האפליקציה (ערכה/גודל טקסט).
+- **תרופה:** ווידג'ט-קלט עם גובה חריג מקבל `height:Npx` ב-QSS **שלו** (תוכן; + מסגרת + ריפוד = הגובה הרצוי). מה שנכתב ברמת הווידג'ט מנצח את הערכה בקסקדה ונשמר גם בפוליש הבא. לאמת: `w.maximumSize()` אחרי `show()`, לא רק `geometry()`.
+- **ורקע התוכנה (`utils/wallpaper.py`):** משטח לשונית שהופך שקוף בחלון הראשי — דרך property `wallpaper=true` ו-QSS `[wallpaper="true"]`, לא ע"י מחיקת ה-`background` — כדי שצילומי לשונית בודדת (רוב `dev/_shot_*.py`) ישארו עם רקע אטום.

@@ -1419,7 +1419,8 @@ class GroupUpdateTab(QWidget):
         #    shared design language of the הגדרות/צינתוקים screens. Layout/visuals
         #    only: every widget, signal and method below is unchanged.
         self.setObjectName("group-tab")
-        self.setStyleSheet(f"QWidget#group-tab{{background:{_BG};}}")
+        self.setStyleSheet(f"QWidget#group-tab{{background:{_BG};}}"
+                           "QWidget#group-tab[wallpaper=\"true\"]{background:transparent;}")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -1566,7 +1567,7 @@ class GroupUpdateTab(QWidget):
         self.products_spin.setStyleSheet(
             "QSpinBox{font-size:40px; font-weight:900; color:#064e3b; background:#ffffff;"
             " border:3px solid #0f9d78; border-radius:14px; padding:2px 44px 2px 12px;"
-            " min-height:70px; max-height:76px;}"
+            " min-height:66px; max-height:66px; height:66px;}"   # content 66 + border 3×2 + padding 2×2 = 76 = setFixedHeight
             "QSpinBox:focus{border-color:#0f766e;}"
             "QSpinBox::up-button{subcontrol-origin:border; subcontrol-position:top left; width:34px; height:36px;}"
             "QSpinBox::down-button{subcontrol-origin:border; subcontrol-position:bottom left; width:34px; height:36px;}")
@@ -1584,10 +1585,16 @@ class GroupUpdateTab(QWidget):
         _plab = prod_field.itemAt(0).widget()
         _plab.setStyleSheet("color:#0f766e; font-size:17px; font-weight:900; " + _LBL)
         _plab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        prod_field.addSpacing(6)   # v3.65: the hint sat flush under the 76px spin and looked clipped
         prod_field.addWidget(self.lbl_regulars_count)
         self.lbl_regulars_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_regulars_count.setMinimumHeight(24)
         pp.addLayout(prod_field)
         self.products_spin.setFixedHeight(76)   # after _field (which sets 38); beats the theme QSS height
+        # ⚠ qt-material's `QSpinBox{height:36px}` is re-applied as maximumSize on every
+        # theme polish (after this setFixedHeight!) ⇒ layout slot 42px, widget 76px,
+        # the hint label painted underneath it. The widget-level `height:66px` above
+        # wins the cascade, so the polished maximum stays 76.
         pp.addLayout(_field("רזרבה", self.reserve_spin, maxw=110))
         pp.addWidget(self.leftover_card)
         pp.addStretch(1)

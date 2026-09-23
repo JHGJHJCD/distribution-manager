@@ -56,6 +56,7 @@ BACKUP_DIR = os.path.join(_data_dir(), "backups")
 # bundle) so each charity can drop in its own logo and it survives updates.
 USER_LOGO_PATH = os.path.join(_data_dir(), "org_logo.png")
 CHAT_BG_PATH = os.path.join(_data_dir(), "chat_bg")   # user's chat wallpaper (any image ext)
+APP_BG_PATH = os.path.join(_data_dir(), "app_bg")     # v3.65: user's app-wide wallpaper (any image ext)
 
 
 def _legacy_db_candidates() -> list:

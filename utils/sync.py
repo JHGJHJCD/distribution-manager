@@ -44,6 +44,7 @@ _MY_DRIVE_NAMES = ("My Drive", "האחסון שלי", "התיקיה שלי")
 # and window/user-interface state.
 EXCLUDED_SETTINGS = {"password", "win_geometry", "backup_folder", "last_backup_at",
                      "mei_last", "community_pcts_ui", "chat_bg_path",
+                     "app_bg_mode", "app_bg_opacity",   # v3.65 per-machine wallpaper
                      # per-machine display preference (screens differ) + the
                      # per-machine one-time legacy feedback import marker
                      "ui_font_scale", "ui_font_size", "feedback_legacy_imported"}

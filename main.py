@@ -658,7 +658,11 @@ class MainWindow(QMainWindow):
         self._refresh_messages_badge()
         # Wrap in a container with a top margin so the pill tabs aren't clipped
         # against the window's title bar.
-        central = QWidget()
+        # v3.65: the central widget paints the soft picture background behind
+        # every screen (settings → רקע התוכנה); see utils/wallpaper.py.
+        from utils import wallpaper as _wp
+        central = _wp.WallpaperWidget()
+        self._wallpaper = central
         c_lay = QVBoxLayout(central)
         c_lay.setContentsMargins(6, 6, 6, 6)
         # Room below the app-bar so its soft drop-shadow lands in clear space and
@@ -714,6 +718,7 @@ class MainWindow(QMainWindow):
 
         c_lay.addWidget(self.tabs)
         self.setCentralWidget(central)
+        _wp.mark_surfaces(central)   # tab surfaces go transparent over the wallpaper
 
         # שכבת עומק+תנועה: צל רך לסרגל-העל, והרמה מונפשת לכפתורים הראשיים בעץ הנוכחי.
         from utils import effects
@@ -727,6 +732,12 @@ class MainWindow(QMainWindow):
             cur._needs_refresh = False
 
         self._apply_rtl_polish()
+
+    def apply_wallpaper(self):
+        """Re-read the wallpaper settings and repaint (Settings → רקע התוכנה)."""
+        w = getattr(self, "_wallpaper", None)
+        if w is not None:
+            w.reload()
 
     def _load_appbar_logo(self):
         """Fill the top-bar logo from the user's logo (data dir) if present, else

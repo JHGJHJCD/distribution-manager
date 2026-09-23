@@ -1703,7 +1703,8 @@ class TzintukimTab(QWidget):
         root.setSpacing(0)
         surface = QWidget()
         surface.setObjectName("tz-surface")
-        surface.setStyleSheet(f"QWidget#tz-surface{{background:{_BG};}}")
+        surface.setStyleSheet(f"QWidget#tz-surface{{background:{_BG};}}"
+                              "QWidget#tz-surface[wallpaper=\"true\"]{background:transparent;}")
         root.addWidget(surface, 1)
         s_lay = QVBoxLayout(surface)
         s_lay.setContentsMargins(0, 0, 0, 0)

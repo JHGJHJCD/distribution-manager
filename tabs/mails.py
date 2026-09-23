@@ -279,7 +279,8 @@ class MailsTab(QWidget):
         root.setSpacing(0)
         surface = QWidget()
         surface.setObjectName("mail-surface")
-        surface.setStyleSheet(f"QWidget#mail-surface{{background:{_BG};}}")
+        surface.setStyleSheet(f"QWidget#mail-surface{{background:{_BG};}}"
+                              "QWidget#mail-surface[wallpaper=\"true\"]{background:transparent;}")
         root.addWidget(surface, 1)
         s_lay = QVBoxLayout(surface)
         s_lay.setContentsMargins(0, 0, 0, 0)
