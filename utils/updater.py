@@ -252,11 +252,64 @@ def apply_update(downloaded_path: str):
             pass
         return f"לא ניתן להחליף את קובץ התוכנה: {e}"
 
+    env = _child_env()
+    # #dy6yq (23/9/2026): the user already typed the password in THIS session —
+    # the relaunched build lets them straight in, once, via a one-time token.
+    token = arm_autologin()
+    if token:
+        env[AUTOLOGIN_ENV] = token
     try:
-        subprocess.Popen([exe], close_fds=True, env=_child_env())
+        subprocess.Popen([exe], close_fds=True, env=env)
     except OSError as e:
         return f"העדכון הותקן, אך ההפעלה מחדש נכשלה. הפעל את התוכנה ידנית.\n({e})"
     return None
+
+
+# ─── one-time auto-login after a self-update (#dy6yq) ─────────────────────────
+AUTOLOGIN_ENV = "MH_AUTOLOGIN"
+AUTOLOGIN_MAX_AGE_S = 180
+
+
+def _autologin_path() -> str:
+    import database as db
+    return os.path.join(os.path.dirname(db.DB_PATH), "autologin.token")
+
+
+def arm_autologin() -> str:
+    """Write a fresh one-time token next to the DB and return it ('' on failure).
+    The relaunched process must present the SAME token in its environment
+    within AUTOLOGIN_MAX_AGE_S — the file is deleted on first use, so it can't
+    be replayed, and a stale file is ignored."""
+    import secrets, time
+    token = secrets.token_hex(16)
+    try:
+        with open(_autologin_path(), "w", encoding="utf-8") as f:
+            f.write(f"{token} {int(time.time())}")
+    except OSError:
+        return ""
+    return token
+
+
+def consume_autologin() -> bool:
+    """True exactly once, right after a self-update relaunch, if the env token
+    matches the fresh file. Always removes the file."""
+    import time
+    token = os.environ.pop(AUTOLOGIN_ENV, "")
+    path = _autologin_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            saved, ts = f.read().split()
+    except (OSError, ValueError):
+        return False
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    try:
+        fresh = (time.time() - int(ts)) <= AUTOLOGIN_MAX_AGE_S
+    except ValueError:
+        return False
+    return bool(token) and token == saved and fresh
 
 
 # ─── relaunch environment ─────────────────────────────────────────────────────

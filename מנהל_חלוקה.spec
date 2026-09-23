@@ -17,6 +17,7 @@ a = Analysis(
     datas=[
         ('icon.ico', '.'),
         ('org_logo.png', '.'),
+        ('changelog.txt', '.'),
         ('fonts', 'fonts'),
         *qt_material_data,
     ],

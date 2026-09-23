@@ -1465,10 +1465,6 @@ class GroupUpdateTab(QWidget):
 
         # ── Step ①: distribution details ──────────────────────────────────────
         card1, c1, _h1 = _step_card("1", "פרטי החלוקה", "שם, תאריך, כמות המוצרים והרזרבה")
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(18)
-        grid.setVerticalSpacing(8)
-
         self.name_input = QComboBox()
         self.name_input.setEditable(True)
         self.name_input.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
@@ -1553,42 +1549,54 @@ class GroupUpdateTab(QWidget):
         self.lbl_regulars_count.setStyleSheet(
             "color:#334155; font-size:11.5px; font-weight:700; " + _LBL)
 
-        grid.addLayout(_field("שם החלוקה", self.name_input), 0, 0)
-        grid.addLayout(_field("תאריך", self.date_edit), 0, 1)
-        grid.addLayout(_field("מחלק", self.dist_input), 0, 2)
+        # #l56pm (23/9/2026): the form fields sit one under another in a single
+        # column, and 'מוצרים זמינים' stands beside them as ONE big framed panel in
+        # the app's own teal — emphasised by size and frame, not by a foreign colour.
+        form = QVBoxLayout()
+        form.setSpacing(8)
+        form.addLayout(_field("שם החלוקה", self.name_input))
+        form.addLayout(_field("תאריך", self.date_edit))
+        form.addLayout(_field("מחלק", self.dist_input))
+        form.addLayout(_field("הערה כללית לחלוקה", self.note_input))
+        form.addStretch(1)
 
-        # 'מוצרים זמינים' is the hero field (#ss0lm) — a bold amber panel, with
-        # 'רזרבה' right beside it (#l9lyw) so the operator fills both together.
-        self.products_spin.setMinimumHeight(48)
-        self.products_spin.setMinimumWidth(120)
+        self.products_spin.setMinimumHeight(72)
+        self.products_spin.setMinimumWidth(250)
+        self.products_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.products_spin.setStyleSheet(
-            "QSpinBox{font-size:24px; font-weight:900; color:#064e3b; background:#ffffff;"
-            " border:2px solid #f59e0b; border-radius:10px; padding:2px 10px;}"
-            "QSpinBox:focus{border-color:#d97706;}")
+            "QSpinBox{font-size:40px; font-weight:900; color:#064e3b; background:#ffffff;"
+            " border:3px solid #0f9d78; border-radius:14px; padding:2px 44px 2px 12px;"
+            " min-height:70px; max-height:76px;}"
+            "QSpinBox:focus{border-color:#0f766e;}"
+            "QSpinBox::up-button{subcontrol-origin:border; subcontrol-position:top left; width:34px; height:36px;}"
+            "QSpinBox::down-button{subcontrol-origin:border; subcontrol-position:bottom left; width:34px; height:36px;}")
         prod_panel = QFrame()
         prod_panel.setObjectName("prod-panel")
         prod_panel.setStyleSheet(
-            "QFrame#prod-panel{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            " stop:0 #fffbeb, stop:1 #fef3c7); border:2px solid #fbbf24;"
-            " border-radius:14px;}")
-        prod_panel.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
-        pp = QHBoxLayout(prod_panel)
-        pp.setContentsMargins(16, 10, 16, 10)
-        pp.setSpacing(24)
-        prod_field = _field("★  מוצרים זמינים", self.products_spin, maxw=150)
+            "QFrame#prod-panel{background:qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+            " stop:0 #f0fdf9, stop:1 #d9f5ea); border:3px solid #0f9d78;"
+            " border-radius:18px;}")
+        prod_panel.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        pp = QVBoxLayout(prod_panel)
+        pp.setContentsMargins(22, 14, 22, 14)
+        pp.setSpacing(10)
+        prod_field = _field("★  מוצרים זמינים", self.products_spin, maxw=300)
         _plab = prod_field.itemAt(0).widget()
-        _plab.setStyleSheet("color:#b45309; font-size:15px; font-weight:900; " + _LBL)
+        _plab.setStyleSheet("color:#0f766e; font-size:17px; font-weight:900; " + _LBL)
+        _plab.setAlignment(Qt.AlignmentFlag.AlignCenter)
         prod_field.addWidget(self.lbl_regulars_count)
+        self.lbl_regulars_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
         pp.addLayout(prod_field)
+        self.products_spin.setFixedHeight(76)   # after _field (which sets 38); beats the theme QSS height
         pp.addLayout(_field("רזרבה", self.reserve_spin, maxw=110))
+        pp.addWidget(self.leftover_card)
+        pp.addStretch(1)
 
-        grid.addWidget(prod_panel, 1, 0, 1, 2, Qt.AlignmentFlag.AlignRight)
-        grid.addWidget(self.leftover_card, 1, 2, Qt.AlignmentFlag.AlignVCenter)
-        grid.addLayout(_field("הערה כללית לחלוקה", self.note_input), 2, 0, 1, 3)
-        grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(2, 1)
-        c1.addLayout(grid)
+        row = QHBoxLayout()
+        row.setSpacing(28)
+        row.addLayout(form, 1)
+        row.addWidget(prod_panel, 0, Qt.AlignmentFlag.AlignTop)
+        c1.addLayout(row)
         lay.addWidget(card1)
 
         # ── Collapsible: advanced distribution modes ──────────────────────────
@@ -1837,6 +1845,7 @@ class GroupUpdateTab(QWidget):
         bar.addWidget(self.btn_save)
 
         btn_print = QPushButton("  הדפסה לחלוקה")
+        self.btn_print = btn_print
         btn_print.setObjectName("primary")
         btn_print.setStyleSheet(_BTN_PRINT)
         btn_print.setMinimumHeight(54)
@@ -1855,6 +1864,7 @@ class GroupUpdateTab(QWidget):
         bar.addWidget(btn_print)
 
         btn_pdf = QPushButton("  שמור PDF")
+        self.btn_pdf = btn_pdf
         btn_pdf.setObjectName("ghost")
         btn_pdf.setStyleSheet(_BTN_GHOST)
         btn_pdf.setMinimumHeight(46)
@@ -1947,6 +1957,10 @@ class GroupUpdateTab(QWidget):
         self.lbl_checked.setVisible(record)
         self.stage_banner.setVisible(record)
         self.btn_save.setVisible(record)
+        # #cfoq2: printing/PDF belong to the prep stage — in the record stage
+        # they mislead ("are we still preparing?").
+        self.btn_print.setVisible(not record)
+        self.btn_pdf.setVisible(not record)
         self.stage_toggle.set_stage(self._stage)
         self._refresh_header_chips()
 

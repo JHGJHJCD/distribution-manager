@@ -74,3 +74,13 @@ inner = tab.findChild(QScrollArea).widget()
 inner.grab().save(os.path.join(out, "group_v303_fullpage.png"))
 print("shot: group_v303_fullpage.png")
 print("done ->", out)
+
+# ── v3.64 asserts (#l56pm / #cfoq2) ─────────────────────────────────────────
+tab._set_stage("record"); app.processEvents()
+assert not tab.btn_print.isVisible() and not tab.btn_pdf.isVisible(), "print/pdf visible in record stage"
+tab._set_stage("prep"); app.processEvents()
+assert tab.btn_print.isVisible() and tab.btn_pdf.isVisible(), "print/pdf hidden in prep stage"
+assert tab.products_spin.height() >= 70, ("products spin too small", tab.products_spin.height())
+# fields stacked: name above date above distributor (same x column)
+assert tab.name_input.y() < tab.date_edit.y() < tab.dist_input.y() < tab.note_input.y(), "form not stacked"
+print("asserts ok: stage buttons + stacked form + big products spin")

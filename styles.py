@@ -498,6 +498,27 @@ def _scale_font_sizes(qss: str, scale: float) -> str:
     return re.sub(r"font-size:\s*([\d.]+)\s*px", rep, qss)
 
 
+_BASE_QSS_CACHE = {"qss": None}
+
+
+def _base_qss(app) -> str:
+    """qt-material's rendered sheet + EXTRA_QSS, built ONCE per process (#wi46n:
+    qt-material re-renders its template and rewrites icon files to disk on every
+    call — that was the seconds-long lag when changing the text size)."""
+    cached = _BASE_QSS_CACHE["qss"]
+    if cached is not None:
+        return cached
+    try:
+        from qt_material import apply_stylesheet
+        apply_stylesheet(app, theme="light_teal.xml", invert_secondary=True,
+                         extra=QT_MATERIAL_EXTRA)
+        qss = app.styleSheet() + EXTRA_QSS
+    except Exception:
+        qss = EXTRA_QSS
+    _BASE_QSS_CACHE["qss"] = qss
+    return qss
+
+
 def apply_app_theme(app, percent: int = 100):
     """Apply the full app theme (qt-material + EXTRA_QSS) with every font size
     scaled to `percent` (100 = the default look). Safe to call again at runtime —
@@ -508,18 +529,17 @@ def apply_app_theme(app, percent: int = 100):
         scale = max(0.5, min(2.0, (int(percent) or 100) / 100.0))
     except (TypeError, ValueError):
         scale = 1.0
-    try:
-        from qt_material import apply_stylesheet
-        apply_stylesheet(app, theme="light_teal.xml", invert_secondary=True,
-                         extra=QT_MATERIAL_EXTRA)
-        qss = app.styleSheet() + EXTRA_QSS
-    except Exception:
-        qss = EXTRA_QSS
+    qss = _base_qss(app)
     if abs(scale - 1.0) > 0.001:
         qss = _scale_font_sizes(qss, scale)
-    app.setStyleSheet(qss)
+    # One repolish pass instead of three: set the font first (its change event
+    # is absorbed by the stylesheet repolish that follows).
     # Segoe UI renders Hebrew crisply at every DPI (Rubik looked soft/blurry).
-    app.setFont(QFont("Segoe UI", max(7, round(11 * scale))))
+    font = QFont("Segoe UI", max(7, round(11 * scale)))
+    if app.font() != font:
+        app.setFont(font)
+    if app.styleSheet() != qss:
+        app.setStyleSheet(qss)
 
 # ── Row highlight tokens (referenced directly in tab code) ──────────────────
 OVERDUE_BG  = "#ffebee"

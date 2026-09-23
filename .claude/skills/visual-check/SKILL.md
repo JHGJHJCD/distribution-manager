@@ -111,3 +111,5 @@ to exercise the thing you changed.
 Confirm the change visually in the PNG, then give the user a one-line plain-Hebrew note
 of what now looks right. If something is off, fix the source and re-capture — don't ship
 a UI change you haven't seen rendered.
+
+- **צילום עלה אחרי `navigate_to_tab` יוצא כמעט ריק (23/9/2026):** `_show_leaf` מריץ `effects.fade_in` (170ms) — לחכות `QTest.qWait(450)` לפני `grab()`. וגם: `tab.grab()` על עלה מחזיר שחור — לחתוך מ-`win.grab()` במקום.

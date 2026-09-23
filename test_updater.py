@@ -77,5 +77,27 @@ finally:
     updater.current_exe = _orig_current
     updater.subprocess.Popen = _orig_popen
 
+
+# ── #dy6yq (v3.64): one-time auto-login right after a self-update relaunch ──
+import time as _time
+_tmpdir = tempfile.mkdtemp()
+updater._autologin_path = lambda: os.path.join(_tmpdir, "autologin.token")
+os.environ.pop(updater.AUTOLOGIN_ENV, None)
+check("AL1 no token file -> no auto-login", updater.consume_autologin() is False)
+tok = updater.arm_autologin()
+check("AL2 arm writes a 32-hex token", len(tok) == 32 and os.path.exists(updater._autologin_path()))
+os.environ[updater.AUTOLOGIN_ENV] = "wrong"
+check("AL3 wrong env token -> refused, file consumed",
+      updater.consume_autologin() is False and not os.path.exists(updater._autologin_path()))
+tok = updater.arm_autologin(); os.environ[updater.AUTOLOGIN_ENV] = tok
+check("AL4 matching fresh token -> auto-login once", updater.consume_autologin() is True)
+check("AL5 and never twice (file gone, env popped)",
+      updater.consume_autologin() is False and updater.AUTOLOGIN_ENV not in os.environ)
+tok = updater.arm_autologin(); os.environ[updater.AUTOLOGIN_ENV] = tok
+with open(updater._autologin_path(), "w", encoding="utf-8") as _f:
+    _f.write(f"{tok} {int(_time.time()) - updater.AUTOLOGIN_MAX_AGE_S - 5}")
+check("AL6 stale token (older than the window) -> refused", updater.consume_autologin() is False)
+shutil.rmtree(_tmpdir, ignore_errors=True)
+
 print("\nRESULT:", "ALL PASS ✓" if ok else "FAILURES ✗")
 sys.exit(0 if ok else 1)

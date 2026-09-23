@@ -2,8 +2,11 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLineEdit, QLabel, QComboBox,
     QDialog, QFormLayout, QMessageBox, QFileDialog, QSpinBox,
-    QTextEdit, QAbstractItemView, QMenu, QCheckBox, QGridLayout
+    QTextEdit, QAbstractItemView, QMenu, QCheckBox, QGridLayout, QFrame
 )
+from tabs.group_update import (_LBL, _CARD_QSS, _CHIP_QSS, _BTN_PRIMARY, _BTN_GHOST)
+from tabs.tzintukim import _HCHIP_GREEN
+from utils.ui import FlowLayout
 from PyQt6.QtCore import Qt, QDate, QTimer
 from widgets import DateEdit
 from PyQt6.QtGui import QColor
@@ -257,25 +260,95 @@ class RecipientsTab(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        # #e2d81 (23/9/2026): the screen speaks the same design language as
+        # חלוקה/צינתוקים/מיילים — title + subtitle, live chips, and ALL the
+        # actions together in the top corner (export used to hide bottom-right).
         lay = QVBoxLayout(self)
-        lay.setSpacing(8)
-        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(10)
+        lay.setContentsMargins(20, 12, 20, 8)
 
-        # Title + actions row
-        top = QHBoxLayout()
-        title = QLabel("רשימת מקבלים")
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        title = QLabel("כל המקבלים")
         title.setObjectName("title")
-        top.addWidget(title)
-        top.addStretch()
+        title.setStyleSheet("color:#064e3b; font-size:22px; font-weight:800; " + _LBL)
+        head.addWidget(title)
+        sub = QLabel("כל הכרטיסים — חיפוש, סינון, הוספה, ייבוא וייצוא")
+        sub.setStyleSheet("color:#64748b; font-size:13px; " + _LBL)
+        head.addWidget(sub)
+        head.addStretch()
+
+        btn_add = QPushButton("＋ הוסף מקבל")
+        btn_add.setObjectName("primary")
+        btn_add.setStyleSheet(_BTN_PRIMARY)
+        btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_add.clicked.connect(self._add)
+        head.addWidget(btn_add)
+        self.btn_add = btn_add
+
+        btn_import = QPushButton("יבוא מ-Excel")
+        btn_import.setObjectName("success")
+        btn_import.setStyleSheet(_BTN_GHOST)
+        btn_import.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_import.setToolTip("ייבוא מקובץ Excel (פורמט תבנית ליהודה)")
+        btn_import.clicked.connect(self._import_excel)
+        head.addWidget(btn_import)
+        self.btn_import = btn_import
+
+        btn_export = QPushButton("ייצוא לאקסל")
+        btn_export.setObjectName("success")
+        btn_export.setStyleSheet(_BTN_GHOST)
+        btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_export.setToolTip("ייצוא כל רשימת המקבלים המוצגת לקובץ Excel בתיקיית ההורדות")
+        btn_export.clicked.connect(self._export_excel)
+        head.addWidget(btn_export)
+        self.btn_export = btn_export
+
+        btn_dup = QPushButton("בדיקת כפילויות")
+        btn_dup.setObjectName("neutral")
+        btn_dup.setStyleSheet(_BTN_GHOST)
+        btn_dup.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_dup.setToolTip("סריקת שמות/טלפונים כפולים")
+        btn_dup.clicked.connect(self._open_dup_check)
+        head.addWidget(btn_dup)
+        self.btn_dup = btn_dup
+        lay.addLayout(head)
+
+        # live chips (מוצגים / פעילים / קבועים) — filled in _populate
+        self.chips_row = QWidget()
+        chips = FlowLayout(self.chips_row, 8, 6)
+        self.count_lbl = QLabel("")
+        self.count_lbl.setObjectName("subtitle")
+        self.count_lbl.setStyleSheet(_HCHIP_GREEN)
+        chips.addWidget(self.count_lbl)
+        self.chip_active = QLabel("")
+        self.chip_active.setStyleSheet(_CHIP_QSS)
+        chips.addWidget(self.chip_active)
+        self.chip_regular = QLabel("")
+        self.chip_regular.setStyleSheet(_CHIP_QSS)
+        chips.addWidget(self.chip_regular)
+        lay.addWidget(self.chips_row)
+
+        # toolbar: search + filters, in a white card strip
+        bar = QFrame()
+        bar.setObjectName("ui-card")
+        bar.setStyleSheet(_CARD_QSS)
+        top = QHBoxLayout(bar)
+        top.setContentsMargins(12, 8, 12, 8)
+        top.setSpacing(10)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("חיפוש בכל השדות (שם/טלפון/כתובת/בית כנסת/נציג...)")
         self.search_input.setAlignment(ALIGN_RIGHT)
-        self.search_input.setMaximumWidth(360)
+        self.search_input.setMinimumWidth(260)
+        self.search_input.setMaximumWidth(420)
         self.search_input.addAction(search_icon(), QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.textChanged.connect(lambda: self._filter_timer.start(220))
-        top.addWidget(self.search_input)
+        top.addWidget(self.search_input, 1)
 
+        lbl_f = QLabel("סינון:")
+        lbl_f.setStyleSheet("color:#64748b; font-size:12.5px; font-weight:700; " + _LBL)
+        top.addWidget(lbl_f)
         self.status_filter = QComboBox()
         self.status_filter.addItems(["הכל", "פעיל", "מושהה", "הסתיים"])
         self.status_filter.currentTextChanged.connect(self.refresh)
@@ -320,26 +393,7 @@ class RecipientsTab(QWidget):
         self.priority_filter.currentTextChanged.connect(self._sync_holiday_filter)
         top.addWidget(self.holiday_filter)
         self._sync_holiday_filter()
-
-        btn_add = QPushButton("+ הוסף מקבל")
-        btn_add.setObjectName("primary")
-        btn_add.clicked.connect(self._add)
-        top.addWidget(btn_add)
-
-        # Match the 'הוסף מקבל' button's size and look — it used to be a smaller,
-        # differently-styled button beside it, which read as out of place (#eiqat).
-        btn_import = QPushButton("+ יבוא מ-Excel")
-        btn_import.setObjectName("success")
-        btn_import.setToolTip("ייבוא מקובץ Excel (פורמט תבנית ליהודה)")
-        btn_import.clicked.connect(self._import_excel)
-        top.addWidget(btn_import)
-
-        lay.addLayout(top)
-
-        # Count label
-        self.count_lbl = QLabel("")
-        self.count_lbl.setObjectName("subtitle")
-        lay.addWidget(self.count_lbl)
+        lay.addWidget(bar)
 
         # Table
         self.table = QTableWidget()
@@ -382,26 +436,6 @@ class RecipientsTab(QWidget):
         # Bottom bar — the per-row action buttons (הפעל/השהה/מחק) were removed
         # (#wtfnh, redundant) and moved to a right-click menu on the row. What
         # stays: exporting the whole list (#thmir) and the duplicate check.
-        bot = QHBoxLayout()
-        bot.setSpacing(8)
-
-        btn_export = QPushButton("ייצוא לאקסל")
-        btn_export.setObjectName("success")
-        btn_export.setStyleSheet("font-size:11px; min-height:24px; min-width:0; padding:3px 12px;")
-        btn_export.setToolTip("ייצוא כל רשימת המקבלים המוצגת לקובץ Excel בתיקיית ההורדות")
-        btn_export.clicked.connect(self._export_excel)
-        bot.addWidget(btn_export)
-
-        bot.addStretch()
-
-        btn_dup = QPushButton("בדיקת כפילויות")
-        btn_dup.setObjectName("neutral")
-        btn_dup.setStyleSheet("font-size:11px; min-height:24px; min-width:0; padding:3px 12px;")
-        btn_dup.setToolTip("סריקת שמות/טלפונים כפולים")
-        btn_dup.clicked.connect(self._open_dup_check)
-        bot.addWidget(btn_dup)
-
-        lay.addLayout(bot)
 
     def _show_row_menu(self, pos):
         """Right-click menu on a recipient row: edit / activate / suspend / delete.
@@ -591,7 +625,11 @@ class RecipientsTab(QWidget):
                     item.setForeground(color)
                 self.table.setItem(r, c, item)
         self.table.blockSignals(False)
-        self.count_lbl.setText(f"סה\"כ: {len(rows)} מקבלים")
+        self.count_lbl.setText(f"{len(rows)} מקבלים מוצגים")
+        n_act = sum(1 for r in rows if (r.get("status") or "") == "פעיל")
+        n_reg = sum(1 for r in rows if r.get("priority") == 4)
+        self.chip_active.setText(f"{n_act} פעילים")
+        self.chip_regular.setText(f"{n_reg} קבועים")
         refresh_empty_state(self.table)
 
     def _apply_filter(self):
@@ -1180,8 +1218,13 @@ class RecipientDialog(QDialog):
         active = st == "פעיל"
         in_dist = bool(self._effective_frequency())
         text = (pr if in_dist else "לא בחלוקה") + ("" if active else f" · {st}")
+        # #m5bxy (23/9/2026): the chip wears the SAME colour as the priority
+        # badge in the recipients table, so the card and the list agree.
+        badge_key = next((k for k in ("קבוע", "ראשונה", "שנייה", "בירור") if k in pr), None)
         if not active:
             fg, bg = "#b45309", "#fef3c7"
+        elif badge_key and (in_dist or badge_key == "בירור"):
+            bg, fg = PRIORITY_BADGES[badge_key]
         elif in_dist:
             fg, bg = "#0f766e", "#d1fae5"
         else:

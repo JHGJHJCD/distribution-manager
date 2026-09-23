@@ -125,8 +125,20 @@ def build():
     log("copied -> " + EXE_ASCII)
 
 
+def gen_changelog(version=None, message=None):
+    """Regenerate changelog.txt (bundled into the EXE; shown in Settings →
+    "יומן שינויים"). The commit being shipped is not in git yet, so its own
+    note is prepended explicitly."""
+    cmd = [PY312, os.path.join("dev", "gen_changelog.py")]
+    if version and message:
+        cmd += ["--prepend", version, message]
+    env = dict(os.environ, PYTHONUTF8="1")
+    run(cmd, env=env)
+
+
 def ship(version, message):
     bump(version)
+    gen_changelog(version, message)   # before the build so the EXE carries it
     test()
     build()
     tag = "v" + version

@@ -1513,11 +1513,16 @@ def _run():
     splash.set_progress(100)
     app.processEvents()
 
-    login = LoginDialog()
-    splash.finish(login)
-
-    if login.exec() != QDialog.DialogCode.Accepted:
-        _hard_exit(0)
+    from utils import updater as _upd
+    if _upd.consume_autologin():
+        # #dy6yq: relaunched right after a self-update — the password was typed
+        # minutes ago in the previous session; don't ask again.
+        splash.close()
+    else:
+        login = LoginDialog()
+        splash.finish(login)
+        if login.exec() != QDialog.DialogCode.Accepted:
+            _hard_exit(0)
 
     win = MainWindow()
     win.show_smart()

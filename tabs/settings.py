@@ -285,7 +285,7 @@ class SettingsTab(QWidget):
                                   "(100% = הגודל הרגיל)")
         self._font_apply_timer = QTimer(self)
         self._font_apply_timer.setSingleShot(True)
-        self._font_apply_timer.setInterval(250)
+        self._font_apply_timer.setInterval(600)
         self._font_apply_timer.timeout.connect(self._apply_font_percent)
         self.font_spin.valueChanged.connect(lambda *_: self._font_apply_timer.start())
         g.addWidget(_flabel("גודל הטקסט בתוכנה"), 0, 0)
@@ -411,40 +411,58 @@ class SettingsTab(QWidget):
         lay.addLayout(_section("חיבורים"))
         row = _row(); lay.addLayout(row)
 
-        # ── חשבון Google (v3.39) ──
-        card, body, _h = _card("חשבון Google של הקופה", "mail", "בלי סיסמת אפליקציה")
-        body.addWidget(_desc(
-            "משמש לשליחת מיילים למקבלים (מסך \"מיילים\") ולמתנדבים. לוחצים \"התחבר עם "
-            "Google\", נפתח דפדפן, בוחרים את חשבון הקופה ומאשרים — פעם אחת. החיבור משותף "
-            "לשני המחשבים דרך הסנכרון."))
-        body.addWidget(_hint(
-            "במסך של גוגל עשויה להופיע אזהרה \"Google לא אימתה את האפליקציה\" — לוחצים "
-            "\"מתקדם\" ואז \"המשך\". התוכנה מבקשת הרשאת שליחה בלבד, לא קריאת מיילים.",
-            "#b45309"))
+        # ── חשבון Google (v3.39; #vtf2f 23/9/2026: עוצב מחדש — מצב אחד, פעולה אחת,
+        #    כל ההסברים מאחורי "איך זה עובד?" במקום מגילה על המסך) ──
+        card, body, _h = _card("חשבון Google של הקופה", "mail", "ממנו נשלחים המיילים למקבלים ולמתנדבים")
+        self.google_state = QFrame()
+        self.google_state.setObjectName("google-state")
+        self.google_state.setStyleSheet(
+            "QFrame#google-state{border-radius:12px; border:1.5px solid #e2e8f0; background:#f8fafc;}"
+            "QFrame#google-state[state=\"ok\"]{border-color:#6ee7b7; background:#ecfdf5;}"
+            "QFrame#google-state[state=\"warn\"]{border-color:#fcd34d; background:#fffbeb;}")
+        gs = QHBoxLayout(self.google_state)
+        gs.setContentsMargins(14, 10, 14, 10)
+        gs.setSpacing(12)
+        self.lbl_google_icon = QLabel("●")
+        self.lbl_google_icon.setFixedWidth(22)
+        self.lbl_google_icon.setStyleSheet("font-size:20px; " + _LBL)
+        gs.addWidget(self.lbl_google_icon)
         self.lbl_google_status = QLabel("")
         self.lbl_google_status.setWordWrap(True)
-        self.lbl_google_status.setStyleSheet("color:#334155; font-size:13px; font-weight:700; " + _LBL)
-        body.addWidget(self.lbl_google_status)
-        self.btn_google_connect = _btn("התחבר עם Google", _BTN_PRIMARY, self._google_connect)
-        self.btn_google_disconnect = _btn("התנתק", _BTN_GHOST, self._google_disconnect)
+        self.lbl_google_status.setStyleSheet("color:#334155; font-size:13.5px; font-weight:800; " + _LBL)
+        gs.addWidget(self.lbl_google_status, 1)
+        body.addWidget(self.google_state)
+
+        self.btn_google_connect = _btn("התחבר עם Google", _BTN_PRIMARY, self._google_connect,
+                                       "נפתח דפדפן, בוחרים את חשבון הקופה ומאשרים — פעם אחת. "
+                                       "החיבור משותף לשני המחשבים דרך הסנכרון.")
         self.btn_google_test = _btn("שלח מייל בדיקה", _BTN_GHOST, self._test_mail_settings)
-        # v3.41: קובץ הזיהוי (OAuth client, Desktop app) שגוגל מורידה — נטען פעם
-        # אחת במחשב אחד ומסתנכרן; בלעדיו "התחבר עם Google" נעול.
-        self.btn_google_client = _btn("טען קובץ זיהוי מגוגל…", _BTN_GHOST, self._google_load_client,
+        self.btn_google_disconnect = _btn("התנתק", _BTN_GHOST, self._google_disconnect)
+        # v3.41: קובץ הזיהוי (OAuth client, Desktop app) — נטען פעם אחת, מסתנכרן.
+        self.btn_google_client = _btn("טען קובץ זיהוי מגוגל…", _BTN_PRIMARY, self._google_load_client,
                                       "קובץ ה-JSON שהורדת מ-Google Cloud Console (Credentials → "
                                       "OAuth client ID → Desktop app → Download JSON)")
-        body.addLayout(_btn_row(self.btn_google_connect, self.btn_google_disconnect,
-                                self.btn_google_test, self.btn_google_client))
+        self.btn_google_help = _btn("איך זה עובד?", _BTN_GHOST, self._google_show_help)
+        body.addLayout(_btn_row(self.btn_google_connect, self.btn_google_client,
+                                self.btn_google_test, self.btn_google_disconnect,
+                                self.btn_google_help))
+        # ההסבר המלא (הוצג פעם על המסך) — עכשיו בחלון "איך זה עובד?"; ה-attribute
+        # נשמר לתאימות, הווידג'ט מוסתר.
         self.lbl_google_help = QLabel(
-            "צריך פעם אחת \"קובץ זיהוי\" מגוגל: "
+            "<b>מה זה:</b> חיבור חד-פעמי לחשבון ה-Gmail של הקופה — בלי סיסמת אפליקציה. "
+            "התוכנה מבקשת הרשאת <b>שליחה בלבד</b> (לא קריאת מיילים), והחיבור משותף לשני המחשבים.<br><br>"
+            "<b>איך מתחברים:</b> לוחצים \"התחבר עם Google\" → נפתח דפדפן → בוחרים את חשבון הקופה → "
+            "\"אישור\". אם גוגל מציגה \"Google לא אימתה את האפליקציה\" — לוחצים \"מתקדם\" ואז \"המשך\".<br><br>"
+            "<b>אם הכפתור נעול</b> — צריך פעם אחת \"קובץ זיהוי\" מגוגל: "
             "<a href=\"https://console.cloud.google.com/apis/credentials\">Google Cloud Console</a>"
             " → צור פרויקט → הפעל את Gmail API → OAuth consent screen (External, הוסף את מייל הקופה "
-            "כ-Test user) → Credentials → Create OAuth client ID → Desktop app → Download JSON. "
-            "אחר כך לחץ \"טען קובץ זיהוי מגוגל\" ובחר את הקובץ.")
+            "כ-Test user) → Credentials → Create OAuth client ID → Desktop app → Download JSON, "
+            "ואז \"טען קובץ זיהוי מגוגל\".<br><br>"
+            "<b>בלי Google:</b> אפשר לשלוח גם עם סיסמת-אפליקציה בכרטיס \"מייל למתנדבים\".")
         self.lbl_google_help.setTextFormat(Qt.TextFormat.RichText)
         self.lbl_google_help.setOpenExternalLinks(True)
         self.lbl_google_help.setWordWrap(True)
-        self.lbl_google_help.setStyleSheet("color:#334155; font-size:12px; " + _LBL)
+        self.lbl_google_help.setVisible(False)
         body.addWidget(self.lbl_google_help)
         _place(row, card, body)
 
@@ -763,7 +781,9 @@ class SettingsTab(QWidget):
                                  "דווח על בעיה או השאר בקשה — נשלח למפתח")
         self.btn_feedback_inbox = _btn("📥 הודעות שנשלחו", _BTN_GHOST, self._open_feedback_inbox,
                                        "כל ההודעות שנשלחו למפתח משני המחשבים — צפייה, העתקה וסימון כטופל")
-        body.addLayout(_btn_row(self.btn_feedback, self.btn_feedback_inbox))
+        self.btn_changelog = _btn("📜 יומן שינויים", _BTN_GHOST, self._open_changelog,
+                                  "כל השינויים בתוכנה, גרסה אחרי גרסה")
+        body.addLayout(_btn_row(self.btn_feedback, self.btn_feedback_inbox, self.btn_changelog))
         self._refresh_feedback_inbox_btn()
         _place(row, card, body)
 
@@ -1154,6 +1174,10 @@ class SettingsTab(QWidget):
         from utils.ui import FeedbackDialog
         FeedbackDialog.open(self)
 
+    def _open_changelog(self):
+        from utils.ui import ChangelogDialog
+        ChangelogDialog.open(self)
+
     # ── Community balance percentages (#lejmr) ───────────────────────────────
     def _open_community_quotas(self):
         CommunityQuotasDialog(self).exec()
@@ -1478,22 +1502,38 @@ class SettingsTab(QWidget):
 
     def _refresh_google_status(self):
         avail = google_auth.is_available()
-        if google_auth.is_connected():
-            self.lbl_google_status.setText("✓ מחובר — " + (google_auth.connected_email() or "חשבון Google"))
-            self.lbl_google_status.setStyleSheet("color:#0f766e; font-size:13px; font-weight:700; " + _LBL)
+        connected = google_auth.is_connected()
+        if connected:
+            text = "מחובר — " + (google_auth.connected_email() or "חשבון Google")
+            state, color, icon = "ok", "#047857", "✓"
         elif not avail:
-            self.lbl_google_status.setText(
-                "עוד לא נטען קובץ זיהוי מגוגל — ראה ההסבר למטה. בינתיים אפשר לשלוח עם סיסמת אפליקציה.")
-            self.lbl_google_status.setStyleSheet("color:#b45309; font-size:12.5px; font-weight:700; " + _LBL)
+            text = "חסר קובץ זיהוי מגוגל (פעם אחת) — ואז אפשר להתחבר"
+            state, color, icon = "warn", "#b45309", "!"
         else:
-            self.lbl_google_status.setText("קובץ הזיהוי נטען ✓ — עכשיו לחץ \"התחבר עם Google\"")
-            self.lbl_google_status.setStyleSheet("color:#334155; font-size:13px; " + _LBL)
-        self.btn_google_connect.setText("התחבר מחדש" if google_auth.is_connected() else "התחבר עם Google")
-        self.btn_google_connect.setEnabled(avail)
-        self.btn_google_disconnect.setVisible(google_auth.is_connected())
-        self.btn_google_test.setVisible(google_auth.is_connected())
+            text = "לא מחובר — לחץ \"התחבר עם Google\""
+            state, color, icon = "warn", "#b45309", "○"
+        self.lbl_google_status.setText(text)
+        self.lbl_google_status.setStyleSheet(f"color:{color}; font-size:13.5px; font-weight:800; " + _LBL)
+        self.lbl_google_icon.setText(icon)
+        self.lbl_google_icon.setStyleSheet(f"color:{color}; font-size:20px; font-weight:900; " + _LBL)
+        self.google_state.setProperty("state", state)
+        self.google_state.style().unpolish(self.google_state)
+        self.google_state.style().polish(self.google_state)
+        # One clear primary action per state; the rest only when relevant.
+        self.btn_google_connect.setText("התחבר מחדש" if connected else "התחבר עם Google")
+        self.btn_google_connect.setVisible(avail)
+        self.btn_google_connect.setStyleSheet(_BTN_GHOST if connected else _BTN_PRIMARY)
         self.btn_google_client.setVisible(not avail)
-        self.lbl_google_help.setVisible(not avail)
+        self.btn_google_disconnect.setVisible(connected)
+        self.btn_google_test.setVisible(connected)
+
+    def _google_show_help(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("חשבון Google — איך זה עובד?")
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText("<div dir='rtl' style='min-width:520px;'>" + self.lbl_google_help.text() + "</div>")
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.exec()
 
     def _google_load_client(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -1749,8 +1789,18 @@ class SettingsTab(QWidget):
         app = QApplication.instance()
         if app is not None:
             import styles
-            with busy_cursor():
-                styles.apply_app_theme(app, pct)
+            top = self.window()
+            # #wi46n: freeze painting while the whole widget tree repolishes —
+            # one clean redraw at the end instead of a visible flicker-cascade;
+            # the spinbox is locked meanwhile so clicks don't queue more applies.
+            top.setUpdatesEnabled(False)
+            self.font_spin.setEnabled(False)
+            try:
+                with busy_cursor():
+                    styles.apply_app_theme(app, pct)
+            finally:
+                top.setUpdatesEnabled(True)
+                self.font_spin.setEnabled(True)
         if self.main_win:
             self.main_win.status_msg(f"גודל הטקסט: {pct}%")
 
