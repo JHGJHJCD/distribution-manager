@@ -1230,7 +1230,12 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
             # — especially one recorded a day or two LATE (Thu-Sat), which is
             # normal — from dragging every bi-weekly/monthly recipient back onto
             # THIS week's list (they'd look like their frequency was ignored).
-            served_recently = (ld2 is not None and cycle_wednesday(ld2) == base_wed)
+            # A date AFTER the upcoming Wednesday can't be a real (late-recorded)
+            # distribution of this cycle yet — it's a future-dated typo. Without
+            # the upper bound, on Thu–Sat a typo 1–6 days past next Wednesday
+            # landed in base_wed's cycle and put the person on this week's list.
+            served_recently = (ld2 is not None and ld2 <= max(today, base_wed)
+                               and cycle_wednesday(ld2) == base_wed)
             if nd <= cutoff or served_recently:
                 result.append(r)
         if updates:
@@ -2355,6 +2360,15 @@ def get_incoming_log(limit: int = 200, include_undone: bool = True):
         return [dict(r) for r in conn.execute(q, (limit,))]
 
 
+def _restored(before: dict) -> dict:
+    """A card re-created by a manager undo is a NEW write: stamped now. With its
+    old updated_at the other computer's resurrection guard (delete newer than the
+    card) dropped it, so the undo never reached the computer that deleted."""
+    data = {k: v for k, v in before.items() if k not in ("id", "updated_at")}
+    data["updated_at"] = _utc_now()
+    return data
+
+
 def undo_incoming(incoming_id: int):
     """Revert a change another computer made (#5rhe9). The revert is a normal
     local write, so it syncs back and (being newer) overrides the change on every
@@ -2390,10 +2404,10 @@ def undo_incoming(incoming_id: int):
                 if local:
                     update_recipient(local["id"], fields, source="undo")
                 else:
-                    add_recipient(before)          # vanished locally → recreate
+                    add_recipient(_restored(before))   # vanished locally → recreate
         elif op == "rec_delete":
             if before is not None and not get_recipient_by_guid(guid):
-                add_recipient(before)              # restore the deleted recipient
+                add_recipient(_restored(before))   # restore the deleted recipient
         else:
             return False, "סוג שינוי זה אינו נתמך לביטול"
     except Exception as e:                          # noqa: BLE001 — surface to UI

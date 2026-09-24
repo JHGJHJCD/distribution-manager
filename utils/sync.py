@@ -515,7 +515,11 @@ def _adopt_match(conn, data: dict):
     if name:
         rows = conn.execute(
             "SELECT * FROM recipients WHERE TRIM(full_name)=?", (name,)).fetchall()
-        if len(rows) == 1 and (not phone or (rows[0]["phone1"] or "").strip() == phone):
+        # Name AND phone must agree. A card with no phone used to match any local
+        # namesake — a DIFFERENT person added on the other computer then stole
+        # this person's guid and overwrote the card (phone, souls…). A duplicate
+        # is visible and fixable ("בדיקת כפילויות"); a silent merge is not.
+        if len(rows) == 1 and (rows[0]["phone1"] or "").strip() == phone:
             return rows[0]
     return None
 
@@ -646,6 +650,13 @@ def _apply_rec_delete(conn, rec: dict):
     remember_delete(conn, rec.get("guid") or "", rec.get("ts") or "")
     local = _find_recipient_by_guid(conn, rec.get("guid") or "")
     if local is None:
+        return
+    # Last-write-wins, mirroring the resurrection guard: a card written here
+    # AFTER the delete (a manager's undo, or an edit made before we pulled the
+    # delete) wins over it. Without this an old delete — e.g. replayed from a
+    # compacted journal's tombstones — wiped a recipient the manager restored.
+    del_ts = rec.get("ts") or ""
+    if del_ts and (local["updated_at"] or "") > del_ts:
         return
     before = dict(local)
     rid = local["id"]
@@ -1293,6 +1304,18 @@ def _snapshot_body(include_settings: bool = True) -> int:
                                  "sender", "device", "total", "status", "status_ts",
                                  "sent", "failed", "report_json", "attachment", "with_header")})
         n += 1
+        # A peer that already has this campaign ignores mail_add (idempotent), so
+        # after a compaction it would never learn the final result — the same
+        # reason tz_update follows tz_add above. A fresh peer rejects it as "not
+        # newer" (same stamp), which is harmless.
+        if c.get("status_ts"):
+            log_change("mail_update", {"guid": c.get("guid") or "",
+                                       "sent": c.get("sent", 0),
+                                       "failed": c.get("failed", 0),
+                                       "status": c.get("status", "sending"),
+                                       "ts": c.get("status_ts", ""),
+                                       "report_json": c.get("report_json", "")})
+            n += 1
     for t in tpls:
         log_change("mtpl_upsert", {k: t.get(k, "") for k in
                                    ("guid", "name", "subject", "body", "updated_at",

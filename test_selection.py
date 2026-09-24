@@ -154,6 +154,28 @@ db.add_recipient({"full_name": "עתידי", "status": "פעיל", "frequency": 
 _wk = [r["full_name"] for r in db.get_weekly_list()]
 ok("weekly list excludes a future-dated last_distribution", "עתידי" not in _wk, str(_wk))
 
+# …on EVERY weekday (the check above only fails on Thu–Sat: a typo 1–6 days past
+# next Wednesday landed in that Wednesday's cycle and counted as "served now").
+import datetime as _dt_mod
+_RealDate = db.date
+for _wd_off in range(7):
+    _fake_today = _today + timedelta(days=_wd_off)
+    class _FakeDate(_RealDate):
+        @classmethod
+        def today(cls, _d=_fake_today):
+            return _RealDate(_d.year, _d.month, _d.day)
+    db.date = _FakeDate
+    try:
+        db.reset_all_data()
+        for _k in range(1, 13):
+            db.add_recipient({"full_name": f"עתידי-{_k}", "status": "פעיל", "frequency": "שבועי",
+                              "last_distribution": (_fake_today + timedelta(days=_k + 7)).isoformat()})
+        _wk2 = [r["full_name"] for r in db.get_weekly_list()]
+    finally:
+        db.date = _RealDate
+    ok(f"weekly list excludes future-dated typos (weekday {_fake_today.weekday()})",
+       _wk2 == [], str(_wk2))
+
 # ── ותק: never-received counts from REGISTRATION date, not the year-2000 epoch ─
 _vet = {"last_distribution": "", "start_date": (_today - timedelta(days=500)).isoformat()}
 _new = {"last_distribution": "", "start_date": (_today - timedelta(days=5)).isoformat()}

@@ -397,6 +397,84 @@ ok("force delete cleared the history on B", db.get_changes_for_recipient(ch_b["i
 ok("deleted recipient did not come back from C's older snapshot",
    db.get_recipient_by_guid(ch_guid) is None)
 
+
+# ── Adopt-by-match must not MERGE two different people (namesakes) ───────────
+# A has "אהרון שם-זהה" with a phone. B adds a DIFFERENT person with the same name
+# and no phone. Name alone (phone missing on one side) is not "שם+טלפון" — adopting
+# stole A's guid and overwrote A's person with B's empty card.
+use_machine(dir_a)
+ns_a = db.add_recipient({"full_name": "אהרון שם-זהה", "phone1": "0501212121", "souls": 4})
+ns_guid = db.get_recipient(ns_a)["guid"]
+use_machine(dir_b)
+time.sleep(0.01)
+ns_b = db.add_recipient({"full_name": "אהרון שם-זהה", "souls": 1, "address": "אדם אחר"})
+sync.run_sync()
+use_machine(dir_a); sync.run_sync()
+ns_rows = [r for r in db.get_all_recipients() if r["full_name"] == "אהרון שם-זהה"]
+ok("namesake without phone is NOT merged into the existing person",
+   len(ns_rows) == 2, str([(r["phone1"], r["souls"]) for r in ns_rows]))
+ok("the existing person kept its guid and phone",
+   (db.get_recipient_by_guid(ns_guid) or {}).get("phone1") == "0501212121")
+
+# ── Manager undo of a DELETE must reach the other computer (and stay) ─────────
+# B deletes a recipient; A (manager) undoes it. The restored card carried its OLD
+# updated_at, so B's resurrection guard (delete newer than the card) swallowed it
+# and the two computers disagreed forever.
+use_machine(dir_a)
+un_a = db.add_recipient({"full_name": "שחזור מנהל", "phone1": "0506060606"})
+un_guid = db.get_recipient(un_a)["guid"]
+sync.run_sync()
+use_machine(dir_b); sync.run_sync()
+time.sleep(0.01)
+db.delete_recipient(db.get_recipient_by_guid(un_guid)["id"])
+sync.run_sync()
+use_machine(dir_a)
+sync.set_manager_device(True)
+sync.run_sync()
+ok("A applied B's delete", db.get_recipient_by_guid(un_guid) is None)
+inc = [r for r in db.get_incoming_log() if r["target_guid"] == un_guid and r["op"] == "rec_delete"]
+ok("manager log recorded the delete", len(inc) == 1)
+ok_undo, _msg = db.undo_incoming(inc[0]["id"]) if inc else (False, "")
+ok("manager undo restored it locally", ok_undo and db.get_recipient_by_guid(un_guid) is not None, _msg)
+sync.run_sync()
+sync.set_manager_device(False)
+use_machine(dir_b); sync.run_sync()
+ok("the undo reached the other computer", db.get_recipient_by_guid(un_guid) is not None)
+# …and B's later journal compaction (which replays its old delete tombstone)
+# must not delete the restored card on A again.
+old_limit = sync.JOURNAL_MAX_BYTES
+sync.JOURNAL_MAX_BYTES = 1
+try:
+    db.set_setting("org_name_probe", "x")
+finally:
+    sync.JOURNAL_MAX_BYTES = old_limit
+use_machine(dir_a); sync.run_sync()
+ok("an old delete tombstone replayed by compaction doesn't re-delete a restored card",
+   db.get_recipient_by_guid(un_guid) is not None)
+
+# ── Compaction must carry mail-campaign RESULTS to a peer that is behind ──────
+# B saw a mail campaign while it was 'sending'; A finished it, then compacted
+# before B pulled. The compacted head re-sent only mail_add (ignored — B already
+# has the guid), so B showed "sending" forever.
+use_machine(dir_a)
+mg = db.add_mail_campaign("נושא", "גוף", "כולם", "a@b.c", 3)
+sync.run_sync()
+use_machine(dir_b); sync.run_sync()
+ok("B sees the campaign while sending", (db.get_mail_campaign(mg) or {}).get("status") == "sending")
+use_machine(dir_a)
+time.sleep(0.01)
+db.update_mail_campaign(mg, 3, 0, "done", "[]")
+old_limit = sync.JOURNAL_MAX_BYTES
+sync.JOURNAL_MAX_BYTES = 1
+try:
+    db.set_setting("org_name_probe", "y")
+finally:
+    sync.JOURNAL_MAX_BYTES = old_limit
+use_machine(dir_b); sync.run_sync()
+ok("B got the final mail result through the compacted journal",
+   (db.get_mail_campaign(mg) or {}).get("status") == "done",
+   (db.get_mail_campaign(mg) or {}).get("status"))
+
 print()
 if fails:
     print(f"✗ {len(fails)} FAILED: {fails}")
