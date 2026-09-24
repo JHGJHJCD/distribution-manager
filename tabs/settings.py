@@ -282,8 +282,8 @@ class SettingsTab(QWidget):
         self.font_spin.setFixedWidth(110)
         self.font_spin.setMinimumHeight(_INPUT_H)
         self.font_spin.setValue(db.get_ui_font_percent())
-        self.font_spin.setToolTip("מגדיל או מקטין את הטקסט בכל התוכנה מיידית "
-                                  "(100% = הגודל הרגיל)")
+        self.font_spin.setToolTip("מגדיל או מקטין את הטקסט בכל התוכנה. "
+                                  "100% = הגודל הרגיל.")
         self._font_apply_timer = QTimer(self)
         self._font_apply_timer.setSingleShot(True)
         self._font_apply_timer.setInterval(600)
@@ -303,8 +303,8 @@ class SettingsTab(QWidget):
         except Exception:
             self.no_show_spin.setValue(3)
         self.no_show_spin.setToolTip(
-            "מי שנרשם לו \"לא הגיע\" כך-וכך פעמים ברצף יסומן באדום ברשימת החלוקה "
-            "ובכרטיס המקבל. 0 = בלי התראות.")
+            "מי שלא הגיע כך-וכך פעמים ברצף יסומן באדום ברשימת החלוקה "
+            "ובכרטיס. 0 = בלי התראה.")
         self.no_show_spin.valueChanged.connect(self._on_no_show_changed)
         g.addWidget(_flabel("התראה על מי שלא הגיע"), 1, 0)
         g.addWidget(self.no_show_spin, 1, 1)
@@ -373,8 +373,8 @@ class SettingsTab(QWidget):
         self.bg_opacity_spin.setSuffix(" %")
         self.bg_opacity_spin.setFixedWidth(110)
         self.bg_opacity_spin.setMinimumHeight(_INPUT_H)
-        self.bg_opacity_spin.setToolTip("כמה התמונה נראית מבעד לרקע — 100% = בעוצמה מלאה, "
-                                        "0% = כמעט לא רואים אותה. משתנה מיד.")
+        self.bg_opacity_spin.setToolTip("כמה חזק נראית תמונת הרקע. 100% = מלא, "
+                                        "0% = כמעט שקוף. משתנה מיד.")
         self._bg_apply_timer = QTimer(self)
         self._bg_apply_timer.setSingleShot(True)
         self._bg_apply_timer.setInterval(300)
@@ -543,8 +543,8 @@ class SettingsTab(QWidget):
         self.mail_file_pw.setPlaceholderText("ריק = הקובץ לא מוגן")
         self.mail_file_pw.setAlignment(ALIGN_RIGHT)
         self.mail_file_pw.setToolTip(
-            "הקובץ המצורף למתנדב יינעל בסיסמה זו (צריך אותה כדי לפתוח ב-Excel). "
-            "הסיסמה לא נכתבת במייל — מסרו אותה למתנדב פעם אחת בעל-פה / בווטסאפ.")
+            "הקובץ למתנדב יינעל בסיסמה זו — צריך אותה כדי לפתוח ב-Excel. "
+            "הסיסמה לא נשלחת במייל; מסרו אותה למתנדב בעל-פה או בווטסאפ.")
         _form_row(form, "כתובת שולח", self.mail_email)
         _form_row(form, "סיסמת אפליקציה", self.mail_password)
         _form_row(form, "סיסמה לקובץ המתנדב", self.mail_file_pw)
@@ -582,15 +582,15 @@ class SettingsTab(QWidget):
         self.ym_caller.setPlaceholderText("048691834")
         self.ym_caller.setAlignment(ALIGN_RIGHT)
         self.ym_caller.setToolTip(
-            "המספר שהזכאים רואים כשהמערכת מחייגת אליהם. מספר 04 עובר בפלאפונים "
-            "כשרים; אם משאירים ריק — נשלח מ-048691834.")
+            "המספר שהמקבלים רואים כשהמערכת מחייגת. מספר 04 עובר בפלאפונים "
+            "כשרים. ריק = נשלח מ-048691834.")
         self.ym_caller.setText(db.get_setting("yemot_caller_id") or "")
         self.ym_gemini_key = QLineEdit()
         self.ym_gemini_key.setEchoMode(QLineEdit.EchoMode.Password)
         self.ym_gemini_key.setPlaceholderText("לקול המשופר ב\"צור הקלטה מטקסט\" (לא חובה)")
         self.ym_gemini_key.setToolTip(
-            "מפתח API חינמי של Google Gemini — משמש רק ליצירת הקלטה מטקסט "
-            "בקול המשופר. בלעדיו עדיין עובדים הקולות הרגילים (אברי/הילה).")
+            "מפתח חינמי של Google Gemini — רק ליצירת הקלטה מטקסט "
+            "בקול המשופר. בלעדיו הקולות הרגילים (אברי/הילה) עדיין עובדים.")
         self.ym_gemini_key.setAlignment(ALIGN_RIGHT)
         self.ym_gemini_key.setText(db.get_setting("gemini_api_key") or "")
         _form_row(form, "מספר מערכת", self.ym_system)
@@ -627,8 +627,8 @@ class SettingsTab(QWidget):
         self.ym_survey_prompt = QLineEdit()
         self.ym_survey_prompt.setPlaceholderText(_ym.DEFAULT_SURVEY_PROMPT)
         self.ym_survey_prompt.setAlignment(ALIGN_RIGHT)
-        self.ym_survey_prompt.setToolTip("הטקסט שהקו מקריא למי שמקיש "
-                                         f"{_ym.SURVEY_EXT} (הקראה ממוחשבת)")
+        self.ym_survey_prompt.setToolTip("הטקסט שהקו מקריא בקול ממוחשב למי שמקיש "
+                                         f"{_ym.SURVEY_EXT}")
         _form_row(sform, "השאלה בטלפון", self.ym_survey_prompt)
         body.addLayout(sform)
         self._load_survey_settings()
@@ -805,8 +805,8 @@ class SettingsTab(QWidget):
         self.chk_dl_notify = QCheckBox(
             "קבל התראות במחשב זה על הורדות גרסה ועדכוני המחשב השני")
         self.chk_dl_notify.setToolTip(
-            "כשמסומן: המחשב הזה (ורק הוא) יציג התראת Windows כשמישהו מוריד "
-            "את התוכנה מגיטהאב, וכשהמחשב השני מתעדכן לגרסה חדשה.")
+            "כשמסומן: רק המחשב הזה יציג התראת Windows כשמורידים "
+            "את התוכנה מגיטהאב וכשהמחשב השני מתעדכן.")
         self.chk_dl_notify.setChecked(sync.notify_downloads())
         self.chk_dl_notify.toggled.connect(sync.set_notify_downloads)
         body.addWidget(self.chk_dl_notify)
@@ -2051,7 +2051,7 @@ class FeedbackInboxDialog(QDialog):
         self.btn_copy_open = QPushButton("העתק את כל הפתוחות")
         self.btn_copy_open.setObjectName("neutral")
         self.btn_copy_open.setToolTip("מעתיק את כל ההודעות שטרם טופלו — נוח "
-                                      "להדבקה בבקשת תיקון אחת")
+                                      "להדביק בבקשת תיקון אחת")
         self.btn_copy_open.clicked.connect(self._copy_open)
         btns.addWidget(self.btn_copy_open)
         btns.addStretch()

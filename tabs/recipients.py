@@ -290,7 +290,7 @@ class RecipientsTab(QWidget):
         btn_import.setObjectName("success")
         btn_import.setStyleSheet(_BTN_GHOST)
         btn_import.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_import.setToolTip("ייבוא מקובץ Excel (פורמט תבנית ליהודה)")
+        btn_import.setToolTip("ייבוא מקובץ Excel לפי פורמט התבנית")
         btn_import.clicked.connect(self._import_excel)
         head.addWidget(btn_import)
         self.btn_import = btn_import
@@ -299,7 +299,7 @@ class RecipientsTab(QWidget):
         btn_export.setObjectName("success")
         btn_export.setStyleSheet(_BTN_GHOST)
         btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_export.setToolTip("ייצוא כל רשימת המקבלים המוצגת לקובץ Excel בתיקיית ההורדות")
+        btn_export.setToolTip("ייצוא הרשימה המוצגת לקובץ Excel בתיקיית ההורדות")
         btn_export.clicked.connect(self._export_excel)
         head.addWidget(btn_export)
         self.btn_export = btn_export
@@ -308,7 +308,7 @@ class RecipientsTab(QWidget):
         btn_dup.setObjectName("neutral")
         btn_dup.setStyleSheet(_BTN_GHOST)
         btn_dup.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_dup.setToolTip("סריקת שמות/טלפונים כפולים")
+        btn_dup.setToolTip("איתור שמות או טלפונים כפולים")
         btn_dup.clicked.connect(self._open_dup_check)
         head.addWidget(btn_dup)
         self.btn_dup = btn_dup
@@ -946,8 +946,8 @@ class RecipientDialog(QDialog):
         self.f_priority = QComboBox()
         self.f_priority.addItems([o[0] or "—" for o in _PRIORITY_OPTIONS])
         self.f_priority.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.f_priority.setToolTip("עדיפות בחלוקה: קבוע · עדיפות ראשונה · עדיפות שנייה · "
-                                   "חובת בירור (ריק = לא בחלוקה)")
+        self.f_priority.setToolTip("עדיפות בחלוקה: קבוע · ראשונה · שנייה · "
+                                   "חובת בירור. ריק = לא בחלוקה.")
 
         self.f_last_dist  = DateEdit(allow_empty=True)
         self.f_next_dist  = DateEdit(allow_empty=True)
@@ -962,7 +962,7 @@ class RecipientDialog(QDialog):
         # נתמך חגים (v3.52): a general yes/no mark and — when on — which holidays.
         # No holiday ticked = every holiday (the common case, one click).
         self.f_holiday = QCheckBox("נתמך חגים")
-        self.f_holiday.setToolTip("סימון כללי: המשפחה נתמכת בחלוקות החגים. "
+        self.f_holiday.setToolTip("המשפחה מקבלת בחלוקות החגים. "
                                   "אפשר לצמצם לחגים מסוימים בשורה שמתחת.")
         self.f_holiday_boxes = {}
         self._holiday_row = QWidget()

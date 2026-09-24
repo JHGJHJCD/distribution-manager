@@ -467,10 +467,16 @@ QMainWindow {
 QStatusBar { font-size: $fs_sub; min-height: 28px; padding: 0 12px; color: $ink_soft; }
 QStatusBar::item { border: none; }
 
-/* ════ Tooltip ════ */
+/* ════ Tooltip — deep-teal card, bright teal edge, roomy & readable ════ */
 QToolTip {
-    background-color: $ink; color: #f5f5f5; border: none;
-    border-radius: 6px; padding: 6px 10px; font-size: $fs_sub;
+    background-color: #0b322c;
+    color: #ecfdf6;
+    border: 1.5px solid $blue_400;
+    border-radius: 9px;
+    padding: 9px 13px;
+    font-family: $font;
+    font-size: $fs_tab;
+    font-weight: 500;
 }
 
 /* ════ GroupBox ════ */

@@ -224,7 +224,7 @@ class ProductsEditor(QWidget):
             "QSpinBox{background:#ffffff; color:#1f2937; border:1px solid #d7dfea;"
             " border-radius:8px; padding:2px 8px; font-size:14px; font-weight:700;}"
             "QSpinBox:focus{border-color:#14b8a6;}")
-        qty_spin.setToolTip("כמות לאדם — כמה יחידות מהמוצר הזה מקבל כל אחד")
+        qty_spin.setToolTip("כמה יחידות מהמוצר מקבל כל אדם")
         h.addWidget(qty_spin)
 
         # ── סוג פריט (stretch) ────────────────────────────────────────────────

@@ -46,7 +46,7 @@ class _StageToggle(QWidget):
         self.setMinimumWidth(320)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.setToolTip("החלף בין הכנת הרשימה לבין רישום מי קיבל בפועל")
+        self.setToolTip("מעבר בין שלב ההכנה לשלב רישום מי קיבל בפועל")
         self._anim = QPropertyAnimation(self, b"pos", self)
         self._anim.setDuration(220)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
@@ -266,7 +266,7 @@ class FilterCriteriaDialog(QDialog):
         cur = selection.holiday_criterion(criteria)
         self.holiday_combo.setCurrentIndex(
             next((i for i, (_l, c) in enumerate(self._holiday_opts) if c == cur), 0))
-        self.holiday_combo.setToolTip("מי שלא סומן 'נתמך חגים' בכרטיס המקבל לא ייכנס "
+        self.holiday_combo.setToolTip("מי שלא סומן 'נתמך חגים' בכרטיס לא ייכנס "
                                       "לרשימה — גם לא כהשלמת קהילה.")
         hrow.addWidget(self.holiday_combo, 1)
         outer.addLayout(hrow)
@@ -278,9 +278,9 @@ class FilterCriteriaDialog(QDialog):
         self.chk_balance.setChecked(bool((criteria or {}).get("balance_communities", True)))
         self.chk_balance.setStyleSheet("font-weight:600; color:#334155;")
         self.chk_balance.setToolTip(
-            "כשהאיזון פעיל: המוצרים מתחלקים בין הקהילות לפי גודלן (או לפי אחוזים "
-            "שנקבעו בהגדרות). בתוך כל קהילה נבחרים העומדים בסינון לפי ניקוד צורך; "
-            "אם אין מספיק עומדים בסינון — היתרה מושלמת מאנשי אותה קהילה לפי ניקוד.")
+            "המוצרים מתחלקים בין הקהילות לפי גודלן (או לפי אחוזים מההגדרות). "
+            "בכל קהילה נבחרים תחילה העומדים בסינון לפי ניקוד; אם אין מספיק — "
+            "היתרה מושלמת מאנשי אותה קהילה לפי ניקוד.")
         outer.addWidget(self.chk_balance)
 
         comm_row = QHBoxLayout()
@@ -294,7 +294,7 @@ class FilterCriteriaDialog(QDialog):
         comm_row.addStretch()
         btn_assign = QPushButton("שיוך קהילות…")
         btn_assign.setStyleSheet(_BTN_GHOST)
-        btn_assign.setToolTip("הצגת המקבלים שאין להם שם נציג, השלמה אוטומטית לפי "
+        btn_assign.setToolTip("הצגת מקבלים בלי שם נציג, השלמה אוטומטית לפי "
                               "בית הכנסת, ושיוך ידני")
         btn_assign.clicked.connect(self._open_assign)
         comm_row.addWidget(btn_assign)
@@ -538,8 +538,8 @@ class _ManualAddDialog(QDialog):
         for label in ("כולם", "כל העדיפויות", "קבוע", "ראשונה", "שנייה", "ללא עדיפות",
                       "נתמך חגים"):
             self._prio_filter.addItem(label)
-        self._prio_filter.setToolTip("«כולם» = כל הרשימה · «כל העדיפויות» = רק "
-                                     "קבוע / ראשונה / שנייה · «נתמך חגים» = מי שסומן כך בכרטיס")
+        self._prio_filter.setToolTip("«כולם» = כל הרשימה · «כל העדיפויות» = "
+                                     "קבוע / ראשונה / שנייה בלבד · «נתמך חגים» = מי שסומן כך בכרטיס")
         self._prio_filter.currentIndexChanged.connect(self._refill)
         self._prio_filter.currentIndexChanged.connect(self._sync_freq_filter)
         top.addWidget(self._prio_filter)
@@ -683,7 +683,7 @@ class _ManualAddDialog(QDialog):
                     t.item(i, c).setForeground(QColor("#b91c1c"))
                 t.item(i, 5).setBackground(QColor("#fee2e2"))
                 t.item(i, 0).setToolTip("מקבל לא פעיל — הוספתו לחלוקה לא תחזיר "
-                                        "אותו לסטטוס פעיל")
+                                        "אותו למצב פעיל")
         t.blockSignals(False)
         hidden = (f" (בלי {self._hidden_count} קבועים שבועיים/דו-שבועיים — "
                   f"מוסתרים במצב 'בלי קבועים')" if self._hidden_count else "")
@@ -1472,7 +1472,7 @@ class GroupUpdateTab(QWidget):
         self.name_input.setMinimumWidth(150)
         self.name_input.lineEdit().setPlaceholderText("לדוגמה: חלוקת פסח")
         self.name_input.lineEdit().setAlignment(ALIGN_RIGHT)
-        self.name_input.setToolTip("שם/מטרת החלוקה — חובה למלא לפני הדפסה. אפשר לבחור משמות קודמים.")
+        self.name_input.setToolTip("שם החלוקה — בחלוקה שבועית רגילה מתמלא אוטומטית; אפשר לבחור משם קודם.")
         self.name_input.addItems(self._load_history("dist_names_history"))
         self.name_input.setCurrentText("")
         _style_completer(self.name_input)
@@ -1480,7 +1480,7 @@ class GroupUpdateTab(QWidget):
 
         self.date_edit = DateEdit(allow_empty=False)
         self.date_edit.setMinimumWidth(130)
-        self.date_edit.setToolTip("תאריך ביצוע החלוקה — ימי רביעי מסומנים בכחול")
+        self.date_edit.setToolTip("תאריך החלוקה — ימי רביעי מסומנים בכחול")
 
         self.dist_input = QComboBox()
         self.dist_input.setEditable(True)
@@ -1488,7 +1488,7 @@ class GroupUpdateTab(QWidget):
         self.dist_input.setMinimumWidth(130)
         self.dist_input.lineEdit().setPlaceholderText("שם המחלק")
         self.dist_input.lineEdit().setAlignment(ALIGN_RIGHT)
-        self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
+        self.dist_input.setToolTip("שם מי שחילק — נשמר ומוצע בפעם הבאה")
         self.dist_input.addItems(self._load_history("distributors_history"))
         self.dist_input.setCurrentText(db.get_setting("last_distributor") or "")
         _style_completer(self.dist_input)
@@ -1497,7 +1497,7 @@ class GroupUpdateTab(QWidget):
         self.note_input = QLineEdit()
         self.note_input.setPlaceholderText("הערה כללית שתישמר עם החלוקה (לא חובה)")
         self.note_input.setAlignment(ALIGN_RIGHT)
-        self.note_input.setToolTip("הערה על כל החלוקה — נשמרת פעם אחת בלשונית 'חלוקות'")
+        self.note_input.setToolTip("הערה לכל החלוקה — נשמרת פעם אחת ומופיעה בלשונית 'חלוקות'")
 
         # מוצרים זמינים + רזרבה — the single most important field on the screen
         # (#ss0lm): the whole distribution starts from ONE place (single source of
@@ -1505,8 +1505,9 @@ class GroupUpdateTab(QWidget):
         # drives how many portions are left for one-timers after regulars.
         self.products_spin = QSpinBox()
         self.products_spin.setRange(0, 99999)
-        self.products_spin.setToolTip("כמה מוצרים/מנות יש בסך הכל בחלוקה זו. "
-                                      "הקבועים נצרכים קודם; מה שנשאר עובר לחד-פעמיים.")
+        self.products_spin.setToolTip("כמה מנות/מוצרים יש בחלוקה. במצב רגיל הקבועים "
+                                      "קודם והשאר לחד-פעמיים; במצב לפי ניקוד/סינון "
+                                      "המספר קובע כמה נכנסים לרשימה (הגבוהים בניקוד).")
         try:
             self.products_spin.setValue(int(db.get_setting("available_products") or 0))
         except (TypeError, ValueError):
@@ -1515,7 +1516,9 @@ class GroupUpdateTab(QWidget):
 
         self.reserve_spin = QSpinBox()
         self.reserve_spin.setRange(0, 999)
-        self.reserve_spin.setToolTip("כמה אנשי רזרבה (הבאים בתור לפי עדיפות) לצרף לחד-פעמיים")
+        self.reserve_spin.setToolTip("כמה אנשי המתנה (הבאים בתור) לצרף אחרי הרשימה — "
+                                     "במצב רגיל החד-פעמיים הבאים בתור, ובמצב לפי "
+                                     "ניקוד/סינון הבאים בתור בכל הרשימה")
         try:
             self.reserve_spin.setValue(int(db.get_setting("reserve_count") or 5))
         except (TypeError, ValueError):
@@ -1539,7 +1542,7 @@ class GroupUpdateTab(QWidget):
         self.btn_pick_onetime.setStyleSheet(_BTN_SUCCESS)
         self.btn_pick_onetime.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_pick_onetime.setToolTip(
-            "פותח חלון לבחירת מקבלי החד-פעמי — המומלצים כבר מסומנים לפי עדיפות וניקוד")
+            "פתיחת חלון לבחירת מקבלי החד-פעמי — המומלצים כבר מסומנים לפי עדיפות וניקוד")
         self.btn_pick_onetime.clicked.connect(self._open_one_time_picker)
         _lc.addWidget(self.btn_pick_onetime)
         self.leftover_card.setVisible(False)   # shown only when there's a hint
@@ -1616,11 +1619,11 @@ class GroupUpdateTab(QWidget):
         self.mode_combo.setView(_light_popup_view())
         self.mode_combo.setMinimumHeight(42)
         self.mode_combo.setToolTip(
-            "כיצד להתייחס לקבועים בחלוקה זו:\n"
-            "• רגיל — קבועים אוטומטית לפי לוח זמנים (ברירת מחדל)\n"
-            "• בלי קבועים — קבועים לא מקבלים\n"
-            "• קבועים לפי ניקוד — רק הקבועים מדורגים לפי ניקוד צורך\n"
-            "• לפי סינון מותאם — כל המקבלים שעונים על קריטריונים (מספר ילדים / הכנסה / פנוי לנפש)")
+            "איך מתייחסים לקבועים בחלוקה זו:\n"
+            "• רגיל — קבועים נכנסים אוטומטית לפי הלוח (ברירת מחדל)\n"
+            "• בלי קבועים — הקבועים לא נכנסים\n"
+            "• קבועים לפי ניקוד — רק הקבועים, מדורגים לפי ניקוד צורך\n"
+            "• לפי סינון מותאם — כל מי שעונה על הקריטריונים (מספר ילדים / הכנסה / פנוי לנפש)")
         for label, val in (("רגיל — קבועים לפי לוח זמנים", "schedule"),
                            ("בלי קבועים", "none"),
                            ("קבועים לפי ניקוד", "scored"),
@@ -1645,7 +1648,7 @@ class GroupUpdateTab(QWidget):
         self.btn_edit_filter = QPushButton("הגדר סינון")
         self.btn_edit_filter.setStyleSheet(_BTN_GHOST)
         self.btn_edit_filter.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_edit_filter.setToolTip("בחר לפי אילו קריטריונים לסנן (מספר ילדים / הכנסה / פנוי לנפש)")
+        self.btn_edit_filter.setToolTip("בחירת הקריטריונים לסינון (מספר ילדים / הכנסה / פנוי לנפש)")
         self.btn_edit_filter.clicked.connect(self._edit_filter)
         adv_row.addWidget(self.btn_edit_filter, 0, Qt.AlignmentFlag.AlignBottom)
         adv_row.addStretch()
@@ -1678,7 +1681,7 @@ class GroupUpdateTab(QWidget):
         btn_send_vol.setStyleSheet(_BTN_PRIMARY)
         btn_send_vol.setIcon(QIcon(line_icon("send", 18, "#ffffff")))
         btn_send_vol.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_send_vol.setToolTip("שולח למתנדב במייל קובץ מעוצב עם הרשימה, למילוי בלי לגעת בתוכנה")
+        btn_send_vol.setToolTip("שליחת קובץ מעוצב עם הרשימה למתנדב במייל — למילוי בלי לגעת בתוכנה")
         btn_send_vol.clicked.connect(self._send_to_volunteer)
         vol_row.addWidget(btn_send_vol, 0, Qt.AlignmentFlag.AlignBottom)
 
@@ -1687,8 +1690,8 @@ class GroupUpdateTab(QWidget):
         btn_import_vol.setStyleSheet(_BTN_GHOST)
         btn_import_vol.setIcon(QIcon(line_icon("upload", 18, "#475569")))
         btn_import_vol.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_import_vol.setToolTip("בדרך כלל לא צריך — תוצאות שהמתנדב שולח חזרה במייל נקלטות אוטומטית. "
-                                  "כפתור זה נועד לייבוא ידני של קובץ Excel שהתקבל בדרך אחרת.")
+        btn_import_vol.setToolTip("בדרך כלל לא צריך — תוצאות שהמתנדב שולח במייל נקלטות אוטומטית. "
+                                  "הכפתור נועד לייבוא ידני של קובץ Excel שהתקבל בדרך אחרת.")
         btn_import_vol.clicked.connect(self._import_volunteer_results)
         vol_row.addWidget(btn_import_vol, 0, Qt.AlignmentFlag.AlignBottom)
         vol_row.addStretch()
@@ -1707,7 +1710,7 @@ class GroupUpdateTab(QWidget):
         self.btn_add_manual = QPushButton("＋ הוסף מקבל")
         self.btn_add_manual.setStyleSheet(_BTN_ACCENT)
         self.btn_add_manual.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_add_manual.setToolTip("הוסף לחלוקה זו מקבל כלשהו מכל הרשימה — גם אם "
+        self.btn_add_manual.setToolTip("הוספת מקבל כלשהו מכל הרשימה לחלוקה זו — גם אם "
                                        "אינו עומד בקריטריונים או אינו בתור השבוע")
         self.btn_add_manual.clicked.connect(self._add_manual)
         h2.addWidget(self.btn_add_manual)
@@ -1716,7 +1719,7 @@ class GroupUpdateTab(QWidget):
         self.btn_export_prep.setStyleSheet(_BTN_INFO)
         self.btn_export_prep.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_export_prep.setToolTip("ייצוא רשימת המקבלים המוכנה לאקסל — עוד לפני "
-                                        "מעבר לרישום מי קיבל")
+                                        "המעבר לרישום מי קיבל")
         self.btn_export_prep.setIcon(QIcon(line_icon("download", 18, "#ffffff")))
         self.btn_export_prep.clicked.connect(self._export_prep_excel)
         h2.addWidget(self.btn_export_prep)
@@ -1846,8 +1849,8 @@ class GroupUpdateTab(QWidget):
         self.btn_save.setMinimumWidth(170)
         self.btn_save.setIcon(QIcon(line_icon("save", 18, "#ffffff")))
         self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_save.setToolTip("רושם את החלוקה למעקב (כולל 'לא הגיע' למי שלא סומן) "
-                                 "ומייצא אוטומטית אקסל מלא לתיקיית ההורדות")
+        self.btn_save.setToolTip("רישום החלוקה למעקב (מי שלא סומן נרשם 'לא הגיע') "
+                                 "וייצוא אוטומטי של אקסל מלא לתיקיית ההורדות")
         self.btn_save.clicked.connect(self._save)
         bar.addWidget(self.btn_save)
 
@@ -1860,7 +1863,7 @@ class GroupUpdateTab(QWidget):
         btn_print.setIcon(QIcon(line_icon("print", 22, "#ffffff")))
         btn_print.setIconSize(QSize(22, 22))
         btn_print.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_print.setToolTip("הדפס את רשימת החלוקה המסומנת (A4)")
+        btn_print.setToolTip("הדפסת רשימת החלוקה המסומנת (A4)")
         _print_glow = QGraphicsDropShadowEffect(btn_print)
         _print_glow.setBlurRadius(22)
         _print_glow.setXOffset(0)
@@ -1879,7 +1882,7 @@ class GroupUpdateTab(QWidget):
         btn_pdf.setIcon(QIcon(line_icon("download", 18, "#0f766e")))
         btn_pdf.setIconSize(QSize(18, 18))
         btn_pdf.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_pdf.setToolTip("שומר את רשימת החלוקה כקובץ PDF בתיקיית ההורדות ופותח אותו")
+        btn_pdf.setToolTip("שמירת רשימת החלוקה כקובץ PDF בתיקיית ההורדות ופתיחתו")
         btn_pdf.clicked.connect(self._export_pdf)
         bar.addWidget(btn_pdf)
 
@@ -1895,7 +1898,7 @@ class GroupUpdateTab(QWidget):
             "QPushButton:pressed{background:#eab308;}")
         btn_reset.setMinimumHeight(46)
         btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_reset.setToolTip("מאפס את המסך לחלוקה חדשה — מנקה מוצרים, רזרבה, שם, "
+        btn_reset.setToolTip("איפוס המסך לחלוקה חדשה — ניקוי מוצרים, רזרבה, שם, "
                              "הערה, סימונים ובחירות חד-פעמי")
         btn_reset.clicked.connect(self._reset_for_new)
         bar.addWidget(btn_reset)
@@ -2607,11 +2610,11 @@ class GroupUpdateTab(QWidget):
         _ERR = "border: 2px solid #dc2626; background-color: #fff5f5;"
         if not distributor:
             self.dist_input.setStyleSheet(_ERR)
-            self.dist_input.setToolTip("חובה למלא שם המחלק")
+            self.dist_input.setToolTip("חובה למלא את שם המחלק")
             QMessageBox.warning(self, "שדות חסרים", "• שם המחלק: שדה חובה")
             return
         self.dist_input.setStyleSheet("")
-        self.dist_input.setToolTip("שם האדם שביצע את החלוקה — נזכר ומוצע אוטומטית")
+        self.dist_input.setToolTip("שם מי שחילק — נשמר ומוצע בפעם הבאה")
 
         # Explicit confirmation before recording (#adr4h): only the TICKED rows are
         # saved, but it's easy to record more than intended (e.g. after 'בחר הכל').
@@ -2988,7 +2991,7 @@ class GroupUpdateTab(QWidget):
         if not name:
             self.name_input.setStyleSheet(
                 "border: 2px solid #dc2626; background-color:#fff5f5;")
-            self.name_input.setToolTip("חובה לרשום שם חלוקה לפני הדפסה")
+            self.name_input.setToolTip("חובה לרשום שם חלוקה לפני ההדפסה")
             QMessageBox.warning(
                 self, "חסר שם חלוקה",
                 "בחלוקה מיוחדת יש לרשום שם חלוקה (למשל 'חלוקת פסח') "
@@ -2996,8 +2999,8 @@ class GroupUpdateTab(QWidget):
             self.name_input.setFocus()
             return
         self.name_input.setStyleSheet("")
-        self.name_input.setToolTip("שם/מטרת החלוקה — בחלוקה שבועית רגילה מושלם אוטומטית. "
-                                   "אפשר לבחור משמות קודמים.")
+        self.name_input.setToolTip("שם החלוקה — בחלוקה שבועית רגילה מתמלא אוטומטית; "
+                                   "אפשר לבחור משם קודם.")
         if not self._ensure_one_time_picks("הדפסה"):
             return
         # Remember the name typed for print too, so it's suggested next time.
@@ -3031,7 +3034,7 @@ class GroupUpdateTab(QWidget):
         if not name:
             self.name_input.setStyleSheet(
                 "border: 2px solid #dc2626; background-color:#fff5f5;")
-            self.name_input.setToolTip("חובה לרשום שם חלוקה לפני שמירת PDF")
+            self.name_input.setToolTip("חובה לרשום שם חלוקה לפני שמירת ה-PDF")
             QMessageBox.warning(
                 self, "חסר שם חלוקה",
                 "בחלוקה מיוחדת יש לרשום שם חלוקה (למשל 'חלוקת פסח') "
@@ -3039,8 +3042,8 @@ class GroupUpdateTab(QWidget):
             self.name_input.setFocus()
             return
         self.name_input.setStyleSheet("")
-        self.name_input.setToolTip("שם/מטרת החלוקה — בחלוקה שבועית רגילה מושלם אוטומטית. "
-                                   "אפשר לבחור משמות קודמים.")
+        self.name_input.setToolTip("שם החלוקה — בחלוקה שבועית רגילה מתמלא אוטומטית; "
+                                   "אפשר לבחור משם קודם.")
         if not self._ensure_one_time_picks("שמירת PDF"):
             return
         self._push_name_history(name)

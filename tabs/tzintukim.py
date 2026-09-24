@@ -388,8 +388,8 @@ class _FreeListDialog(QDialog):
         lay.addWidget(self.text, 1)
         btn_xls = QPushButton("📊 טען מקובץ אקסל…")
         btn_xls.setObjectName("neutral")
-        btn_xls.setToolTip("קורא את כל המספרים מהקובץ ומציג אותם כאן — "
-                           "מה שרואים זה מה שנשלח")
+        btn_xls.setToolTip("קורא את המספרים מהקובץ ומציג אותם כאן — "
+                           "מה שרואים זה מה שיישלח")
         btn_xls.clicked.connect(self._load_excel)
         lay.addWidget(btn_xls)
         self.lbl_count = QLabel("")
@@ -1009,7 +1009,7 @@ class TtsDialog(QDialog):
         btns = QHBoxLayout()
         self.btn_preview = QPushButton("🔊 השמע לי לדוגמה")
         self.btn_preview.setObjectName("neutral")
-        self.btn_preview.setToolTip("יוצר את ההקלטה ופותח אותה בנגן של המחשב — "
+        self.btn_preview.setToolTip("יוצר את ההקלטה ומשמיע אותה במחשב, "
                                     "לפני שמאשרים")
         self.btn_preview.clicked.connect(self._preview)
         btns.addWidget(self.btn_preview)
@@ -1742,7 +1742,7 @@ class TzintukimTab(QWidget):
         # when it did not. Shown only when credentials exist.
         self.lbl_ok = QLabel("●  בודק חיבור לימות המשיח…")
         self.lbl_ok.setStyleSheet(_CHIP_GREY)
-        self.lbl_ok.setToolTip("נבדק מול השרת של ימות המשיח בכניסה ללשונית ופעם בכמה דקות")
+        self.lbl_ok.setToolTip("נבדק מול ימות המשיח בכניסה למסך ופעם בכמה דקות")
         head.addWidget(self.lbl_ok)
         # … or the not-configured chip + a way in (hidden once configured).
         self.banner = QWidget()
@@ -1762,7 +1762,7 @@ class TzintukimTab(QWidget):
         # glance (how many are ready · is there a message · a waiting schedule).
         self.chip_ready = QLabel("☐  עוד לא נטענה רשימה")
         self.chip_ready.setStyleSheet(_CHIP_GREY)
-        self.chip_ready.setToolTip("כמה נמענים מסומנים ומוכנים לשליחה ברשימה של שלב 1")
+        self.chip_ready.setToolTip("כמה נמענים מסומנים ומוכנים לשליחה בשלב 1")
         head.addWidget(self.chip_ready)
         self.chip_msg = QLabel("")
         self.chip_msg.setStyleSheet(_CHIP_GREY)
@@ -1804,8 +1804,8 @@ class TzintukimTab(QWidget):
             "🗂 חלוקה קודמת…",
             "בחירה מרשימת החלוקות שנרשמו — למשל כדי להזכיר למי שלא הגיע",
             "בחר חלוקה")
-        self.btn_past.setToolTip("פותח את רשימת החלוקות שנרשמו; המקבלים של החלוקה "
-                                 "שתבחר יהפכו לרשימת הנמענים")
+        self.btn_past.setToolTip("בוחרים חלוקה שכבר נרשמה, והמקבלים שלה "
+                                 "הופכים לרשימת הנמענים")
         self.btn_past.clicked.connect(self._pick_past_batch)
         tiles.addWidget(t2, 10)
         t3, self.btn_free, _d = _tile(
@@ -1813,7 +1813,7 @@ class TzintukimTab(QWidget):
             "מדביקים מספרי טלפון או טוענים קובץ אקסל — בלי שום קשר לחלוקות",
             "הדבק / טען אקסל")
         self.btn_free.setToolTip("מדביקים מספרי טלפון או בוחרים קובץ אקסל — "
-                                 "בלי שום קשר לרשימות החלוקה")
+                                 "בלי קשר לרשימות החלוקה")
         self.btn_free.clicked.connect(self._load_free_list)
         tiles.addWidget(t3, 10)
         c_lay.addWidget(self.load_frame)
@@ -1879,8 +1879,8 @@ class TzintukimTab(QWidget):
         self.btn_push_server = QPushButton("עדכן את שרת המענה")
         self.btn_push_server.setStyleSheet(_BTN_GHOST)
         self.btn_push_server.setToolTip(
-            "שולח לשרת המענה את הרשימה המסומנת — מי שיחייג חזרה לקו יישאל אם הוא מגיע. "
-            "קורה אוטומטית בכל שליחה/תזמון; כאן אפשר לחזור על זה ידנית.")
+            "שולח לשרת המענה את הרשימה המסומנת, כדי שמי שיחייג חזרה לקו יישאל אם הוא מגיע. "
+            "קורה אוטומטית בכל שליחה או תזמון; כאן אפשר לעשות זאת ידנית.")
         self.btn_push_server.clicked.connect(self._push_current_list)
         self.btn_push_server.setVisible(self._cb_server_on())
         tools.addWidget(self.btn_push_server)
@@ -1932,8 +1932,8 @@ class TzintukimTab(QWidget):
         btn_publish = QPushButton("פרסם בשלוחה 1…")
         btn_publish.setStyleSheet(_BTN_LINK)
         btn_publish.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_publish.setToolTip("מעתיק את ההודעה הנוכחית לשלוחת ההודעות של הקו — "
-                               "שם כל מתקשר ישמע אותה. לא קורה אוטומטית אף פעם; "
+        btn_publish.setToolTip("מעתיק את ההודעה הנוכחית לשלוחת ההודעות של הקו, "
+                               "כך שכל מתקשר ישמע אותה. לא קורה אוטומטית — "
                                "רק בלחיצה כאן ואחרי אישור.")
         btn_publish.clicked.connect(self._publish_to_line)
         c_head.addWidget(btn_publish)
@@ -1971,7 +1971,7 @@ class TzintukimTab(QWidget):
         self.btn_play_local = QPushButton("▶  השמע במחשב")
         self.btn_play_local.setStyleSheet(_BTN_GHOST)
         self.btn_play_local.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_play_local.setToolTip("פותח את ההקלטה בנגן של המחשב — כשהיא שמורה "
+        self.btn_play_local.setToolTip("משמיע את ההקלטה במחשב, כשהיא שמורה "
                                        "במאגר ההקלטות של המחשב הזה")
         self.btn_play_local.clicked.connect(self._play_current_recording)
         self.btn_play_local.setVisible(False)
@@ -1989,7 +1989,7 @@ class TzintukimTab(QWidget):
         self.btn_new_msg.setStyleSheet(_BTN_PRIMARY + _MENU_BTN_QSS)
         self.btn_new_msg.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_new_msg.setToolTip("הקלטה במיקרופון · יצירה מטקסט · העלאת קובץ — "
-                                    "ההודעה החדשה מחליפה את הנוכחית בכל שליחה מעכשיו")
+                                    "ההודעה החדשה תחליף את הנוכחית מכאן ואילך")
         self.btn_new_msg.setMenu(self._new_message_menu())
         row.addWidget(self.btn_new_msg)
         self.btn_library = QPushButton("🎵  מאגר הקלטות")
@@ -2031,15 +2031,15 @@ class TzintukimTab(QWidget):
         btn_ans.setIcon(QIcon(line_icon("refresh", 18, "#475569")))
         btn_ans.setToolTip("קורא מהקו את התשובות שהוקשו בסקר (שלוחה "
                            f"{yemot.SURVEY_EXT}: 1 מגיע / 2 לא מגיע / 3 לא יודע) "
-                           "לצינתוקים של השבועיים האחרונים ומעדכן את הטבלה, "
+                           "בצינתוקים של השבועיים האחרונים, ומעדכן את הטבלה, "
                            "ההיסטוריה ורשימת החלוקה")
         btn_ans.clicked.connect(self._refresh_answers)
         btn_srv = QPushButton("  היסטוריה מהשרת")
         btn_srv.setStyleSheet(_BTN_GHOST)
         btn_srv.setIcon(QIcon(line_icon("download", 18, "#475569")))
-        btn_srv.setToolTip("מושך מהשרת של ימות את כל הקמפיינים שהקו הריץ אי-פעם "
-                           "(גם לפני התוכנה) ואת יומן כל השיחות הנכנסות לקו מאז ומעולם — "
-                           "כדי שהתוכנה תדע באיזו שעה כל אחד באמת עונה או מתקשר. "
+        btn_srv.setToolTip("מושך מימות את כל הצינתוקים שהקו הריץ אי-פעם "
+                           "(גם לפני התוכנה) ואת יומן השיחות הנכנסות לקו, "
+                           "כדי שהתוכנה תדע באיזו שעה כל אחד עונה או מתקשר. "
                            "רץ לבד פעם ביום ברקע; הכפתור מרענן עכשיו.")
         btn_srv.clicked.connect(lambda: self._sync_history(manual=True))
         self.btn_hist_sync = btn_srv
@@ -2175,8 +2175,8 @@ class TzintukimTab(QWidget):
         # dialed are skipped). Visible only while a campaign is being polled.
         self.btn_stop_send = QPushButton("⛔ עצור שליחה")
         self.btn_stop_send.setStyleSheet(_BTN_STOP)
-        self.btn_stop_send.setToolTip("עוצר בשרת של ימות את השליחה שרצה עכשיו — "
-                                      "מי שעוד לא צולצל לא יצולצל. שיחות שכבר "
+        self.btn_stop_send.setToolTip("עוצר בימות את השליחה שרצה עכשיו: "
+                                      "מי שעוד לא צולצל לא יצולצל, ושיחות שכבר "
                                       "מצלצלות מסתיימות כרגיל.")
         self.btn_stop_send.clicked.connect(self._stop_campaign)
         self.btn_stop_send.setVisible(False)
@@ -2204,14 +2204,14 @@ class TzintukimTab(QWidget):
         summary_row.addWidget(self.lbl_summary, 1)
         bar.addLayout(summary_row)
         self.btn_sched = QPushButton("  תזמן שליחה…")
-        self.btn_sched.setToolTip("קובעים תאריך ושעה — והצינתוק יוצא לבד "
-                                  "מהשרת של ימות המשיח, גם כשהמחשב כבוי")
+        self.btn_sched.setToolTip("קובעים תאריך ושעה, והצינתוק יוצא לבד "
+                                  "מימות המשיח — גם כשהמחשב כבוי")
         self.btn_sched.clicked.connect(self._schedule)
         self.btn_sched.setVisible(False)
         self.btn_smart = QPushButton("  שגר לפי השעה של כל אחד…")
         self.btn_smart.setToolTip(
-            "מפזר את השליחה לאורך היום — כל נמען מצולצל בשעה שבה הכי קל להשיג "
-            "אותו לפי ההיסטוריה. יוצא מהשרת של ימות המשיח גם כשהמחשב כבוי.")
+            "מפזר את השליחה לאורך היום: כל נמען מצולצל בשעה שבה הכי קל להשיג "
+            "אותו לפי ההיסטוריה. יוצא מימות המשיח גם כשהמחשב כבוי.")
         self.btn_smart.clicked.connect(self._smart_schedule)
         self.btn_smart.setVisible(False)
         act.addStretch()
@@ -2220,7 +2220,7 @@ class TzintukimTab(QWidget):
         self.btn_later.setIcon(QIcon(line_icon("calendar", 18, "#475569")))
         self.btn_later.setMinimumHeight(46)
         self.btn_later.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_later.setToolTip("הצינתוק יוצא לבד מהשרת של ימות המשיח במועד שתבחר — "
+        self.btn_later.setToolTip("הצינתוק יוצא לבד מימות המשיח במועד שתבחר — "
                                   "גם כשהמחשב כבוי")
         self.btn_later.setMenu(self._later_menu())
         act.addWidget(self.btn_later)
@@ -2274,7 +2274,7 @@ class TzintukimTab(QWidget):
         m.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         m.setToolTipsVisible(True)
         a = m.addAction("🎤  הקלט במיקרופון…")
-        a.setToolTip("מקליטים את ההודעה בקול שלך דרך המיקרופון של המחשב. "
+        a.setToolTip("מקליטים את ההודעה בקול שלך דרך המיקרופון. "
                      "ההקלטה נשמרת במאגר ומועלית לצינתוק.")
         a.triggered.connect(self._record_message)
         a = m.addAction("✍  צור הקלטה מטקסט…")
@@ -2283,7 +2283,7 @@ class TzintukimTab(QWidget):
         a.triggered.connect(self._create_from_text)
         a = m.addAction("📁  העלה קובץ הקלטה…")
         a.setToolTip("קובץ שמע (WAV/MP3) שיושמע בצינתוק — מומר אוטומטית "
-                     "לפורמט הטלפוני בשרת של ימות")
+                     "לפורמט הטלפוני בימות")
         a.triggered.connect(self._upload_recording)
         return m
 

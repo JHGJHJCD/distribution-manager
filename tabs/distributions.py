@@ -120,22 +120,22 @@ class DistributionsTab(QWidget):
         # every time it's opened and after a delete, so it had no real use.)
         self.btn_export_one = QPushButton("ייצוא הנבחרת לאקסל")
         self.btn_export_one.setStyleSheet(_SMALL_BTN)
-        self.btn_export_one.setToolTip("ייצוא החלוקה הנבחרת לאקסל — כל פרטי המקבלים "
-                                       "ומי קיבל / לא הגיע")
+        self.btn_export_one.setToolTip("ייצוא החלוקה הנבחרת לאקסל — פרטי המקבלים "
+                                       "ומי קיבל")
         self.btn_export_one.clicked.connect(self._export_selected)
         top.addWidget(self.btn_export_one)
 
         self.btn_export_all = QPushButton("ייצוא כל ההיסטוריה")
         self.btn_export_all.setStyleSheet(_SMALL_BTN)
-        self.btn_export_all.setToolTip("ייצוא כל החלוקות שנרשמו — גיליון אחד עם כל "
-                                       "פרטי המקבלים ומי קיבל בכל חלוקה")
+        self.btn_export_all.setToolTip("ייצוא כל החלוקות לאקסל — מי קיבל בכל "
+                                       "חלוקה")
         self.btn_export_all.clicked.connect(self._export_all)
         top.addWidget(self.btn_export_all)
 
         self.btn_delete = QPushButton("מחק חלוקה")
         self.btn_delete.setObjectName("danger")
         self.btn_delete.setStyleSheet(_SMALL_BTN)
-        self.btn_delete.setToolTip("מחק את החלוקה הנבחרת ואת רישומי המקבלים שלה")
+        self.btn_delete.setToolTip("מחיקת החלוקה הנבחרת וכל רישומי המקבלים שבה")
         self.btn_delete.clicked.connect(self._delete_selected)
         top.addWidget(self.btn_delete)
         lay.addLayout(top)

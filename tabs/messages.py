@@ -111,7 +111,7 @@ class _Bubble(QFrame):
                 guid = msg.get("guid") or ""
                 del_btn = QPushButton("מחק")
                 del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                del_btn.setToolTip("מחק הודעה זו (אצל כל הצוות)")
+                del_btn.setToolTip("מחיקת ההודעה — אצל כל הצוות")
                 del_btn.setStyleSheet(
                     "QPushButton{color:#b45b5b; background:transparent; border:none;"
                     "font-size:10.5px; font-weight:600; padding:0 2px;}"
@@ -158,7 +158,7 @@ class MessagesTab(QWidget):
                  "border-radius:9px; padding:6px 12px; font-size:12.5px; font-weight:600;}"
                  "QPushButton:hover{background:#eafaf3;}")
         self.btn_bg = QPushButton("רקע")
-        self.btn_bg.setToolTip("בחר תמונת רקע למסך ההודעות (נשמר במחשב זה בלבד)")
+        self.btn_bg.setToolTip("בחירת תמונת רקע למסך ההודעות — נשמר במחשב זה בלבד")
         self.btn_bg.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_bg.setStyleSheet(_wall)
         self.btn_bg.clicked.connect(self._choose_bg)

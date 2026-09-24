@@ -843,7 +843,7 @@ class MainWindow(QMainWindow):
         fb_btn.setObjectName("neutral")
         fb_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         fb_btn.setStyleSheet("font-size:11px; min-height:22px; padding:2px 10px;")
-        fb_btn.setToolTip("דווח על בעיה או השאר בקשה למפתח")
+        fb_btn.setToolTip("דיווח על תקלה או בקשה למפתח")
         fb_btn.clicked.connect(self._open_feedback)
         sb.addWidget(fb_btn)
         self._fb_btn = fb_btn
