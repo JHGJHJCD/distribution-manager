@@ -2035,7 +2035,10 @@ class GroupUpdateTab(QWidget):
         db.set_setting("available_products", str(self.products_spin.value()))
         self._update_leftover_hint()
         # #c9k0m: in the scored modes the list length follows the count live.
-        if self._current_mode() in ("scored", "all"):
+        # In 'filter' mode with community balance the products count is split
+        # between the communities (#lejmr), so changing it must rebuild the list
+        # too — otherwise the balanced list stayed stuck on the old count.
+        if self._current_mode() in ("scored", "all", "filter"):
             self.refresh()
 
     def _on_reserve_changed(self, *_):

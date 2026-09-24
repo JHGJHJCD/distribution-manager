@@ -183,6 +183,24 @@ gt._persist_extras()
 ok("R8 deleted pick isn't persisted as a bare local id",
    str(gone) not in (db.get_setting("weekly_extra_ids") or "").split(","))
 
+# ── R9: מצב "סינון מותאם" + איזון קהילות — שינוי "מוצרים זמינים" מרענן חי ───────
+# האיזון מחלק את available_products בין הקהילות, לכן שינוי המספר חייב לבנות מחדש
+# את הרשימה על המסך (כמו במצבי scored/all). קודם הרשימה נשארה תקועה על הישן.
+for i in range(6):
+    db.add_recipient({"full_name": f"קהילתי{i}", "status": "פעיל", "frequency": "חד-פעמי",
+                      "priority": 3, "souls": 2, "representative": "נציג א" if i < 3 else "נציג ב",
+                      "phone1": f"057{i}222333", "income": "1000"})
+db.set_filter_criteria({"balance_communities": True})
+db.set_setting("available_products", "2")
+db.set_setting("dist_regulars_mode", "filter")
+gt.refresh()
+ok("R9a filter+balance shows exactly available_products", len(gt._rows_data) == 2,
+   f"mode={gt._current_mode()} n={len(gt._rows_data)}")
+gt.products_spin.setValue(5)           # המפעיל מזיז את שדה "מוצרים זמינים"
+ok("R9b changing products live-rebuilds the balanced list", len(gt._rows_data) == 5,
+   str(len(gt._rows_data)))
+db.set_setting("dist_regulars_mode", "schedule"); gt.refresh()
+
 print()
 print("נכשלו: " + ", ".join(fails) if fails else "הכל עבר ✓")
 sys.exit(1 if fails else 0)
