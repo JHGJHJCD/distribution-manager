@@ -284,6 +284,15 @@ _pg = selection.balance_by_community(_gap, {"children_total": {"min": 6, "max": 
 ok("C4c top-up picks the near-miss (closest to the filter), not the neediest",
    len(_pg) == 1 and _pg[0]["full_name"] == "כמעט", str([r["full_name"] for r in _pg]))
 
+# C4e RULE 4 in the top-up: a family with MISSING data on a constrained field
+# never edges out a measurable one — even one far over the threshold (a known
+# gap of 1.5 used to lose to the flat 1.0 given for "no data").
+_mis = [crec("ידוע-רחוק", "נציג ה", 3000), crec("חסר", "נציג ה", ""),
+        crec("עומד", "נציג ה", 500)]
+_pm = selection.balance_by_community(_mis, {"income": {"min": None, "max": 1200}}, W_INCOME, 2)
+ok("C4e top-up takes the measurable near-miss before the missing-data card",
+   [r["full_name"] for r in _pm] == ["עומד", "ידוע-רחוק"], str([r["full_name"] for r in _pm]))
+
 # C4d a regular swept into the top-up is flagged (_balance_regular) so the screen
 # can highlight it — monthly counts as regular too.
 _reg = [dict(crec("קבוע-חודשי", "נציג ד", 8000), frequency="חודשי"),

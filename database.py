@@ -139,12 +139,13 @@ def _db_recipient_count(path: str) -> int:
 
 def self_heal_db():
     """Recover from a 'database disk image is malformed' before the app touches
-    the DB. Two stages, safest first:
-      1. A stale/mismatched WAL+SHM sidecar can make an otherwise-fine DB read as
-         malformed. Delete the sidecars and re-check — no data lost (a 0-byte or
-         orphaned WAL holds no committed rows).
-      2. If the DB itself is corrupt, restore the BEST backup (most recipients,
-         newest as tiebreak) and set the corrupt file aside as data.corrupt.db.
+    the DB. Stages, safest first:
+      1. REINDEX in place — index-only damage is fixed with nothing lost.
+      1b. A stale/mismatched WAL+SHM sidecar can make an otherwise-fine DB read as
+         malformed. Move the sidecars aside (*.stale, never deleted) and re-check.
+      2. If the DB itself is corrupt, set it aside as data.db.corrupt.db and
+         restore the newest usable backup. If it can't be set aside, stop —
+         never overwrite the only copy.
     Never raises — a failure here just falls through to normal init."""
     try:
         if not os.path.exists(DB_PATH):
@@ -152,12 +153,30 @@ def self_heal_db():
         if _db_integrity_ok(DB_PATH):
             return
 
-        # Stage 1: drop stale sidecars, retry.
+        # Stage 1: damage limited to indexes is repaired in place by REINDEX —
+        # FIRST, with the WAL still attached (it may hold committed rows)
+        # (the tables are intact — nothing lost). Restoring a backup here used to
+        # silently roll away everything since the last backup.
+        try:
+            c = sqlite3.connect(DB_PATH)
+            try:
+                c.execute("REINDEX")
+                c.commit()
+            finally:
+                c.close()
+        except Exception:
+            pass
+        if _db_integrity_ok(DB_PATH):
+            return
+
+        # Stage 1b: move stale sidecars ASIDE (never delete — a WAL can still hold
+        # committed rows, e.g. when the check failed only because the file was
+        # briefly locked), retry.
         for ext in ("-wal", "-shm"):
             side = DB_PATH + ext
             try:
                 if os.path.exists(side):
-                    os.remove(side)
+                    os.replace(side, side + ".stale")
             except Exception:
                 pass
         if _db_integrity_ok(DB_PATH):
@@ -213,9 +232,10 @@ def self_heal_db():
                 os.remove(corrupt)
             os.replace(DB_PATH, corrupt)
         except Exception:
-            # Could not even set it aside — nothing more we can safely do here;
-            # fall through and let init_db attempt its normal path.
-            pass
+            # Could not even set it aside (file in use) — then we must NOT copy a
+            # backup over it either: that would destroy the only copy of the
+            # newer data. Leave it for init_db / a manual restore.
+            return
 
         if best is None:
             return   # no usable backup — init_db will create a fresh empty schema
