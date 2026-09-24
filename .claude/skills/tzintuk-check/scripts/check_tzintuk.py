@@ -341,13 +341,14 @@ def _(y, t, test, rel):
     return not problems, ", ".join(problems)
 
 
-@lint("I46", "v3.38 — merge_survey_answers לא מוחק תשובה שנרשמה כש-fetch חזר ריק (rows_empty guard); הבדיקה מכסה תקלה זמנית + שמירת ריאטריביושן")
+@lint("I46", "v3.38/3.71 — merge_survey_answers לא מוחק תשובה שנרשמה כשהטלפון לא חזר ב-fetch (ריק או חלקי — per-phone guard); הבדיקה מכסה תקלה זמנית + fetch חלקי + שמירת ריאטריביושן")
 def _(y, t, test, rel):
     body = _func_body(y, "merge_survey_answers")
-    okk = ("rows_empty" in body
-           and "if hit is None and rows_empty and e.get(\"answer\"):" in body
+    okk = ("phones_in_rows" in body
+           and "if hit is None and ph not in phones_in_rows and e.get(\"answer\"):" in body
            and "continue" in body)
     okk = okk and "fetch ריק לא מוחק תשובה שכבר נרשמה" in test
+    okk = okk and "partial fetch (other source down) keeps a recorded answer" in test
     okk = okk and "ריאטריביושן נשמר" in test
     return okk, ""
 

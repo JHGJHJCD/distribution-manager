@@ -303,7 +303,17 @@ def find_phones(line: str) -> tuple:
     reported as bad (they look like a phone but are not); shorter ones
     ('דירה 5') are just part of the name."""
     phones, bad, words, short_nums = [], [], [], []
-    toks = [t.strip(",;") for t in line.split()]
+    toks = []
+    for t in line.split():
+        t = t.strip(",;")
+        parts = t.split("/")
+        # "050-1234567/052-1112222" = two numbers; split only when every piece
+        # is numeric, so a name bit like "12/5" stays as written.
+        if len(parts) > 1 and all(_NUMERIC_TOK.fullmatch(x) for x in parts) \
+                and any(normalize_phone_loose(x) for x in parts):
+            toks.extend(parts)
+        else:
+            toks.append(t)
     toks = [t for t in toks if t]
     i = 0
     while i < len(toks):
@@ -1790,13 +1800,18 @@ def merge_survey_answers(entries: list, rows: list, since_iso: str = "",
     # tag, synced to the other computer) is a data-integrity bug. Only a fetch
     # that actually returned rows may clear/move a recorded answer (the
     # until_by_phone reattribution needs the moving answer to be IN rows).
-    rows_empty = not (rows or [])
+    # Per phone, not per fetch: `rows` = the 77 file + the callback server, and
+    # the 77 file always carries old history — so when the callback server alone
+    # failed, rows was not empty and its recorded answers were wiped anyway.
+    # Only a phone whose own row IS in this fetch may be cleared/moved.
+    phones_in_rows = {r["phone"] for r in rows or []}
     changed = False
     for e in entries or []:
         if not isinstance(e, dict):
             continue
-        hit = latest.get(normalize_phone(e.get("phone")))
-        if hit is None and rows_empty and e.get("answer"):
+        ph = normalize_phone(e.get("phone"))
+        hit = latest.get(ph)
+        if hit is None and ph not in phones_in_rows and e.get("answer"):
             continue                       # keep the recorded answer as-is
         answer = hit[1] if hit else ""
         at = hit[0].isoformat() if hit else ""

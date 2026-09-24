@@ -7,7 +7,7 @@
 היסטוריה ב-DB (idempotence + LWW), שומר שליחה-כפולה, וסנכרון בין 2 מחשבים.
 """
 import os, sys, json, tempfile, urllib.parse
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import os
 from utils import call_history   # המטמון האמיתי של המחשב לא נכנס לבדיקות
 import tempfile as _tf
@@ -964,6 +964,13 @@ ok("שני מספרים מפוצלים ברווחים בשורה אחת",
 ok("ספרה בודדת בשם אינה 'פסול'",
    yemot.find_phones("0501234567 כהן דירה 5")[:2] == (["0501234567"], "כהן דירה 5")
    and yemot.find_phones("0501234567 כהן דירה 5")[2] == [])
+# "050-1234567/052-1112222" (two numbers joined by a slash) was one non-numeric
+# token → became part of the "name", no phone, and no warning either.
+ok("find_phones: numbers joined by '/' → both numbers",
+   yemot.find_phones("כהן 050-1234567/052-1112222")[:2] == (["0501234567", "0521112222"], "כהן"),
+   str(yemot.find_phones("כהן 050-1234567/052-1112222")))
+ok("find_phones: a date-like '12/5' in a name is left alone",
+   yemot.find_phones("0501234567 כהן 12/5")[:2] == (["0501234567"], "כהן 12/5"))
 from tabs.tzintukim import _FreeListDialog
 ents, bad = _FreeListDialog._parse_text(
     "050 123 4567\tכהן\n501234567;לוי\nabc 99")
@@ -1037,6 +1044,15 @@ ok("merge: מי שלא הקיש = מפתח answer ריק (לא הגיב)",
 ok("merge: changed בפעם הראשונה", changed)
 _, changed2 = yemot.merge_survey_answers(entries, rows, sent)
 ok("merge: אותם נתונים שוב → changed=False", not changed2)
+# A PARTIAL fetch (the callback server failed → only the 77 file's old rows came
+# back) must not wipe an answer the missing source had recorded — the v3.38 guard
+# only covered a fully empty fetch, but the 77 file always has old history.
+_keep = [{"phone": "0501111111", "answer": "1", "answer_at": "2026-09-02T17:00:00+00:00"}]
+_old77 = [{"phone": "0507777777", "answer": "2",
+           "at": datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc)}]
+_keep, _chg = yemot.merge_survey_answers(_keep, _old77, sent)
+ok("merge: partial fetch (other source down) keeps a recorded answer",
+   _keep[0]["answer"] == "1" and not _chg, str(_keep))
 ok("survey_checked אחרי merge", yemot.survey_checked(entries) and not yemot.survey_checked([{"phone": "1"}]))
 cnt = yemot.answer_counts(entries)
 ok("answer_counts", cnt == {"1": 1, "2": 0, "3": 1, "": 2}, str(cnt))

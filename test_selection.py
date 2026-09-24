@@ -394,6 +394,18 @@ ok("H9 criteria 'חנוכה' → only marks covering it; matches_criteria ANDs i
 ok("H10 holiday_label", selection.holiday_label({"holiday": "*"}) == "נתמכי חגים"
    and selection.holiday_label({"holiday": "פסח"}) == "נתמכי פסח" and selection.holiday_label({}) == "")
 
+# Excel import of the mark: a NEGATIVE text must not turn the mark on, and a list
+# written with "/" or "ו" must keep its holidays.
+import holidays as _hol
+ok("H11 from_text: 'לא נתמך' → not supported", _hol.from_text("לא נתמך") == (0, ""), str(_hol.from_text("לא נתמך")))
+ok("H11 from_text: 'לא' / 'no' → not supported", _hol.from_text("לא") == (0, "") and _hol.from_text("no") == (0, ""))
+ok("H11 from_text: positives still work", _hol.from_text("כן") == (1, "") and _hol.from_text("נתמך חגים") == (1, "")
+   and _hol.from_text("V") == (1, "") and _hol.from_text("כל החגים") == (1, ""))
+ok("H12 from_text: 'פסח וסוכות' / 'פסח / סוכות' keep both",
+   _hol.from_text("פסח וסוכות") == (1, "סוכות,פסח") and _hol.from_text("פסח / סוכות") == (1, "סוכות,פסח"),
+   f"{_hol.from_text('פסח וסוכות')} {_hol.from_text('פסח / סוכות')}")
+ok("H12 'ראש השנה ושבועות' keeps a two-word name", _hol.parse_list("ראש השנה ושבועות") == ["ראש השנה", "שבועות"])
+
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)
