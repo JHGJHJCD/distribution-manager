@@ -165,6 +165,12 @@ _HEB_FINALS = str.maketrans("ךםןףץ", "כמנפצ")
 _SINGLE_PARENT_MARKERS = ("גרוש", "אלמנ", "רווק", "פרוד", "חד הורי", "חד-הורי", "לא נשוי")
 
 
+# Row key (a set of field names) for numeric cells that were BLANK in the file.
+# They are still filled with 0 for a new card (unchanged behaviour), but a merge
+# import must not propose "5 → 0" for an existing recipient from an empty cell.
+BLANK_KEY = "_blank_fields"
+
+
 def _adults_in_household(marital_status) -> int:
     """How many adults to count toward נפשות for this household. A single-parent
     status (divorced/widowed/single/separated) → 1 adult; anything else,
@@ -248,6 +254,10 @@ def import_app_export(path: str) -> List[Dict]:
             if key in _DATE_KEYS:
                 rec[key] = _ddmmyyyy_to_iso(cell(key))
             elif key in _INT_KEYS:
+                if not cell(key):
+                    # blank ≠ 0: a merge import must not "update" a known count
+                    # to 0 (database.diff_incoming_recipients skips these)
+                    rec.setdefault(BLANK_KEY, set()).add(key)
                 try:
                     rec[key] = int(float(cell(key))) if cell(key) else 0
                 except (ValueError, TypeError):
@@ -401,8 +411,12 @@ def import_from_excel(path: str) -> List[Dict]:
                 return None
             return row[idx]
 
+        blank = set()
+
         def _int_cell(key):
             v = cell(key)
+            if not v:
+                blank.add(key)   # blank ≠ 0 for a merge import (see BLANK_KEY)
             try:
                 return int(float(v)) if v else 0
             except (ValueError, TypeError):
@@ -427,6 +441,8 @@ def import_from_excel(path: str) -> List[Dict]:
         children_home = _int_cell("children_home")
         marital = cell("marital_status")
         souls = children_home + _adults_in_household(marital)
+        if "children_home" in blank:
+            blank.add("souls")   # derived from a blank cell — not real data
 
         # Priority code → priority number + frequency.
         # 4 = קבוע → weekly regular flow; 3/2/1/0 = one-time (priority tiers);
@@ -492,6 +508,8 @@ def import_from_excel(path: str) -> List[Dict]:
             "occupation":        cell("occupation"),
             "representative":    cell("representative"),
         })
+        if blank:
+            results[-1][BLANK_KEY] = blank
 
     return results
 

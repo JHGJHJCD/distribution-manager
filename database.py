@@ -2669,10 +2669,12 @@ def diff_incoming_recipients(rows: list[dict]) -> dict:
             by_ext.setdefault(ext, []).append(r)
 
     new_rows, updates, dupes = [], [], 0
+    new_by_key = {}   # the same NEW person twice in one file → one card
     for row in rows:
         name = (row.get("full_name") or "").strip()
         if not name:
             continue
+        blank = row.get("_blank_fields") or ()   # numeric cells empty in the file
         match = None
         ext = (row.get("external_id") or "").strip()
         if ext and len(by_ext.get(ext, [])) == 1:
@@ -2683,11 +2685,22 @@ def diff_incoming_recipients(rows: list[dict]) -> dict:
             dupes += 1
             continue
         if match is None:
-            new_rows.append(row)
+            key = ("ext", ext) if ext else ("name", name)
+            first = new_by_key.get(key)
+            if first is None:
+                first = {k: v for k, v in row.items() if k != "_blank_fields"}
+                new_by_key[key] = first
+                new_rows.append(first)
+            else:
+                # later rows fill what the earlier one left empty
+                for k, v in row.items():
+                    if k != "_blank_fields" and k not in blank \
+                            and _norm_val(k, v) and not _norm_val(k, first.get(k)):
+                        first[k] = v
             continue
         changes = {}
         for field in _IMPORT_DIFF_FIELDS:
-            if field not in row:
+            if field not in row or field in blank:
                 continue
             new_norm = _norm_val(field, row.get(field))
             old_norm = _norm_val(field, match.get(field))
@@ -2715,6 +2728,6 @@ def apply_import_confirmed(new_rows: list[dict], updates: list[dict]) -> tuple[i
         fields = {f: _coerce(f, ch["new"]) if f in _INT_FIELDS else ch["new"]
                   for f, ch in u.get("changes", {}).items()}
         if fields:
-            update_recipient(u["id"], fields)
+            update_recipient(u["id"], fields, source="import")
             updated += 1
     return added, updated
