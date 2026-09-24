@@ -68,7 +68,7 @@ def resource_path(relative: str) -> str:
 
 # ─── Splash screen ───────────────────────────────────────────────────────────
 
-def _make_splash_pix(W=520, H=340) -> QPixmap:
+def _make_splash_pix(W=520, H=340, status="טוען...") -> QPixmap:
     pix = QPixmap(W, H)
     pix.fill(QColor("#ffffff"))
     p = QPainter(pix)
@@ -105,7 +105,7 @@ def _make_splash_pix(W=520, H=340) -> QPixmap:
     p.setPen(QColor(255, 255, 255, 225))
     p.setFont(QFont("Segoe UI", 9))
     p.drawText(QRect(12, H - 32, W - 24, 32),
-               Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, "טוען...")
+               Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, status)
     p.drawText(QRect(12, H - 32, W - 24, 32),
                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                f"גרסה {APP_VERSION}")
@@ -155,8 +155,8 @@ class _Splash(QSplashScreen):
             painter.drawRoundedRect(fill, bar_h / 2, bar_h / 2)
 
 
-def _show_splash(app: "QApplication") -> _Splash:
-    splash = _Splash(_make_splash_pix())
+def _show_splash(app: "QApplication", status: str = "טוען...") -> _Splash:
+    splash = _Splash(_make_splash_pix(status=status))
     splash.show()
     app.processEvents()
     return splash
@@ -1474,7 +1474,10 @@ def _run():
     _apply_theme(app)
 
     import time
-    splash = _show_splash(app)
+    # A relaunch right after a self-update: get the operator back into the app as
+    # fast as possible (no artificial branding wait) and say what's happening.
+    _post_update = updater.autologin_pending()
+    splash = _show_splash(app, "מתקין את העדכון…" if _post_update else "טוען...")
     t0 = time.time()
 
     # Smoothly animate the progress bar toward a moving target that the real
@@ -1516,8 +1519,11 @@ def _run():
         pass
     _target["v"] = 92
 
-    # Keep splash visible for at least 1.8 s (the animator keeps filling it).
-    remaining = max(0, 1800 - int((time.time() - t0) * 1000))
+    # Keep splash visible for at least 1.8 s (the animator keeps filling it) —
+    # but after a self-update relaunch, skip the branding wait so the app snaps
+    # back almost instantly (#reopen-fast, 24/9/2026).
+    min_splash = 300 if _post_update else 1800
+    remaining = max(0, min_splash - int((time.time() - t0) * 1000))
     if remaining:
         _wait_ms(remaining)
 

@@ -99,5 +99,50 @@ with open(updater._autologin_path(), "w", encoding="utf-8") as _f:
 check("AL6 stale token (older than the window) -> refused", updater.consume_autologin() is False)
 shutil.rmtree(_tmpdir, ignore_errors=True)
 
+# ── reopen robustness (24/9/2026): retry + detach flags + ShellExecute fallback ──
+import time as _t2
+_orig_sleep = _t2.sleep
+_t2.sleep = lambda *_a, **_k: None      # don't actually wait during the retries
+_orig_popen2 = updater.subprocess.Popen
+_orig_startfile = getattr(updater.os, "startfile", None)
+
+# 1) Popen succeeds → returns True and (on win32) passes detach creationflags.
+captured = {}
+def _fake_popen_ok(*a, **k):
+    captured.update(k); return object()
+updater.subprocess.Popen = _fake_popen_ok
+check("RL1 relaunch True when spawn succeeds", updater._relaunch("x.exe", {}) is True)
+if sys.platform == "win32":
+    check("RL2 spawn is detached (creationflags set)", bool(captured.get("creationflags")))
+
+# 2) Popen always fails → retries, then falls back to ShellExecute (os.startfile).
+tries = {"n": 0}
+def _fake_popen_fail(*a, **k):
+    tries["n"] += 1; raise OSError(32, "locked by scanner")
+updater.subprocess.Popen = _fake_popen_fail
+sf = {"called": False}
+updater.os.startfile = lambda *a, **k: sf.__setitem__("called", True)
+check("RL3 fallback reopens when spawn keeps failing", updater._relaunch("x.exe", {}) is True)
+check("RL4 it retried the direct spawn before falling back", tries["n"] >= 2)
+check("RL5 fallback used ShellExecute", sf["called"] is True)
+
+# 3) both paths fail → False (caller shows 'launch manually').
+updater.os.startfile = lambda *a, **k: (_ for _ in ()).throw(OSError("no shell"))
+check("RL6 returns False only when every launch path fails",
+      updater._relaunch("x.exe", {}) is False)
+
+# 4) autologin_pending peeks at the env without consuming it.
+updater.os.environ.pop(updater.AUTOLOGIN_ENV, None)
+check("RL7 pending False without env token", updater.autologin_pending() is False)
+updater.os.environ[updater.AUTOLOGIN_ENV] = "abc"
+check("RL8 pending True with env token (not consumed)",
+      updater.autologin_pending() is True and updater.os.environ.get(updater.AUTOLOGIN_ENV) == "abc")
+updater.os.environ.pop(updater.AUTOLOGIN_ENV, None)
+
+updater.subprocess.Popen = _orig_popen2
+if _orig_startfile is not None:
+    updater.os.startfile = _orig_startfile
+_t2.sleep = _orig_sleep
+
 print("\nRESULT:", "ALL PASS ✓" if ok else "FAILURES ✗")
 sys.exit(0 if ok else 1)

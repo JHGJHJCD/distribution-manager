@@ -73,6 +73,18 @@ Traps that have cost us time before. Check the relevant one before touching that
   `Popen`, forcing a clean independent extraction. **Whenever a frozen onefile app spawns another
   onefile EXE (self-relaunch included), always pass a scrubbed env** — never a bare `Popen([exe])`.
   This is the real fix; the v2.84 liveness-probe + import-warming are belt-and-suspenders.
+- **v3.70 (24/9/2026): "closes but never reopens" after an update — the relaunch was fragile.**
+  Two causes, both fixed in `updater._relaunch` (called from `apply_update`): (1) the freshly
+  written EXE can be briefly **locked by an on-access scanner** (NetFree / Defender) right after
+  `os.replace`, so a single `Popen([exe])` could fail with a sharing violation → the app just
+  closed. Now: **retry the spawn 6× (0.4s apart), then fall back to `os.startfile`** (ShellExecute,
+  the double-click path — very tolerant). The fallback can't carry the auto-login env token, so the
+  user is asked for the password that once, but the app *does* reopen. (2) The child was spawned
+  tied to this process's console/group; now it gets **`creationflags=DETACHED_PROCESS |
+  CREATE_NEW_PROCESS_GROUP`** so it fully survives our hard-exit. **When relaunching a frozen EXE,
+  always: scrubbed env (v2.91) + detach flags + retry + a ShellExecute fallback.** Tests: RL1–RL8
+  in `test_updater.py`. Also v3.70: the post-update reopen skips the artificial 1.8 s splash wait
+  (`updater.autologin_pending()` → `min_splash=300ms`) and the splash says "מתקין את העדכון…".
 
 ## NetFree (network)
 - NetFree can inject **HTTP 418 "Blocked by NetFree"** and break builds/downloads with no obvious

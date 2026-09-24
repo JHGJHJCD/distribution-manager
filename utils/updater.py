@@ -258,11 +258,42 @@ def apply_update(downloaded_path: str):
     token = arm_autologin()
     if token:
         env[AUTOLOGIN_ENV] = token
-    try:
-        subprocess.Popen([exe], close_fds=True, env=env)
-    except OSError as e:
-        return f"העדכון הותקן, אך ההפעלה מחדש נכשלה. הפעל את התוכנה ידנית.\n({e})"
+    if not _relaunch(exe, env):
+        return "העדכון הותקן, אך ההפעלה מחדש נכשלה. הפעל את התוכנה ידנית."
     return None
+
+
+def _relaunch(exe: str, env: dict) -> bool:
+    """Start the updated EXE as a fully independent process that survives this
+    one's exit. Returns True on success.
+
+    Two hard-won robustness points (the 'closes but never reopens' report,
+    24/9/2026):
+    • creationflags DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — without them the
+      child stays tied to this process's console/group, and our immediate hard
+      exit could take it down before its window ever appears.
+    • retry + ShellExecute fallback — the EXE was written to disk milliseconds
+      ago, and an on-access scanner (NetFree / Defender) can hold a brief lock on
+      it, so the first Popen can fail with a sharing violation. We retry, then
+      fall back to os.startfile (the double-click path, very tolerant). The
+      fallback cannot carry the auto-login env var, so the user is asked for the
+      password once — reopening beats not reopening."""
+    import time
+    flags = 0
+    if sys.platform == "win32":
+        # 0x08 DETACHED_PROCESS | 0x200 CREATE_NEW_PROCESS_GROUP
+        flags = 0x00000008 | 0x00000200
+    for attempt in range(6):
+        try:
+            subprocess.Popen([exe], close_fds=True, env=env, creationflags=flags)
+            return True
+        except OSError:
+            time.sleep(0.4)
+    try:
+        os.startfile(exe)   # Windows ShellExecute — reopens without the token
+        return True
+    except (OSError, AttributeError):
+        return False
 
 
 # ─── one-time auto-login after a self-update (#dy6yq) ─────────────────────────
@@ -288,6 +319,13 @@ def arm_autologin() -> str:
     except OSError:
         return ""
     return token
+
+
+def autologin_pending() -> bool:
+    """True when this process was launched by a self-update relaunch (the env
+    token is present) — WITHOUT consuming it. Lets startup shorten the splash so
+    the reopen after an update feels instant."""
+    return bool(os.environ.get(AUTOLOGIN_ENV))
 
 
 def consume_autologin() -> bool:

@@ -1945,23 +1945,43 @@ class SettingsTab(QWidget):
             return
         dest = updater.download_target()
         self._dl_tag = result.get("tag") or ""
-        self._progress = QProgressDialog("מוריד עדכון...", "ביטול", 0, 100, self)
+        mb = (result.get("size") or 0) / (1024 * 1024)
+        self._dl_size_txt = f" ({mb:.1f} MB)" if mb else ""
+        self._progress = QProgressDialog(
+            f"מוריד את גרסה v{result['version']}{self._dl_size_txt}…",
+            "ביטול", 0, 100, self)
         self._progress.setWindowTitle("עדכון תוכנה")
         self._progress.setWindowModality(Qt.WindowModality.WindowModal)
         self._progress.setMinimumDuration(0)
         self._progress.setAutoClose(False)
         self._progress.setAutoReset(False)
+        self._dl_version = result.get("version") or ""
         self._worker = _UpdateWorker("download", url=result["url"], dest=dest)
-        self._worker.progress.connect(self._progress.setValue)
+        self._worker.progress.connect(self._on_dl_progress)
         self._worker.finished_dl.connect(self._on_downloaded)
         self._progress.canceled.connect(self._worker.cancel)
         self._progress.setValue(0)
         self._worker.start()
 
+    def _on_dl_progress(self, pct: int):
+        """Live download feedback — a clear step + percentage so the operator
+        sees genuine progress instead of a silent bar."""
+        p = getattr(self, "_progress", None)
+        if p is None:
+            return
+        p.setValue(pct)
+        if pct >= 100:
+            p.setLabelText("מסיים הורדה, מתקין ומפעיל מחדש…")
+        else:
+            p.setLabelText(
+                f"מוריד את גרסה v{getattr(self, '_dl_version', '')}"
+                f"{getattr(self, '_dl_size_txt', '')} — {pct}%")
+
     def _on_downloaded(self, result):
-        if hasattr(self, "_progress") and self._progress is not None:
-            self._progress.close()
+        _prog = getattr(self, "_progress", None)
         if isinstance(result, Exception):
+            if _prog is not None:
+                _prog.close()
             if isinstance(result, InterruptedError):
                 self.lbl_update_status.setText("העדכון בוטל.")
             else:
@@ -1972,10 +1992,19 @@ class SettingsTab(QWidget):
             return
         if not self._mails_guard_ok():
             # v3.47: שליחה שהתחילה בזמן ההורדה — לא מחליפים את ה-EXE מתחתיה
+            if _prog is not None:
+                _prog.close()
             self.lbl_update_status.setStyleSheet("color:#b45309;")
             self.lbl_update_status.setText("העדכון הורד אך לא הותקן — יש שליחת מיילים פעילה. "
                                            "לחץ \"בדוק עדכון\" אחרי שתסתיים.")
             return
+        # Keep the progress window up with a clear install step, so the moment
+        # between "downloaded" and the reopened window isn't a silent blank.
+        if _prog is not None:
+            _prog.setCancelButton(None)
+            _prog.setLabelText("מתקין את העדכון ומפעיל מחדש…")
+            _prog.setValue(100)
+            QApplication.processEvents()
         # v3.40: this download is OURS — the manager machine must not count it
         # as "someone downloaded the software". Written before the relaunch.
         updater.record_self_download(getattr(self, "_dl_tag", ""))
