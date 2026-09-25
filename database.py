@@ -139,12 +139,13 @@ def _db_recipient_count(path: str) -> int:
 
 def self_heal_db():
     """Recover from a 'database disk image is malformed' before the app touches
-    the DB. Two stages, safest first:
-      1. A stale/mismatched WAL+SHM sidecar can make an otherwise-fine DB read as
-         malformed. Delete the sidecars and re-check — no data lost (a 0-byte or
-         orphaned WAL holds no committed rows).
-      2. If the DB itself is corrupt, restore the BEST backup (most recipients,
-         newest as tiebreak) and set the corrupt file aside as data.corrupt.db.
+    the DB. Stages, safest first:
+      1. REINDEX in place — index-only damage is fixed with nothing lost.
+      1b. A stale/mismatched WAL+SHM sidecar can make an otherwise-fine DB read as
+         malformed. Move the sidecars aside (*.stale, never deleted) and re-check.
+      2. If the DB itself is corrupt, set it aside as data.db.corrupt.db and
+         restore the newest usable backup. If it can't be set aside, stop —
+         never overwrite the only copy.
     Never raises — a failure here just falls through to normal init."""
     try:
         if not os.path.exists(DB_PATH):
@@ -152,12 +153,30 @@ def self_heal_db():
         if _db_integrity_ok(DB_PATH):
             return
 
-        # Stage 1: drop stale sidecars, retry.
+        # Stage 1: damage limited to indexes is repaired in place by REINDEX —
+        # FIRST, with the WAL still attached (it may hold committed rows)
+        # (the tables are intact — nothing lost). Restoring a backup here used to
+        # silently roll away everything since the last backup.
+        try:
+            c = sqlite3.connect(DB_PATH)
+            try:
+                c.execute("REINDEX")
+                c.commit()
+            finally:
+                c.close()
+        except Exception:
+            pass
+        if _db_integrity_ok(DB_PATH):
+            return
+
+        # Stage 1b: move stale sidecars ASIDE (never delete — a WAL can still hold
+        # committed rows, e.g. when the check failed only because the file was
+        # briefly locked), retry.
         for ext in ("-wal", "-shm"):
             side = DB_PATH + ext
             try:
                 if os.path.exists(side):
-                    os.remove(side)
+                    os.replace(side, side + ".stale")
             except Exception:
                 pass
         if _db_integrity_ok(DB_PATH):
@@ -213,9 +232,10 @@ def self_heal_db():
                 os.remove(corrupt)
             os.replace(DB_PATH, corrupt)
         except Exception:
-            # Could not even set it aside — nothing more we can safely do here;
-            # fall through and let init_db attempt its normal path.
-            pass
+            # Could not even set it aside (file in use) — then we must NOT copy a
+            # backup over it either: that would destroy the only copy of the
+            # newer data. Leave it for init_db / a manual restore.
+            return
 
         if best is None:
             return   # no usable backup — init_db will create a fresh empty schema
@@ -1230,7 +1250,12 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
             # — especially one recorded a day or two LATE (Thu-Sat), which is
             # normal — from dragging every bi-weekly/monthly recipient back onto
             # THIS week's list (they'd look like their frequency was ignored).
-            served_recently = (ld2 is not None and cycle_wednesday(ld2) == base_wed)
+            # A date AFTER the upcoming Wednesday can't be a real (late-recorded)
+            # distribution of this cycle yet — it's a future-dated typo. Without
+            # the upper bound, on Thu–Sat a typo 1–6 days past next Wednesday
+            # landed in base_wed's cycle and put the person on this week's list.
+            served_recently = (ld2 is not None and ld2 <= max(today, base_wed)
+                               and cycle_wednesday(ld2) == base_wed)
             if nd <= cutoff or served_recently:
                 result.append(r)
         if updates:
@@ -2355,6 +2380,15 @@ def get_incoming_log(limit: int = 200, include_undone: bool = True):
         return [dict(r) for r in conn.execute(q, (limit,))]
 
 
+def _restored(before: dict) -> dict:
+    """A card re-created by a manager undo is a NEW write: stamped now. With its
+    old updated_at the other computer's resurrection guard (delete newer than the
+    card) dropped it, so the undo never reached the computer that deleted."""
+    data = {k: v for k, v in before.items() if k not in ("id", "updated_at")}
+    data["updated_at"] = _utc_now()
+    return data
+
+
 def undo_incoming(incoming_id: int):
     """Revert a change another computer made (#5rhe9). The revert is a normal
     local write, so it syncs back and (being newer) overrides the change on every
@@ -2390,10 +2424,10 @@ def undo_incoming(incoming_id: int):
                 if local:
                     update_recipient(local["id"], fields, source="undo")
                 else:
-                    add_recipient(before)          # vanished locally → recreate
+                    add_recipient(_restored(before))   # vanished locally → recreate
         elif op == "rec_delete":
             if before is not None and not get_recipient_by_guid(guid):
-                add_recipient(before)              # restore the deleted recipient
+                add_recipient(_restored(before))   # restore the deleted recipient
         else:
             return False, "סוג שינוי זה אינו נתמך לביטול"
     except Exception as e:                          # noqa: BLE001 — surface to UI
@@ -2635,10 +2669,12 @@ def diff_incoming_recipients(rows: list[dict]) -> dict:
             by_ext.setdefault(ext, []).append(r)
 
     new_rows, updates, dupes = [], [], 0
+    new_by_key = {}   # the same NEW person twice in one file → one card
     for row in rows:
         name = (row.get("full_name") or "").strip()
         if not name:
             continue
+        blank = row.get("_blank_fields") or ()   # numeric cells empty in the file
         match = None
         ext = (row.get("external_id") or "").strip()
         if ext and len(by_ext.get(ext, [])) == 1:
@@ -2649,11 +2685,22 @@ def diff_incoming_recipients(rows: list[dict]) -> dict:
             dupes += 1
             continue
         if match is None:
-            new_rows.append(row)
+            key = ("ext", ext) if ext else ("name", name)
+            first = new_by_key.get(key)
+            if first is None:
+                first = {k: v for k, v in row.items() if k != "_blank_fields"}
+                new_by_key[key] = first
+                new_rows.append(first)
+            else:
+                # later rows fill what the earlier one left empty
+                for k, v in row.items():
+                    if k != "_blank_fields" and k not in blank \
+                            and _norm_val(k, v) and not _norm_val(k, first.get(k)):
+                        first[k] = v
             continue
         changes = {}
         for field in _IMPORT_DIFF_FIELDS:
-            if field not in row:
+            if field not in row or field in blank:
                 continue
             new_norm = _norm_val(field, row.get(field))
             old_norm = _norm_val(field, match.get(field))
@@ -2681,6 +2728,6 @@ def apply_import_confirmed(new_rows: list[dict], updates: list[dict]) -> tuple[i
         fields = {f: _coerce(f, ch["new"]) if f in _INT_FIELDS else ch["new"]
                   for f, ch in u.get("changes", {}).items()}
         if fields:
-            update_recipient(u["id"], fields)
+            update_recipient(u["id"], fields, source="import")
             updated += 1
     return added, updated

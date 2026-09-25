@@ -195,5 +195,43 @@ check("R2: replace-import pre-wipe backup uses kind='safety'",
 check("R2: replace-import no longer uses a plain routine auto_backup() before reset",
       "auto_backup() is not True" not in _rsrc)
 
+# ── 10. self_heal must not roll the live data back when it can be repaired ─────
+# Damage limited to an INDEX (REINDEX fixes it, nothing lost) used to trigger a
+# full restore of yesterday's backup — silently dropping everything newer.
+h_dir = os.path.join(WORK, "heal10")
+db.DB_PATH = os.path.join(h_dir, "data.db")
+db.BACKUP_DIR = os.path.join(h_dir, "backups")
+os.makedirs(db.BACKUP_DIR, exist_ok=True)
+db.init_db()
+db.add_recipient({"full_name": "ישן", "status": "פעיל"})
+db._copy_db(db.DB_PATH, os.path.join(db.BACKUP_DIR, "backup_old.db"))
+for i in range(5):
+    db.add_recipient({"full_name": f"חדש {i}", "status": "פעיל"})
+_c = sqlite3.connect(db.DB_PATH); _c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+_c.execute("PRAGMA writable_schema=ON")
+_c.execute("UPDATE sqlite_master SET sql='CREATE INDEX idx_recipients_status ON recipients(full_name)' "
+           "WHERE name='idx_recipients_status'")
+_c.commit(); _c.close()
+check("H10: index-only damage makes integrity_check fail", db._db_integrity_ok(db.DB_PATH) is False)
+db.self_heal_db()
+check("H10: index damage repaired in place — all 6 recipients kept (no rollback)",
+      db._db_recipient_count(db.DB_PATH) == 6 and db._db_integrity_ok(db.DB_PATH))
+
+# If the damaged file can't be set aside (in use), it must NOT be overwritten by a
+# backup — that destroyed the only copy of the newer data.
+db.add_recipient({"full_name": "שביעי", "status": "פעיל"})
+_c = sqlite3.connect(db.DB_PATH); _c.execute("PRAGMA wal_checkpoint(TRUNCATE)"); _c.close()
+_real_ok, _real_replace = db._db_integrity_ok, os.replace
+db._db_integrity_ok = lambda p: False if p == db.DB_PATH else _real_ok(p)
+def _busy(a, b):
+    raise PermissionError("file in use")
+os.replace = _busy
+try:
+    db.self_heal_db()
+finally:
+    os.replace, db._db_integrity_ok = _real_replace, _real_ok
+check("H11: set-aside failed → live DB left untouched (not overwritten by a backup)",
+      db._db_recipient_count(db.DB_PATH) == 7)
+
 print("\nRESULT:", "ALL PASS ✓" if ok else "FAILURES ✗")
 sys.exit(0 if ok else 1)

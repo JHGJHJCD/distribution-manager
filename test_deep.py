@@ -743,6 +743,45 @@ except OSError: pass
 
 
 # ══════════════════════════════════════════════════
+# IM: ייבוא-מיזוג מאקסל (diff_incoming_recipients / apply_import_confirmed)
+# ══════════════════════════════════════════════════
+import utils.excel_utils as _xu, openpyxl as _opx, pathlib as _pl
+_im_dir = tempfile.mkdtemp()
+_orig_dl, _orig_ed = _xu._downloads_dir, _xu.export_dir
+_xu._downloads_dir = lambda: _pl.Path(_im_dir)
+_xu.export_dir = lambda kind="": _pl.Path(_im_dir)
+try:
+    _im_id = db.add_recipient({"full_name": "ייבוא כהן", "phone1": "0521234567", "souls": 7,
+                               "frequency": "שבועי", "status": "פעיל", "children_home": 5,
+                               "children_total": 8, "children_married": 3})
+    _im_path = _xu.export_recipients_to_excel([db.get_recipient(_im_id)])
+    _wb = _opx.load_workbook(_im_path); _ws = _wb.active
+    _hr = next(r for r in range(1, 10) if any(_ws.cell(r, c).value == "שם מלא" for c in range(1, 60)))
+    for _c in range(1, _ws.max_column + 1):
+        if _ws.cell(_hr, _c).value in ("מספר ילדים", "ילדים נשואים", "ילדים בבית", "נפשות"):
+            _ws.cell(_hr + 1, _c).value = None
+    _wb.save(_im_path)
+    _d = db.diff_incoming_recipients(_xu.import_from_excel(_im_path))
+    check("IM1 blank number cells in the file do not propose zeroing souls/children",
+          _d["updates"] == [], str(_d["updates"]))
+finally:
+    _xu._downloads_dir, _xu.export_dir = _orig_dl, _orig_ed
+    shutil.rmtree(_im_dir, ignore_errors=True)
+
+_d = db.diff_incoming_recipients([{"full_name": "ייבוא כהן", "address": "הרצל 5"},
+                                  {"full_name": "ייבוא לוי", "phone1": "0501111111"},
+                                  {"full_name": "ייבוא לוי", "phone1": "0501111111", "address": "גפן 2"}])
+db.apply_import_confirmed(_d["new"], [{"id": u["id"], "changes": u["changes"]} for u in _d["updates"]])
+_im_ch = db.get_changes_for_recipient(_im_id, db.get_recipient(_im_id)["guid"])
+check("IM2 merge-import history is tagged 'ייבוא מאקסל' (source=import), not 'עריכה'",
+      [c["source"] for c in _im_ch if c["field"] == "address"] == ["import"],
+      str([(c["field"], c["source"]) for c in _im_ch]))
+_im_levi = [r for r in db.get_all_recipients() if r["full_name"] == "ייבוא לוי"]
+check("IM3 the same new person twice in one file → ONE card (details merged)",
+      len(_im_levi) == 1 and _im_levi[0]["address"] == "גפן 2", str([(r["id"], r["address"]) for r in _im_levi]))
+
+
+# ══════════════════════════════════════════════════
 # סיכום
 # ══════════════════════════════════════════════════
 print()

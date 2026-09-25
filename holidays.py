@@ -16,6 +16,8 @@ subset is empty (= all holidays) or contains X. The general filter "נתמך ח�
 matches everyone with the mark on, whatever the subset.
 """
 
+import re
+
 HOLIDAYS = ["ראש השנה", "סוכות", "חנוכה", "פורים", "פסח", "שבועות"]
 
 SEP = ","
@@ -25,8 +27,11 @@ def parse_list(text) -> list:
     """'פסח, סוכות' → ['סוכות', 'פסח'] in HOLIDAYS order; unknown names dropped."""
     if not text:
         return []
-    raw = [p.strip() for p in str(text).replace("،", ",").replace(";", ",").split(SEP)]
-    names = {p for p in raw if p}
+    raw = []
+    for part in str(text).replace("،", ",").replace(";", ",").split(SEP):
+        # also "פסח / סוכות" and "פסח וסוכות" (hand-typed Excel)
+        raw.extend(re.split(r"\s*/\s*|\s+ו(?=\S)", part))
+    names = {p.strip() for p in raw if p and p.strip()}
     return [h for h in HOLIDAYS if h in names]
 
 
@@ -78,6 +83,12 @@ def from_text(text) -> tuple:
     if subset:
         return 1, to_field(subset)
     low = s.lower()
-    if any(k in low for k in ("כן", "כל החגים", "נתמך", "v", "x", "✓", "1", "true")):
+    # Whole words, negation first: "לא נתמך" contains "נתמך" and used to turn
+    # the mark ON (and the mark is a hard gate for holiday distributions).
+    words = set(re.findall(r"[\w✓]+", low))
+    if words & {"לא", "no", "false", "0"}:
+        return 0, ""
+    if "כל החגים" in low or any(w.startswith(("נתמך", "נתמכ")) for w in words) \
+            or words & {"כן", "v", "x", "✓", "1", "true", "yes"}:
         return 1, ""
     return 0, ""

@@ -137,6 +137,14 @@ def _linkify(escaped: str) -> str:
     def rep(m):
         url = m.group(1)
         tail = ""
+        # Runs on ESCAPED text: "<url>" / "\"url\"" arrive as "&lt;url&gt;" /
+        # "&quot;url&quot;" and the entity was swallowed into the link (href
+        # ".../page&gt" → a 404, plus a stray ";"). Cut at the first such entity;
+        # "&amp;" (a real & in a query string) stays part of the URL.
+        cut = re.search(r"&(?:lt|gt|quot|#x27|#39);", url)
+        if cut:
+            tail = url[cut.start():]
+            url = url[:cut.start()]
         while url and url[-1] in ".,;:!?)":
             tail = url[-1] + tail
             url = url[:-1]

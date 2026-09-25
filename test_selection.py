@@ -154,6 +154,28 @@ db.add_recipient({"full_name": "עתידי", "status": "פעיל", "frequency": 
 _wk = [r["full_name"] for r in db.get_weekly_list()]
 ok("weekly list excludes a future-dated last_distribution", "עתידי" not in _wk, str(_wk))
 
+# …on EVERY weekday (the check above only fails on Thu–Sat: a typo 1–6 days past
+# next Wednesday landed in that Wednesday's cycle and counted as "served now").
+import datetime as _dt_mod
+_RealDate = db.date
+for _wd_off in range(7):
+    _fake_today = _today + timedelta(days=_wd_off)
+    class _FakeDate(_RealDate):
+        @classmethod
+        def today(cls, _d=_fake_today):
+            return _RealDate(_d.year, _d.month, _d.day)
+    db.date = _FakeDate
+    try:
+        db.reset_all_data()
+        for _k in range(1, 13):
+            db.add_recipient({"full_name": f"עתידי-{_k}", "status": "פעיל", "frequency": "שבועי",
+                              "last_distribution": (_fake_today + timedelta(days=_k + 7)).isoformat()})
+        _wk2 = [r["full_name"] for r in db.get_weekly_list()]
+    finally:
+        db.date = _RealDate
+    ok(f"weekly list excludes future-dated typos (weekday {_fake_today.weekday()})",
+       _wk2 == [], str(_wk2))
+
 # ── ותק: never-received counts from REGISTRATION date, not the year-2000 epoch ─
 _vet = {"last_distribution": "", "start_date": (_today - timedelta(days=500)).isoformat()}
 _new = {"last_distribution": "", "start_date": (_today - timedelta(days=5)).isoformat()}
@@ -261,6 +283,15 @@ _pg = selection.balance_by_community(_gap, {"children_total": {"min": 6, "max": 
                                      W_INCOME, 1)
 ok("C4c top-up picks the near-miss (closest to the filter), not the neediest",
    len(_pg) == 1 and _pg[0]["full_name"] == "כמעט", str([r["full_name"] for r in _pg]))
+
+# C4e RULE 4 in the top-up: a family with MISSING data on a constrained field
+# never edges out a measurable one — even one far over the threshold (a known
+# gap of 1.5 used to lose to the flat 1.0 given for "no data").
+_mis = [crec("ידוע-רחוק", "נציג ה", 3000), crec("חסר", "נציג ה", ""),
+        crec("עומד", "נציג ה", 500)]
+_pm = selection.balance_by_community(_mis, {"income": {"min": None, "max": 1200}}, W_INCOME, 2)
+ok("C4e top-up takes the measurable near-miss before the missing-data card",
+   [r["full_name"] for r in _pm] == ["עומד", "ידוע-רחוק"], str([r["full_name"] for r in _pm]))
 
 # C4d a regular swept into the top-up is flagged (_balance_regular) so the screen
 # can highlight it — monthly counts as regular too.
@@ -371,6 +402,18 @@ ok("H9 criteria 'חנוכה' → only marks covering it; matches_criteria ANDs i
    and selection.matches_criteria(_h_some, {"holiday": "פסח"}))
 ok("H10 holiday_label", selection.holiday_label({"holiday": "*"}) == "נתמכי חגים"
    and selection.holiday_label({"holiday": "פסח"}) == "נתמכי פסח" and selection.holiday_label({}) == "")
+
+# Excel import of the mark: a NEGATIVE text must not turn the mark on, and a list
+# written with "/" or "ו" must keep its holidays.
+import holidays as _hol
+ok("H11 from_text: 'לא נתמך' → not supported", _hol.from_text("לא נתמך") == (0, ""), str(_hol.from_text("לא נתמך")))
+ok("H11 from_text: 'לא' / 'no' → not supported", _hol.from_text("לא") == (0, "") and _hol.from_text("no") == (0, ""))
+ok("H11 from_text: positives still work", _hol.from_text("כן") == (1, "") and _hol.from_text("נתמך חגים") == (1, "")
+   and _hol.from_text("V") == (1, "") and _hol.from_text("כל החגים") == (1, ""))
+ok("H12 from_text: 'פסח וסוכות' / 'פסח / סוכות' keep both",
+   _hol.from_text("פסח וסוכות") == (1, "סוכות,פסח") and _hol.from_text("פסח / סוכות") == (1, "סוכות,פסח"),
+   f"{_hol.from_text('פסח וסוכות')} {_hol.from_text('פסח / סוכות')}")
+ok("H12 'ראש השנה ושבועות' keeps a two-word name", _hol.parse_list("ראש השנה ושבועות") == ["ראש השנה", "שבועות"])
 
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")

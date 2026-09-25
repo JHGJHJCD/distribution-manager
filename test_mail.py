@@ -941,6 +941,15 @@ _t = next(t for t in db.get_mail_templates() if t["name"] == "מעוצבת")
 ok("תבנית שומרת את העיצוב (u)", mailer.is_rich(_t["body"]) and "<u>" in _t["body"], _t["body"])
 tab.deleteLater()
 
+print("\n§13 קישורים ליד < > ומרכאות")
+_h = mailer.html_body("ראו <https://example.com/page> וגם \"https://example.com/x\".")
+ok("linkify: URL inside <…> → href without &gt", "href='https://example.com/page'" in _h
+   and "page&gt'" not in _h, _h)
+ok("linkify: URL inside quotes → href without &quot", "href='https://example.com/x'" in _h
+   and "&quot'" not in _h, _h)
+ok("linkify: query-string &amp; stays inside the link",
+   "href='https://e.com/?a=1&amp;b=2'" in mailer.html_body("https://e.com/?a=1&b=2"))
+
 print()
 if fails:
     print(f"FAILED ({len(fails)}):"); [print("  -", f) for f in fails]

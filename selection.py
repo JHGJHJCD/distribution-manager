@@ -324,6 +324,17 @@ def criteria_gap(rec: dict, criteria: dict) -> float:
     return total
 
 
+def criteria_missing(rec: dict, criteria: dict) -> int:
+    """How many CONSTRAINED filter fields have no usable value on this card."""
+    n = 0
+    for field, _label in FILTER_FIELDS:
+        b = (criteria or {}).get(field) or {}
+        if (b.get("min") is not None or b.get("max") is not None) \
+                and to_number(rec.get(field)) is None:
+            n += 1
+    return n
+
+
 # ── Community balance (mode 'filter', #lejmr) ─────────────────────────────────
 # The operator's request (2026-08): when distributing by the broad filter, the
 # products must be split FAIRLY BETWEEN COMMUNITIES ("קהילה" = everyone sharing
@@ -484,7 +495,11 @@ def balance_by_community(rows: list, criteria: dict, weights: dict,
             # screen can highlight it.
             others = [r for r in members if all(r is not t for t in take)]
             scoring.annotate_need_scores(others, weights)
-            others.sort(key=lambda r: (criteria_gap(r, criteria),
+            # Missing data first-class LAST (RULE 4): the flat 1.0 criteria_gap
+            # gives "no data" can be smaller than a known far-off gap (income
+            # 3000 vs max 1200 = 1.5), so count the missing fields before it.
+            others.sort(key=lambda r: (criteria_missing(r, criteria),
+                                       criteria_gap(r, criteria),
                                        -(r.get("need_score") or 0),
                                        -(r.get("days_since") or 0),
                                        r.get("full_name") or ""))
