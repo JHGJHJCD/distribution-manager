@@ -277,6 +277,32 @@ db.bulk_add_distributions([{"id": rid_ex2, "full_name": "נוספת-ראשונה
 check("D3 קבוע שקיבל רק חלוקה נוספת — עדיין ברשימת הרביעי הקרוב",
       any(r["id"] == rid_ex2 for r in db.get_weekly_list()))
 
+# D4 — תאריך ישן בפורמט "16/09/2026" מומר לבד בהפעלה (הכרעת יהודה 25/9/2026), אחרי גיבוי
+_bk_prev = db.BACKUP_DIR
+db.BACKUP_DIR = tempfile.mkdtemp()                 # לא לגעת בגיבויים האמיתיים
+rid_lg = db.add_recipient({"full_name": "תאריך-ישן", "status": "פעיל", "frequency": "חודשי"})
+db.bulk_add_distributions([{"id": rid_lg, "full_name": "תאריך-ישן", "frequency": "חודשי"}],
+                          "2026-06-03", "עוף", 1, "")
+_c = sqlite3.connect(db.DB_PATH)
+_c.execute("UPDATE distributions SET dist_date='17/06/2026' WHERE recipient_id=?", (rid_lg,))
+_c.execute("INSERT INTO distributions (recipient_id, recipient_name, dist_date, received) "
+           "VALUES (?, 'תאריך-ישן', 'שטויות', 1)", (rid_lg,))
+_c.commit(); _c.close()
+db.init_db()
+_c = sqlite3.connect(db.DB_PATH)
+_dates = sorted(r[0] for r in _c.execute(
+    "SELECT dist_date FROM distributions WHERE recipient_id=?", (rid_lg,)))
+_c.close()
+check("D4 '17/06/2026' הומר ל-2026-06-17 (וערך לא-תאריך לא נגע)",
+      _dates == ["2026-06-17", "שטויות"], str(_dates))
+_r = db.get_recipient(rid_lg)
+check("D4 התור מחושב מהתאריך שהומר (חודשי → 15/07)",
+      _r["last_distribution"] == "2026-06-17" and _r["next_distribution"] == "2026-07-15",
+      f"{_r['last_distribution']} / {_r['next_distribution']}")
+check("D4 נעשה גיבוי-ביטחון לפני ההמרה",
+      any(n.startswith("safety_") for n in os.listdir(db.BACKUP_DIR)), str(os.listdir(db.BACKUP_DIR)))
+db.BACKUP_DIR = _bk_prev
+
 # חודשי שהתור שלו נשמר לפי הכלל הישן (5 שבועות) — מתקן את עצמו ונכנס לרשימה אחרי 4
 _today = date.today()
 _bw = _today if _today.weekday() == 2 else next_wednesday(_today)

@@ -49,6 +49,8 @@ def _need_num(val, kind):
         return None
     if kind == "money":
         s = s.replace(",", "")
+        # A minus (debt) is real data: "-500", or "500-" as typed in RTL text.
+        neg = s.startswith("-") or s.endswith("-")
         kept = "".join(ch for ch in s if ch.isdigit() or ch == ".")
         if kept.count(".") > 1:                       # keep only the first dot
             head, _, tail = kept.partition(".")
@@ -56,7 +58,7 @@ def _need_num(val, kind):
         if not any(ch.isdigit() for ch in kept):
             return None
         try:
-            return float(kept)
+            return -float(kept) if neg else float(kept)
         except ValueError:
             return None
     try:
@@ -90,8 +92,9 @@ def annotate_need_scores(rows, weights: dict):
     #    highest value in the list, so someone with NO expense scores 0 on that
     #    factor (not a neutral half) and the neediest scores the full weight. This
     #    is what makes a single-factor ranking run cleanly 0→100.
-    #  • "low" factors (less = needier, e.g. הכנסה פנויה): only positive values
-    #    define the range; the neediest (lowest value) scores the full weight.
+    #  • "low" factors (less = needier, e.g. הכנסה פנויה): non-zero values
+    #    (including negatives = debt) define the range; the neediest (lowest
+    #    value) scores the full weight. 0 = unknown (see below).
     # RULE 4 (חוסר נתונים → תחתית התור): a MISSING value on ANY factor contributes
     #   0 points — treated as "least needy" — never a neutral 0.5. So incomplete
     #   data can only ever hurt a ranking, sinking families with missing details
@@ -101,7 +104,10 @@ def annotate_need_scores(rows, weights: dict):
         vals = []
         for r in rows:
             v = _need_num(r.get(f["field"]), f["kind"])
-            if v is None or (f["dir"] == "low" and v <= 0):
+            # "low" factors: 0 is ambiguous (some families really have 0, some
+            # never filled it — user decision 25/9/2026) → treated as missing.
+            # A NEGATIVE value (debt) is real data and the neediest of all.
+            if v is None or (f["dir"] == "low" and v == 0):
                 continue
             vals.append(v)
         if f["dir"] == "high":
@@ -120,7 +126,7 @@ def annotate_need_scores(rows, weights: dict):
                 comp = _norm(v, lo, hi) if (v is not None and v > 0) else 0.0
                 missing = v is None
             else:
-                missing = v is None or v <= 0
+                missing = v is None or v == 0
                 # RULE 4: missing → 0 ("least needy"), not a neutral 0.5.
                 comp = 0.0 if missing else 1.0 - _norm(v, lo, hi)
             w = weights.get(f["key"], 0)

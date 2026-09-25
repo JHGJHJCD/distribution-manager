@@ -201,7 +201,7 @@ def to_number(val):
     # everything else (spaces, ₪, letters). A stray extra '.' makes float() fail
     # → None, which is the safe "no usable number" answer.
     s = s.replace(",", "")
-    neg = s.lstrip().startswith("-")
+    neg = s.lstrip().startswith("-") or s.rstrip().endswith("-")   # "500-" typed RTL
     text = "".join(ch for ch in s if ch.isdigit() or ch == ".")
     if text in ("", "."):
         return None

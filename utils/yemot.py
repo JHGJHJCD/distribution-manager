@@ -273,6 +273,20 @@ def normalize_phone(raw) -> str:
     return ""
 
 
+def looks_like_id(phone: str) -> bool:
+    """A 9-digit landline ('0X…') whose digits also pass the Israeli ID-number
+    check digit — probably a ת"ז pasted into a free list, not a phone. Only a
+    hint for asking the operator (user decision 25/9/2026): ~1 in 10 real
+    landlines pass the check too, so it must never silently drop a number."""
+    if len(phone or "") != 9 or not phone.isdigit() or phone[0] != "0":
+        return False
+    total = 0
+    for i, ch in enumerate(phone):
+        d = int(ch) * (1 if i % 2 == 0 else 2)
+        total += d - 9 if d > 9 else d
+    return total % 10 == 0
+
+
 def normalize_phone_loose(raw) -> str:
     """normalize_phone for text that came out of Excel/pasting: a cell stored
     as a NUMBER loses its leading zero (501234567) or gains '.0'

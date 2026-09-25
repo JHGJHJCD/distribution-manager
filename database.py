@@ -1,3 +1,4 @@
+import re
 import sqlite3
 import sys
 import os
@@ -603,6 +604,47 @@ def init_db():
             # Legacy plaintext password — hash it in place.
             conn.execute("UPDATE settings SET value=? WHERE key='password'",
                          (_hash_password(str(row["value"])),))
+
+    _migrate_legacy_dist_dates()
+
+
+_LEGACY_DATE_RE = re.compile(r"^\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})\s*$")
+
+
+def _legacy_date_to_iso(s) -> str:
+    """'16/09/2026' / '1.9.2026' (day-first, Israeli) → '2026-09-16'; '' if not one."""
+    m = _LEGACY_DATE_RE.match(s or "")
+    if not m:
+        return ""
+    try:
+        return date(int(m.group(3)), int(m.group(2)), int(m.group(1))).isoformat()
+    except ValueError:
+        return ""
+
+
+def _migrate_legacy_dist_dates():
+    """History dates saved by very old versions as DD/MM/YYYY are ignored by the
+    turn logic (only ISO counts), so a monthly recipient could come back too soon.
+    Convert them in place (user decision 25/9/2026) — after a safety backup. Each
+    computer runs the same deterministic conversion, so nothing needs syncing."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, recipient_id, dist_date FROM distributions WHERE dist_date NOT GLOB "
+            "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'").fetchall()
+        todo = [(iso, r["id"], r["recipient_id"]) for r in rows
+                if (iso := _legacy_date_to_iso(r["dist_date"]))]
+    if not todo:
+        return
+    try:
+        from utils.backup import auto_backup
+        auto_backup("safety")
+    except Exception:
+        pass
+    with get_connection() as conn:
+        conn.executemany("UPDATE distributions SET dist_date=? WHERE id=?",
+                         [(iso, did) for iso, did, _ in todo])
+        for rid in {rid for _, _, rid in todo if rid}:
+            _recompute_recipient_dates(conn, rid)
 
 
 # ─── Password hashing ─────────────────────────────────────────────────────────

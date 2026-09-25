@@ -47,6 +47,27 @@ rows2.sort(key=lambda x: (-(x.get("need_score") or 0), x.get("full_name") or "")
 check("bug7: tie breaks by name, not by more children",
       rows2[0]["full_name"] == "אאא")
 
+# ── הכרעת יהודה 25/9/2026: 0 = לא ידוע (חלק באמת 0, חלק לא מילאו) → 0 נק';
+#    מינוס = נתון אמיתי (חוב) → הכי נזקק. "-500" כטקסט לא נקרא כ-500 חיובי. ──
+w_money = {"money": 100, "souls": 0, "recency": 0,
+           "income": 0, "housing": 0, "medical": 0}
+rows3 = [
+    {"full_name": "חוב-טקסט", "per_soul": "-500"},
+    {"full_name": "חוב-מספר", "per_soul": -500},
+    {"full_name": "חוב-ש\"ח", "per_soul": "-1,000 ₪"},
+    {"full_name": "נמוך",     "per_soul": "200"},
+    {"full_name": "גבוה",     "per_soul": "2000"},
+    {"full_name": "אפס",      "per_soul": "0"},
+    {"full_name": "ריק",      "per_soul": ""},
+]
+scoring.annotate_need_scores(rows3, w_money)
+s3 = {r["full_name"]: r["need_score"] for r in rows3}
+check("neg: '-500' text is read as negative", scoring._need_num("-500", "money") == -500.0)
+check("neg: biggest debt scores 100", s3['חוב-ש"ח'] == 100)
+check("neg: debt text == debt number", s3["חוב-טקסט"] == s3["חוב-מספר"])
+check("neg: debt beats a low positive", s3["חוב-טקסט"] > s3["נמוך"] > s3["גבוה"])
+check("zero: 0 stays unknown → 0 points, like blank", s3["אפס"] == 0 and s3["ריק"] == 0)
+
 if _fail:
     print(f"\nFAILED: {_fail}")
     sys.exit(1)

@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QComboBox, QMessageBox, QProgressBar, QScrollArea, QDialog, QLineEdit,
     QListWidget, QListWidgetItem, QFileDialog, QInputDialog, QTextEdit,
-    QDateTimeEdit, QProgressDialog, QSizePolicy, QMenu
+    QDateTimeEdit, QProgressDialog, QSizePolicy, QMenu, QCheckBox
 )
 
 import database as db
@@ -396,6 +396,15 @@ class _FreeListDialog(QDialog):
         self.lbl_count.setObjectName("subtitle")
         self.lbl_count.setWordWrap(True)
         lay.addWidget(self.lbl_count)
+        # A 9-digit number that passes the ת"ז check digit is held back until the
+        # operator confirms it's really a phone (user decision 25/9/2026).
+        self.lbl_ids = QLabel("")
+        self.lbl_ids.setWordWrap(True)
+        self.lbl_ids.setStyleSheet("color:#b45309;")
+        lay.addWidget(self.lbl_ids)
+        self.chk_ids = QCheckBox("אלה מספרי טלפון אמיתיים — לצלצל גם אליהם")
+        self.chk_ids.toggled.connect(self._reparse)
+        lay.addWidget(self.chk_ids)
         btns = QHBoxLayout()
         self.btn_ok = QPushButton("הצג את הרשימה »")
         self.btn_ok.setObjectName("primary")
@@ -434,7 +443,16 @@ class _FreeListDialog(QDialog):
             if p not in seen:
                 seen.add(p)
                 unique.append((p, n))
+        ids = [p for p, _n in unique if yemot.looks_like_id(p)]
+        if ids and not self.chk_ids.isChecked():
+            unique = [(p, n) for p, n in unique if p not in ids]
         self.entries = unique
+        self.lbl_ids.setText(
+            f"⚠ {len(ids)} מספרים נראים כמו תעודת זהות ולא יצולצלו: "
+            + ", ".join(ids[:5]) + ("…" if len(ids) > 5 else "")
+            + ". אם אלה טלפונים — סמן למטה." if ids else "")
+        self.lbl_ids.setVisible(bool(ids))
+        self.chk_ids.setVisible(bool(ids))
         msg = f"זוהו {len(self.entries)} מספרים תקינים."
         if bad:
             msg += f"  ⚠ {len(bad)} קטעים נראים כמו מספר אבל אינם תקינים: " \

@@ -2806,6 +2806,24 @@ tab._run_blocking = _orig31["run_blocking"]
 tab._clear_batch()
 
 
+# §32 — ת"ז ברשימה עצמאית (הכרעת יהודה 25/9/2026): מספר שנראה כמו ת"ז לא
+#        מצולצל עד שהמפעיל מאשר; טלפון קווי רגיל עובר כרגיל.
+print("\n=== §32: ת\"ז ברשימה עצמאית ===")
+ok("looks_like_id: ת\"ז תקינה (9 ספרות, ספרת ביקורת)", yemot.looks_like_id("034567891"))
+ok("looks_like_id: טלפון קווי שלא עובר ביקורת", not yemot.looks_like_id("048671230"))
+ok("looks_like_id: נייד 10 ספרות אף פעם לא", not yemot.looks_like_id("0501234567"))
+_fl = _FreeListDialog()
+_fl.text.setPlainText("034567891 כהן\n048671230 לוי\n0501234567 גרין")
+_ph32 = [p for p, _n in _fl.entries]
+ok("§32 חשוד-ת\"ז לא ברשימה לפני אישור", "034567891" not in _ph32 and len(_ph32) == 2, _ph32)
+ok("§32 המפעיל רואה את החשוד", "034567891" in _fl.lbl_ids.text() and _fl.chk_ids.isVisible() is not None
+   and not _fl.chk_ids.isHidden(), _fl.lbl_ids.text())
+_fl.chk_ids.setChecked(True)
+ok("§32 אחרי אישור — נכנס", "034567891" in [p for p, _n in _fl.entries])
+_fl.text.setPlainText("0501234567")
+ok("§32 בלי חשודים — האישור מוסתר", _fl.chk_ids.isHidden())
+
+
 print()
 if fails:
     print(f"✗ {len(fails)} בדיקות נכשלו: {fails}")
