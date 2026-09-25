@@ -1839,14 +1839,18 @@ def _valid_iso(s) -> str:
         return ""
 
 
-def _history_last(conn, rec_id) -> str:
+def _history_last(conn, rec_id, regular_only: bool = False) -> str:
     # received=1 only: a recorded no-show must never become someone's
     # "last distribution" — they didn't actually receive anything.
     # Only real ISO dates compete: one junk legacy value ("26/08/2026") sorts above
     # every ISO string and would otherwise hide the whole history.
+    # regular_only: skip Sun–Tue (strftime %w 0–2) — at this fund a distribution on
+    # those days is an EXTRA round, not the Wednesday one (user decision 25/9/2026).
+    extra = " AND strftime('%w', dist_date) NOT IN ('0','1','2')" if regular_only else ""
     row = conn.execute("SELECT MAX(dist_date) AS m FROM distributions "
                        "WHERE recipient_id=? AND received=1 AND dist_date GLOB "
-                       "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'", (rec_id,)).fetchone()
+                       "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'" + extra,
+                       (rec_id,)).fetchone()
     return _valid_iso(row["m"] if row else "")
 
 
@@ -1884,7 +1888,10 @@ def _recompute_recipient_dates(conn, rec_id):
     last = max(hist, base)
     if freq and freq != "חד-פעמי":
         # never served → due at the upcoming Wednesday (same answer get_weekly_list gives)
-        nxt = calculate_next_dist(last, freq).isoformat()
+        # The turn counts from the last REGULAR distribution: a Sun–Tue one is an
+        # extra round (user decision 25/9/2026) and doesn't push the turn.
+        nxt = calculate_next_dist(max(_history_last(conn, rec_id, regular_only=True), base),
+                                  freq).isoformat()
     else:
         nxt = ""
     conn.execute("UPDATE recipients SET last_distribution=?, next_distribution=? WHERE id=?",

@@ -114,7 +114,8 @@ def _serve(rid, name, d):
     db.bulk_add_distributions(
         [{"id": rid, "full_name": name, "frequency": "דו-שבועי", "souls": 3, "area": ""}],
         d.isoformat(), "", 1, "בודק", dist_name="A2")
-for _off, _lbl in ((0, "רביעי"), (1, "חמישי"), (4, "ראשון")):
+# (ראשון–שלישי = חלוקה נוספת, לא איחור — הכרעת יהודה 25/9/2026; נבדק ב-D3)
+for _off, _lbl in ((0, "רביעי"), (1, "חמישי"), (3, "שבת")):
     _n = f"דושב-שבוע-שעבר-{_lbl}"
     _r = _mk_bw(_n)
     _serve(_r, _n, _last_wed + _td(days=_off))
@@ -258,6 +259,23 @@ check("חלוקה אחרונה נשארת החדשה (17/06)", _r["last_distribu
       f"got {_r['last_distribution']}")
 check("חלוקה הבאה לפי החדשה (01/07)", _r["next_distribution"] == "2026-07-01",
       f"got {_r['next_distribution']}")
+
+# D3 — חלוקה ביום א'–ג' = חלוקה נוספת (הכרעת יהודה 25/9/2026): לא מזיזה את התור הקבוע
+rid_ex = db.add_recipient({"full_name": "נוספת", "status": "פעיל", "frequency": "דו-שבועי"})
+_ex = [{"id": rid_ex, "full_name": "נוספת", "frequency": "דו-שבועי"}]
+db.bulk_add_distributions(_ex, "2026-06-17", "עוף", 1, "")      # רביעי — חלוקה רגילה
+db.bulk_add_distributions(_ex, "2026-06-21", "עוף", 1, "")      # ראשון — חלוקה נוספת
+_r = db.get_recipient(rid_ex)
+check("D3 חלוקה נוספת נשמרת כחלוקה אחרונה (21/06)", _r["last_distribution"] == "2026-06-21",
+      f"got {_r['last_distribution']}")
+check("D3 התור הקבוע לא זז — שבועיים מהרביעי (01/07)", _r["next_distribution"] == "2026-07-01",
+      f"got {_r['next_distribution']}")
+rid_ex2 = db.add_recipient({"full_name": "נוספת-ראשונה", "status": "פעיל", "frequency": "שבועי"})
+db.bulk_add_distributions([{"id": rid_ex2, "full_name": "נוספת-ראשונה", "frequency": "שבועי"}],
+                          (date.today() - timedelta(days=(date.today().weekday() + 1) % 7)).isoformat(),
+                          "עוף", 1, "")
+check("D3 קבוע שקיבל רק חלוקה נוספת — עדיין ברשימת הרביעי הקרוב",
+      any(r["id"] == rid_ex2 for r in db.get_weekly_list()))
 
 # חודשי שהתור שלו נשמר לפי הכלל הישן (5 שבועות) — מתקן את עצמו ונכנס לרשימה אחרי 4
 _today = date.today()
