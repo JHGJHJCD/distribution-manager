@@ -107,11 +107,12 @@ def _(c):
     return okk, ""
 
 
-@lint("M7", "_close_stale_campaigns: רק המחשב הזה, לא השליחה הפעילה (_active_guid)")
+@lint("M7", "_close_stale_campaigns: המחשב הזה מיד; המחשב השני רק אחרי STALE_PEER_HOURS; לא השליחה הפעילה (_active_guid)")
 def _(c):
     body = _func_body(c["m"], "_close_stale_campaigns")
-    return ('c.get("status") == "sending"' in body and "== me" in body
-            and 'c.get("guid") != self._active_guid' in body
+    return ('c.get("status") != "sending"' in body and "!= me" in body
+            and "STALE_PEER_HOURS" in body and "_silent_for_hours(" in body
+            and 'c.get("guid") == self._active_guid' in body
             and '"interrupted"' in body), ""
 
 

@@ -538,8 +538,15 @@ class FeedbackDialog:
                 QMessageBox.warning(dlg, "שגיאה", f"שמירת ההודעה נכשלה:\n{e}")
                 return
             if _mail_ready:
-                with busy_cursor():
-                    ok, err = _feedback.email_to_dev(text, name_edit.text())
+                # In the background (like every other send since v3.42): a dead
+                # network / NetFree used to freeze the whole app until the
+                # timeout, with the dialog reading "לא מגיב".
+                send.setEnabled(False)
+                send.setText("שולח…")
+                ok, err = run_in_background(
+                    lambda: _feedback.email_to_dev(text, name_edit.text()), dlg)
+                send.setEnabled(True)
+                send.setText("שליחה")
                 if ok:
                     QMessageBox.information(dlg, "תודה!", "ההודעה נשלחה למפתח במייל ✓\nתודה רבה!")
                     dlg.accept()
@@ -548,15 +555,59 @@ class FeedbackDialog:
                                     f"{err}\n\nתיפתח עכשיו תוכנת המייל שלך עם ההודעה מוכנה.")
             from PyQt6.QtGui import QDesktopServices
             from PyQt6.QtCore import QUrl
-            QDesktopServices.openUrl(QUrl(_feedback.mailto_link(text, name_edit.text())))
-            QMessageBox.information(dlg, "תודה!",
-                                    "נפתחה תוכנת המייל עם ההודעה — נשאר רק ללחוץ 'שלח'.\n"
-                                    "ההודעה נשמרה גם ב'הודעות שנשלחו' בהגדרות.")
+            opened = QDesktopServices.openUrl(QUrl(_feedback.mailto_link(text, name_edit.text())))
+            if opened:
+                QMessageBox.information(dlg, "תודה!",
+                                        "נפתחה תוכנת המייל עם ההודעה — נשאר רק ללחוץ 'שלח'.\n"
+                                        "ההודעה נשמרה גם ב'הודעות שנשלחו' בהגדרות.")
+            else:
+                # No mail program set up on this Windows — don't claim one opened;
+                # hand the text over on the clipboard instead.
+                QApplication.clipboard().setText(
+                    f"אל: {_feedback.DEV_EMAIL}\nנושא: {_feedback.MAIL_SUBJECT}\n\n{text}")
+                QMessageBox.information(
+                    dlg, "ההודעה הועתקה",
+                    "לא נמצאה תוכנת מייל במחשב הזה.\n"
+                    f"ההודעה הועתקה — הדבק אותה במייל אל {_feedback.DEV_EMAIL}.\n"
+                    "ההודעה נשמרה גם ב'הודעות שנשלחו' בהגדרות.")
             dlg.accept()
 
         send.clicked.connect(_do_send)
         msg.setFocus()
         return dlg.exec()
+
+
+def run_in_background(fn, parent=None):
+    """Run one blocking callable off the UI thread and return its result (or
+    re-raise its exception) as if it ran inline, while the window keeps
+    repainting — the wait cursor is shown meanwhile. Shared by small dialogs
+    (feedback mail) that used to block under `busy_cursor`; the tzintukim tab
+    has a richer variant with a progress dialog (`_run_blocking`)."""
+    from PyQt6.QtCore import QThread, QEventLoop, pyqtSignal
+
+    class _W(QThread):
+        done = pyqtSignal(object)
+
+        def run(self):
+            try:
+                self.done.emit(fn())
+            except Exception as e:      # noqa: BLE001 — handed back to the caller
+                self.done.emit(e)
+
+    box = {}
+    loop = QEventLoop(parent)
+    w = _W(parent)
+    w.done.connect(lambda r: (box.__setitem__("r", r), loop.quit()))
+    w.finished.connect(loop.quit)
+    with busy_cursor():
+        w.start()
+        loop.exec()
+        w.wait(2000)
+    w.deleteLater()
+    res = box.get("r")
+    if isinstance(res, Exception):
+        raise res
+    return res
 
 
 @contextmanager

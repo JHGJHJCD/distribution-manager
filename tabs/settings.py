@@ -23,15 +23,11 @@ import json
 
 # ── v3.01 design language — shared with "חלוקה ורישום" / "צינתוקים" ──────────
 from PyQt6.QtWidgets import QSizePolicy
-from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _BTN_PRIMARY,
-                               _BTN_GHOST, _BTN_DANGER, _BTN_ACCENT)
+from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _CHIP_AMBER,
+                               _CHIP_RED, _LBL, _BTN_PRIMARY, _BTN_GHOST, _BTN_DANGER,
+                               _BTN_ACCENT)
 
-_LBL = "background:transparent; border:none;"
-_CHIP_AMBER = ("QLabel{background:#fdf0d5; color:#92600a; border:none; border-radius:16px;"
-               " padding:5px 13px; font-size:12.5px; font-weight:700;}")
-_CHIP_RED = ("QLabel{background:#fee2e2; color:#b91c1c; border:none; border-radius:16px;"
-             " padding:5px 13px; font-size:12.5px; font-weight:700;}")
-_DESC = "color:#64748b; font-size:12.5px; " + _LBL
+_DESC ="color:#64748b; font-size:12.5px; " + _LBL
 _FLABEL = "color:#475569; font-size:12.5px; font-weight:700; " + _LBL
 _NOTE_AMBER = ("QLabel{color:#92400e; font-size:12px; font-weight:600; background:#fffbeb;"
                " border:1px solid #fde68a; border-radius:8px; padding:7px 10px;}")
@@ -384,6 +380,9 @@ class SettingsTab(QWidget):
         op_row.addWidget(_hint("עדין = 30–50%"))
         op_row.addStretch()
         body.addLayout(op_row)
+        # The background is a per-computer choice (EXCLUDED_SETTINGS) — say so,
+        # otherwise a picture chosen here "doesn't arrive" at the other computer.
+        body.addWidget(_hint("הרקע נשמר במחשב הזה בלבד — במחשב השני בוחרים בנפרד."))
         body.addLayout(_btn_row(_btn("שמור", _BTN_PRIMARY, self._save_branding)))
         _place(row, card, body)
 
@@ -1405,13 +1404,6 @@ class SettingsTab(QWidget):
         dlg.exec()
         if self.main_win and hasattr(self.main_win, "refresh_all"):
             self.main_win.refresh_all()
-        else:
-            QMessageBox.information(
-                self, "סנכרון הושלם",
-                f"נשלחו {res['pushed']} שינויים, נקלטו {res['applied']} שינויים "
-                "מהמחשב השני.")
-            if res["applied"] and self.main_win:
-                self.main_win.refresh_all()
 
     def _choose_backup_folder(self):
         if self.main_win and hasattr(self.main_win, "choose_backup_folder"):
@@ -2108,9 +2100,12 @@ class FeedbackInboxDialog(QDialog):
         self.table.setRowCount(len(self._rows))
         for r, fb in enumerate(self._rows):
             done = (fb.get("status") == "done")
-            when = QTableWidgetItem(timefmt.datetime_str(fb.get("created_at") or "")
-                                    or (fb.get("created_at") or ""))
-            when.setToolTip(timefmt.relative(fb.get("created_at") or ""))
+            # relative in the cell, full stamp in the tooltip — same as every
+            # other history table (tzintukim / mails); it used to be the reverse
+            _full = (timefmt.datetime_str(fb.get("created_at") or "")
+                     or (fb.get("created_at") or ""))
+            when = QTableWidgetItem(timefmt.relative(fb.get("created_at") or "") or _full)
+            when.setToolTip(_full)
             self.table.setItem(r, 0, when)
             self.table.setItem(r, 1, QTableWidgetItem(fb.get("author_name") or "—"))
             self.table.setItem(r, 2, QTableWidgetItem(fb.get("host") or ""))
@@ -2222,8 +2217,9 @@ class ManagerLogDialog(QDialog):
         self.table.setRowCount(len(rows))
         for r, rec in enumerate(rows):
             undone = bool(rec.get("undone"))
-            t = QTableWidgetItem(timefmt.datetime_str(rec.get("applied_at")))
-            t.setToolTip(timefmt.relative(rec.get("applied_at")))
+            _full = timefmt.datetime_str(rec.get("applied_at"))
+            t = QTableWidgetItem(timefmt.relative(rec.get("applied_at")) or _full)
+            t.setToolTip(_full)
             self.table.setItem(r, 0, t)
             self.table.setItem(r, 1, QTableWidgetItem(rec.get("target_name") or ""))
             summ = QTableWidgetItem(rec.get("summary") or "")

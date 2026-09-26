@@ -672,6 +672,9 @@ def _apply_rec_delete(conn, rec: dict):
                          (rid,)).fetchone()["c"]
         if n == 0:
             conn.execute("DELETE FROM recipients WHERE id=?", (rid,))
+            # the card's change history goes with it (mirrors db.delete_recipient)
+            conn.execute("DELETE FROM change_log WHERE recipient_id=? OR (rec_guid=? AND rec_guid<>'')",
+                         (rid, rec.get("guid") or ""))
             deleted = True
     if deleted and _RECORD_INCOMING:
         _record_incoming(conn, "rec_delete", rec.get("guid") or "",

@@ -1050,6 +1050,9 @@ _CHIP_GREEN  = ("QLabel{background:#d3ede1; color:#334155; border:none; border-r
                 " padding:5px 13px; font-size:12.5px; font-weight:700;}")
 _CHIP_AMBER  = ("QLabel{background:#fdf0d5; color:#92600a; border:none; border-radius:16px;"
                 " padding:5px 13px; font-size:12.5px; font-weight:700;}")
+# One red for every screen (settings used to paint its own, lighter shade).
+_CHIP_RED    = ("QLabel{background:#fde2e2; color:#991b1b; border:none; border-radius:16px;"
+                " padding:5px 13px; font-size:12.5px; font-weight:700;}")
 # Shorthand for "no frame/background" on the many transparent labels the redesign
 # lays over the soft grey surface.
 _LBL = "background:transparent; border:none;"
@@ -1239,10 +1242,7 @@ class _CollapsibleCard(QFrame):
         self.header.setChecked(bool(opened))
 
 
-def _fdate(s: str) -> str:
-    if s and len(s) >= 10 and s[4] == '-':
-        return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
-    return s or ""
+from utils.timefmt import fdate as _fdate   # one shared copy (סקירת בשלות 26/9/2026)
 
 
 # Merged tab: viewing the week's list AND checking who received + recording it.
@@ -2008,7 +2008,9 @@ class GroupUpdateTab(QWidget):
     # ── distribution-mode for regulars (schedule / none / scored) ──────────────
     def _current_mode(self) -> str:
         data = self.mode_combo.currentData()
-        return data if data in ("all", "schedule", "none", "scored", "filter") else "all"
+        # 'all' left the picker on 26/08 (#7ycrg) and db.get_regulars_mode maps it
+        # to 'schedule' anyway — fall back to the real default, not a ghost value.
+        return data if data in ("schedule", "none", "scored", "filter") else "schedule"
 
     def _on_mode_changed(self, *_):
         db.set_setting("dist_regulars_mode", self._current_mode())
@@ -2194,6 +2196,9 @@ class GroupUpdateTab(QWidget):
         # Re-read the one-time picks: they are a synced setting, so a pick made
         # on the other computer arrives through the sync refresh.
         self._load_extras()
+        # The name/distributor suggestions are synced settings too — a name typed
+        # on the other computer used to appear only after a save or a restart.
+        self._reload_name_history()
         # מצב החלוקה הוא הגדרה מסונכרנת — אם המחשב השני החליף מצב, הקומבו והצ'יפ
         # כאן חייבים לעקוב (אחרת המסך מציג מצב אחד והחישובים ב-DB רצים לפי אחר).
         saved_idx = self.mode_combo.findData(db.get_regulars_mode())

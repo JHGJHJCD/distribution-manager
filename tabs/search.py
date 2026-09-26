@@ -9,7 +9,9 @@ from PyQt6.QtGui import QFont, QColor
 import database as db
 from utils.ui import (search_icon, busy_cursor, line_icon, enable_touch_scroll,
                       PRIORITY_BADGES, STATUS_BADGES, HOLIDAY_BADGES, ALIGN_RIGHT,
-                      reveal_in_folder, apply_header_icons)
+                      reveal_in_folder, apply_header_icons, attach_empty_state,
+                      refresh_empty_state)
+from utils import timefmt
 import holidays
 from utils.excel_utils import export_recipients_to_excel
 from utils.print_view import print_recipient_card
@@ -17,10 +19,7 @@ from utils.print_view import print_recipient_card
 _SMALL_BTN = "font-size:11px; min-height:24px; min-width:0; padding:3px 12px;"
 
 
-def _fdate(s: str) -> str:
-    if s and len(s) >= 10 and s[4] == '-':
-        return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
-    return s or ""
+from utils.timefmt import fdate as _fdate   # one shared copy (סקירת בשלות 26/9/2026)
 
 
 HIST_COLS = ["תאריך", "מה חולק", "כמות", "מחלק", "הערות"]
@@ -223,6 +222,8 @@ class SearchTab(QWidget):
         self.hist_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.hist_table.setAlternatingRowColors(True)
         self.hist_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        # an explained empty state instead of bare column headers over nothing
+        attach_empty_state(self.hist_table, "עדיין לא נרשמו חלוקות למקבל זה")
         self.hist_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.hist_table.verticalHeader().setDefaultSectionSize(30)
         hdr = self.hist_table.horizontalHeader()
@@ -356,6 +357,7 @@ class SearchTab(QWidget):
         self._clear_details()
         self.hist_table.clearContents()
         self.hist_table.setRowCount(0)
+        refresh_empty_state(self.hist_table)
         self.hist_title.setText("היסטוריית חלוקות")
         if hasattr(self, "btn_del_hist"):
             self.btn_del_hist.setEnabled(False)
@@ -475,7 +477,6 @@ class SearchTab(QWidget):
         except Exception:
             mails = []
         if mails:
-            from utils import timefmt
             last = mails[0]
             self.lbl_mails.setText(
                 f"✉ מיילים שנשלחו: {len(mails)} · אחרון: {timefmt.datetime_str(last['sent_at'])} — "
@@ -509,11 +510,15 @@ class SearchTab(QWidget):
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(ALIGN_RIGHT)
+                if c == 0:
+                    # "לפני שבועיים" on hover — like the other history tables
+                    item.setToolTip(timefmt.relative(entry.get("dist_date", "") or ""))
                 if missed:
                     item.setForeground(QColor("#b91c1c"))
                 # Keep the record id on every cell so a selected row can be deleted.
                 item.setData(Qt.ItemDataRole.UserRole, entry.get("id"))
                 self.hist_table.setItem(r, c, item)
+        refresh_empty_state(self.hist_table)
 
     def _delete_hist_record(self):
         """Remove the selected distribution record from this recipient's history.

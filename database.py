@@ -911,7 +911,11 @@ FIELD_LABELS_HE = {
 }
 # מה נרשם בהיסטוריה: כל שדה בכרטיס חוץ מהנגזרים (תאריכי החלוקה — יש להם היסטוריה
 # משלהם ב-distributions; last_dist_base הוא קלט טכני שלהם).
-_UNTRACKED_FIELDS = {"last_distribution", "next_distribution", "last_dist_base"}
+_UNTRACKED_FIELDS = {"last_distribution", "next_distribution", "last_dist_base",
+                     # priority_raw is the same choice as priority (the dialog writes
+                     # both) — one "עדיפות" row per change, not two (see
+                     # _priority_hist_value; "חובת בירור" lives only in the raw).
+                     "priority_raw"}
 _TRACKED_FIELDS = [f for f in _RECIPIENT_FIELDS if f not in _UNTRACKED_FIELDS]
 # כמה זמן אחורה נזרעת ההיסטוריה למחשב שמצטרף (snapshot) — ראו sync._snapshot_body.
 CHANGE_LOG_SEED_MONTHS = 24
@@ -924,8 +928,43 @@ def change_source_label(source: str) -> str:
     return CHANGE_SOURCE_HE.get(source or "", source or "עריכה")
 
 
+# ערכים מקודדים בכרטיס → מה המשתמש רואה בהיסטוריה (סקירת בשלות 26/9/2026: החלון
+# הציג "4 ← 3" לעדיפות ו-"0 ← 1" לנתמך-חגים — קודים של האקסל המקורי שאף מסך אחר
+# לא מציג). ה-DB שומר את הקוד; רק התצוגה (חלון/שורת-סיכום/אקסל) מתורגמת.
+_CHANGE_VALUE_HE = {
+    "priority": {"4": "קבוע", "3": "עדיפות ראשונה", "2": "עדיפות שנייה",
+                 "1": "לא בחלוקה (1)", "0": "לא בחלוקה (0)", "בירור": "חובת בירור",
+                 "": "ללא"},
+    "holiday_support": {"1": "כן", "0": "לא"},
+}
+
+
+def change_value_label(field: str, value) -> str:
+    """The user-facing text of one old/new value in the change history.
+    Coded fields (priority / holiday_support) get their Hebrew label, everything
+    else is the stored text; empty → '—'."""
+    v = _hist_norm(value)
+    table = _CHANGE_VALUE_HE.get(field or "")
+    if table is not None and v in table:
+        return table[v]
+    return v or "—"
+
+
 def _hist_norm(v) -> str:
     return "" if v is None else str(v).strip()
+
+
+def _priority_hist_value(row: dict, fallback: dict | None = None) -> str:
+    """The one value the history keeps for the priority pair: the code (4/3/2)
+    when there is one, 'בירור' when only the raw says so, '' = none. A partial
+    update (only one of the two keys) falls back to the stored row."""
+    src = fallback or {}
+    pr = row.get("priority") if "priority" in row else src.get("priority")
+    raw = row.get("priority_raw") if "priority_raw" in row else src.get("priority_raw")
+    pr = _hist_norm(pr)
+    if pr:
+        return pr
+    return "בירור" if "בירור" in _hist_norm(raw) else ""
 
 
 def _device() -> str:
@@ -956,9 +995,14 @@ def _log_changes(conn, rec_id: int, old: dict, new: dict, source: str) -> dict |
         return None
     changes = []
     for field in _TRACKED_FIELDS:
-        if field not in new:
-            continue
-        o, n = _hist_norm(old.get(field)), _hist_norm(new.get(field))
+        if field == "priority":
+            if "priority" not in new and "priority_raw" not in new:
+                continue
+            o, n = _priority_hist_value(old), _priority_hist_value(new, old)
+        else:
+            if field not in new:
+                continue
+            o, n = _hist_norm(old.get(field)), _hist_norm(new.get(field))
         if o == n:
             continue
         changes.append({"guid": uuid.uuid4().hex, "field": field,
@@ -1129,6 +1173,11 @@ def delete_recipient(rec_id: int):
                 "לא ניתן למחוק — שנה סטטוס ל'הסתיים' במקום."
             )
         conn.execute("DELETE FROM recipients WHERE id=?", (rec_id,))
+        # The card's change history goes with it (as in the forced delete) —
+        # otherwise orphan rows stay in change_log forever, invisible in any
+        # screen yet re-seeded into every sync snapshot.
+        conn.execute("DELETE FROM change_log WHERE recipient_id=? OR (rec_guid=? AND rec_guid<>'')",
+                     (rec_id, (rec or {}).get("guid") or ""))
         _remember_delete(conn, rec)
     if rec and rec.get("guid"):
         _sync_log("rec_delete", {"guid": rec["guid"], "force": False})
@@ -2558,8 +2607,10 @@ def reset_all_data(tzintuk: bool = False):
 def import_recipients_from_list(rows: list[dict]) -> tuple[int, int, list[dict]]:
     """Bulk import - adds new records; for existing ones, fills only empty fields.
     Returns (added, updated, conflicts) counts."""
+    # next_distribution is derived only (v3.60, _recompute_recipient_dates) — the
+    # file's column is ignored; last_distribution becomes the base date.
     updatable = ["phone1", "phone2", "phone3", "address", "area", "souls",
-                 "frequency", "start_date", "last_distribution", "next_distribution",
+                 "frequency", "start_date", "last_distribution",
                  "external_id", "source", "birth_date", "spouse_birth_date",
                  "id_number", "spouse_id_number",
                  "children_home", "children_married", "children_total",

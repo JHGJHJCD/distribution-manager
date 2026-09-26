@@ -3,14 +3,12 @@
 המשתמש משאיר הודעה דרך כפתור קטן בשורת המצב. ההודעה:
 1. נשמרת תמיד מקומית — %APPDATA%\\ManhalHaluka\\feedback.jsonl (גיבוי שלא הולך
    לאיבוד גם בלי רשת).
-2. נשלחת ברקע לערוץ המקוון:
-   • אם הוגדר טוקן GitHub (utils/_secret.py או משתני-סביבה) — נפתח Issue חדש
-     במאגר. כך כל דיווח מגיע ישירות לרשימת התקלות בגיטאב.
-   • אחרת — נשלחת לטופס Google (ללא טוקן), והדיווחים נאספים בגיליון התשובות.
-
-הטוקן לעולם לא נשמר בקוד המשותף: הוא יושב ב-utils/_secret.py שנמצא ב-.gitignore
-ונכנס רק לתוך ה-EXE בזמן הבנייה. כתובת הטופס ומזהי השדות ציבוריים ולכן כאן.
+2. מגיעה למפתח במייל בלבד (v3.64, #u7gmi — GitHub Issue וטופס Google הוסרו):
+   • אם חשבון מייל מחובר (Google או SMTP) — נשלחת ישירות (`email_to_dev`).
+   • אחרת — נפתחת תוכנת המייל של המשתמש עם ההודעה מוכנה (`mailto_link`).
+3. נרשמת גם ב-DB (מסונכרן) — "הודעות שנשלחו" בהגדרות.
 """
+import html
 import os
 import json
 import urllib.parse
@@ -119,12 +117,13 @@ def email_to_dev(message: str, name: str = "") -> tuple[bool, str]:
     if not email_utils.is_configured():
         return False, "שליחת מייל לא הוגדרה (ראה לשונית הגדרות ← מייל למתנדבים)."
     entry = _entry(message, name)
+    esc = html.escape          # "<" in the user's text must not break the mail
     body = (
         "<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
         "<p><b>התקבלה הודעה מהמשתמש:</b></p>"
-        f"<p style='white-space:pre-wrap;'>{message}</p><hr>"
-        f"<p style='color:#6b7280;font-size:12px;'>מאת: {entry['name'] or 'אנונימי'} · "
-        f"גרסה v{entry['version']} · {entry['host'] or '—'} · {entry['ts']}</p></div>")
+        f"<p style='white-space:pre-wrap;'>{esc(message)}</p><hr>"
+        f"<p style='color:#6b7280;font-size:12px;'>מאת: {esc(entry['name'] or 'אנונימי')} · "
+        f"גרסה v{esc(str(entry['version']))} · {esc(entry['host'] or '—')} · {entry['ts']}</p></div>")
     try:
         email_utils.send_email(DEV_EMAIL, subject=MAIL_SUBJECT,
                                html_body=body)

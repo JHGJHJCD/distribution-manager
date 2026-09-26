@@ -34,6 +34,15 @@ def to_israel(iso: str):
     return dt.astimezone(z) if z is not None else dt.astimezone()
 
 
+def fdate(s: str) -> str:
+    """ISO date 'YYYY-MM-DD' → 'DD/MM/YYYY' (anything else is returned as is).
+    One copy for every table/card that shows a distribution date — it used to
+    be pasted into four tabs."""
+    if s and len(s) >= 10 and s[4] == '-':
+        return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
+    return s or ""
+
+
 def clock(iso: str) -> str:
     """'HH:MM' in Israel time."""
     dt = to_israel(iso)

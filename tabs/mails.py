@@ -30,15 +30,13 @@ from PyQt6.QtWidgets import (
 import database as db
 from utils import email_utils, mailer, richtext, sync, timefmt
 from utils.ui import busy_cursor, enable_touch_scroll, FlowLayout
-from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _CHIP_AMBER, _LBL,
-                               _BTN_PRIMARY, _BTN_GHOST, _BTN_PRINT, _BTN_ACCENT,
+from tabs.group_update import (_BG, _CARD_QSS, _CHIP_QSS, _CHIP_GREEN, _CHIP_AMBER, _CHIP_RED,
+                               _LBL, _BTN_PRIMARY, _BTN_GHOST, _BTN_PRINT, _BTN_ACCENT,
                                _BTN_DANGER, _step_badge, _step_card, _metric, _set_metric)
 from tabs.tzintukim import (_set_step_done, _CARD_DONE_QSS, _HCHIP_GREEN, _HCHIP_AMBER,
                             _CHIPBTN_AMBER)
 
-_CHIP_RED = ("QLabel{background:#fde2e2; color:#991b1b; border:none; border-radius:16px;"
-             " padding:5px 13px; font-size:12.5px; font-weight:700;}")
-_TOGGLE = ("QPushButton{background:#fafcfb; color:#334155; border:2px solid #e2e8f0;"
+_TOGGLE =("QPushButton{background:#fafcfb; color:#334155; border:2px solid #e2e8f0;"
            " border-radius:10px; font-weight:700; font-size:13.5px; padding:0 16px; min-height:40px;}"
            "QPushButton:hover{border-color:#94d3c0;}"
            "QPushButton:checked{background:#e6f5ef; color:#0f766e; border-color:#0f9d78;}")
@@ -1367,21 +1365,43 @@ class MailsTab(QWidget):
             db.update_mail_campaign(guid, sent, failed, "interrupted",
                                     json.dumps(rows, ensure_ascii=False))
 
+    # שליחה של המחשב השני שנשארה "בתהליך" (המחשב קרס ולא נפתח שוב) נסגרת מכאן
+    # אחרי יום שלם בלי עדכון — אף שליחה אמיתית לא נמשכת כל כך; אם המחשב ההוא
+    # בכל זאת יסיים אחר כך, ה-LWW שלו (status_ts חדש יותר) ידרוס את הסגירה.
+    STALE_PEER_HOURS = 24
+
     def _close_stale_campaigns(self):
-        """שליחה שנקטעה (התוכנה נסגרה באמצע) — לא להשאיר "בתהליך" לנצח."""
+        """שליחה שנקטעה (התוכנה נסגרה באמצע) — לא להשאיר "בתהליך" לנצח.
+        של המחשב הזה: מיד בהפעלה. של המחשב השני: רק אחרי STALE_PEER_HOURS
+        (קודם שורה כזו נשארה "⏳ נשלח עכשיו…" לנצח, בלי 'שלח שוב לנכשלים')."""
         me = sync.device_name() or ""
         for c in db.get_mail_campaigns():
-            if c.get("status") == "sending" and (c.get("device") or "") == me \
-                    and c.get("guid") != self._active_guid:
-                try:
-                    rows = json.loads(c.get("report_json") or "[]")
-                except Exception:
-                    rows = []
-                # v3.43: מי שנשאר "ממתין" → "לא נשלח" עם סיבה, כדי ששליחה-חוזרת תאסוף אותו
-                rows = mailer.close_pending(rows)
-                sent, failed = mailer.summarize(rows)
-                db.update_mail_campaign(c["guid"], sent, failed, "interrupted",
-                                        json.dumps(rows, ensure_ascii=False))
+            if c.get("status") != "sending" or c.get("guid") == self._active_guid:
+                continue
+            if (c.get("device") or "") != me and not self._silent_for_hours(
+                    c.get("status_ts") or c.get("sent_at") or "", self.STALE_PEER_HOURS):
+                continue
+            try:
+                rows = json.loads(c.get("report_json") or "[]")
+            except Exception:
+                rows = []
+            # v3.43: מי שנשאר "ממתין" → "לא נשלח" עם סיבה, כדי ששליחה-חוזרת תאסוף אותו
+            rows = mailer.close_pending(rows)
+            sent, failed = mailer.summarize(rows)
+            db.update_mail_campaign(c["guid"], sent, failed, "interrupted",
+                                    json.dumps(rows, ensure_ascii=False))
+
+    @staticmethod
+    def _silent_for_hours(iso: str, hours: float) -> bool:
+        """True when a UTC stamp is older than `hours` (unparseable = old)."""
+        from datetime import datetime, timezone
+        try:
+            dt = datetime.fromisoformat(iso)
+        except (TypeError, ValueError):
+            return True
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - dt).total_seconds() >= hours * 3600
 
     # ── history ───────────────────────────────────────────────────────────────
 
@@ -1409,6 +1429,11 @@ class MailsTab(QWidget):
             txt, color = self._HIST_STATUS.get(c.get("status", ""), ("", "#334155"))
             if c.get("status") == "done" and c.get("failed"):
                 txt, color = "✓ הושלם, חלק נכשלו", "#b45309"
+            elif c.get("status") == "sending" and (c.get("device") or "") \
+                    and (c.get("device") or "") != (sync.device_name() or ""):
+                # the other computer is sending — say which, so a stuck row is
+                # understood ("המחשב ההוא נסגר?") instead of looking like ours
+                txt = f"⏳ נשלח עכשיו מהמחשב «{c.get('device')}»"
             st = QTableWidgetItem(txt)
             st.setForeground(QColor(color))
             h.setItem(i, 3, st)

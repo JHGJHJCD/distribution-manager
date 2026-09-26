@@ -450,6 +450,23 @@ tab2._send = lambda targets=None, audience=None, **kw: _sent_args.update(t=targe
 tab2._resend_failed(idx8)
 ok("שליחה חוזרת: בדיוק 2 היעדים שלא נוסו", sorted(t["email"] for t in _sent_args.get("t") or []) == ["p2@x.com", "p3@x.com"],
    _sent_args)
+# (ב2, סקירת בשלות 26/9/2026) שליחה של המחשב השני שנשארה "בתהליך": טרייה — לא
+# נוגעים (הוא באמת שולח); שקטה יותר מיום — נסגרת כ'נקטע' גם מכאן, אחרת השורה
+# הייתה "⏳ נשלח עכשיו…" לנצח בלי 'שלח שוב לנכשלים'.
+_peer_fresh = db.add_mail_campaign("של השני", "גוף", "כולם", "kupa@gmail.com", 2, device="PC-אחר")
+_peer_old = db.add_mail_campaign("של השני ישן", "גוף", "כולם", "kupa@gmail.com", 2, device="PC-אחר")
+with db.get_connection() as _c:
+    _c.execute("UPDATE mail_campaigns SET status_ts=?, sent_at=? WHERE guid=?",
+               ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00", _peer_old))
+tab2._close_stale_campaigns()
+ok("שליחה טרייה של המחשב השני נשארת 'בתהליך' (הוא באמת שולח)",
+   db.get_mail_campaign(_peer_fresh)["status"] == "sending")
+ok("שליחה של המחשב השני ששתקה יותר מיום נסגרת כ'נקטע'",
+   db.get_mail_campaign(_peer_old)["status"] == "interrupted")
+tab2._refresh_history()
+_ip = next(i for i, c in enumerate(tab2._camps) if c["guid"] == _peer_fresh)
+ok("בהיסטוריה כתוב מאיזה מחשב נשלח עכשיו", "PC-אחר" in tab2.hist.item(_ip, 3).text(),
+   tab2.hist.item(_ip, 3).text())
 tab2.deleteLater()
 # (ג) "עצור" חוזר להיות פעיל בשליחה הבאה
 tab._active_guid = g8

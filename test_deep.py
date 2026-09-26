@@ -784,6 +784,52 @@ check("CH10 ייצוא מקבל בודד כולל גיליון 'היסטוריי
       and _xwb["היסטוריית שינויים"].cell(2, 4).value == "6", str(_xwb.sheetnames))
 try: os.unlink(_xp)
 except OSError: pass
+# CH11 (סקירת בשלות 26/9/2026): ערכים מקודדים מוצגים בעברית — לא "4 ← 3" / "0 ← 1".
+_v_id = db.add_recipient({"full_name": "קודים בדיקה", "phone1": "0508888888", "priority": 3,
+                          "holiday_support": 1})
+db.update_recipient(_v_id, {"priority": 4, "holiday_support": 0})
+_vr = db.get_recipient(_v_id)
+_vby = {c["field"]: c for c in db.get_changes_for_recipient(_v_id, _vr["guid"])}
+from widgets import change_line as _chl
+check("CH11 עדיפות/נתמך-חגים בהיסטוריה עם תוויות עברית (חלון, שורת סיכום, אקסל)",
+      db.change_value_label("priority", "3") == "עדיפות ראשונה"
+      and db.change_value_label("priority", 4) == "קבוע"
+      and db.change_value_label("holiday_support", "1") == "כן"
+      and db.change_value_label("holiday_support", "0") == "לא"
+      and db.change_value_label("income", "") == "—"
+      and db.change_value_label("income", "1000") == "1000"
+      and "עדיפות: עדיפות ראשונה ← קבוע" in _chl(_vby["priority"], with_when=False)
+      and "נתמך חגים: כן ← לא" in _chl(_vby["holiday_support"], with_when=False),
+      str([_chl(c, with_when=False) for c in _vby.values()]))
+# שינוי עדיפות בכרטיס כותב priority+priority_raw — שורה אחת בהיסטוריה, לא שתיים;
+# "חובת בירור" (priority=None, raw="חובת בירור") נשמר כערך של אותה שורה.
+db.update_recipient(_v_id, {"priority": None, "priority_raw": "חובת בירור"})
+_vchs = db.get_changes_for_recipient(_v_id, _vr["guid"])
+check("CH11c עדיפות = שורה אחת (בלי 'עדיפות (מקור)'), ו'חובת בירור' מוצג בשמו",
+      not any(c["field"] == "priority_raw" for c in _vchs)
+      and _vchs[0]["field"] == "priority" and _vchs[0]["old_value"] == "4"
+      and _vchs[0]["new_value"] == "בירור"
+      and "עדיפות: קבוע ← חובת בירור" in _chl(_vchs[0], with_when=False)
+      and db.change_value_label("priority", "") == "ללא",
+      str([(c["field"], c["old_value"], c["new_value"]) for c in _vchs]))
+# CH12: מחיקה רגילה (בלי היסטוריית חלוקות) מנקה גם את היסטוריית השינויים — לא
+# משאירה שורות יתומות שאף מסך לא מציג אבל כל סנאפשוט זורע מחדש.
+db.delete_recipient(_v_id)
+check("CH12 מחיקה רגילה מנקה את היסטוריית השינויים",
+      db.get_changes_for_recipient(_v_id, _vr["guid"]) == [])
+_v_id = db.add_recipient({"full_name": "קודים בדיקה", "phone1": "0508888888", "priority": 3,
+                          "holiday_support": 1})
+db.update_recipient(_v_id, {"priority": 4, "holiday_support": 0})
+_vr = db.get_recipient(_v_id)
+_vp = _exp1(_vr, [], db.get_changes_for_recipient(_v_id, _vr["guid"]))
+_vwb = openpyxl.load_workbook(_vp)["היסטוריית שינויים"]
+_vcells = {(_vwb.cell(r, 2).value): (_vwb.cell(r, 3).value, _vwb.cell(r, 4).value)
+           for r in range(2, _vwb.max_row + 1)}
+check("CH11b גיליון האקסל מציג את אותן תוויות",
+      _vcells.get("עדיפות") == ("עדיפות ראשונה", "קבוע") and _vcells.get("נתמך חגים") == ("כן", "לא"),
+      str(_vcells))
+try: os.unlink(_vp)
+except OSError: pass
 
 
 # ══════════════════════════════════════════════════
@@ -797,17 +843,29 @@ _xu.export_dir = lambda kind="": _pl.Path(_im_dir)
 try:
     _im_id = db.add_recipient({"full_name": "ייבוא כהן", "phone1": "0521234567", "souls": 7,
                                "frequency": "שבועי", "status": "פעיל", "children_home": 5,
-                               "children_total": 8, "children_married": 3})
+                               "children_total": 8, "children_married": 3,
+                               "holiday_support": 1, "holidays": "פסח"})
     _im_path = _xu.export_recipients_to_excel([db.get_recipient(_im_id)])
     _wb = _opx.load_workbook(_im_path); _ws = _wb.active
     _hr = next(r for r in range(1, 10) if any(_ws.cell(r, c).value == "שם מלא" for c in range(1, 60)))
     for _c in range(1, _ws.max_column + 1):
-        if _ws.cell(_hr, _c).value in ("מספר ילדים", "ילדים נשואים", "ילדים בבית", "נפשות"):
+        if _ws.cell(_hr, _c).value in ("מספר ילדים", "ילדים נשואים", "ילדים בבית", "נפשות",
+                                       "נתמך חגים"):
             _ws.cell(_hr + 1, _c).value = None
     _wb.save(_im_path)
     _d = db.diff_incoming_recipients(_xu.import_from_excel(_im_path))
     check("IM1 blank number cells in the file do not propose zeroing souls/children",
           _d["updates"] == [], str(_d["updates"]))
+    # סקירת בשלות 26/9/2026: תא 'נתמך חגים' ריק = אין מידע, לא "לא" — הדיף הציע
+    # "נתמך חגים: 1 → 0" לכל מי שהתא שלו נשאר ריק. "לא" מפורש עדיין מנקה.
+    _hc = next(c for c in range(1, _ws.max_column + 1) if _ws.cell(_hr, c).value == "נתמך חגים")
+    _ws.cell(_hr + 1, _hc).value = "לא"
+    _wb.save(_im_path)
+    _d2 = db.diff_incoming_recipients(_xu.import_from_excel(_im_path))
+    check("IM1b blank 'נתמך חגים' cell keeps the mark; explicit 'לא' proposes clearing it",
+          _d["updates"] == [] and len(_d2["updates"]) == 1
+          and _d2["updates"][0]["changes"].get("holiday_support", {}).get("new") == 0,
+          str(_d2["updates"]))
 finally:
     _xu._downloads_dir, _xu.export_dir = _orig_dl, _orig_ed
     shutil.rmtree(_im_dir, ignore_errors=True)

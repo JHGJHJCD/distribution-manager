@@ -250,6 +250,11 @@ def import_app_export(path: str) -> List[Dict]:
                 # v3.52: 'נתמך חגים' text → general mark + subset
                 import holidays
                 rec["holiday_support"], rec["holidays"] = holidays.from_text(cell(key))
+                if not str(cell(key) or "").strip():
+                    # blank ≠ "לא": a merge import must not clear a known mark
+                    # (the diff proposed "נתמך חגים: 1 → 0" for everyone whose
+                    # cell was left empty). "לא" in the cell still clears it.
+                    rec.setdefault(BLANK_KEY, set()).update({"holiday_support", "holidays"})
                 continue
             if key in _DATE_KEYS:
                 rec[key] = _ddmmyyyy_to_iso(cell(key))
@@ -905,7 +910,7 @@ def export_single_recipient_to_excel(rec: Dict,
     # Optional third sheet — card change history (v3.63).
     if changes:
         from utils import timefmt
-        from database import change_source_label
+        from database import change_source_label, change_value_label
         cs = wb.create_sheet("היסטוריית שינויים")
         cs.sheet_view.rightToLeft = True
         cs.append(["מתי", "שדה", "היה", "הפך ל", "איך", "מחשב"])
@@ -918,7 +923,8 @@ def export_single_recipient_to_excel(rec: Dict,
         for idx, ch in enumerate(changes, 2):
             cs.append([timefmt.datetime_str(ch.get("changed_at") or ""),
                        ch.get("field_changed") or ch.get("field") or "",
-                       ch.get("old_value") or "", ch.get("new_value") or "",
+                       change_value_label(ch.get("field"), ch.get("old_value")),
+                       change_value_label(ch.get("field"), ch.get("new_value")),
                        change_source_label(ch.get("source") or ""), ch.get("device") or ""])
             for cell in cs[idx]:
                 cell.alignment = cell_align
