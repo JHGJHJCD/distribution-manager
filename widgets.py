@@ -354,8 +354,9 @@ from database import change_source_label   # noqa: E402  (pure, shared with Exce
 
 def change_line(ch: dict, with_when: bool = True) -> str:
     """One change as a short Hebrew line: 'הכנסות: 1,000 → 2,000' (+ מתי/מחשב)."""
-    old = ch.get("old_value") or "—"
-    new = ch.get("new_value") or "—"
+    from database import change_value_label
+    old = change_value_label(ch.get("field"), ch.get("old_value"))
+    new = change_value_label(ch.get("field"), ch.get("new_value"))
     label = ch.get("field_changed") or ch.get("field") or ""
     core = f"{label}: {old} ← {new}"
     if not with_when:
@@ -429,6 +430,7 @@ class ChangeHistoryDialog(QDialog):
 
     def _fill(self):
         from utils import timefmt
+        import database as db
         key = self.cmb_field.currentData() or ""
         rows = [c for c in self._changes
                 if not key or (c.get("field") or c.get("field_changed")) == key]
@@ -438,8 +440,8 @@ class ChangeHistoryDialog(QDialog):
             when = QTableWidgetItem(timefmt.datetime_str(ch.get("changed_at") or ""))
             when.setToolTip(timefmt.relative(ch.get("changed_at") or ""))
             vals = [when, QTableWidgetItem(ch.get("field_changed") or ch.get("field") or ""),
-                    QTableWidgetItem(ch.get("old_value") or "—"),
-                    QTableWidgetItem(ch.get("new_value") or "—"),
+                    QTableWidgetItem(db.change_value_label(ch.get("field"), ch.get("old_value"))),
+                    QTableWidgetItem(db.change_value_label(ch.get("field"), ch.get("new_value"))),
                     QTableWidgetItem(change_source_label(ch.get("source"))),
                     QTableWidgetItem(ch.get("device") or "")]
             vals[3].setForeground(QBrush(QColor("#0f766e")))

@@ -32,11 +32,7 @@ def _mark(widget, error: bool, tip: str = ""):
     widget.setStyleSheet(_ERR_STYLE if error else "")
     widget.setToolTip(tip if error else "")
 
-def _fdate(s: str) -> str:
-    """'2026-06-03' → '03/06/2026'"""
-    if s and len(s) >= 10 and s[4] == '-':
-        return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
-    return s or ""
+from utils.timefmt import fdate as _fdate   # one shared copy (סקירת בשלות 26/9/2026)
 from utils.backup import auto_backup_async, auto_backup
 from utils.excel_utils import import_from_excel, _FULL_FIELDS
 

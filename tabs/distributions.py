@@ -25,10 +25,8 @@ COLS = ["תאריך", "שם החלוקה", "מה חולק", "כמות לאדם",
 _COL_NOTE = 7
 
 
-def _fdate(s: str) -> str:
-    if s and len(s) >= 10 and s[4] == '-':
-        return f"{s[8:10]}/{s[5:7]}/{s[:4]}"
-    return s or ""
+from utils import timefmt
+from utils.timefmt import fdate as _fdate   # one shared copy (סקירת בשלות 26/9/2026)
 
 
 class BatchDetailsDialog(QDialog):
@@ -190,6 +188,8 @@ class DistributionsTab(QWidget):
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(ALIGN_RIGHT)
+                if c == 0:   # "לפני שבועיים" on hover — like the other history tables
+                    item.setToolTip(timefmt.relative(b.get("dist_date", "") or ""))
                 if c == 1:   # name — bold
                     f = item.font(); f.setBold(True); item.setFont(f)
                 item.setData(Qt.ItemDataRole.UserRole, b.get("id"))

@@ -33,7 +33,8 @@ from PyQt6.QtWidgets import (
 
 import database as db
 from utils import call_history, netblock, timefmt, tts, yemot
-from utils.ui import busy_cursor, enable_touch_scroll, line_icon, FlowLayout
+from utils.ui import (busy_cursor, enable_touch_scroll, line_icon, FlowLayout,
+                      attach_empty_state, refresh_empty_state)
 # v3.22 — microphone recording (RecordDialog). Imported at module level so
 # PyInstaller bundles the QtMultimedia backend; the dialog itself degrades to a
 # clear message when the module is missing.
@@ -2106,6 +2107,8 @@ class TzintukimTab(QWidget):
         self.hist.setMaximumHeight(420)
         self.hist.setToolTip("לחיצה כפולה על שורה — פירוט לפי שם ומספר")
         self.hist.cellDoubleClicked.connect(lambda _r, _c: self._open_history_details())
+        # explained empty state (like the mails history) instead of bare headers
+        attach_empty_state(self.hist, "עדיין לא נשלחו צינתוקים מהתוכנה.")
         c_lay.addWidget(self.hist)
         lay.addWidget(card)
         lay.addStretch()
@@ -5039,6 +5042,7 @@ class TzintukimTab(QWidget):
             ans = QTableWidgetItem(hit[1])
             ans.setForeground(QColor("#166534"))
             self.hist.setItem(i, 6, ans)
+        refresh_empty_state(self.hist)
 
     def _export_history(self):
         """#67rdi — ייצוא כל היסטוריית הצינתוקים לאקסל, כולל סטטוס פר-מספר
