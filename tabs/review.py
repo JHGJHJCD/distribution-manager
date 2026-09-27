@@ -151,7 +151,9 @@ class ReviewTab(QWidget):
             return
         dlg = RecipientDialog(self, rec)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            db.update_recipient(rec_id, dlg.get_data())
+            from tabs.recipients import save_card_edit
+            if not save_card_edit(self, rec_id, rec, dlg):
+                return
             auto_backup_async()
             self.refresh()
             if self.main_win:

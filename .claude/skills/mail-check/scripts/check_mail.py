@@ -430,10 +430,10 @@ def _(c):
             and "root.attach(alt)" in body), ""
 
 
-@lint("M41", "From = formataddr((SENDER_NAME, כתובת)) + Date + Message-ID עם דומיין השולח (לא hostname)")
+@lint("M41", "From = formataddr((sender_name(), כתובת)) — שם ניתן לשינוי בהגדרות (v3.75), ברירת מחדל SENDER_NAME; + Date + Message-ID עם דומיין השולח (לא hostname)")
 def _(c):
     body = _func_body(c["eu"], "send_email")
-    return ("formataddr((SENDER_NAME, from_addr))" in body and 'root["Date"] = formatdate(' in body
+    return ("formataddr((sender_name(), from_addr))" in body and 'root["Date"] = formatdate(' in body
             and 'root["Message-ID"] = make_msgid(domain=' in body), ""
 
 

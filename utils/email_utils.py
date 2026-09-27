@@ -154,7 +154,17 @@ def mail_session() -> SmtpSession:
     return SmtpSession()
 
 
-SENDER_NAME = "קופה של צדקה הר יונה"   # שם התצוגה של השולח (From) בכל מייל יוצא
+SENDER_NAME = "קופה של צדקה הר יונה"   # שם התצוגה של השולח (From) — ברירת המחדל
+
+
+def sender_name() -> str:
+    """v3.75 (הכרעת יהודה 27/9/2026): שם השולח ניתן לשינוי בהגדרות (setting
+    מסונכרן `mail_sender_name`); ריק = ברירת המחדל."""
+    return (db.get_setting("mail_sender_name") or "").strip() or SENDER_NAME
+
+
+def set_sender_name(name: str):
+    db.set_setting("mail_sender_name", (name or "").strip())
 
 # v3.46: Gmail מקבלת מייל עד 25MB *אחרי* קידוד base64 (×1.37). קובץ של 20MB = מייל של
 # 27MB ⇒ נדחה אצל כל נמען. תקרת הקובץ במסך 18MB (≈24.7MB מקודד), ובדיקה סופית על
@@ -195,7 +205,7 @@ def send_email(to_addr: str, subject: str, html_body: str,
 
     root = MIMEMultipart("mixed")
     root["Subject"] = subject
-    root["From"] = formataddr((SENDER_NAME, from_addr))
+    root["From"] = formataddr((sender_name(), from_addr))
     root["To"] = to_addr
     root["Date"] = formatdate(localtime=True)
     # דומיין מכתובת השולח — לא hostname (שם המחשב לא זולג לנמען)

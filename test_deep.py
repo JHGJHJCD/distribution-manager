@@ -303,6 +303,112 @@ check("D4 נעשה גיבוי-ביטחון לפני ההמרה",
       any(n.startswith("safety_") for n in os.listdir(db.BACKUP_DIR)), str(os.listdir(db.BACKUP_DIR)))
 db.BACKUP_DIR = _bk_prev
 
+# D5 — חלוקת חג (הכרעות יהודה 27/9/2026): חלוקה נוספת גם ביום רביעי, נזכרת בהיסטוריה
+print("\n=== D5: חלוקת חג = חלוקה נוספת ===")
+rid_h = db.add_recipient({"full_name": "חג-קבוע", "status": "פעיל", "frequency": "דו-שבועי"})
+_h = [{"id": rid_h, "full_name": "חג-קבוע", "frequency": "דו-שבועי"}]
+db.bulk_add_distributions(_h, "2026-06-17", "עוף", 1, "")                      # רביעי רגיל
+_bid_h = db.bulk_add_distributions(_h, "2026-06-24", "מארז פסח", 1, "", dist_name="חלוקת פסח",
+                                   holiday="פסח")                              # רביעי — חלוקת חג
+_r = db.get_recipient(rid_h)
+check("D5 חלוקת החג נשמרת כחלוקה אחרונה (24/06)", _r["last_distribution"] == "2026-06-24",
+      f"got {_r['last_distribution']}")
+check("D5 התור הקבוע לא זז — שבועיים מהרביעי הרגיל (01/07)", _r["next_distribution"] == "2026-07-01",
+      f"got {_r['next_distribution']}")
+_hist_h = db.get_distributions_for_recipient(rid_h)
+check("D5 שורת ההיסטוריה נושאת את החג", any(h.get("holiday") == "פסח" for h in _hist_h),
+      str([h.get("holiday") for h in _hist_h]))
+_b_h = next(b for b in db.get_distribution_batches() if b["id"] == _bid_h)
+check("D5 האצווה נושאת את החג", _b_h.get("holiday") == "פסח", str(_b_h.get("holiday")))
+import holidays as _hol_mod
+check("D5 תווית: 'פסח' → 'חלוקת פסח', '*' → 'חלוקת חג', '' → ''",
+      _hol_mod.dist_label("פסח") == "חלוקת פסח" and _hol_mod.dist_label("*") == "חלוקת חג"
+      and _hol_mod.dist_label("") == "")
+# חלוקה רגילה שנרשמה בלי חג — התור כן זז (הכלל הישן נשמר)
+db.bulk_add_distributions(_h, "2026-07-01", "עוף", 1, "")
+_r = db.get_recipient(rid_h)
+check("D5 חלוקה רגילה אחרי החג מזיזה את התור (15/07)", _r["next_distribution"] == "2026-07-15",
+      f"got {_r['next_distribution']}")
+
+# D6 — תאריך עתידי (טעות הקלדה מהאקסל) מתעלמים ממנו: הקבוע נכנס לרשימת השבוע (הכרעה 27/9/2026)
+print("\n=== D6: תאריך עתידי = טעות, מתעלמים ===")
+_today = date.today()
+_bw = _today if _today.weekday() == 2 else next_wednesday(_today)
+rid_f = db.add_recipient({"full_name": "עתידי-אקסל", "status": "פעיל", "frequency": "שבועי",
+                          "last_distribution": (_bw + timedelta(days=9)).isoformat()})
+_r = db.get_recipient(rid_f)
+check("D6 'חלוקה אחרונה' עתידית לא מוצגת בכרטיס", not (_r.get("last_distribution") or ""),
+      f"got {_r.get('last_distribution')!r}")
+check("D6 הקבוע מופיע ברשימת הרביעי הקרוב", any(r["id"] == rid_f for r in db.get_weekly_list()))
+check("D6 התור = הרביעי הקרוב", _r["next_distribution"] == _bw.isoformat(),
+      f"{_r['next_distribution']} vs {_bw}")
+# תאריך שהוא בדיוק הרביעי הקרוב (רישום מראש ליום החלוקה) — כן נספר
+rid_f2 = db.add_recipient({"full_name": "רביעי-הקרוב", "status": "פעיל", "frequency": "דו-שבועי"})
+db.bulk_add_distributions([{"id": rid_f2, "full_name": "רביעי-הקרוב", "frequency": "דו-שבועי"}],
+                          _bw.isoformat(), "עוף", 1, "")
+_r = db.get_recipient(rid_f2)
+check("D6 חלוקה שתאריכה הרביעי הקרוב נספרת (לא טעות)", _r["last_distribution"] == _bw.isoformat(),
+      f"got {_r['last_distribution']}")
+# שורת היסטוריה עם תאריך עתידי רחוק (הוקלד שנה קדימה) — גם היא מתעלמת
+rid_f3 = db.add_recipient({"full_name": "שנה-קדימה", "status": "פעיל", "frequency": "שבועי"})
+db.bulk_add_distributions([{"id": rid_f3, "full_name": "שנה-קדימה", "frequency": "שבועי"}],
+                          (_bw + timedelta(days=365)).isoformat(), "עוף", 1, "")
+check("D6 רישום שנה קדימה לא מעלים את הקבוע מהרשימה",
+      any(r["id"] == rid_f3 for r in db.get_weekly_list()))
+
+# DL — מקבל שנמחק נרשם (מי/מתי/מחשב) ואפשר לשחזר (הכרעת יהודה 27/9/2026)
+print("\n=== DL: יומן מקבלים שנמחקו ===")
+rid_dl = db.add_recipient({"full_name": "נמחק כהן", "status": "פעיל", "phone1": "0501234567",
+                           "souls": 4, "priority": 3})
+db.delete_recipient(rid_dl)
+_mine = lambda: [r for r in db.get_deleted_recipients() if r["full_name"] == "נמחק כהן"]
+_dl = _mine()
+check("DL1 המחיקה נרשמה עם שם וטלפון",
+      len(_dl) == 1 and _dl[0]["full_name"] == "נמחק כהן" and _dl[0]["phone"] == "0501234567", str(_dl))
+check("DL2 נרשם המחשב ואופן המחיקה", bool(_dl[0]["device"]) and _dl[0]["source"] == "delete",
+      f"{_dl[0]['device']!r}/{_dl[0]['source']}")
+_new_id, _msg = db.restore_deleted_recipient(_dl[0]["guid"])
+_r = db.get_recipient(_new_id) if _new_id else None
+check("DL3 שחזור מחזיר את הכרטיס עם הנתונים", _r is not None and _r["souls"] == 4 and _r["priority"] == 3
+      and _r["phone1"] == "0501234567", str(_r and dict(_r)))
+check("DL4 אחרי שחזור השורה יורדת מהיומן", _mine() == [])
+check("DL5 השחזור לא ממציא היסטוריה/תאריכים", _r is not None and not (_r["last_distribution"] or ""))
+# מחיקה כפויה (עם היסטוריה) — גם נרשמת, מסומנת ככפויה
+db.bulk_add_distributions([{"id": _new_id, "full_name": "נמחק כהן"}], "2026-06-17", "עוף", 1, "")
+db.force_delete_recipient(_new_id)
+_dl = _mine()
+check("DL6 מחיקה כפויה נרשמת ככזו", len(_dl) == 1 and _dl[0]["source"] == "force", str(_dl))
+# שחזור כשכבר קיים אדם זהה (שוחזר במחשב השני) — לא מכפיל
+db.add_recipient({"full_name": "נמחק כהן", "status": "פעיל", "phone1": "0501234567"})
+_nid, _msg = db.restore_deleted_recipient(_dl[0]["guid"])
+check("DL7 שחזור של מי שכבר קיים לא מוסיף כפול", _nid is None and "כבר קיים" in _msg
+      and _mine() == [], _msg)
+check("DL8 diff לשומר עריכה-בו-זמנית — תוויות עברית של השדות ששונו",
+      db.changed_fields_summary({"souls": 3, "phone1": "050"}, {"souls": 4, "phone1": "050"}) == ["נפשות"])
+
+# AS — לוגו/רקע נשמרים בתוך ה-DB וחוזרים לדיסק אחרי שחזור (הכרעת יהודה 27/9/2026)
+print("\n=== AS: קובצי-מראה בגיבוי ===")
+_as_dir = tempfile.mkdtemp()
+_prev_logo, _prev_bg = db.USER_LOGO_PATH, db.APP_BG_PATH
+db.USER_LOGO_PATH = os.path.join(_as_dir, "org_logo.png")
+db.APP_BG_PATH = os.path.join(_as_dir, "app_bg")
+_png = b"\x89PNG\r\n\x1a\n" + b"x" * 40
+with open(db.USER_LOGO_PATH, "wb") as _fh:
+    _fh.write(_png)
+with open(db.APP_BG_PATH + ".jpg", "wb") as _fh:
+    _fh.write(b"JFIF" + b"y" * 30)
+check("AS1 save_asset קורא את הקובץ", db.save_asset(db.ASSET_LOGO, db.USER_LOGO_PATH)
+      and db.save_asset(db.ASSET_BG, db.APP_BG_PATH + ".jpg"))
+os.remove(db.USER_LOGO_PATH); os.remove(db.APP_BG_PATH + ".jpg")
+_written = db.restore_assets_to_disk()
+check("AS2 אחרי שהקבצים נעלמו — שניהם חוזרים מה-DB", sorted(_written) == ["app_bg", "logo"], str(_written))
+check("AS3 התוכן זהה (לוגו)", open(db.USER_LOGO_PATH, "rb").read() == _png)
+check("AS4 הסיומת המקורית נשמרה (רקע .jpg)", os.path.exists(db.APP_BG_PATH + ".jpg"))
+check("AS5 קובץ שקיים בדיסק לא נדרס (אין כתיבה חוזרת)", db.restore_assets_to_disk() == [])
+db.delete_asset(db.ASSET_LOGO)
+check("AS6 delete_asset מוחק", db.get_asset(db.ASSET_LOGO) is None and db.get_asset(db.ASSET_BG) is not None)
+db.USER_LOGO_PATH, db.APP_BG_PATH = _prev_logo, _prev_bg
+
 # חודשי שהתור שלו נשמר לפי הכלל הישן (5 שבועות) — מתקן את עצמו ונכנס לרשימה אחרי 4
 _today = date.today()
 _bw = _today if _today.weekday() == 2 else next_wednesday(_today)

@@ -114,6 +114,10 @@ def use_none():
 
 
 def _remove_custom():
+    try:
+        db.delete_asset(db.ASSET_BG)
+    except Exception:                            # noqa: BLE001
+        pass
     p = custom_path()
     while p:
         try:
@@ -140,6 +144,7 @@ def set_custom(src_path: str) -> str:
     except Exception as e:                       # noqa: BLE001
         return "שמירת תמונת הרקע נכשלה:\n%s" % e
     db.set_setting(MODE_KEY, "custom")
+    db.save_asset(db.ASSET_BG, dest)             # v3.75: travels with the backup
     return ""
 
 

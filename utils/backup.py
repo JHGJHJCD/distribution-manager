@@ -26,6 +26,11 @@ def restore_from_backup(backup_path: str) -> bool:
                 dst_conn.close()
         finally:
             src_conn.close()
+        # v3.75: the logo / wallpaper stored inside the backup come back too
+        try:
+            db.restore_assets_to_disk()
+        except Exception:
+            pass
         return True
     except Exception:
         return False

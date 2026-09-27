@@ -892,9 +892,13 @@ def export_single_recipient_to_excel(rec: Dict,
             cell.border = border
         hs.row_dimensions[1].height = 20
         missed_fill = PatternFill("solid", fgColor="FEE2E2")   # red — no-show
+        import holidays as _hol
         for idx, entry in enumerate(history, 2):
             missed = (entry.get("received", 1) or 0) == 0
             what = "✗ לא קיבל" if missed else (entry.get("what_dist", "") or "")
+            tag = _hol.dist_label(entry.get("holiday"))
+            if tag:
+                what = tag + (f" · {what}" if what else "")
             hs.append([_fmt_date(entry.get("dist_date", "")), what,
                        entry.get("quantity", "") or "", entry.get("distributor", "") or "",
                        entry.get("notes", "") or ""])
@@ -1095,7 +1099,7 @@ def export_tzintuk_history_to_excel(campaigns: List[Dict],
     labels = _yemot.answer_labels()
     NO_ANSWER = TZINTUK_NO_ANSWER
 
-    status_he = {"sending": "בתהליך", "done": "הסתיים", "scheduled": "מתוזמן",
+    status_he = {"sending": "בתהליך", "done": "הושלם", "scheduled": "מתוזמן",
                  "stopping": "נעצר — ממתין לתוצאות",
                  "canceled": "בוטל", "sched_failed": "התזמון נכשל"}
 

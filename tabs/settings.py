@@ -419,6 +419,10 @@ class SettingsTab(QWidget):
                  "החזר את כל הנתונים מקובץ גיבוי .db שתבחר ידנית"),
             _btn("בחר תיקיית גיבוי…", _BTN_GHOST, self._choose_backup_folder,
                  "בחר לאן לשמור עותק גיבוי נוסף (למשל כונן חיצוני)")))
+        body.addWidget(_hint("הגיבוי כולל גם את הלוגו ותמונת הרקע שבחרת — בשחזור במחשב חדש הם חוזרים לבד."))
+        self.btn_deleted = _btn("מקבלים שנמחקו…", _BTN_GHOST, self._open_deleted,
+                                "מי נמחק מרשימת המקבלים, מתי ומאיזה מחשב — ואפשרות לשחזר")
+        body.addLayout(_btn_row(self.btn_deleted))
         _place(row, card, body)
 
         # ── תיקיות ייצוא (#5e1jc) ──
@@ -544,6 +548,13 @@ class SettingsTab(QWidget):
         self.mail_file_pw.setToolTip(
             "הקובץ למתנדב יינעל בסיסמה זו — צריך אותה כדי לפתוח ב-Excel. "
             "הסיסמה לא נשלחת במייל; מסרו אותה למתנדב בעל-פה או בווטסאפ.")
+        self.mail_sender_name = QLineEdit()
+        self.mail_sender_name.setPlaceholderText(email_utils.SENDER_NAME)
+        self.mail_sender_name.setAlignment(ALIGN_RIGHT)
+        self.mail_sender_name.setToolTip("השם שהנמענים רואים ליד הכתובת בכל מייל יוצא "
+                                         "(מקבלים, מתנדבים, בדיקה). ריק = השם הקבוע של הקופה. "
+                                         "משותף לשני המחשבים.")
+        _form_row(form, "שם השולח", self.mail_sender_name)
         _form_row(form, "כתובת שולח", self.mail_email)
         _form_row(form, "סיסמת אפליקציה", self.mail_password)
         _form_row(form, "סיסמה לקובץ המתנדב", self.mail_file_pw)
@@ -954,6 +965,7 @@ class SettingsTab(QWidget):
         self._set_text_safe(self.mail_email, cfg["email"])
         self._set_text_safe(self.mail_password, cfg["app_password"])
         self._set_text_safe(self.mail_file_pw, email_utils.get_checklist_password())
+        self._set_text_safe(self.mail_sender_name, db.get_setting("mail_sender_name") or "")
         if email_utils.is_configured():
             self.lbl_mail_status.setText("מוגדר ✓")
             self.lbl_mail_status.setStyleSheet("color:#334155;")
@@ -1132,6 +1144,13 @@ class SettingsTab(QWidget):
         )
         return False
 
+    def _open_deleted(self):
+        """v3.75 — יומן המקבלים שנמחקו (הכרעת יהודה 27/9/2026)."""
+        dlg = DeletedRecipientsDialog(self)
+        dlg.exec()
+        if dlg.restored and self.main_win:
+            self.main_win.refresh_all()
+
     def _open_backup_list(self):
         """#69pen: every saved backup in one list with a 'שחזר' button per row."""
         dlg = BackupListDialog(self)
@@ -1164,6 +1183,13 @@ class SettingsTab(QWidget):
         with busy_cursor():
             ok = restore_from_backup(path)
             if ok:
+                # v3.75: the backup carries the logo / wallpaper — show them now
+                mw = self.main_win
+                if mw is not None:
+                    if hasattr(mw, "_load_appbar_logo"):
+                        mw._load_appbar_logo()
+                    if hasattr(mw, "apply_wallpaper"):
+                        mw.apply_wallpaper()
                 self.refresh()
                 if self.main_win:
                     self.main_win.refresh_all()
@@ -1457,6 +1483,7 @@ class SettingsTab(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "שגיאה", f"לא ניתן להעתיק את הלוגו:\n{e}")
             return
+        db.save_asset(db.ASSET_LOGO, db.USER_LOGO_PATH)     # v3.75: travels with the backup
         self._apply_logo_change()
 
     def _reset_logo(self):
@@ -1466,6 +1493,7 @@ class SettingsTab(QWidget):
                 os.remove(db.USER_LOGO_PATH)
         except Exception:
             pass
+        db.delete_asset(db.ASSET_LOGO)
         self._apply_logo_change()
 
     def _apply_logo_change(self):
@@ -1532,7 +1560,13 @@ class SettingsTab(QWidget):
         password = self.mail_password.text()
         # The file password is independent of the SMTP login — save it either way.
         email_utils.set_checklist_password(self.mail_file_pw.text())
+        email_utils.set_sender_name(self.mail_sender_name.text())      # v3.75
         if not email or not password:
+            if email_utils.google_connected():
+                # Google does the sending — the SMTP pair is optional here
+                self.refresh()
+                QMessageBox.information(self, "נשמר", "הגדרות המייל נשמרו ✓")
+                return
             QMessageBox.warning(self, "", "יש למלא כתובת מייל וסיסמת אפליקציה.")
             return
         email_utils.set_smtp_config(email, password)
@@ -1669,6 +1703,7 @@ class SettingsTab(QWidget):
         email = self.mail_email.text().strip()
         password = self.mail_password.text()
         email_utils.set_checklist_password(self.mail_file_pw.text())
+        email_utils.set_sender_name(self.mail_sender_name.text())
         if email and password:
             email_utils.set_smtp_config(email, password)
 
@@ -2017,6 +2052,100 @@ class SettingsTab(QWidget):
         # #ko0a0: no confirmation click — the app closes itself and the updated
         # version opens automatically (apply_update already relaunched it).
         QApplication.quit()
+
+
+class DeletedRecipientsDialog(QDialog):
+    """v3.75 — 'מקבלים שנמחקו' (הכרעת יהודה 27/9/2026): מי נמחק, מתי, מאיזה מחשב
+    ואיך; כפתור 'שחזר' מחזיר את הכרטיס כמקבל חדש."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("מקבלים שנמחקו")
+        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.setMinimumSize(760, 480)
+        self.setSizeGripEnabled(True)
+        self.restored = False
+        lay = QVBoxLayout(self)
+        head = QLabel("כל מי שנמחק מרשימת המקבלים — משני המחשבים. \"שחזר\" מחזיר את "
+                      "הכרטיס לרשימה (בלי היסטוריית חלוקות שנמחקה איתו).")
+        head.setWordWrap(True)
+        head.setStyleSheet("color:#334155; font-size:13px;")
+        lay.addWidget(head)
+        self.table = QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["מתי", "שם", "טלפון", "מחשב", "איך", "פעולה"])
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.verticalHeader().setVisible(False)
+        hdr = self.table.horizontalHeader()
+        for c in (0, 2, 3, 4):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        # ⚠ ResizeToContents measures the (empty) item, not the cell widget → the
+        # button column must be Fixed (same pitfall as the tzintuk phone column).
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(5, 110)
+        self.table.verticalHeader().setDefaultSectionSize(36)
+        self.table.cellClicked.connect(self._on_cell_clicked)
+        lay.addWidget(self.table, 1)
+        self.lbl_empty = QLabel("עדיין לא נמחק אף מקבל 🙂")
+        self.lbl_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_empty.setStyleSheet("color:#64748b; font-size:14px; padding:24px;")
+        lay.addWidget(self.lbl_empty)
+        btns = QHBoxLayout()
+        btns.addStretch()
+        close = QPushButton("סגור")
+        close.setObjectName("neutral")
+        close.clicked.connect(self.accept)
+        btns.addWidget(close)
+        lay.addLayout(btns)
+        self._fill()
+
+    def _fill(self):
+        from utils import timefmt
+        rows = db.get_deleted_recipients()
+        self._rows = rows
+        self.table.setRowCount(0)
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            when = QTableWidgetItem(timefmt.relative(r.get("deleted_at", "")) or "")
+            when.setToolTip(timefmt.datetime_str(r.get("deleted_at", "")))
+            self.table.setItem(i, 0, when)
+            self.table.setItem(i, 1, QTableWidgetItem(r.get("full_name", "") or "—"))
+            self.table.setItem(i, 2, QTableWidgetItem(r.get("phone", "") or ""))
+            self.table.setItem(i, 3, QTableWidgetItem(r.get("device", "") or ""))
+            self.table.setItem(i, 4, QTableWidgetItem(
+                db.SOURCE_LABELS_DELETE.get(r.get("source", ""), r.get("source", "") or "מחיקה")))
+            # Action as a TEXT cell + cellClicked (like "✕ הסר" in the mails tab,
+            # v3.55): a cell *widget* kept its size-hint geometry and spilled out of
+            # the column in the grab (verified via Gemini) — text never does.
+            act = QTableWidgetItem("↩ שחזר")
+            act.setForeground(QColor("#0f766e"))
+            act.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            act.setToolTip("לחיצה מחזירה את הכרטיס לרשימת המקבלים")
+            self.table.setItem(i, 5, act)
+        self.table.setVisible(bool(rows))
+        self.lbl_empty.setVisible(not rows)
+
+    def _on_cell_clicked(self, r: int, c: int):
+        if c == 5 and 0 <= r < len(self._rows):
+            self._restore(self._rows[r].get("guid"))
+
+    def _restore(self, guid: str):
+        new_id, msg = db.restore_deleted_recipient(guid)
+        if new_id is not None:
+            self.restored = True
+            auto_backup_async_safe()
+        QMessageBox.information(self, "שחזור מקבל", msg)
+        self._fill()
+
+
+def auto_backup_async_safe():
+    try:
+        from utils.backup import auto_backup_async
+        auto_backup_async()
+    except Exception:            # noqa: BLE001
+        pass
 
 
 class FeedbackInboxDialog(QDialog):

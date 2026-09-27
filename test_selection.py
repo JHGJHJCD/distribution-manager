@@ -147,15 +147,17 @@ _n, _reg = db.compute_suggested_n(10)
 ok("compute_suggested_n counts only the DUE regular (1 of 2)", _reg == 1, f"reg={_reg}")
 ok("compute_suggested_n leaves the rest for one-timers", _n == 9, f"n={_n}")
 
-# ── get_weekly_list ignores a FUTURE last_distribution (data-entry error) ──────
+# ── a FUTURE last_distribution (data-entry error) is IGNORED — the regular is due ──
+# (user decision 27/9/2026; until v3.74 the person vanished from the list until
+#  the typo date passed, with nowhere to fix it)
 db.reset_all_data()
 db.add_recipient({"full_name": "עתידי", "status": "פעיל", "frequency": "שבועי",
                   "last_distribution": (_today + timedelta(days=10)).isoformat()})
 _wk = [r["full_name"] for r in db.get_weekly_list()]
-ok("weekly list excludes a future-dated last_distribution", "עתידי" not in _wk, str(_wk))
+ok("weekly list IGNORES a future-dated last_distribution (person is due)", "עתידי" in _wk, str(_wk))
 
-# …on EVERY weekday (the check above only fails on Thu–Sat: a typo 1–6 days past
-# next Wednesday landed in that Wednesday's cycle and counted as "served now").
+# …on EVERY weekday (a typo 1–6 days past next Wednesday must not count as
+# "served now" either — it's a typo like any other future date).
 import datetime as _dt_mod
 _RealDate = db.date
 for _wd_off in range(7):
@@ -173,8 +175,8 @@ for _wd_off in range(7):
         _wk2 = [r["full_name"] for r in db.get_weekly_list()]
     finally:
         db.date = _RealDate
-    ok(f"weekly list excludes future-dated typos (weekday {_fake_today.weekday()})",
-       _wk2 == [], str(_wk2))
+    ok(f"weekly list ignores future-dated typos → all 12 due (weekday {_fake_today.weekday()})",
+       len(_wk2) == 12, str(_wk2))
 
 # ── ותק: never-received counts from REGISTRATION date, not the year-2000 epoch ─
 _vet = {"last_distribution": "", "start_date": (_today - timedelta(days=500)).isoformat()}

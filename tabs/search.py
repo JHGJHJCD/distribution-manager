@@ -504,6 +504,10 @@ class SearchTab(QWidget):
             # (default 1 = received).
             missed = (entry.get("received", 1) or 0) == 0
             what = "✗ לא קיבל" if missed else entry.get("what_dist", "")
+            # v3.75: a holiday distribution is tagged in the family's history
+            hol = holidays.dist_label(entry.get("holiday"))
+            if hol:
+                what = f"🎉 {hol}" + (f" · {what}" if what else "")
             vals = [_fdate(entry.get("dist_date", "")), what,
                     str(entry.get("quantity", "") or ""), entry.get("distributor", ""),
                     entry.get("notes", "")]

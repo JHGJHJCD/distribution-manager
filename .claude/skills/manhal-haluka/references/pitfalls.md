@@ -567,3 +567,8 @@ M45 (3.46) הגן על סגירת החלון, אבל `settings._on_downloaded` �
 - **מה קרה:** תיבת "מוצרים זמינים" (`setFixedHeight(76)`) צוירה 76px אבל הלייאאוט הקצה לה רק 42px, והתווית "קבועים השבוע" מתחתיה נחתכה (Gemini זיהה בצילום). הסיבה: `QSpinBox{height:36px}` של qt-material הופך ב-`QStyleSheetStyle::polish` ל-`maximumSize` (42) — וזה רץ **אחרי** הבנייה בכל `setStyleSheet` של האפליקציה (ערכה/גודל טקסט).
 - **תרופה:** ווידג'ט-קלט עם גובה חריג מקבל `height:Npx` ב-QSS **שלו** (תוכן; + מסגרת + ריפוד = הגובה הרצוי). מה שנכתב ברמת הווידג'ט מנצח את הערכה בקסקדה ונשמר גם בפוליש הבא. לאמת: `w.maximumSize()` אחרי `show()`, לא רק `geometry()`.
 - **ורקע התוכנה (`utils/wallpaper.py`):** משטח לשונית שהופך שקוף בחלון הראשי — דרך property `wallpaper=true` ו-QSS `[wallpaper="true"]`, לא ע"י מחיקת ה-`background` — כדי שצילומי לשונית בודדת (רוב `dev/_shot_*.py`) ישארו עם רקע אטום.
+
+## כפתור כ-cell widget בטבלת דיאלוג נשאר בגיאומטריית ה-size-hint שלו (v3.75, 27/9/2026)
+- **מה קרה:** `DeletedRecipientsDialog` שם `QPushButton("שחזר")` דרך `setCellWidget`. בצילום (WA_DontShowOnScreen + grab) הכפתור נשאר ב-`QRect(14,11,120,54)` — לא הוצמד לתא (`visualRect` 0,0,119,43), חרג מהעמודה וחתך את קו הטבלה (Gemini זיהה; `doItemsLayout`/resize לא עזרו). גם עטיפה ב-QWidget+layout נחתכה (המלכודת הידועה של ווידג'ט-תא עם layout).
+- **תרופה:** פעולה בשורה = **טקסט בתא** ("↩ שחזר", צבע, tooltip) + `cellClicked(r, c)` — כמו "✕ הסר" במיילים (v3.55) ו"תקן…" בצינתוקים (v3.54). אפס ווידג'טים בתאים = אפס בעיות גיאומטריה, וגם זול ב-500 שורות.
+- **וגם:** עמודת-פעולה חייבת `ResizeToContents` על טקסט אמיתי או `Fixed` — `ResizeToContents` מודד את הפריט, לא ווידג'ט.

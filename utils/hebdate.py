@@ -22,3 +22,15 @@ def auto_weekly_name(d: date) -> str:
         parsha = parsha.replace(", ", "־")     # "נצבים, וילך" → "נצבים־וילך"
         return f"חלוקת פרשת {parsha} — {heb}"
     return f"חלוקה שבועית — {heb}"
+
+
+def auto_holiday_name(d: date, label: str) -> str:
+    """שם ברירת-מחדל לחלוקת חג (v3.75): "חלוקת פסח — י״ד ניסן תשפ״ו".
+    label = "חלוקת פסח" / "חלוקת חג". החזרת "" = אין נתון (fallback לקורא)."""
+    try:
+        from pyluach import dates
+        g = dates.GregorianDate(d.year, d.month, d.day)
+        heb = g.to_heb().hebrew_date_string()
+    except Exception:
+        return ""
+    return f"{label} — {heb}"

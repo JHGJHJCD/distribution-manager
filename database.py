@@ -523,6 +523,11 @@ def init_db():
             conn.execute("ALTER TABLE distributions ADD COLUMN received INTEGER DEFAULT 1")
         if "guid" not in dist_cols:
             conn.execute("ALTER TABLE distributions ADD COLUMN guid TEXT DEFAULT ''")
+        # v3.75 (הכרעות יהודה 27/9/2026): חלוקת חג נזכרת ככזו — '' = חלוקה רגילה,
+        # '*' = חלוקת חג כללית, 'פסח' = חג מסוים. חלוקת חג היא חלוקה *נוספת*: לא
+        # מזיזה את התור הקבוע (ראה _history_last), ומוצגת בהיסטוריה של המשפחה.
+        if "holiday" not in dist_cols:
+            conn.execute("ALTER TABLE distributions ADD COLUMN holiday TEXT DEFAULT ''")
         # v3.60 back-fill (once): a card date that no history row explains came
         # from the Excel import / was typed — remember it as the base.
         # Every start re-derives last/next for everyone (cheap; ~500 rows): a card
@@ -534,6 +539,29 @@ def init_db():
         batch_cols = {row["name"] for row in conn.execute("PRAGMA table_info(dist_batches)")}
         if "guid" not in batch_cols:
             conn.execute("ALTER TABLE dist_batches ADD COLUMN guid TEXT DEFAULT ''")
+        if "holiday" not in batch_cols:
+            conn.execute("ALTER TABLE dist_batches ADD COLUMN holiday TEXT DEFAULT ''")
+        # v3.75 (הכרעת יהודה 27/9/2026): מקבל שנמחק נרשם — מי/מתי/מאיזה מחשב, עם
+        # צילום הכרטיס כדי שאפשר יהיה לשחזר. מקומי (מגיע מהמחשב השני דרך op rec_delete).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS deleted_recipients (
+                guid        TEXT PRIMARY KEY,
+                full_name   TEXT DEFAULT '',
+                phone       TEXT DEFAULT '',
+                deleted_at  TEXT DEFAULT '',
+                device      TEXT DEFAULT '',
+                source      TEXT DEFAULT '',
+                card_json   TEXT DEFAULT ''
+            )""")
+        # v3.75: קובצי-מראה (לוגו / תמונת רקע) נשמרים גם בתוך ה-DB כדי שגיבוי
+        # ושחזור במחשב חדש יחזירו אותם לבד (הכרעת יהודה 27/9/2026). לא מסונכרן.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS assets (
+                key       TEXT PRIMARY KEY,
+                name      TEXT DEFAULT '',
+                data      BLOB,
+                saved_at  TEXT DEFAULT ''
+            )""")
         # v3.47: שליחת-מיילים זוכרת את הקובץ המצורף ואת מצב הכותרת — "שלח שוב לנכשלים"
         # שולח את *המקור*, לא את מה שבטיוטה. נתיב מקומי; במחשב השני = שם בלבד (אזהרה).
         mail_cols = {row["name"] for row in conn.execute("PRAGMA table_info(mail_campaigns)")}
@@ -606,6 +634,10 @@ def init_db():
                          (_hash_password(str(row["value"])),))
 
     _migrate_legacy_dist_dates()
+    try:
+        restore_assets_to_disk()
+    except Exception:            # noqa: BLE001 — a cosmetic file must never block startup
+        pass
 
 
 _LEGACY_DATE_RE = re.compile(r"^\s*(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})\s*$")
@@ -1160,6 +1192,146 @@ def _remember_delete(conn, rec):
                      (rec["guid"], _utc_now()))
 
 
+# ─── מקבלים שנמחקו (v3.75) ────────────────────────────────────────────────────
+SOURCE_LABELS_DELETE = {"delete": "מחיקה", "force": "מחיקה כפויה (עם היסטוריה)",
+                        "dup": "מחיקת כפילות"}
+
+
+def _deleted_card_payload(rec: dict, source: str) -> dict:
+    """The extra fields the rec_delete op carries so the OTHER computer can log
+    who was deleted, by which computer, and keep the card for a restore."""
+    rec = rec or {}
+    card = {k: rec.get(k, "") for k in _RECIPIENT_FIELDS}
+    card["guid"] = rec.get("guid", "")
+    return {"name": rec.get("full_name", ""), "device": _device(), "source": source,
+            "card": card}
+
+
+def _remember_deleted_card(conn, rec: dict, source: str, device: str = "", ts: str = ""):
+    """Write one row to deleted_recipients (idempotent by guid)."""
+    if not rec or not rec.get("guid"):
+        return
+    card = {k: rec.get(k, "") for k in _RECIPIENT_FIELDS}
+    conn.execute(
+        "INSERT OR REPLACE INTO deleted_recipients "
+        "(guid, full_name, phone, deleted_at, device, source, card_json) VALUES (?,?,?,?,?,?,?)",
+        (rec["guid"], rec.get("full_name", "") or "", rec.get("phone1", "") or "",
+         ts or _utc_now(), device or _device(), source or "delete",
+         json.dumps(card, ensure_ascii=False)))
+
+
+def get_deleted_recipients(limit: int = 500) -> list[dict]:
+    """Newest first. Each row: guid, full_name, phone, deleted_at, device, source, card_json."""
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM deleted_recipients ORDER BY deleted_at DESC LIMIT ?",
+                            (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def restore_deleted_recipient(guid: str) -> tuple:
+    """Bring a deleted card back as a NEW recipient (new guid — the old one is a
+    tombstone on both computers). Returns (new_id or None, message). If a card
+    with the same name+phone already exists (restored on the other computer),
+    nothing is added and the log row is dropped."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM deleted_recipients WHERE guid=?", (guid,)).fetchone()
+    if not row:
+        return None, "הרשומה לא נמצאה"
+    try:
+        card = json.loads(row["card_json"] or "{}")
+    except ValueError:
+        card = {}
+    if not card.get("full_name"):
+        card["full_name"] = row["full_name"] or ""
+    name, phone = card.get("full_name", ""), (card.get("phone1") or "")
+    with get_connection() as conn:
+        dup = conn.execute("SELECT id FROM recipients WHERE full_name=? AND COALESCE(phone1,'')=?",
+                           (name, phone)).fetchone()
+    if dup:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM deleted_recipients WHERE guid=?", (guid,))
+        return None, f"{name} כבר קיים ברשימה (שוחזר במחשב אחר) — לא נוסף שוב."
+    for k in ("guid", "id", "updated_at", "last_distribution", "next_distribution"):
+        card.pop(k, None)
+    new_id = add_recipient(card)
+    with get_connection() as conn:
+        conn.execute("DELETE FROM deleted_recipients WHERE guid=?", (guid,))
+    return new_id, f"{name} שוחזר לרשימת המקבלים ✓"
+
+
+def changed_fields_summary(before: dict, after: dict) -> list:
+    """Hebrew labels of the card fields that differ between two snapshots
+    (v3.75 stale-edit guard). Derived/technical fields are ignored."""
+    out = []
+    for f in _TRACKED_FIELDS:
+        if _hist_norm((before or {}).get(f)) != _hist_norm((after or {}).get(f)):
+            out.append(FIELD_LABELS_HE.get(f, f))
+    return out
+
+
+# ─── קובצי-מראה בתוך ה-DB (v3.75) ────────────────────────────────────────────
+ASSET_LOGO = "logo"
+ASSET_BG = "app_bg"
+
+
+def save_asset(key: str, path: str) -> bool:
+    """Store a copy of the file (logo / wallpaper) inside the DB so a backup
+    carries it. Returns False when the file can't be read."""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return False
+    with get_connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO assets (key, name, data, saved_at) VALUES (?,?,?,?)",
+                     (key, os.path.basename(path), data, _utc_now()))
+    return True
+
+
+def delete_asset(key: str):
+    with get_connection() as conn:
+        conn.execute("DELETE FROM assets WHERE key=?", (key,))
+
+
+def get_asset(key: str):
+    """(name, bytes) or None."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT name, data FROM assets WHERE key=?", (key,)).fetchone()
+    return (row["name"], row["data"]) if row and row["data"] else None
+
+
+def restore_assets_to_disk() -> list:
+    """After a restore / on a new computer: write back the logo and wallpaper
+    files that the DB holds but the disk lacks. Returns the keys written."""
+    written = []
+    logo = get_asset(ASSET_LOGO)
+    if logo and not os.path.exists(USER_LOGO_PATH):
+        try:
+            os.makedirs(os.path.dirname(USER_LOGO_PATH), exist_ok=True)
+            with open(USER_LOGO_PATH, "wb") as fh:
+                fh.write(logo[1])
+            written.append(ASSET_LOGO)
+        except OSError:
+            pass
+    bg = get_asset(ASSET_BG)
+    if bg:
+        d, stem = os.path.dirname(APP_BG_PATH), os.path.basename(APP_BG_PATH)
+        try:
+            present = any(fn.startswith(stem + ".") for fn in os.listdir(d))
+        except OSError:
+            present = False
+        if not present:
+            ext = os.path.splitext(bg[0])[1] or ".png"
+            try:
+                os.makedirs(d, exist_ok=True)
+                with open(APP_BG_PATH + ext, "wb") as fh:
+                    fh.write(bg[1])
+                written.append(ASSET_BG)
+            except OSError:
+                pass
+    return written
+
+
 def delete_recipient(rec_id: int):
     """Delete a recipient. Raises ValueError if they have distribution history."""
     rec = get_recipient(rec_id)
@@ -1179,8 +1351,10 @@ def delete_recipient(rec_id: int):
         conn.execute("DELETE FROM change_log WHERE recipient_id=? OR (rec_guid=? AND rec_guid<>'')",
                      (rec_id, (rec or {}).get("guid") or ""))
         _remember_delete(conn, rec)
+        _remember_deleted_card(conn, rec, "delete")
     if rec and rec.get("guid"):
-        _sync_log("rec_delete", {"guid": rec["guid"], "force": False})
+        _sync_log("rec_delete", {"guid": rec["guid"], "force": False,
+                                 **_deleted_card_payload(rec, "delete")})
 
 
 def force_delete_recipient(rec_id: int):
@@ -1191,9 +1365,10 @@ def force_delete_recipient(rec_id: int):
         conn.execute("DELETE FROM change_log WHERE recipient_id=? OR (rec_guid=? AND rec_guid<>'')",
                      (rec_id, (rec or {}).get("guid") or ""))
         conn.execute("DELETE FROM recipients WHERE id=?", (rec_id,))
+        _remember_deleted_card(conn, rec, "force")
         _remember_delete(conn, rec)
     if rec and rec.get("guid"):
-        _sync_log("rec_delete", {"guid": rec["guid"], "force": True})
+        _sync_log("rec_delete", {"guid": rec["guid"], "force": True, **_deleted_card_payload(rec, "force")})
 
 
 # ─── Next Wednesday + frequency-aware next distribution ───────────────────────
@@ -1672,8 +1847,13 @@ def compute_suggested_n(total_products: int) -> tuple[int, int]:
 def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
                            quantity, distributor: str,
                            dist_name: str = "", general_note: str = "",
-                           not_received: list[dict] = None):
+                           not_received: list[dict] = None, holiday: str = ""):
     """Add many distributions at once and update recipients' last/next distribution.
+
+    `holiday` (v3.75): '' = a regular round; '*' / a holiday name = a HOLIDAY
+    distribution — remembered on the batch and on every row, shown in the
+    family's history, and treated as an EXTRA round that never moves the
+    regular Wednesday turn (user decision 27/9/2026).
 
     Also records ONE batch row (the distribution event) that the "חלוקות" tab
     lists — capturing the shared header, the multi-product breakdown (carried in
@@ -1686,6 +1866,7 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
     UNTOUCHED: a no-show didn't get anything, so their seniority clock keeps
     running and they stay due for the next round."""
     not_received = not_received or []
+    holiday = (holiday or "").strip()
     souls_total = 0
     for rec in records:
         try:
@@ -1698,9 +1879,9 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
         cur = conn.execute(
             "INSERT INTO dist_batches "
             "(dist_name, dist_date, products, quantity, distributor, general_note, "
-            " recipient_count, souls_total, guid) VALUES (?,?,?,?,?,?,?,?,?)",
+            " recipient_count, souls_total, guid, holiday) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (dist_name or "", dist_date, what_dist, quantity or 0, distributor or "",
-             general_note or "", len(records), souls_total, batch_guid)
+             general_note or "", len(records), souls_total, batch_guid, holiday)
         )
         batch_id = cur.lastrowid
 
@@ -1715,12 +1896,12 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
             row_guid = uuid.uuid4().hex
             conn.execute(
                 "INSERT INTO distributions "
-                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received, guid) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,1,?)",
+                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received, guid, holiday) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?)",
                 (rec.get("id"), rec.get("full_name", ""), dist_date,
                  rec.get("area", ""), rec.get("souls", 0),
                  what_dist, quantity, distributor,
-                 rec.get("notes", ""), batch_id, row_guid)
+                 rec.get("notes", ""), batch_id, row_guid, holiday)
             )
             # last/next are re-derived from the history that now exists (single
             # source of truth — the same function the other computer runs), so an
@@ -1740,12 +1921,12 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
             row_guid = uuid.uuid4().hex
             conn.execute(
                 "INSERT INTO distributions "
-                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received, guid) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,0,?)",
+                "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received, guid, holiday) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?)",
                 (rec.get("id"), rec.get("full_name", ""), dist_date,
                  rec.get("area", ""), rec.get("souls", 0),
                  what_dist, 0, distributor,
-                 rec.get("notes", ""), batch_id, row_guid)
+                 rec.get("notes", ""), batch_id, row_guid, holiday)
             )
             sync_rows.append({"guid": row_guid, "rec_guid": _rec_guid(conn, rec),
                               "recipient_name": rec.get("full_name", ""),
@@ -1757,7 +1938,8 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
         "batch": {"dist_name": dist_name or "", "dist_date": dist_date,
                   "products": what_dist, "quantity": quantity or 0,
                   "distributor": distributor or "", "general_note": general_note or "",
-                  "recipient_count": len(records), "souls_total": souls_total},
+                  "recipient_count": len(records), "souls_total": souls_total,
+                  "holiday": holiday},
         "rows": sync_rows,
     })
     return batch_id
@@ -1930,18 +2112,25 @@ def _valid_iso(s) -> str:
         return ""
 
 
-def _history_last(conn, rec_id, regular_only: bool = False) -> str:
+def _history_last(conn, rec_id, regular_only: bool = False, max_date: str = "") -> str:
     # received=1 only: a recorded no-show must never become someone's
     # "last distribution" — they didn't actually receive anything.
     # Only real ISO dates compete: one junk legacy value ("26/08/2026") sorts above
     # every ISO string and would otherwise hide the whole history.
     # regular_only: skip Sun–Tue (strftime %w 0–2) — at this fund a distribution on
     # those days is an EXTRA round, not the Wednesday one (user decision 25/9/2026).
-    extra = " AND strftime('%w', dist_date) NOT IN ('0','1','2')" if regular_only else ""
+    # A holiday distribution (v3.75) is an extra round too — even on a Wednesday.
+    # max_date: ignore rows dated after it (a far-future typo, see _recompute).
+    extra = (" AND strftime('%w', dist_date) NOT IN ('0','1','2')"
+             " AND COALESCE(holiday,'')=''") if regular_only else ""
+    args = [rec_id]
+    if max_date:
+        extra += " AND dist_date <= ?"
+        args.append(max_date)
     row = conn.execute("SELECT MAX(dist_date) AS m FROM distributions "
                        "WHERE recipient_id=? AND received=1 AND dist_date GLOB "
                        "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'" + extra,
-                       (rec_id,)).fetchone()
+                       args).fetchone()
     return _valid_iso(row["m"] if row else "")
 
 
@@ -1966,23 +2155,29 @@ def _recompute_recipient_dates(conn, rec_id):
       next = calculate_next_dist(last, frequency)   ('' for one-time / no frequency)
     Every write path (record / delete / sync apply / card edit / import) calls this,
     so the card can't drift from the history and both computers reach the same
-    answer. A far-future base (typo) is ignored once real history exists."""
+    answer. A date AFTER the upcoming Wednesday (Excel typo / mistyped round) is
+    ignored entirely — user decision 27/9/2026: the regular is then simply due,
+    instead of vanishing from the weekly list until the typo date passes."""
     row = conn.execute("SELECT frequency, last_dist_base FROM recipients WHERE id=?",
                        (rec_id,)).fetchone()
     if not row:
         return
     freq = row["frequency"] or ""
-    hist = _history_last(conn, rec_id)
+    today = date.today()
+    horizon = (today if today.weekday() == 2 else next_wednesday(today)).isoformat()
+    hist = _history_last(conn, rec_id, max_date=horizon)
     base = _valid_iso(row["last_dist_base"])
-    if base and hist and base > (date.today() + timedelta(days=7)).isoformat():
+    if base and base > horizon:
         base = ""
     last = max(hist, base)
     if freq and freq != "חד-פעמי":
         # never served → due at the upcoming Wednesday (same answer get_weekly_list gives)
-        # The turn counts from the last REGULAR distribution: a Sun–Tue one is an
-        # extra round (user decision 25/9/2026) and doesn't push the turn.
-        nxt = calculate_next_dist(max(_history_last(conn, rec_id, regular_only=True), base),
-                                  freq).isoformat()
+        # The turn counts from the last REGULAR distribution: a Sun–Tue one and a
+        # holiday distribution are extra rounds (user decisions 25/9 + 27/9/2026)
+        # and don't push the turn.
+        nxt = calculate_next_dist(
+            max(_history_last(conn, rec_id, regular_only=True, max_date=horizon), base),
+            freq).isoformat()
     else:
         nxt = ""
     conn.execute("UPDATE recipients SET last_distribution=?, next_distribution=? WHERE id=?",
@@ -2592,6 +2787,7 @@ def reset_all_data(tzintuk: bool = False):
         conn.execute("DELETE FROM dist_batches")
         conn.execute("DELETE FROM change_log")
         conn.execute("DELETE FROM sync_deleted")
+        conn.execute("DELETE FROM deleted_recipients")
         conn.execute("DELETE FROM recipients")
         # v3.27 — the voice-call history goes too: it holds the phone numbers
         # of the recipients just deleted and drives the "already sent for

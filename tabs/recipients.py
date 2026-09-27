@@ -36,6 +36,37 @@ from utils.timefmt import fdate as _fdate   # one shared copy (סקירת בשל
 from utils.backup import auto_backup_async, auto_backup
 from utils.excel_utils import import_from_excel, _FULL_FIELDS
 
+
+def save_card_edit(parent, rec_id: int, loaded: dict, dlg, source: str = "edit") -> bool:
+    """v3.75 — THE way to save a card edited in RecipientDialog (all screens).
+    Stale-edit guard (user decision 27/9/2026): if the card changed since it was
+    opened (the other computer edited it meanwhile — a sync landed), ASK before
+    overwriting instead of silently winning by last-write. A card that was
+    deleted meanwhile is not re-created. Returns True when saved."""
+    current = db.get_recipient(rec_id)
+    name = (loaded or {}).get("full_name", "") or ""
+    if current is None:
+        QMessageBox.warning(parent, "הכרטיס נמחק בינתיים",
+                            f"המקבל {name} נמחק בזמן שהכרטיס היה פתוח (כנראה במחשב השני).\n"
+                            "השינויים לא נשמרו.")
+        return False
+    if (current.get("updated_at") or "") != ((loaded or {}).get("updated_at") or ""):
+        changed = db.changed_fields_summary(loaded, current)
+        what = ("שדות ששונו: " + ", ".join(changed[:8]) + (" ועוד…" if len(changed) > 8 else "")
+                if changed else "")
+        ans = QMessageBox.question(
+            parent, "הכרטיס שונה בינתיים",
+            f"הכרטיס של {name} שונה בזמן שהיה פתוח אצלך — כנראה מהמחשב השני.\n"
+            + (what + "\n\n" if what else "\n")
+            + "לשמור את השינויים שלך ולדרוס את מה שנשמר שם?\n"
+            "(\"לא\" = לסגור בלי לשמור; פתח את הכרטיס שוב כדי לראות את הגרסה החדשה.)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if ans != QMessageBox.StandardButton.Yes:
+            return False
+    db.update_recipient(rec_id, dlg.get_data(), source=source)
+    return True
+
 # key → Hebrew label for the import-review dialog (reuses the export labels).
 _FIELD_LABELS = {k: v for k, v in _FULL_FIELDS}
 
@@ -663,7 +694,9 @@ class RecipientsTab(QWidget):
         rec = db.get_recipient(rec_id)
         dlg = RecipientDialog(self, rec)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            db.update_recipient(rec_id, dlg.get_data())
+            if not save_card_edit(self, rec_id, rec, dlg):
+                self.refresh()
+                return
             auto_backup_async()
             self.refresh()
             if self.main_win:

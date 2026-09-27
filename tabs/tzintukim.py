@@ -2326,12 +2326,13 @@ class TzintukimTab(QWidget):
         rec = db.get_recipient(rec_id)
         if not rec:
             return
-        from tabs.recipients import RecipientDialog
+        from tabs.recipients import RecipientDialog, save_card_edit
         from utils.backup import auto_backup_async
         dlg = RecipientDialog(self, rec)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        db.update_recipient(rec_id, dlg.get_data())
+        if not save_card_edit(self, rec_id, rec, dlg):
+            return
         auto_backup_async()
         gt = getattr(self.main, "group_tab", None)
         if gt is not None:
@@ -2486,7 +2487,7 @@ class TzintukimTab(QWidget):
             + (f"&nbsp;&nbsp;<span style='color:{mut}; font-weight:500'>{tail}</span>"
                if tail else ""))
 
-    _HIST_STATUS = {"sending": ("📡 שולח עכשיו", "#0f766e"), "done": ("✓ הסתיים", "#166534"),
+    _HIST_STATUS = {"sending": ("📡 שולח עכשיו", "#0f766e"), "done": ("✓ הושלם", "#166534"),
                     "stopping": ("⛔ נעצר — ממתין לתוצאות", "#991b1b"),
                     "scheduled": ("⏳ מתוזמן", "#92600a"), "canceled": ("בוטל", "#6b7280"),
                     "sched_failed": ("⚠ התזמון נכשל", "#991b1b")}
@@ -4448,7 +4449,7 @@ class TzintukimTab(QWidget):
         if st.get("finished"):
             self._chain_next = True      # a smart send has more hour groups to track
             self.btn_stop_send.setVisible(False)
-            head = ("השליחה נעצרה ⛔ —" if st.get("stopped") else "הקמפיין הסתיים ✓ —")
+            head = ("השליחה נעצרה ⛔ —" if st.get("stopped") else "הקמפיין הושלם ✓ —")
             self.lbl_prog.setText(
                 f"{head} {st['delivered']} קיבלו את ההודעה, "
                 f"{st['failed']} נכשלו. התשובות בסקר (הקשה {yemot.SURVEY_EXT}) "
@@ -4674,7 +4675,7 @@ class TzintukimTab(QWidget):
             self.progress.setRange(0, 1)
             self.progress.setValue(1)
             self.lbl_prog.setText(
-                f"המעקב הסתיים ✓ — {returned} חזרו לשיחה ושמעו את ההודעה. "
+                f"המעקב הושלם ✓ — {returned} חזרו לשיחה ושמעו את ההודעה. "
                 f"התשובות בסקר (הקשה {yemot.SURVEY_EXT}) נשמרות בקו וממשיכות "
                 "להתעדכן — כפתור \"רענן תשובות\" בהיסטוריה.")
             self._persist_callback(st, final=True,

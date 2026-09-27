@@ -49,7 +49,7 @@ ok("guids assigned at insert", bool(r1["guid"]) and bool(r2["guid"]) and r1["gui
 
 batch_id = db.bulk_add_distributions([dict(r1)], "2026-08-19", "מארז מזון", 1, "משה",
                                      dist_name="חלוקת בדיקה",
-                                     not_received=[dict(r2)])
+                                     not_received=[dict(r2)], holiday="פסח")
 n_seed = sync.enable_sync(shared, seed=True)
 ok("A seeded snapshot", n_seed >= 3, f"records={n_seed}")
 ok("A journal exists in shared folder",
@@ -73,6 +73,10 @@ b_recs = db.get_batch_recipients(batches_b[0]["id"]) if batches_b else []
 ok("B batch has both rows (received + no-show)", len(b_recs) == 2, f"rows={len(b_recs)}")
 got_flags = sorted((r.get("received", 1) or 0) for r in b_recs)
 ok("B no-show flag survived", got_flags == [0, 1], str(got_flags))
+ok("B batch + rows carry the holiday code (v3.75)",
+   batches_b and batches_b[0].get("holiday") == "פסח"
+   and all(r.get("holiday") == "פסח" for r in b_recs),
+   f"{batches_b[0].get('holiday') if batches_b else None} / {[r.get('holiday') for r in b_recs]}")
 ok("B last_distribution recomputed",
    by_name.get("ישראל כהן", {}).get("last_distribution") == "2026-08-19")
 ok("B no-show dates untouched",
@@ -129,12 +133,17 @@ a_new = [r for r in db.get_all_recipients() if r["full_name"] == "רחל אבר�
 ok("A received the holiday mark (v3.52)",
    int(a_new.get("holiday_support") or 0) == 1 and a_new.get("holidays") == "פסח,סוכות",
    f"{a_new.get('holiday_support')!r}/{a_new.get('holidays')!r}")
+sync.set_device_name("מחשב-א")          # v3.75: the deletion log names the deleting computer
 db.delete_recipient(a_new["id"])
 sync.run_sync()
 use_machine(dir_b)
 sync.run_sync()
 ok("B mirrored the delete",
    all(r["full_name"] != "רחל אברהם" for r in db.get_all_recipients()))
+_dl_b = [r for r in db.get_deleted_recipients() if r["full_name"] == "רחל אברהם"]
+ok("B logged the deletion with A's device name (v3.75)",
+   len(_dl_b) == 1 and _dl_b[0]["device"] == "מחשב-א" and _dl_b[0]["source"] == "delete",
+   str(_dl_b))
 
 # ── Settings: synced key travels, excluded key does not ──────────────────────
 db.set_setting("available_products", "42")

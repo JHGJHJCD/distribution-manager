@@ -178,7 +178,7 @@ assert tz.table.item(i_ok, 3).text() == "● מוכן"
 # היסטוריה: 7 עמודות, עמודת מצב, "מחר HH:MM", "לא הגיבו"
 assert tz.hist.columnCount() == 7 and tz.hist.rowCount() == 4, (tz.hist.columnCount(), tz.hist.rowCount())
 statuses = [tz.hist.item(r, 2).text() for r in range(tz.hist.rowCount())]
-assert "⏳ מתוזמן" in statuses and "✓ הסתיים" in statuses and "⛔ נעצר באמצע" in statuses, statuses
+assert "⏳ מתוזמן" in statuses and "✓ הושלם" in statuses and "⛔ נעצר באמצע" in statuses, statuses
 whens = [tz.hist.item(r, 0).text() for r in range(tz.hist.rowCount())]
 assert any(w.startswith("מחר") for w in whens), whens
 assert any("לא הגיבו" in tz.hist.item(r, 6).text() for r in range(tz.hist.rowCount()))

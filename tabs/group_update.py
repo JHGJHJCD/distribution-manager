@@ -2132,7 +2132,20 @@ class GroupUpdateTab(QWidget):
 
     @classmethod
     def _is_auto_name(cls, name: str) -> bool:
-        return bool(name) and name.startswith(cls._AUTO_NAME_PREFIXES)
+        if not name:
+            return False
+        if name.startswith(cls._AUTO_NAME_PREFIXES):
+            return True
+        # v3.75: the auto holiday name "חלוקת פסח — <תאריך עברי>" / "חלוקת חג — …"
+        return any(name.startswith(f"{holidays.dist_label(c)} — ")
+                   for c in [holidays.ANY] + list(holidays.HOLIDAYS))
+
+    def _active_holiday(self) -> str:
+        """The holiday code of the distribution being prepared ('' = regular):
+        set only in 'סינון מותאם' with a holiday criterion (v3.52)."""
+        if self._current_mode() != "filter":
+            return ""
+        return selection.holiday_criterion(db.get_filter_criteria())
 
     def _effective_dist_name(self):
         """The distribution name to use for printing / PDF / email / saving.
@@ -2144,13 +2157,18 @@ class GroupUpdateTab(QWidget):
         name = self.name_input.currentText().strip()
         if name:
             return name
+        hol = self._active_holiday()
         try:
             iso = self.date_edit.get_iso()
-            name = hebdate.auto_weekly_name(date.fromisoformat(iso))
+            if hol:
+                name = hebdate.auto_holiday_name(date.fromisoformat(iso), holidays.dist_label(hol))
+            else:
+                name = hebdate.auto_weekly_name(date.fromisoformat(iso))
         except (ValueError, TypeError):
             name = ""
         if not name:      # pyluach unavailable / bad date → old Gregorian format
-            name = self._AUTO_NAME_PREFIX + _fdate(self.date_edit.get_iso())
+            prefix = (holidays.dist_label(hol) + " — ") if hol else self._AUTO_NAME_PREFIX
+            name = prefix + _fdate(self.date_edit.get_iso())
         self.name_input.setCurrentText(name)
         return name
 
@@ -2552,6 +2570,9 @@ class GroupUpdateTab(QWidget):
         self.lbl_total.setText(f"סה\"כ ברשימה: {total}")
         self.lbl_checked.setText(f"סומנו: {checked}")
         self.lbl_souls.setText(f"נפשות: {souls}")
+        # v3.75: the save button says how many will be recorded (like "שלח עכשיו ל-N")
+        self.btn_save.setText(f" שמור חלוקה ל-{checked}" if self._stage == "record" and checked
+                              else " שמור חלוקה")
         # Live one-line summary for the sticky bottom bar (v3.03) — in the record
         # stage it leads with how many are ticked; in prep it's the list size.
         if self._stage == "record":
@@ -2654,7 +2675,8 @@ class GroupUpdateTab(QWidget):
         with busy_cursor():
             db.bulk_add_distributions(checked, dist_date, "", 0, distributor,
                                       dist_name=dist_name, general_note=general_note,
-                                      not_received=not_received)
+                                      not_received=not_received,
+                                      holiday=self._active_holiday())
             auto_backup_async()
             # Merged action: also export a full Excel (of who received) to Downloads.
             try:
@@ -2669,11 +2691,14 @@ class GroupUpdateTab(QWidget):
         self._push_name_history(dist_name)
         self._reload_name_history()
 
-        self._after_round_recorded(dist_name)
+        left_holiday = self._after_round_recorded(dist_name)
 
         if export_path:
             reveal_in_folder(export_path)   # open Downloads with the file selected
         msg = f"נשמרה חלוקה ל-{len(checked)} מקבלים."
+        if left_holiday:
+            msg += ("\n\nחלוקת החג נרשמה כחלוקה נוספת (התור הקבוע לא זז), "
+                    "והמסך חזר למצב חלוקה רגילה.")
         if export_path:
             msg += f"\n\nקובץ אקסל מלא נשמר בתיקיית ההורדות ונפתחה התיקייה:\n{export_path}"
         elif export_err:
@@ -2702,6 +2727,28 @@ class GroupUpdateTab(QWidget):
         # silently reusing a stale one.
         if self._is_auto_name(dist_name or self.name_input.currentText().strip()):
             self.name_input.setCurrentText("")
+        return self._leave_holiday_mode()
+
+    def _leave_holiday_mode(self) -> bool:
+        """After a HOLIDAY distribution was recorded, go back to the regular weekly
+        round by itself (user decision 27/9/2026: the 'נתמכי פסח' filter used to
+        stick to the following week and the regulars simply weren't listed).
+        Clears the holiday criterion (the other thresholds are kept) and returns
+        the mode picker to 'רגיל'. Returns True when it did switch."""
+        if not self._active_holiday():
+            return False
+        crit = db.get_filter_criteria()
+        crit[selection.HOLIDAY_KEY] = ""
+        db.set_filter_criteria(crit)
+        idx = self.mode_combo.findData("schedule")
+        if idx >= 0 and self.mode_combo.currentIndex() != idx:
+            self.mode_combo.setCurrentIndex(idx)     # → _on_mode_changed → refresh
+        else:
+            self._update_mode_controls()
+            self.refresh()
+        if self.main_win:
+            self.main_win.status_msg("חלוקת החג נרשמה — המסך חזר לחלוקה רגילה")
+        return True
 
     def _reload_name_history(self):
         """Refresh the dropdown suggestions of the distributor + name combos,
@@ -2881,6 +2928,22 @@ class GroupUpdateTab(QWidget):
             QMessageBox.critical(self, "שגיאת שליחה",
                                  netblock.explain(e) or f"השליחה נכשלה:\n{e}")
             return False
+
+        # v3.75: the volunteer's mail shows up in the מיילים history like any send
+        try:
+            import json as _json
+            from utils import sync as _sync
+            subj = f"רשימת חלוקה — {dist_name} ({dist_date_disp})"
+            guid = db.add_mail_campaign(
+                subj, "רשימת החלוקה למתנדב (קובץ אקסל מצורף)", f"מתנדב · {to_addr}",
+                email_utils.sender_email(), 1, device=_sync.device_name(), attachment=path)
+            db.update_mail_campaign(guid, 1, 0, "done", report_json=_json.dumps(
+                [{"rec_id": None, "guid": "", "name": distributor or "מתנדב", "email": to_addr,
+                  "status": "sent", "error": ""}], ensure_ascii=False))
+            if self.main_win and hasattr(self.main_win, "mails_tab"):
+                self.main_win.mails_tab._needs_refresh = True
+        except Exception:                        # noqa: BLE001 — bookkeeping only
+            pass
 
         self._push_history("volunteer_emails_history", to_addr)
         self.volunteer_email_input.blockSignals(True)

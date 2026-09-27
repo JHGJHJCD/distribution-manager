@@ -8,11 +8,12 @@ received and the full note."""
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QLabel, QPushButton, QMessageBox, QAbstractItemView,
-    QDialog, QListWidget, QMenu
+    QDialog, QListWidget, QListWidgetItem, QMenu
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 import database as db
+import holidays
 from utils.ui import (attach_empty_state, refresh_empty_state, ALIGN_RIGHT,
                       enable_touch_scroll, apply_header_icons, busy_cursor,
                       reveal_in_folder)
@@ -44,7 +45,11 @@ class BatchDetailsDialog(QDialog):
         head = QLabel(
             f"<div dir='rtl' style='font-family:Segoe UI,Arial;'>"
             f"<span style='font-size:18px;font-weight:800;color:#0d2a4a;'>"
-            f"{batch.get('dist_name') or 'חלוקה'}</span><br>"
+            f"{batch.get('dist_name') or 'חלוקה'}</span>"
+            + (f"<br><span style='background:#fef3c7;color:#92400e;border-radius:8px;"
+               f"padding:1px 8px;font-size:12px;'>🎉 {holidays.dist_label(batch.get('holiday'))}"
+               f" · חלוקה נוספת — לא מזיזה את התור הקבוע</span>" if holidays.is_holiday_dist(batch) else "")
+            + f"<br>"
             f"<span style='color:#475569;'>{_fdate(batch.get('dist_date',''))} · "
             f"{batch.get('products') or ''} · מחלק: {batch.get('distributor') or '—'}</span></div>")
         head.setTextFormat(Qt.TextFormat.RichText)
@@ -66,13 +71,19 @@ class BatchDetailsDialog(QDialog):
         got = [r for r in recs if (r.get("received", 1) or 0) != 0]
         missed = [r for r in recs if (r.get("received", 1) or 0) == 0]
 
-        lay.addWidget(QLabel(f"מקבלים שקיבלו ({len(got)}):"))
+        got_lbl = QLabel(f"מקבלים שקיבלו ({len(got)}):"
+                         "  <span style='color:#64748b;font-size:12px;'>לחיצה כפולה על שם פותחת את הכרטיס</span>")
+        got_lbl.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(got_lbl)
         lst = QListWidget()
         enable_touch_scroll(lst)
         for r in got:
             nm = r.get("recipient_name", "") or "—"
             pnote = (r.get("notes") or "").strip()
-            lst.addItem(f"{nm}" + (f"   —   {pnote}" if pnote else ""))
+            it = QListWidgetItem(f"{nm}" + (f"   —   {pnote}" if pnote else ""))
+            it.setData(Qt.ItemDataRole.UserRole, r.get("recipient_id"))
+            lst.addItem(it)
+        lst.itemDoubleClicked.connect(self._open_card)      # v3.75 (הכרעת יהודה 27/9/2026)
         lay.addWidget(lst, 1)
 
         if missed:
@@ -84,13 +95,36 @@ class BatchDetailsDialog(QDialog):
             enable_touch_scroll(lst_missed)
             for r in missed:
                 nm = r.get("recipient_name", "") or "—"
-                lst_missed.addItem(nm)
+                it = QListWidgetItem(nm)
+                it.setData(Qt.ItemDataRole.UserRole, r.get("recipient_id"))
+                lst_missed.addItem(it)
+            lst_missed.itemDoubleClicked.connect(self._open_card)
             lay.addWidget(lst_missed, 1)
 
         btn = QPushButton("סגור")
         btn.setObjectName("neutral")
         btn.clicked.connect(self.accept)
         lay.addWidget(btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+    def _open_card(self, item):
+        """v3.75 — a double-click on a name opens the recipient's card (like the
+        tzintukim / mails lists). A recipient no longer in the list → message."""
+        rec_id = item.data(Qt.ItemDataRole.UserRole)
+        rec = db.get_recipient(rec_id) if rec_id is not None else None
+        if not rec:
+            QMessageBox.information(self, "", "המקבל הזה כבר לא ברשימת המקבלים.")
+            return
+        from tabs.recipients import RecipientDialog, save_card_edit
+        from utils.backup import auto_backup_async
+        dlg = RecipientDialog(self, rec)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        if not save_card_edit(self, rec_id, rec, dlg):
+            return
+        auto_backup_async()
+        mw = getattr(self.parent(), "main_win", None)
+        if mw is not None and hasattr(mw, "refresh_all"):
+            mw.refresh_all()
 
 
 class DistributionsTab(QWidget):

@@ -92,3 +92,21 @@ def from_text(text) -> tuple:
             or words & {"כן", "v", "x", "✓", "1", "true", "yes"}:
         return 1, ""
     return 0, ""
+
+
+# ─── חלוקת חג (v3.75) ──────────────────────────────────────────────────────────
+# Code stored on dist_batches.holiday / distributions.holiday:
+#   ''   → a regular round;  '*' → a general holiday distribution;  'פסח' → that holiday.
+ANY = "*"
+
+
+def dist_label(code) -> str:
+    """Short Hebrew tag for a distribution's holiday code: '' / 'חלוקת חג' / 'חלוקת פסח'."""
+    code = (str(code or "")).strip()
+    if not code:
+        return ""
+    return "חלוקת חג" if code == ANY else f"חלוקת {code}"
+
+
+def is_holiday_dist(row: dict) -> bool:
+    return bool((str((row or {}).get("holiday") or "")).strip())

@@ -676,6 +676,11 @@ def _apply_rec_delete(conn, rec: dict):
             conn.execute("DELETE FROM change_log WHERE recipient_id=? OR (rec_guid=? AND rec_guid<>'')",
                          (rid, rec.get("guid") or ""))
             deleted = True
+    if deleted:
+        # v3.75: the deletion log on THIS computer too — who was deleted, when,
+        # by which computer (the op carries the peer's device name).
+        db._remember_deleted_card(conn, before, rec.get("source") or "delete",
+                                  device=rec.get("device") or "", ts=rec.get("ts") or "")
     if deleted and _RECORD_INCOMING:
         _record_incoming(conn, "rec_delete", rec.get("guid") or "",
                          before.get("full_name", ""),
@@ -689,13 +694,14 @@ def _apply_batch_add(conn, rec: dict):
     if conn.execute("SELECT 1 FROM dist_batches WHERE guid=?", (guid,)).fetchone():
         return   # already applied (idempotent)
     b = rec.get("batch") or {}
+    holiday = (str(b.get("holiday") or "")).strip()
     cur = conn.execute(
         "INSERT INTO dist_batches (dist_name, dist_date, products, quantity, "
-        "distributor, general_note, recipient_count, souls_total, guid) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "distributor, general_note, recipient_count, souls_total, guid, holiday) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         (b.get("dist_name", ""), b.get("dist_date", ""), b.get("products", ""),
          b.get("quantity", 0), b.get("distributor", ""), b.get("general_note", ""),
-         b.get("recipient_count", 0), b.get("souls_total", 0), guid))
+         b.get("recipient_count", 0), b.get("souls_total", 0), guid, holiday))
     batch_id = cur.lastrowid
     affected = []
     for row in rec.get("rows") or []:
@@ -707,12 +713,13 @@ def _apply_batch_add(conn, rec: dict):
         conn.execute(
             "INSERT INTO distributions (recipient_id, recipient_name, dist_date, "
             "area, souls, what_dist, quantity, distributor, notes, batch_id, "
-            "received, guid) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "received, guid, holiday) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (rid, row.get("recipient_name", ""), b.get("dist_date", ""),
              row.get("area", ""), row.get("souls", 0), b.get("products", ""),
              b.get("quantity", 0) if row.get("received", 1) else 0,
              b.get("distributor", ""), row.get("notes", ""), batch_id,
-             1 if row.get("received", 1) else 0, row.get("guid") or uuid.uuid4().hex))
+             1 if row.get("received", 1) else 0, row.get("guid") or uuid.uuid4().hex,
+             holiday))
         if rid is not None:
             affected.append((rid, bool(row.get("received", 1))))
     # Re-derive each affected recipient's last/next from the history that now
@@ -1199,7 +1206,7 @@ def _snapshot_body(include_settings: bool = True) -> int:
             "guid": b.get("guid") or "",
             "batch": {k: b.get(k, "") for k in ("dist_name", "dist_date", "products",
                                                 "quantity", "distributor", "general_note",
-                                                "recipient_count", "souls_total")},
+                                                "recipient_count", "souls_total", "holiday")},
             "rows": rows})
         n += 1
     for d in dists:

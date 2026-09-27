@@ -930,12 +930,13 @@ class MailsTab(QWidget):
         rec = db.get_recipient(rec_id) if rec_id is not None else None
         if not rec:
             return
-        from tabs.recipients import RecipientDialog
+        from tabs.recipients import RecipientDialog, save_card_edit
         from utils.backup import auto_backup_async
         dlg = RecipientDialog(self, rec)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
-        db.update_recipient(rec_id, dlg.get_data())
+        if not save_card_edit(self, rec_id, rec, dlg):
+            return
         auto_backup_async()
         if self.main is not None and hasattr(self.main, "refresh_all"):
             self.main.refresh_all()

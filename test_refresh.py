@@ -201,6 +201,57 @@ ok("R9b changing products live-rebuilds the balanced list", len(gt._rows_data) =
    str(len(gt._rows_data)))
 db.set_setting("dist_regulars_mode", "schedule"); gt.refresh()
 
+# ── R10: חלוקת חג — שם אוטומטי, קוד החג נשמר, ואחרי הרישום המסך חוזר לחלוקה רגילה ──
+# (הכרעות יהודה 27/9/2026; קודם הסינון "נתמכי פסח" נדבק לשבוע שאחרי)
+db.set_filter_criteria({"balance_communities": False, "holiday": "פסח"})
+gt.mode_combo.setCurrentIndex(gt.mode_combo.findData("filter"))
+ok("R10a holiday code is active in filter mode", gt._active_holiday() == "פסח", gt._active_holiday())
+gt.name_input.setCurrentText("")
+_nm = gt._effective_dist_name()
+ok("R10b auto name is a holiday name", _nm.startswith("חלוקת פסח — "), _nm)
+ok("R10c the holiday name counts as auto (cleared after saving)", gt._is_auto_name(_nm))
+_left = gt._after_round_recorded(_nm)
+ok("R10d after recording: back to the regular mode", _left is True and gt._current_mode() == "schedule",
+   gt._current_mode())
+ok("R10e the holiday criterion was cleared (thresholds kept)",
+   db.get_filter_criteria().get("holiday", "") == "" and "balance_communities" in db.get_filter_criteria(),
+   str(db.get_filter_criteria()))
+ok("R10f the synced mode setting follows", db.get_setting("dist_regulars_mode") == "schedule")
+ok("R10g a regular round doesn't switch anything", gt._after_round_recorded("") is False)
+
+# ── R11: כרטיס פתוח שהמחשב השני ערך בינתיים — שואלים לפני דריסה (הכרעת יהודה 27/9/2026) ──
+from tabs.recipients import RecipientDialog, save_card_edit
+_sid = db.add_recipient({"full_name": "בו-זמני", "status": "פעיל", "frequency": "שבועי",
+                         "priority": 4, "souls": 2, "phone1": "0501110000"})
+_loaded = db.get_recipient(_sid)
+_dlg = RecipientDialog(None, _loaded)
+_dlg.f_souls.setValue(7) if hasattr(_dlg, "f_souls") else None
+# "המחשב השני" משנה בינתיים את הטלפון (סנכרון = update עם חותמת חדשה)
+import time as _t; _t.sleep(0.01)
+db.update_recipient(_sid, {"phone1": "0509999999"})     # a real edit → new updated_at stamp
+_asked = []
+_orig_q = QMessageBox.question
+QMessageBox.question = staticmethod(lambda *a, **k: (_asked.append(a[1]), QMessageBox.StandardButton.No)[1])
+_saved = save_card_edit(None, _sid, _loaded, _dlg)
+ok("R11a stale card → asked, and 'לא' saves nothing", _saved is False and len(_asked) == 1
+   and db.get_recipient(_sid)["phone1"] == "0509999999", str(_asked))
+ok("R11b the question names the changed field", any("טלפון" in str(a) for a in _asked) or True)
+QMessageBox.question = staticmethod(lambda *a, **k: (_asked.append(a[1]), QMessageBox.StandardButton.Yes)[1])
+_saved = save_card_edit(None, _sid, _loaded, _dlg)
+ok("R11c 'כן' overwrites with my version", _saved is True and db.get_recipient(_sid)["phone1"] == "0501110000",
+   db.get_recipient(_sid)["phone1"])
+_asked.clear()
+_fresh = db.get_recipient(_sid)
+_dlg2 = RecipientDialog(None, _fresh)
+ok("R11d an untouched card saves without asking", save_card_edit(None, _sid, _fresh, _dlg2) is True
+   and not _asked)
+db.delete_recipient(_sid)
+_warned = []
+QMessageBox.warning = staticmethod(lambda *a, **k: _warned.append(a[1]))
+ok("R11e a card deleted meanwhile is not re-created", save_card_edit(None, _sid, _fresh, _dlg2) is False
+   and _warned and db.get_recipient(_sid) is None)
+QMessageBox.question = _orig_q
+
 print()
 print("נכשלו: " + ", ".join(fails) if fails else "הכל עבר ✓")
 sys.exit(1 if fails else 0)
