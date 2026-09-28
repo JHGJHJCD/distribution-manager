@@ -306,13 +306,33 @@ class SettingsTab(QWidget):
         g.addWidget(self.no_show_spin, 1, 1)
         g.addWidget(_hint("0 = בלי התראות"), 1, 2)
 
+        # RULE 7 (v3.76): one-timers rotate — cooldown after receiving (synced).
+        self.cooldown_spin = QSpinBox()
+        self.cooldown_spin.setRange(0, 12)
+        self.cooldown_spin.setSuffix(" שבועות")
+        self.cooldown_spin.setFixedWidth(160)
+        self.cooldown_spin.setMinimumHeight(_INPUT_H)
+        try:
+            self.cooldown_spin.setValue(db.get_one_time_cooldown_weeks())
+        except Exception:
+            self.cooldown_spin.setValue(3)
+        self.cooldown_spin.setToolTip(
+            "מי שאינו קבוע (עדיפות ראשונה/שנייה) וקיבל בחלוקה — חוזר לרשימה "
+            "האוטומטית רק כעבור מספר השבועות הזה, כדי שהחד-פעמיים יתחלפו. "
+            "2 = לא פעמיים ברצף · 3 = חוזר אחרי 3 שבועות · 0 = בלי הפסקה "
+            "(הנזקק ביותר יכול לקבל כל שבוע). תמיד אפשר להוסיף ידנית.")
+        self.cooldown_spin.valueChanged.connect(self._on_cooldown_changed)
+        g.addWidget(_flabel("הפסקה לחד-פעמי אחרי שקיבל"), 2, 0)
+        g.addWidget(self.cooldown_spin, 2, 1)
+        g.addWidget(_hint("תחלופה בין החד-פעמיים · 0 = בלי"), 2, 2)
+
         self.lbl_password = QLabel("••••")
         self.lbl_password.setStyleSheet("color:#475569; letter-spacing:2px; font-size:15px; " + _LBL)
-        g.addWidget(_flabel("סיסמת כניסה"), 2, 0)
-        g.addWidget(self.lbl_password, 2, 1)
+        g.addWidget(_flabel("סיסמת כניסה"), 3, 0)
+        g.addWidget(self.lbl_password, 3, 1)
         btn_pwd = _btn("שנה סיסמה…", _BTN_GHOST, self._change_password,
                        "שנה את סיסמת הכניסה לאפליקציה", small=True)
-        g.addWidget(btn_pwd, 2, 2, alignment=Qt.AlignmentFlag.AlignLeft)
+        g.addWidget(btn_pwd, 3, 2, alignment=Qt.AlignmentFlag.AlignLeft)
         body.addLayout(g)
         _place(row, card, body)
 
@@ -932,6 +952,13 @@ class SettingsTab(QWidget):
             pass
         finally:
             self.no_show_spin.blockSignals(False)
+        try:
+            self.cooldown_spin.blockSignals(True)
+            self.cooldown_spin.setValue(db.get_one_time_cooldown_weeks())
+        except Exception:
+            pass
+        finally:
+            self.cooldown_spin.blockSignals(False)
 
         folder = db.get_setting("backup_folder") or ""
         if folder:
@@ -1037,6 +1064,10 @@ class SettingsTab(QWidget):
     def _on_no_show_changed(self, v):
         db.set_setting("no_show_alert_threshold", str(v))
         self._mark_others_stale()
+
+    def _on_cooldown_changed(self, v):
+        db.set_setting("onetime_cooldown_weeks", str(v))
+        self._mark_others_stale()      # משנה את רשימת החלוקה
 
     def _load_weights(self):
         self._weights_dirty = False

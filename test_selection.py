@@ -417,6 +417,86 @@ ok("H12 from_text: 'פסח וסוכות' / 'פסח / סוכות' keep both",
    f"{_hol.from_text('פסח וסוכות')} {_hol.from_text('פסח / סוכות')}")
 ok("H12 'ראש השנה ושבועות' keeps a two-word name", _hol.parse_list("ראש השנה ושבועות") == ["ראש השנה", "שבועות"])
 
+# ── RULE 6 (v3.76, יהודה 28/9/2026) — frequency is a HARD gate in every mode ──
+# A דו-שבועי/תלת-שבועי/חודשי regular whose turn has not come is OUT of the list
+# and the reserve, even with products to spare. Pure checks on selection.is_due.
+from datetime import date as _d, timedelta as _tdl
+_WED = _d(2026, 7, 1)                       # the Wednesday being prepared
+assert _WED.weekday() == 2
+def _reg(name, freq, last=None, nxt=None, **kw):
+    r = rec(name, priority=4, freq=freq, **kw)
+    r["last_distribution"] = last.isoformat() if last else ""
+    r["next_distribution"] = nxt.isoformat() if nxt else ""
+    return r
+ok("F1 דו-שבועי שקיבל שבוע שעבר — לא בתור",
+   not selection.is_due(_reg("a", "דו-שבועי", _WED - _tdl(days=7)), _WED))
+ok("F1 דו-שבועי שקיבל לפני שבועיים — בתור",
+   selection.is_due(_reg("a", "דו-שבועי", _WED - _tdl(days=14)), _WED))
+ok("F1 גבול: קיבל שבוע שעבר ביום חמישי (נרשם באיחור) — עדיין לא בתור",
+   not selection.is_due(_reg("a", "דו-שבועי", _WED - _tdl(days=6)), _WED))
+ok("F2 תלת-שבועי: לפני 14 ימים לא / לפני 21 כן",
+   not selection.is_due(_reg("a", "תלת-שבועי", _WED - _tdl(days=14)), _WED)
+   and selection.is_due(_reg("a", "תלת-שבועי", _WED - _tdl(days=21)), _WED))
+ok("F2 חודשי: לפני 21 ימים לא / לפני 28 כן",
+   not selection.is_due(_reg("a", "חודשי", _WED - _tdl(days=21)), _WED)
+   and selection.is_due(_reg("a", "חודשי", _WED - _tdl(days=28)), _WED))
+ok("F3 שבועי תמיד בתור (גם קיבל שבוע שעבר)",
+   selection.is_due(_reg("a", "שבועי", _WED - _tdl(days=7)), _WED))
+ok("F3 קבוע בלי תדירות — שער התדירות לא חל",
+   selection.is_due(_reg("b", "", _WED - _tdl(days=7)), _WED))
+ok("F3 חד-פעמי / בלי עדיפות — בלי הפסקה (0) השער לא חל",
+   selection.is_due(rec("o", priority=3, last_distribution=(_WED - _tdl(days=7)).isoformat()), _WED, 0)
+   and selection.is_due(rec("c", priority=None, freq="", last_distribution=(_WED - _tdl(days=7)).isoformat()), _WED, 0))
+# ── RULE 7 (v3.76, יהודה 28/9/2026) — one-timers rotate: cooldown after receiving ──
+_ot = lambda days: rec("o", priority=3, last_distribution=(_WED - _tdl(days=days)).isoformat())
+ok("F11 הפסקה 3 שבועות: קיבל לפני 7/14 ימים — לא; לפני 21 — כן",
+   not selection.is_due(_ot(7), _WED, 3) and not selection.is_due(_ot(14), _WED, 3)
+   and selection.is_due(_ot(21), _WED, 3))
+ok("F11 ברירת המחדל = 3 שבועות", selection.ONE_TIME_COOLDOWN_WEEKS_DEFAULT == 3
+   and not selection.is_due(_ot(14), _WED) and selection.is_due(_ot(21), _WED))
+# N = "חוזר לרשימה N שבועות אחרי שקיבל": 2 = לא פעמיים ברצף; 1 = בלי השפעה בפועל.
+ok("F11 הפסקה שבועיים: קיבל שבוע שעבר לא, לפני שבועיים כן",
+   not selection.is_due(_ot(7), _WED, 2) and selection.is_due(_ot(14), _WED, 2))
+ok("F11 קיבל שבוע שעבר ביום חמישי (נרשם באיחור) — נספר למחזור של שבוע שעבר",
+   not selection.is_due(_ot(6), _WED, 2) and selection.is_due(_ot(13), _WED, 2))
+ok("F12 קיבל במחזור הזה — נשאר ברשימה; מעולם לא קיבל — בתור",
+   selection.is_due(_ot(0), _WED, 3) and selection.is_due(rec("n", priority=3), _WED, 3))
+ok("F12 ההפסקה חלה גם על מי שאינו קבוע ובלי עדיפות (במצב סינון)",
+   not selection.is_due(rec("c", priority=None, freq="", last_distribution=(_WED - _tdl(days=7)).isoformat()), _WED, 3))
+ok("F12 ההפסקה לא נוגעת בקבוע שבועי",
+   selection.is_due(_reg("w", "שבועי", _WED - _tdl(days=7)), _WED, 3))
+ok("F13 not_due_reason לחד-פעמי", selection.not_due_reason(_ot(7), _WED, 3) == "קיבל ב-24/06 · הפסקה של 3 שבועות · חוזר ב-15/07",
+   selection.not_due_reason(_ot(7), _WED, 3))
+ok("F13 due_filter עם הפסקה: מי שקיבל שבוע שעבר יוצא, ומי שקיבל לפני חודש נשאר",
+   [r["id"] for r in selection.due_filter([_ot(7), dict(_ot(28), id="old")], _WED, cooldown_weeks=3)] == ["old"])
+ok("F4 קבוע שמעולם לא קיבל — בתור", selection.is_due(_reg("a", "חודשי"), _WED))
+ok("F5 קיבל במחזור הזה (הרביעי עצמו) — נשאר ברשימה, כמו ברשימת השבוע",
+   selection.is_due(_reg("a", "דו-שבועי", _WED), _WED))
+ok("F6 next_distribution הנגזר גובר על החישוב (חלוקת חג לא הזיזה את התור)",
+   selection.is_due(_reg("a", "דו-שבועי", _WED - _tdl(days=7), nxt=_WED), _WED)
+   and not selection.is_due(_reg("a", "דו-שבועי", _WED - _tdl(days=14), nxt=_WED + _tdl(days=7)), _WED))
+ok("F7 due_filter מסנן; ignore=True (חלוקת חג) לא מסנן",
+   [r["id"] for r in selection.due_filter(
+       [_reg("x", "דו-שבועי", _WED - _tdl(days=7)), _reg("y", "שבועי", _WED - _tdl(days=7))], _WED)] == ["y"]
+   and len(selection.due_filter([_reg("x", "דו-שבועי", _WED - _tdl(days=7))], _WED, ignore=True)) == 1)
+ok("F8 not_due_reason מסביר בעברית",
+   selection.not_due_reason(_reg("a", "דו-שבועי", _WED - _tdl(days=7)), _WED) == "דו-שבועי · קיבל ב-24/06 · התור הבא 08/07"
+   and selection.not_due_reason(_reg("a", "שבועי", _WED - _tdl(days=7)), _WED) == "",
+   selection.not_due_reason(_reg("a", "דו-שבועי", _WED - _tdl(days=7)), _WED))
+ok("F9 next_due = הטבלה האחת: שבועי/דו/תלת/חודשי מרביעי 17/06",
+   [selection.next_due("2026-06-17", f).isoformat() for f in ("שבועי", "דו-שבועי", "תלת-שבועי", "חודשי")]
+   == ["2026-06-24", "2026-07-01", "2026-07-08", "2026-07-15"],
+   str([selection.next_due("2026-06-17", f).isoformat() for f in ("שבועי", "דו-שבועי", "תלת-שבועי", "חודשי")]))
+# F10 — the gate runs BEFORE the community balance: a community whose members
+# are all not-due can't fill its quota, and the slots move to the others (the
+# app never pulls a not-yet-due regular back to fill).
+_pool = [dict(_reg(f"A{i}", "דו-שבועי", _WED - _tdl(days=7)), representative="א", souls=5) for i in range(3)] + \
+        [dict(_reg(f"B{i}", "שבועי", _WED - _tdl(days=7)), representative="ב", souls=3) for i in range(3)]
+_gated = selection.due_filter(_pool, _WED)
+_picked = selection.balance_by_community(_gated, {}, W_SOULS, 4)
+ok("F10 קהילה שכולה לא-בתור: המכסה עוברת לאחרות ואף לא-בתור לא נשאב להשלמה",
+   sorted(r["id"] for r in _picked) == ["B0", "B1", "B2"], str([r["id"] for r in _picked]))
+
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

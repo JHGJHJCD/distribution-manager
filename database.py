@@ -1373,63 +1373,21 @@ def force_delete_recipient(rec_id: int):
 
 # ─── Next Wednesday + frequency-aware next distribution ───────────────────────
 
-def next_wednesday(from_date: date = None) -> date:
-    d = from_date or date.today()
-    days_ahead = 2 - d.weekday()  # Wednesday = 2
-    if days_ahead <= 0:
-        days_ahead += 7
-    return d + timedelta(days=days_ahead)
-
-
-def cycle_wednesday(d: date) -> date:
-    """The distribution-cycle Wednesday a given date belongs to.
-
-    Distributions are anchored to Wednesdays. A date belongs to the most recent
-    Wednesday on-or-before it: recorded on time it carries that Wednesday; any day
-    after (Thu … the following Tue) is that same cycle recorded late. So the whole
-    week Wed→Tue maps to one Wednesday, and only the next Wednesday opens a new
-    cycle. This lets 'served for THIS cycle' be tested by cycle equality instead
-    of a raw day-count window that leaked into the previous week and dragged
-    bi-weekly/monthly recipients back onto every week's list."""
-    return d - timedelta(days=(d.weekday() - 2) % 7)   # Wednesday = 2
+# v3.76 (RULE 6, 28/9/2026): the Wednesday/interval arithmetic moved to the pure
+# selection module so the frequency gate (selection.is_due) and the derived
+# next_distribution use ONE table (selection.FREQUENCY_INTERVAL_DAYS). These
+# names stay here because ~20 callers use db.next_wednesday()/calculate_next_dist.
+import selection as _sel
+next_wednesday = _sel.next_wednesday
+cycle_wednesday = _sel.cycle_wednesday
 
 
 def calculate_next_dist(last_date_str: str, frequency: str) -> date:
-    """Return the correct next distribution date based on frequency."""
-    if not last_date_str:
-        # Never served yet: the recipient is due at the UPCOMING distribution
-        # (the coming Wednesday, or today if today is Wednesday) — not a week
-        # out. Otherwise a regular added on distribution day gets pushed to next
-        # week and silently drops off the current list (bug #pv59q).
-        if frequency == "חד-פעמי":
-            return next_wednesday()
-        today = date.today()
-        return today if today.weekday() == 2 else next_wednesday(today)
-    try:
-        last = date.fromisoformat(last_date_str)
-    except ValueError:
-        last = date.today()
-
-    # A distribution dated Thu–Sat belongs to the cycle of the Wednesday just
-    # before it (the operator recorded it a day or so late — the date field
-    # defaults to today). Without snapping back, "at least 14 days" from a
-    # Thursday lands 3 weeks out, so a bi-weekly regular silently skipped a turn
-    # (and a tri-weekly one waited 4 weeks).
-    if last.weekday() in (3, 4, 5):
-        last -= timedelta(days=last.weekday() - 2)
-
-    if frequency == "שבועי":
-        return next_wednesday(last + timedelta(days=1))
-    elif frequency == "דו-שבועי":
-        return next_wednesday(last + timedelta(days=13))
-    elif frequency == "תלת-שבועי":
-        return next_wednesday(last + timedelta(days=20))
-    elif frequency == "חודשי":
-        # every 4 weeks (user decision 17/9/2026) — +29 landed 5 weeks out
-        return next_wednesday(last + timedelta(days=27))
-    else:
-        # חד-פעמי or empty — use next Wednesday from today
-        return next_wednesday()
+    """Return the correct next distribution date based on frequency.
+    Never served → the UPCOMING Wednesday (bug #pv59q); Thu–Sat snaps back to
+    its cycle Wednesday; weekly +7 / bi-weekly +14 / tri-weekly +21 / monthly
+    +28 (user decision 17/9/2026). Delegates to selection.next_due."""
+    return _sel.next_due(last_date_str, frequency)
 
 
 # ─── Weekly distribution list ─────────────────────────────────────────────────
@@ -1607,6 +1565,8 @@ def get_one_time_list(area_filter: str = "הכל"):
             "SELECT * FROM recipients WHERE status='פעיל' AND frequency='חד-פעמי' ORDER BY full_name"
         ).fetchall()
     result = []
+    base_wed = selection.upcoming_wednesday()
+    cooldown = get_one_time_cooldown_weeks()
     for r in rows:
         r = dict(r)
         if area_filter != "הכל" and r.get("area", "") != area_filter:
@@ -1619,6 +1579,11 @@ def get_one_time_list(area_filter: str = "הכל"):
         r["last_dist_date"] = ld
         r["days_since"] = recency_days(r)
         r["in_distribution"] = r.get("priority") in PRIORITY_TIERS
+        # RULE 7 (v3.76): received within the cooldown → not a candidate this week
+        # (listed after the candidates, like the other non-distribution rows).
+        if r["in_distribution"] and not selection.is_due(r, base_wed, cooldown):
+            r["in_distribution"] = False
+            r["_cooldown"] = True
         result.append(r)
 
     in_dist = [r for r in result if r["in_distribution"]]
@@ -1646,9 +1611,14 @@ def get_regulars_scored(area_filter: str = "הכל"):
             "ORDER BY full_name"
         ).fetchall()
     result = []
+    base_wed = selection.upcoming_wednesday()
     for r in rows:
         r = dict(r)
         if area_filter != "הכל" and r.get("area", "") != area_filter:
+            continue
+        # RULE 6 (v3.76): a bi-weekly/tri-weekly/monthly regular whose turn has
+        # not come is OUT — even when products are left over.
+        if not selection.is_due(r, base_wed):
             continue
         ld_str = r.get("last_distribution") or ""
         try:
@@ -1675,6 +1645,8 @@ def get_scored_all(area_filter: str = "הכל"):
     are excluded. Regulars are flagged `_scored_regular`; one-timers keep their
     'חד-פעמי' frequency so the UI tints them distinctly."""
     today = date.today()
+    base_wed = selection.upcoming_wednesday(today)
+    cooldown = get_one_time_cooldown_weeks()
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM recipients WHERE status='פעיל'").fetchall()
     result = []
@@ -1686,8 +1658,12 @@ def get_scored_all(area_filter: str = "הכל"):
         if freq == "חד-פעמי":
             if r.get("priority") not in PRIORITY_TIERS:
                 continue                      # one-timer not up for distribution
+            if not selection.is_due(r, base_wed, cooldown):
+                continue                      # RULE 7 (v3.76): rotating — cooldown
         elif freq != "" or r.get("priority") == 4:
             r["_scored_regular"] = True        # a regular
+            if not selection.is_due(r, base_wed):
+                continue                       # RULE 6 (v3.76): turn not come → out
         else:
             continue                           # data-only row
         ld_str = r.get("last_distribution") or ""
@@ -1756,6 +1732,15 @@ def get_filtered_list(criteria: dict = None, area_filter: str = "הכל"):
     # v3.52: a holiday distribution is a HARD gate — people not marked as
     # holiday-supported never enter, not even as a community top-up.
     rows = selection.holiday_filter(rows, criteria)
+    # RULE 6 (v3.76): the frequency gate runs BEFORE the community balance, so a
+    # not-yet-due bi-weekly/monthly regular is neither picked nor used as a
+    # top-up, and the community quotas are computed over the people who CAN
+    # receive this week (a quota a community can't fill moves to the others).
+    # A holiday round is an extra distribution (v3.75) — the gate is skipped.
+    # RULE 7 (v3.76): the same pass rotates the one-timers (cooldown weeks).
+    rows = selection.due_filter(rows, selection.upcoming_wednesday(),
+                                ignore=bool(selection.holiday_criterion(criteria)),
+                                cooldown_weeks=get_one_time_cooldown_weeks())
     balance = (criteria or {}).get("balance_communities", True)
     try:
         products = int(get_setting("available_products") or 0)
@@ -1973,6 +1958,18 @@ def get_ui_font_percent() -> int:
         return {"small": 90, "large": 120}.get(legacy, 100)
     except Exception:
         return 100
+
+
+def get_one_time_cooldown_weeks() -> int:
+    """RULE 7 (v3.76): weeks a one-timer (עדיפות ראשונה/שנייה, or anyone who is
+    not a regular) stays out of the automatic list after receiving — so the
+    one-timers rotate instead of the neediest one receiving every week.
+    Synced setting `onetime_cooldown_weeks`; default 3 (יהודה 28/9/2026); 0 = off."""
+    try:
+        return max(0, int(get_setting("onetime_cooldown_weeks") or
+                          selection.ONE_TIME_COOLDOWN_WEEKS_DEFAULT))
+    except (TypeError, ValueError):
+        return selection.ONE_TIME_COOLDOWN_WEEKS_DEFAULT
 
 
 def get_no_show_threshold() -> int:

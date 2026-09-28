@@ -484,6 +484,8 @@ class _ManualAddDialog(QDialog):
         self._exclude = exclude_ids or set()
         self._hide_freq = set(hide_frequencies or ())
         self._checked = set()
+        self._base_wed = selection.upcoming_wednesday()
+        self._cooldown = db.get_one_time_cooldown_weeks()
         # EVERYONE — active and inactive alike (#6gcqq: "אני מעוניין שיופיע שם
         # כל האנשים"). Inactive rows are tagged and stay inactive when added.
         roster = [r for r in db.get_all_recipients() if r.get("id") not in self._exclude]
@@ -666,9 +668,13 @@ class _ManualAddDialog(QDialog):
 
             score = rec.get("need_score")
             score_txt = str(int(score)) if isinstance(score, (int, float)) else ""
+            # RULE 6 (v3.76): a regular whose turn hasn't come is still addable
+            # here (the manager knows best) — but he's flagged, and _add_manual
+            # asks before adding him.
+            not_due = selection.not_due_reason(rec, self._base_wed, self._cooldown)
             vals = [None,
                     self._PRIORITY_TXT.get(rec.get("priority"), "—"),
-                    (rec.get("frequency") or "—"),
+                    ((rec.get("frequency") or "—") + (" ⚠ לא בתור" if not_due else "")),
                     (rec.get("area") or ""),
                     score_txt,
                     ("לא פעיל" if inactive else "פעיל")]
@@ -678,6 +684,10 @@ class _ManualAddDialog(QDialog):
                 it.setTextAlignment(ALIGN_RIGHT if c != 4 else
                                     Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
                 t.setItem(i, c, it)
+            if not_due:
+                t.item(i, 2).setBackground(QColor("#fef3c7"))
+                t.item(i, 2).setForeground(QColor("#b45309"))
+                t.item(i, 2).setToolTip(f"לא בתור השבוע — {not_due}")
             if inactive:
                 for c in range(0, 6):
                     t.item(i, c).setForeground(QColor("#b91c1c"))
@@ -3149,6 +3159,23 @@ class GroupUpdateTab(QWidget):
             return
         ids = dlg.selected_ids()
         if not ids:
+            return
+        # RULE 6 (v3.76): adding a regular whose turn hasn't come is allowed but
+        # confirmed — the list itself never shows him this week.
+        base_wed = selection.upcoming_wednesday()
+        cooldown = db.get_one_time_cooldown_weeks()
+        early = []
+        for rid in ids:
+            rec = db.get_recipient(rid) or {}
+            reason = selection.not_due_reason(rec, base_wed, cooldown)
+            if reason:
+                early.append(f"• {rec.get('full_name', '')} — {reason}")
+        if early and QMessageBox.question(
+                self, "מקבל שלא בתור השבוע",
+                "לפי התדירות שלהם, התור של המקבלים הבאים עוד לא הגיע:\n\n"
+                + "\n".join(early) + "\n\nלהוסיף אותם לחלוקה בכל זאת?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         added = 0
         for rid in ids:

@@ -51,6 +51,142 @@ def is_one_time_candidate(rec: dict) -> bool:
     return (rec.get("frequency") or "") == "חד-פעמי" and rec.get("priority") in scoring.PRIORITY_TIERS
 
 
+# ── RULE 6 — frequency is a HARD gate in EVERY distribution mode (28/9/2026) ──
+# יהודה, 28/9/2026: "בדרך כלל יש לנו הרבה מוצרים, הרבה מעבר לקבועים — ולכן אנחנו
+# רוצים שדו-שבועי שקיבל שבוע שעבר לא יקבל, גם אם יש מספיק מוצרים. וכן חודשי
+# ותלת-שבועי." Until now only the plain 'schedule' mode honoured the interval;
+# scored/all/filter ranked every regular by need and pulled a bi-weekly back a
+# week after his turn. Now the turn is checked ONCE, here, before any ranking,
+# and database.py applies it to every mode (list AND reserve). Freed slots go to
+# the next eligible people; a shorter list is left short — never back-filled
+# with a not-yet-due regular. A holiday distribution (an EXTRA round, v3.75) is
+# the one caller that passes ignore=True.
+
+from datetime import date as _date, timedelta as _td
+
+FREQUENCY_INTERVAL_DAYS = {"שבועי": 7, "דו-שבועי": 14, "תלת-שבועי": 21, "חודשי": 28}
+SPACED_FREQUENCIES = frozenset({"דו-שבועי", "תלת-שבועי", "חודשי"})
+FREQ_LABEL = {"דו-שבועי": "דו-שבועי", "תלת-שבועי": "תלת-שבועי", "חודשי": "חודשי"}
+
+
+def next_wednesday(from_date: _date = None) -> _date:
+    """The first Wednesday strictly AFTER from_date (today when omitted)."""
+    d = from_date or _date.today()
+    days_ahead = 2 - d.weekday()          # Wednesday = 2
+    if days_ahead <= 0:
+        days_ahead += 7
+    return d + _td(days=days_ahead)
+
+
+def cycle_wednesday(d: _date) -> _date:
+    """The distribution-cycle Wednesday a date belongs to: the most recent
+    Wednesday on-or-before it (Wed→Tue is one cycle). Pure."""
+    return d - _td(days=(d.weekday() - 2) % 7)
+
+
+def upcoming_wednesday(today: _date = None) -> _date:
+    """The distribution day being prepared: today if Wednesday, else the next."""
+    today = today or _date.today()
+    return today if today.weekday() == 2 else next_wednesday(today)
+
+
+def next_due(last_iso: str, frequency: str, today: _date = None) -> _date:
+    """The Wednesday a regular is next due, from his last distribution.
+    THE single interval table (database.calculate_next_dist delegates here).
+    Never served → the upcoming Wednesday. A Thu–Sat date is snapped back to
+    its cycle Wednesday (recorded a day or two late — normal). Pure."""
+    today = today or _date.today()
+    if not last_iso:
+        return next_wednesday(today) if frequency == "חד-פעמי" else upcoming_wednesday(today)
+    try:
+        last = _date.fromisoformat(last_iso)
+    except (TypeError, ValueError):
+        last = today
+    if last.weekday() in (3, 4, 5):
+        last -= _td(days=last.weekday() - 2)
+    days = FREQUENCY_INTERVAL_DAYS.get(frequency)
+    if not days:                                   # חד-פעמי / blank
+        return next_wednesday(today)
+    if days == 7:
+        # weekly = the first Wednesday after the last day (a Sun–Tue extra round
+        # doesn't cancel this Wednesday — test_deep "שבועי מיום ראשון")
+        return next_wednesday(last + _td(days=1))
+    return next_wednesday(last + _td(days=days - 1))
+
+
+def _valid_date(s) -> _date | None:
+    try:
+        return _date.fromisoformat(str(s)) if s else None
+    except (TypeError, ValueError):
+        return None
+
+
+# RULE 7 — one-timers ROTATE (יהודה 28/9/2026): "אני לא רוצה שאותו חד-פעמי שהוא
+# הכי נצרך יקבל כל שבוע". A non-regular who received is out of the automatic
+# list for ONE_TIME_COOLDOWN_WEEKS_DEFAULT weeks (setting
+# `onetime_cooldown_weeks`, synced, 0 = off) and then competes by need again.
+ONE_TIME_COOLDOWN_WEEKS_DEFAULT = 3
+
+
+def _one_time_turn(last: _date, cooldown_weeks: int) -> _date:
+    """The first Wednesday a one-timer served on `last` is eligible again."""
+    return cycle_wednesday(last) + _td(days=7 * max(0, int(cooldown_weeks)))
+
+
+def is_due(rec: dict, base_wed: _date,
+           cooldown_weeks: int = ONE_TIME_COOLDOWN_WEEKS_DEFAULT) -> bool:
+    """RULES 6+7 — may this person be on the list of the distribution on base_wed?
+
+    Regulars: weekly / blank frequency / never served → always due. A
+    דו-שבועי/תלת-שבועי/חודשי regular is due only when his turn
+    (`next_distribution`, the derived field database._recompute_recipient_dates
+    writes; else computed from `last_distribution`) is on or before base_wed.
+    Non-regulars (one-timers, data rows): due unless served within the last
+    `cooldown_weeks` cycles (0 = no rotation).
+    Either way, someone already served in THIS cycle stays due (keeps him on
+    the list the moment his round is recorded, as the weekly list does). Pure."""
+    last = _valid_date(rec.get("last_distribution"))
+    if last is None:
+        return True
+    if last <= base_wed and cycle_wednesday(last) == base_wed:
+        return True                                # served this very cycle
+    freq = (rec.get("frequency") or "").strip()
+    if is_regular(rec):
+        if freq not in SPACED_FREQUENCIES:
+            return True
+        turn = _valid_date(rec.get("next_distribution")) or next_due(last.isoformat(), freq, base_wed)
+        return turn <= base_wed
+    if cooldown_weeks <= 0:
+        return True
+    return _one_time_turn(last, cooldown_weeks) <= base_wed
+
+
+def due_filter(rows: list, base_wed: _date, ignore: bool = False,
+               cooldown_weeks: int = ONE_TIME_COOLDOWN_WEEKS_DEFAULT) -> list:
+    """Rows that pass RULES 6+7 (unchanged when ignore=True — holiday round). Pure."""
+    if ignore:
+        return list(rows)
+    return [r for r in rows if is_due(r, base_wed, cooldown_weeks)]
+
+
+def not_due_reason(rec: dict, base_wed: _date,
+                   cooldown_weeks: int = ONE_TIME_COOLDOWN_WEEKS_DEFAULT) -> str:
+    """Hebrew explanation for a person RULE 6/7 leaves out ('' when he is due):
+    'דו-שבועי · קיבל ב-17/06 · התור הבא 01/07' or
+    'קיבל ב-17/06 · הפסקה של 3 שבועות · חוזר ב-08/07'. For tooltips/warnings."""
+    if is_due(rec, base_wed, cooldown_weeks):
+        return ""
+    last = _valid_date(rec.get("last_distribution"))
+    freq = (rec.get("frequency") or "").strip()
+    if is_regular(rec):
+        turn = _valid_date(rec.get("next_distribution")) or next_due(last.isoformat(), freq, base_wed)
+        return (f"{FREQ_LABEL.get(freq, freq)} · קיבל ב-{last.strftime('%d/%m')} · "
+                f"התור הבא {turn.strftime('%d/%m')}")
+    turn = _one_time_turn(last, cooldown_weeks)
+    return (f"קיבל ב-{last.strftime('%d/%m')} · הפסקה של {int(cooldown_weeks)} שבועות · "
+            f"חוזר ב-{turn.strftime('%d/%m')}")
+
+
 def rank_by_need(rows: list, weights: dict) -> list:
     """Score every row (in place) and return a NEW list ordered by need — highest
     score first, tie-broken by NAME only (never by a hidden data point, so a

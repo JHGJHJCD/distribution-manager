@@ -41,6 +41,19 @@ tab's UI code can't be tested, gets duplicated, and silently drifts.
    missing contributor scores **0 points** (not a neutral 0.5). Missing data only
    ever hurts, never helps.
 
+5. **Frequency is a HARD gate in EVERY mode (RULE 6, v3.76)** — a bi-weekly /
+   tri-weekly / monthly regular whose turn hasn't come is out of the list AND the
+   reserve, even with products to spare; the list is left shorter rather than
+   back-filled. One pure gate: `is_due(rec, base_wed, cooldown_weeks)` +
+   `due_filter` + `not_due_reason`; the interval table `FREQUENCY_INTERVAL_DAYS`
+   and `next_due` live here too (database.calculate_next_dist delegates). Applied
+   in database.py before ranking in scored/all/filter (**before** community
+   balance) and in get_one_time_list; skipped for a holiday round.
+6. **One-timers rotate (RULE 7, v3.76)** — a non-regular who received returns to
+   the automatic list only after `onetime_cooldown_weeks` (synced setting,
+   default `ONE_TIME_COOLDOWN_WEEKS_DEFAULT`=3; 0 = off). Same `is_due` gate.
+   Manual add always stays possible (flagged "⚠ לא בתור" + confirm dialog).
+
 ## How to add a rule — the recipe
 
 1. **Read first.** Open `selection.py` and find the closest existing function

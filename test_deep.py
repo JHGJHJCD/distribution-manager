@@ -330,6 +330,69 @@ _r = db.get_recipient(rid_h)
 check("D5 חלוקה רגילה אחרי החג מזיזה את התור (15/07)", _r["next_distribution"] == "2026-07-15",
       f"got {_r['next_distribution']}")
 
+# D7 — כלל 6 (v3.76, יהודה 28/9/2026): תדירות = שער קשיח בכל מצבי החלוקה, לא רק ב"לפי לוח".
+print("\n=== D7: דו-שבועי שקיבל שבוע שעבר לא חוזר גם במצבי ניקוד/סינון ===")
+_today = date.today()
+_bw7 = _today if _today.weekday() == 2 else next_wednesday(_today)
+_lw7 = _bw7 - timedelta(days=7)
+_d7 = {}
+for _nm, _fr in (("ד7-דושבועי", "דו-שבועי"), ("ד7-חודשי", "חודשי"), ("ד7-שבועי", "שבועי")):
+    _d7[_nm] = db.add_recipient({"full_name": _nm, "status": "פעיל", "frequency": _fr, "priority": 4,
+                                 "souls": 9, "income": "1000"})
+    db.bulk_add_distributions([{"id": _d7[_nm], "full_name": _nm, "frequency": _fr}],
+                              _lw7.isoformat(), "", 1, "", dist_name="D7")
+_d7_one = db.add_recipient({"full_name": "ד7-ראשונה", "status": "פעיל", "frequency": "חד-פעמי",
+                            "priority": 3, "souls": 9, "income": "1000"})
+db.set_setting("available_products", "50")
+for _lbl, _rows in (("scored", db.get_regulars_scored()), ("all", db.get_scored_all()),
+                    ("filter", db.get_filtered_list({"balance_communities": True})),
+                    ("filter-בלי-איזון", db.get_filtered_list({"balance_communities": False}))):
+    _names = {r["full_name"] for r in _rows}
+    check(f"D7 [{_lbl}] דו-שבועי וחודשי שקיבלו שבוע שעבר — לא ברשימה",
+          "ד7-דושבועי" not in _names and "ד7-חודשי" not in _names, str(sorted(n for n in _names if n.startswith("ד7"))))
+    check(f"D7 [{_lbl}] שבועי שקיבל שבוע שעבר — כן ברשימה", "ד7-שבועי" in _names)
+_hol_rows = {r["full_name"] for r in db.get_filtered_list({"balance_communities": False, "holiday": "*"})}
+db.update_recipient(_d7["ד7-דושבועי"], {"holiday_support": 1})
+_hol_rows = {r["full_name"] for r in db.get_filtered_list({"balance_communities": False, "holiday": "*"})}
+check("D7 חלוקת חג = חלוקה נוספת: הדו-שבועי שקיבל שבוע שעבר כן נכנס", "ד7-דושבועי" in _hol_rows, str(_hol_rows))
+_all_names = {r["full_name"] for r in db.get_scored_all()}
+check("D7 [all] עדיפות ראשונה לא מושפעת מהשער", "ד7-ראשונה" in _all_names)
+# קיבל שבועיים לפני הרביעי הקרוב → חזר לתור בכל המצבים
+db.bulk_add_distributions([{"id": _d7["ד7-דושבועי"], "full_name": "ד7-דושבועי", "frequency": "דו-שבועי"}],
+                          (_bw7 - timedelta(days=14)).isoformat(), "", 1, "", dist_name="D7b")
+for _b in [b for b in db.get_distribution_batches() if b.get("dist_name") == "D7"]:
+    db.delete_batch(_b["id"])
+check("D7 אחרי שהמרווח עבר הדו-שבועי חוזר לרשימת הניקוד",
+      "ד7-דושבועי" in {r["full_name"] for r in db.get_regulars_scored()},
+      str(db.get_recipient(_d7["ד7-דושבועי"])["next_distribution"]))
+db.set_setting("available_products", "0")
+
+# D8 — כלל 7 (v3.76, יהודה 28/9/2026): חד-פעמיים מתחלפים — הפסקה של 3 שבועות (ברירת מחדל) אחרי קבלה
+print("\n=== D8: תחלופה בין החד-פעמיים ===")
+check("D8 ברירת המחדל של ההפסקה = 3 שבועות", db.get_one_time_cooldown_weeks() == 3)
+_d8 = db.add_recipient({"full_name": "ד8-ראשונה-קיבל", "status": "פעיל", "frequency": "חד-פעמי",
+                        "priority": 3, "souls": 9, "income": "500"})
+db.bulk_add_distributions([{"id": _d8, "full_name": "ד8-ראשונה-קיבל", "frequency": "חד-פעמי"}],
+                          _lw7.isoformat(), "", 1, "", dist_name="D8")
+db.set_setting("available_products", "50")
+check("D8 [all] חד-פעמי שקיבל שבוע שעבר — לא ברשימה",
+      "ד8-ראשונה-קיבל" not in {r["full_name"] for r in db.get_scored_all()})
+check("D8 [filter] חד-פעמי שקיבל שבוע שעבר — לא ברשימה",
+      "ד8-ראשונה-קיבל" not in {r["full_name"] for r in db.get_filtered_list({"balance_communities": False})})
+_ot_row = next(r for r in db.get_one_time_list() if r["full_name"] == "ד8-ראשונה-קיבל")
+check("D8 [schedule/בחר חד-פעמיים] לא מועמד השבוע ומסומן בהפסקה",
+      not _ot_row["in_distribution"] and _ot_row.get("_cooldown") is True)
+check("D8 [all] מי שלא קיבל (ד7-ראשונה) עדיין ברשימה", "ד7-ראשונה" in {r["full_name"] for r in db.get_scored_all()})
+db.set_setting("onetime_cooldown_weeks", "0")
+check("D8 הפסקה 0 = כמו קודם: חוזר לרשימה",
+      "ד8-ראשונה-קיבל" in {r["full_name"] for r in db.get_scored_all()}
+      and next(r for r in db.get_one_time_list() if r["full_name"] == "ד8-ראשונה-קיבל")["in_distribution"])
+db.set_setting("onetime_cooldown_weeks", "2")
+check("D8 הפסקה שבועיים: קיבל שבוע שעבר → עדיין לא",
+      "ד8-ראשונה-קיבל" not in {r["full_name"] for r in db.get_scored_all()})
+db.set_setting("onetime_cooldown_weeks", "")
+db.set_setting("available_products", "0")
+
 # D6 — תאריך עתידי (טעות הקלדה מהאקסל) מתעלמים ממנו: הקבוע נכנס לרשימת השבוע (הכרעה 27/9/2026)
 print("\n=== D6: תאריך עתידי = טעות, מתעלמים ===")
 _today = date.today()

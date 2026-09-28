@@ -74,3 +74,23 @@ assert dlg2._hidden_count == 2 and "בלי 2 קבועים" in dlg2._lbl_count.te
 assert dlg._hidden_count == 0 and "מוסתרים" not in dlg._lbl_count.text(), dlg._lbl_count.text()
 dlg2.grab().save(os.path.join(OUT, "manualadd_none.png"))
 print("OK: default=all", len(all_names), "| none-mode shows", len(exp))
+
+# RULE 6 (v3.76): a bi-weekly regular served LAST week is still listed, but his
+# frequency cell is flagged '⚠ לא בתור' (amber) with the reason in the tooltip.
+import selection
+from datetime import timedelta
+_bw = selection.upcoming_wednesday()
+_rid = next(r["id"] for r in db.get_all_recipients() if r["full_name"] == "קבוע דו-שבועי")
+db.bulk_add_distributions([{"id": _rid, "full_name": "קבוע דו-שבועי", "frequency": "דו-שבועי"}],
+                          (_bw - timedelta(days=7)).isoformat(), "", 1, "", dist_name="שבוע שעבר")
+dlg3 = _ManualAddDialog()
+dlg3.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+dlg3.show(); app.processEvents()
+_row = next(i for i in range(dlg3._table.rowCount()) if dlg3._table.item(i, 0).text() == "קבוע דו-שבועי")
+_cell = dlg3._table.item(_row, 2)
+assert "⚠ לא בתור" in _cell.text(), _cell.text()
+assert "התור הבא" in _cell.toolTip(), _cell.toolTip()
+_wk = next(i for i in range(dlg3._table.rowCount()) if dlg3._table.item(i, 0).text() == "קבוע שבועי")
+assert "⚠" not in dlg3._table.item(_wk, 2).text()
+dlg3.grab().save(os.path.join(OUT, "manualadd_notdue.png"))
+print("OK: not-due flag:", _cell.text(), "|", _cell.toolTip())
