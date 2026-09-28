@@ -295,30 +295,6 @@ def apply_header_icons(table, color: str = "#64748b", size: int = 16) -> None:
         item.setIcon(QIcon(line_icon(icon_name, size, color)))
 
 
-def section_header(text: str, icon_name: str, color: str = "#475569",
-                   text_color: str = None, line_color: str = "#e8ecf2"):
-    """Build a section-header row = a dignified line-icon + the header label,
-    styled like the app's QLabel#section-header. Returns a QWidget."""
-    from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel
-    box = QWidget()
-    box.setObjectName("section-header-box")
-    row = QHBoxLayout(box)
-    row.setContentsMargins(0, 0, 0, 0)
-    row.setSpacing(7)
-    ic = QLabel()
-    ic.setPixmap(line_icon(icon_name, 18, color))
-    ic.setStyleSheet("background:transparent; border:none;")
-    lbl = QLabel(text)
-    lbl.setObjectName("section-header")
-    lbl.setStyleSheet(f"border:none; color:{text_color};" if text_color else "border:none;")
-    row.addWidget(ic)
-    row.addWidget(lbl)
-    row.addStretch()
-    box.setStyleSheet(
-        "QWidget#section-header-box { border-bottom:2px solid %s; margin-bottom:2px; }" % line_color)
-    return box
-
-
 def enable_touch_scroll(widget) -> None:
     """Make a scrollable widget (table/list/scroll-area) draggable by finger on a
     touch screen — a left-press-and-drag kinetically scrolls it. Harmless with a
@@ -366,49 +342,6 @@ class BadgeDelegate(QStyledItemDelegate):
         painter.setPen(QColor(fg))
         painter.drawText(QRect(int(x), int(y), int(tw), int(th)),
                          Qt.AlignmentFlag.AlignCenter, text)
-        painter.restore()
-
-
-class HighlightDelegate(QStyledItemDelegate):
-    """Render a cell's text, highlighting the substring that matches the current
-    search query (bold + soft-yellow background). Set the query with set_query();
-    empty query renders normally."""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._query = ""
-
-    def set_query(self, q: str):
-        self._query = (q or "").strip().lower()
-
-    # Horizontal cell padding — matches the QSS `QTableWidget::item { padding }`
-    # so the highlight rectangle lines up with where the text is actually drawn.
-    _PAD = 12
-
-    def paint(self, painter, option, index):
-        # Draw the cell normally first (background, alternating rows, selection,
-        # text) — then overlay a highlight on just the matched substring.
-        super().paint(painter, option, index)
-        text = index.data() or ""
-        q = self._query
-        pos = text.lower().find(q) if q else -1
-        if pos < 0 or not text:
-            return
-
-        painter.save()
-        fm = option.fontMetrics
-        before, match = text[:pos], text[pos:pos + len(q)]
-        r = option.rect
-        # RTL, right-aligned text: it starts at (right - pad) and runs leftwards.
-        x_text_right = r.right() - self._PAD
-        w_before = fm.horizontalAdvance(before)
-        w_match = fm.horizontalAdvance(match)
-        x_match_right = x_text_right - w_before
-        seg_rect = QRect(int(x_match_right - w_match), r.top(), int(w_match), r.height())
-        painter.fillRect(seg_rect, QColor(255, 235, 59, 150))   # translucent yellow
-        f = painter.font(); f.setBold(True); painter.setFont(f)
-        selected = bool(option.state & QStyle.StateFlag.State_Selected)
-        painter.setPen(option.palette.highlightedText().color() if selected else QColor("#7a5900"))
-        painter.drawText(seg_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, match)
         painter.restore()
 
 

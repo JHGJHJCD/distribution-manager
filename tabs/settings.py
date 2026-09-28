@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
 
 import database as db
 from utils.backup import auto_backup, restore_from_backup
-from utils.ui import busy_cursor, ALIGN_RIGHT, section_header, line_icon, enable_touch_scroll
+from utils.ui import busy_cursor, ALIGN_RIGHT, line_icon, enable_touch_scroll
 from utils import updater
 from utils import email_utils
 from utils import google_auth

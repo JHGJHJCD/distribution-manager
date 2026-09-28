@@ -184,25 +184,6 @@ class _PickPersonDialog(QDialog):
         self.accept()
 
 
-class _NamesDialog(QDialog):
-    """רשימה פשוטה של שמות (למשל: מי בלי מייל)."""
-
-    def __init__(self, title: str, lines: list[str], parent=None):
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        self.resize(420, 480)
-        lay = QVBoxLayout(self)
-        lw = QListWidget()
-        for ln in lines:
-            lw.addItem(ln)
-        lay.addWidget(lw, 1)
-        b = QPushButton("סגור")
-        b.setStyleSheet(_BTN_GHOST)
-        b.clicked.connect(self.accept)
-        lay.addWidget(b, 0, Qt.AlignmentFlag.AlignLeft)
-
-
 class _HistoryDetailDialog(QDialog):
     """פירוט שליחה אחת — שורה לכל נמען."""
 
@@ -1013,10 +994,6 @@ class MailsTab(QWidget):
             self._removed.add(tg["rec_id"])
             self._picked = [p for p in self._picked if p["id"] != tg["rec_id"]]
         self._rebuild_targets()
-
-    def _show_bad(self):
-        lines = [f"{t['name']} — {t['reason']}" for t in self._targets if not t["ok"]]
-        _NamesDialog("בלי מייל / לא יישלח", lines, self).exec()
 
     def _add_person(self):
         dlg = _PickPersonDialog({t["rec_id"] for t in self._targets if t.get("rec_id") is not None}, self)

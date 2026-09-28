@@ -376,14 +376,9 @@ def export_distribution_pdf(recipients: List[Dict], dist_date: str,
     return out_path
 
 
-_PRIORITY_LABELS = {4: "קבוע", 3: "עדיפות ראשונה", 2: "עדיפות שנייה"}
-
-
 def _priority_text(rec: Dict) -> str:
-    pr = rec.get("priority")
-    if pr in _PRIORITY_LABELS:
-        return _PRIORITY_LABELS[pr]
-    return "חובת בירור" if "בירור" in (rec.get("priority_raw") or "") else ""
+    from utils.excel_utils import _priority_text as _pt   # lazy: avoid import cycle
+    return _pt(rec)
 
 
 def _holidays_text(rec: Dict) -> str:

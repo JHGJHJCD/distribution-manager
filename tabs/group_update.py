@@ -1068,51 +1068,8 @@ _CHIP_RED    = ("QLabel{background:#fde2e2; color:#991b1b; border:none; border-r
 _LBL = "background:transparent; border:none;"
 
 
-def _card_shadow(widget):
-    """Subtle elevation — a soft outer shadow drawn by a wrapper, NOT a
-    QGraphicsDropShadowEffect (that effect breaks a card's minimum-height
-    negotiation inside a flex layout and squeezes the content). The card's own
-    hairline border plus this shadow read as a lifted card."""
-    widget.setStyleSheet(widget.styleSheet() +
-                         " QFrame#ui-card, QFrame#bottom-bar{}")  # no-op hook
     # Real soft shadow via a graphics effect is avoided; the hairline border on
     # the card already defines it on the grey surface.
-
-
-def _make_card(title: str, icon_name: str = None, hint: str = None, shadow: bool = True):
-    """A white rounded card with a header row. Returns (frame, content_layout)
-    where content_layout is a QVBoxLayout to add the card's body into."""
-    frame = QFrame()
-    frame.setObjectName("ui-card")
-    frame.setStyleSheet(_CARD_QSS)
-    # Fixed height (= content) so a card never balloons to fill spare space and
-    # open big internal gaps; spare vertical space goes to the list instead.
-    frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-    if shadow:
-        _card_shadow(frame)
-    outer = QVBoxLayout(frame)
-    outer.setContentsMargins(18, 9, 18, 9)
-    outer.setSpacing(7)
-
-    head = QHBoxLayout()
-    head.setSpacing(9)
-    if icon_name:
-        ic = QLabel()
-        ic.setPixmap(line_icon(icon_name, 20, "#0f9d78"))
-        ic.setStyleSheet("background:transparent; border:none;")
-        head.addWidget(ic)
-    tl = QLabel(title)
-    tl.setStyleSheet("color:#064e3b; font-size:15px; font-weight:800; background:transparent; border:none;")
-    head.addWidget(tl)
-    if hint:
-        hl = QLabel(hint)
-        hl.setStyleSheet("color:#94a3b8; font-size:12px; background:transparent; border:none;")
-        head.addStretch()
-        head.addWidget(hl)
-    else:
-        head.addStretch()
-    outer.addLayout(head)
-    return frame, outer
 
 
 def _field(label_text: str, widget, maxw: int = None):
@@ -1244,9 +1201,6 @@ class _CollapsibleCard(QFrame):
     def _sync_arrow(self):
         arrow = "▾" if self.header.isChecked() else "◀"
         self.header.setText(f"{arrow}  {self._title}")
-
-    def is_open(self) -> bool:
-        return self.header.isChecked()
 
     def set_open(self, opened: bool):
         self.header.setChecked(bool(opened))

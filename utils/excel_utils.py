@@ -233,11 +233,7 @@ def import_app_export(path: str) -> List[Dict]:
             continue
 
         def cell(key):
-            idx = col_map.get(key)
-            if idx is None or idx >= len(row):
-                return ""
-            v = row[idx]
-            return str(v).strip() if v is not None else ""
+            return _row_cell(row, col_map, key)
 
         name = cell("full_name")
         if not name or name in ("None", "0"):
@@ -404,11 +400,7 @@ def import_from_excel(path: str) -> List[Dict]:
             continue
 
         def cell(key):
-            idx = col_map.get(key)
-            if idx is None or idx >= len(row):
-                return ""
-            v = row[idx]
-            return str(v).strip() if v is not None else ""
+            return _row_cell(row, col_map, key)
 
         def raw_cell(key):
             idx = col_map.get(key)
@@ -605,6 +597,15 @@ _FULL_FIELDS = [
 ]
 
 _PRIORITY_LABELS = {4: "קבוע", 3: "עדיפות ראשונה", 2: "עדיפות שנייה"}
+
+
+def _row_cell(row, col_map: Dict, key: str) -> str:
+    """Text of one Excel cell by column key ('' when the column/value is missing)."""
+    idx = col_map.get(key)
+    if idx is None or idx >= len(row):
+        return ""
+    v = row[idx]
+    return str(v).strip() if v is not None else ""
 
 
 def _priority_text(rec: Dict) -> str:
