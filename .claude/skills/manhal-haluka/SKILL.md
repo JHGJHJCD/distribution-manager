@@ -59,7 +59,7 @@ A change is done only when it **actually works and was verified** — not just "
 - If you touched UI, verify **visually** (real screenshot / run), not only that code runs.
   Screenshots of Hebrew must run **without** the offscreen platform (offscreen renders
   boxes) — use `WA_DontShowOnScreen` + `grab()`.
-- In a structural change, update `CLAUDE.md`; status/"where we stopped" goes in `NEXT_TASK.md`.
+- In a structural change, update `CLAUDE.md` (permanent rules only, a line or two); per-version detail goes to the top of part A of `docs/היסטוריית_גרסאות_מפורטת.md`; status/open items go in `NEXT_TASK.md`. Doc map: `docs/README.md`.
 
 ## 3. Release — one verified command
 

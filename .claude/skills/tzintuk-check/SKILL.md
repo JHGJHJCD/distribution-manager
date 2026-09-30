@@ -63,7 +63,7 @@ C:\Users\יהודה\AppData\Local\Programs\Python\Python312\python.exe .claude\s
   **וגם** שורה ב-`references/invariants.md` כאן אם הכלל ניתן לבדיקה סטטית — ואז הוסף
   את הבדיקה ל-`scripts/check_tzintuk.py` (`LINTS`). כך הבאג לא חוזר בשקט.
 - למדת משהו על ה-API/הקו של ימות → הסקיל התחומי (`yemot-*`).
-- `CLAUDE.md`: שורת `vX.YZ` תחת "צינתוקים"; `NEXT_TASK.md`: חשדות לא מוכחים.
+- `CLAUDE.md`: רק כלל/הכרעה קבועים תחת "צינתוקים" (שורה-שתיים); פירוט `vX.YZ` → ראש חלק א' של `docs/היסטוריית_גרסאות_מפורטת.md`; `NEXT_TASK.md`: חשדות לא מוכחים.
 - שחרור אוטומטי דרך `manhal-haluka` (`release.py ship …`) **רק אם כל הבדיקות עברו**. בלי קרדיט Claude ב-commit.
 
 ## 4. סיכום ליהודה

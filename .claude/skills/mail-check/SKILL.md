@@ -71,7 +71,7 @@ C:\Users\יהודה\AppData\Local\Programs\Python\Python312\python.exe .claude\s
   את הבדיקה ל-`scripts/check_mail.py` (`LINTS`). כך הבאג לא חוזר בשקט.
 - למדת משהו על Gmail API / OAuth / נטפרי מול גוגל → מקטע "מיילים" ב-`CLAUDE.md` + זיכרון
   `reference-netfree` אם זה חסימה.
-- `CLAUDE.md`: שורת `vX.YZ` תחת "מיילים למקבלים"; `NEXT_TASK.md`: חשדות לא מוכחים.
+- `CLAUDE.md`: רק כלל/הכרעה קבועים תחת "מיילים למקבלים" (שורה-שתיים); פירוט `vX.YZ` → ראש חלק א' של `docs/היסטוריית_גרסאות_מפורטת.md`; `NEXT_TASK.md`: חשדות לא מוכחים.
 - שחרור אוטומטי דרך `manhal-haluka` (`release.py ship …`) **רק אם כל הבדיקות עברו**. בלי קרדיט Claude ב-commit.
 
 ## 4. סיכום ליהודה
