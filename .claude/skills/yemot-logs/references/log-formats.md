@@ -44,5 +44,5 @@ key#value%key#value%key#value%…
 
 ## קשור
 - קוד מפענח קיים: `utils/call_history.py` (LogFolderEnterExit → שעות אופטימליות).
-- תוכנית "מצלמת אבטחה לקו" (מעקב שינויי-תצורה עם GetLoginLog + mtime): `LINE_WATCH_PLAN.md`.
+- תוכנית "מצלמת אבטחה לקו" (מעקב שינויי-תצורה עם GetLoginLog + mtime): `docs/plans/LINE_WATCH_PLAN.md`.
 - שינוי תצורת הקו (לא קריאה): `tzintuk-callback-server`, `yemot-line-howto`.

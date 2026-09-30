@@ -48,7 +48,7 @@ $PY .../read_log.py file ivr2:/Log/LogEnterID.ymgr --tail 10           # כל ק
 
 ## למה זה שימושי (דוגמאות אמת)
 - **תחקיר תקלה לפי זמן** — "מה קרה ב-04 ב-12:25?" → `routing --since 12:20` + `api --since 12:20`.
-- **מי שינה את השורש** — `GetLoginLog` + mtime של `ivr2:/ext.ini` (ראה `LINE_WATCH_PLAN.md`).
+- **מי שינה את השורש** — `GetLoginLog` + mtime של `ivr2:/ext.ini` (ראה `docs/plans/LINE_WATCH_PLAN.md`).
 - **האם מתקשר-חזרה הגיע ל-/76** — `api --grep 048691834 --folder 76` / `folder --phone <num>`.
 - **מי מחייג ומתי** (שעות אופטימליות) — `folder YYYY-MM` (זה בדיוק מה ש-`call_history.py` מצבר).
 
