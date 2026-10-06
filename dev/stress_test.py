@@ -46,7 +46,7 @@ from tabs.search import SearchTab
 HEB = "אבגדהוזחטיכלמנסעפצקרשת"
 AREAS = ["", "בעלז", "נתיב"]
 FREQS = ["שבועי", "דו-שבועי", "חודשי", "חד-פעמי", ""]
-STATUSES = ["פעיל", "פעיל", "פעיל", "מושהה", "הסתיים"]  # mostly active
+STATUSES = ["פעיל", "פעיל", "פעיל", "פעיל", "מושהה"]  # mostly active
 
 
 def _rand_name(rng):

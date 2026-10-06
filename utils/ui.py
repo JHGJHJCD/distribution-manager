@@ -39,7 +39,6 @@ HOLIDAY_BADGES = {
 STATUS_BADGES = {
     "פעיל":   ("#e8f5e9", "#1b5e20"),
     "מושהה":  ("#fff8e1", "#8b6914"),
-    "הסתיים": ("#eceff1", "#546e7a"),
 }
 
 
@@ -1132,3 +1131,106 @@ class FlowLayout(QLayout):
             x += sz.width() + self._hs
             line_h = max(line_h, sz.height())
         return y + line_h
+
+
+# ── Hebrew-only standard dialogs (task 3, v3.78) ─────────────────────────────
+# Qt ships its dialog texts (Yes / No / OK / Cancel, file dialog, colour dialog,
+# right-click menus, print preview…) in English. ONE translator, installed once in
+# main._run, turns all of them into Hebrew — so no dialog needs fixing by hand and
+# any future QMessageBox.question / QInputDialog / QFileDialog is Hebrew for free.
+from PyQt6.QtCore import QTranslator, QLibraryInfo   # noqa: E402
+
+# Button words we choose ourselves (shorter / clearer than Qt's stock Hebrew,
+# and with no "&" mnemonic marker).
+_HE_BUTTONS = {
+    "OK": "אישור", "Cancel": "ביטול", "Close": "סגור", "Save": "שמור",
+    "Save All": "שמור הכול", "Open": "פתח", "Yes": "כן", "Yes to All": "כן להכול",
+    "No": "לא", "No to All": "לא להכול", "Abort": "בטל", "Retry": "נסה שוב",
+    "Ignore": "התעלם", "Discard": "אל תשמור", "Apply": "החל", "Reset": "אפס",
+    "Restore Defaults": "שחזר ברירות מחדל", "Help": "עזרה",
+    "Show Details...": "הצג פרטים...", "Hide Details...": "הסתר פרטים...",
+    "Choose": "בחר",
+}
+# Gaps in Qt's own Hebrew catalogue (missing or half-English entries), matched on the
+# exact source text in any context.
+_HE_GAPS = {
+    "&Look in:": "חפש &בתוך:", "Files of &type:": "סוג &קבצים:",
+    "Show facing pages": "הצג עמודים זה מול זה",
+    "Insert Unicode control character": "הוסף תו בקרה של יוניקוד",
+}
+_HE_BUTTON_CONTEXTS = {"QPlatformTheme", "QDialogButtonBox", "QMessageBox", "QFileDialog",
+                       "QColorDialog", "QProgressDialog", "QPrintDialog", "QInputDialog"}
+
+
+class _HebrewButtons(QTranslator):
+    """Overrides the standard-button captions; everything else falls through (a null
+    result) to Qt's own Hebrew catalogue installed beside it."""
+
+    def isEmpty(self):          # noqa: N802 — Qt API name; never skipped as 'empty'
+        return False
+
+    def translate(self, context, sourceText, disambiguation=None, n=-1):   # noqa: N802
+        if sourceText in _HE_GAPS:
+            return _HE_GAPS[sourceText]
+        if context in _HE_BUTTON_CONTEXTS and sourceText:
+            he = _HE_BUTTONS.get(sourceText.replace("&", "").strip())
+            if he:
+                return he
+        return None
+
+
+def _qt_translations_dirs():
+    import os
+    import sys
+    dirs = []
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        dirs.append(os.path.join(base, "translations"))
+    dirs.append(QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath))
+    return dirs
+
+
+def install_hebrew_ui(app) -> bool:
+    """Install the Hebrew translators on `app` (idempotent). Returns True if Qt's
+    full Hebrew catalogue (qtbase_he.qm) was found too — the button captions are
+    Hebrew either way."""
+    if getattr(app, "_he_translators", None):
+        return True
+    keep = []
+    found = False
+    for d in _qt_translations_dirs():
+        qt_tr = QTranslator(app)
+        if qt_tr.load("qtbase_he", d):
+            app.installTranslator(qt_tr)
+            keep.append(qt_tr)
+            found = True
+            break
+    mine = _HebrewButtons(app)
+    app.installTranslator(mine)           # installed last = consulted first
+    keep.append(mine)
+    app._he_translators = keep            # keep Python references alive
+    return found
+
+
+def ask_choice(parent, title: str, text: str, choices, default: int = 0, cancel: int = -1):
+    """A question with named buttons instead of Yes/No (e.g. 'החלף הכול' / 'מזג' /
+    'ביטול'). `choices` = list of button captions; returns the index of the pressed
+    button, or `cancel` if the window was closed with Esc/X. The button at `default`
+    is the Enter button; a caption listed at index `cancel` gets the reject role."""
+    from PyQt6.QtWidgets import QMessageBox
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setWindowTitle(title)
+    box.setText(text)
+    btns = []
+    for i, cap in enumerate(choices):
+        role = (QMessageBox.ButtonRole.RejectRole if i == cancel
+                else QMessageBox.ButtonRole.AcceptRole)
+        btns.append(box.addButton(cap, role))
+    if 0 <= default < len(btns):
+        box.setDefaultButton(btns[default])
+    if 0 <= cancel < len(btns):
+        box.setEscapeButton(btns[cancel])
+    box.exec()
+    clicked = box.clickedButton()
+    return btns.index(clicked) if clicked in btns else cancel

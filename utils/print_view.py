@@ -67,8 +67,8 @@ _PRINT_CSS = _css(11)   # default (kept for any external caller)
 _TH = "<th style='color:#ffffff;'{attrs}><font color='#ffffff'>{txt}</font></th>"
 
 
-def _th(txt: str, cls: str = "") -> str:
-    return _TH.format(attrs=f" class='{cls}'" if cls else "", txt=txt)
+def _th(txt: str, cls: str = "", extra: str = "") -> str:
+    return _TH.format(attrs=(f" class='{cls}'" if cls else "") + (f" {extra}" if extra else ""), txt=txt)
 
 
 _THEAD = ("<thead><tr>"
@@ -386,59 +386,86 @@ def _holidays_text(rec: Dict) -> str:
     return holidays.display(rec)
 
 
+CARD_FONT_PT = 12   # base font of the printed recipient card
+_CELL_BORDER = "border:1px solid #aaaacc;"
+
+
+def _cell(val, head: bool = False, extra: str = "") -> str:
+    """One printed card cell: always right-aligned and with its own visible border
+    (inline, because QTextDocument drops stylesheet borders on styled cells)."""
+    txt = _esc(val)
+    if head:
+        return ("<th class='cc' dir='rtl' align='left' style='text-align:left;"
+                f"background-color:#eef3ff;color:#1a4a7a;{_CELL_BORDER}' width='28%'>{txt}</th>")
+    return (f"<td class='cc' dir='rtl' align='left' {extra} "
+            f"style='text-align:left;{_CELL_BORDER}'>{txt}</td>")
+
+
+def _card_th(txt: str, extra: str = "") -> str:
+    """Card column header: like `_th`, but its own paragraph is RTL (so a trailing
+    apostrophe in "מס'" stays at the word's end) and right-aligned."""
+    return _th(txt, "cc", f"dir='rtl' align='left' {extra}".strip())
+
+
 def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
     """A single recipient's printable card: details block + distribution history."""
     def _v(key):
-        return _esc(rec.get(key) or "")
+        return rec.get(key) or ""
 
+    # Raw values only — `_cell` HTML-escapes them exactly once.
     phones = " / ".join(p for p in [rec.get("phone1"), rec.get("phone2"), rec.get("phone3")] if p)
+    ids = " / ".join(x for x in (_v("id_number"), _v("spouse_id_number")) if x)
     rows = [
-        ("טלפונים", _esc(phones)),
-        ("ת.ז. בעל / אשה", f"{_v('id_number')} / {_v('spouse_id_number')}"),
+        ("טלפונים", phones),
+        ("ת.ז. בעל / אשה", ids),
         ("כתובת", _v("address")),
         ("אזור", _v("area")),
-        ("נפשות", _esc(rec.get("souls") or "")),
-        ("עדיפות", _esc(_priority_text(rec))),
-        ("נתמך חגים", _esc(_holidays_text(rec))),
+        ("נפשות", rec.get("souls") or ""),
+        ("עדיפות", _priority_text(rec)),
+        ("נתמך חגים", _holidays_text(rec)),
         ("תדירות", _v("frequency")),
         ("סטטוס", _v("status")),
-        ("חלוקה אחרונה", _esc(_fmt(rec.get("last_distribution")))),
-        ("חלוקה הבאה", _esc(_fmt(rec.get("next_distribution")))),
+        ("חלוקה אחרונה", _fmt(rec.get("last_distribution"))),
+        ("חלוקה הבאה", _fmt(rec.get("next_distribution"))),
         ("הערות", _v("notes")),
     ]
-    # QTextDocument lays table columns in SOURCE order and ignores direction:rtl,
-    # so a naive label→value order prints label on the LEFT and reads
-    # left-to-right (bug #rxurn). Emit value FIRST, label LAST, so the label lands
-    # on the right where a Hebrew reader starts.
-    details = "".join(
-        f"<tr><td style='width:70%;'>{val}</td>"
-        f"<th style='width:30%;background:#eef3ff;color:#1a4a7a;'>{label}</th></tr>"
-        for label, val in rows
-    )
+    # Column order: QTextDocument honours `direction: rtl` on the table, so the
+    # column written LAST in the source prints right-most. Label therefore comes
+    # last (right side, where a Hebrew reader starts), value first.
+    details = (
+        "<table class='card' border='1' cellspacing='0' cellpadding='6' width='100%'>"
+        "<thead><tr>" + _th("פרטי המקבל", "sec-title", "colspan='2' dir='rtl' align='left'")
+        + "</tr></thead><tbody>"
+        + "".join(
+            f"<tr>{_cell(val)}{_cell(label, head=True)}</tr>"
+            for label, val in rows)
+        + "</tbody></table>")
 
-    # Same reason: write the history columns in REVERSE source order so the
-    # printed table reads right-to-left (מס' on the right, הערות on the left).
+    # History: columns written in REVERSE so the printed table reads right-to-left
+    # (מס' on the right, הערות on the left). Every cell is explicitly right-aligned.
     hist_rows = ""
     for i, h in enumerate(history, 1):
         hist_rows += (
-            f"<tr><td>{_esc(h.get('notes', ''))}</td>"
-            f"<td>{_esc(h.get('distributor', ''))}</td>"
-            f"<td>{_esc(h.get('quantity', '') or '')}</td>"
-            f"<td>{_esc(h.get('what_dist', ''))}</td>"
-            f"<td>{_esc(_fmt(h.get('dist_date')))}</td>"
-            f"<td>{i}</td></tr>"
+            "<tr>"
+            + _cell(h.get('notes', ''))
+            + _cell(h.get('distributor', ''))
+            + _cell(h.get('quantity', '') or '')
+            + _cell(h.get('what_dist', ''))
+            + _cell(_fmt(h.get('dist_date')))
+            + _cell(i)
+            + "</tr>"
         )
-    # The title must sit directly ABOVE the table. A standalone <div> before the
-    # table drifted to the opposite side of the page under QTextDocument's RTL
-    # layout (bug #rxurn), so make the title a full-width header row INSIDE the
-    # table (colspan spanning all columns) — it can't detach from the columns.
+    # The title is a full-width header row INSIDE the table (colspan) so it can't
+    # detach from the columns under QTextDocument's RTL layout (bug #rxurn).
     hist_table = (
-        "<table><thead>"
-        "<tr><th colspan='6' class='sec-title'>היסטוריית חלוקות</th></tr>"
-        "<tr>"
-        "<th>הערות</th><th>מחלק</th><th>כמות</th><th>מה חולק</th><th>תאריך</th><th>מס'</th>"
-        "</tr></thead><tbody>" + (hist_rows or
-            "<tr><td colspan='6' style='text-align:center;color:#888;'>אין חלוקות רשומות</td></tr>")
+        "<table class='card' border='1' cellspacing='0' cellpadding='6' width='100%'>"
+        "<thead>"
+        + "<tr>" + _th("היסטוריית חלוקות", "sec-title", "colspan='6' dir='rtl' align='left'") + "</tr>"
+        + "<tr>" + "".join(_card_th(t, f"width='{w}%'") for t, w in
+                           (("הערות", 34), ("מחלק", 14), ("כמות", 9),
+                            ("מה חולק", 17), ("תאריך", 18), ("מס'", 8))) + "</tr>"
+        + "</thead><tbody>" + (hist_rows or
+            "<tr>" + _cell("אין חלוקות רשומות", extra="colspan='6'") + "</tr>")
         + "</tbody></table>"
     )
 
@@ -448,7 +475,8 @@ def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
     {logo_html}
     <div class='org'>{_esc(ORG_NAME)}</div>
     <h2>כרטיס מקבל — {_esc(rec.get('full_name', ''))}</h2>
-    <table width='100%'>{details}</table>
+    {details}
+    <p></p>
     {hist_table}
     <p class='footer'>הודפס: {date.today().strftime('%d/%m/%Y')} · סה\"כ חלוקות: {len(history)}</p>
     </body></html>
@@ -462,27 +490,37 @@ def _fmt(s) -> str:
     return s
 
 
+def _card_css() -> str:
+    """Printed-card stylesheet: the list's look + roomy cell padding (every cell has
+    the 'cc' class; the section title rows 'sec-title')."""
+    return (_css(CARD_FONT_PT)
+            + ".cc, th.sec-title { padding: 5px 8px; }")
+
+
+def render_recipient_card(pr: QPrinter, rec: Dict, history: List[Dict]):
+    """Draw a single recipient's card onto a QPrinter (preview, paper or PDF)."""
+    logo_path = _resource_path("org_logo.png")
+    has_logo = os.path.exists(logo_path)
+    doc = QTextDocument()
+    if has_logo:
+        doc.addResource(QTextDocument.ResourceType.ImageResource,
+                        QUrl("orglogo"), QImage(logo_path))
+    # Measure against the PRINTER's resolution (like the list does) so the font is a
+    # real 14pt on paper; without it the card came out tiny on a mostly empty page.
+    try:
+        doc.documentLayout().setPaintDevice(pr)
+    except Exception:
+        pass
+    doc.setDefaultStyleSheet(_card_css())
+    doc.setHtml(_card_html(rec, history, has_logo))
+    doc.setPageSize(QSizeF(pr.pageLayout().paintRectPixels(pr.resolution()).size()))
+    doc.print(pr)
+
+
 def print_recipient_card(rec: Dict, history: List[Dict], parent: QWidget = None):
     """Open a print PREVIEW of a single recipient's card + history."""
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
     printer.setPageOrientation(QPageLayout.Orientation.Portrait)
     printer.setPageMargins(QMarginsF(12, 12, 12, 12), QPageLayout.Unit.Millimeter)
-
-    logo_path = _resource_path("org_logo.png")
-    has_logo = os.path.exists(logo_path)
-    card_html = _card_html(rec, history, has_logo)
-
-    def render(pr: QPrinter):
-        doc = QTextDocument()
-        if has_logo:
-            doc.addResource(QTextDocument.ResourceType.ImageResource,
-                            QUrl("orglogo"), QImage(logo_path))
-        # A single recipient's card has a whole A4 page to itself, so print it at
-        # a much larger base font (~3–4× the list's 11pt) — the previous size came
-        # out tiny and hard to read (bug #18).
-        doc.setDefaultStyleSheet(_css(30))
-        doc.setHtml(card_html)
-        doc.setPageSize(QSizeF(pr.pageLayout().paintRectPixels(pr.resolution()).size()))
-        doc.print(pr)
-
-    _preview(printer, render, parent, "תצוגה מקדימה — כרטיס מקבל")
+    _preview(printer, lambda pr: render_recipient_card(pr, rec, history),
+             parent, "תצוגה מקדימה — כרטיס מקבל")

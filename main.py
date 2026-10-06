@@ -538,6 +538,7 @@ class MainWindow(QMainWindow):
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         _set_window_icon(self)
 
+        db.reset_regulars_mode()   # משימה 5: בכל הפעלה מצב החלוקה חוזר ל'לפי לוח זמנים'
         self._build_tabs()
         self._build_statusbar()
         self._setup_auto_sync()
@@ -1371,6 +1372,11 @@ def _crash_dialog(msg: str):
     """Show a plain error dialog without relying on any app-level styling."""
     try:
         from PyQt6.QtWidgets import QMessageBox
+        try:
+            from utils.ui import install_hebrew_ui
+            install_hebrew_ui(QApplication.instance())
+        except Exception:
+            pass
         box = QMessageBox()
         box.setWindowTitle("שגיאת הפעלה — מנהל חלוקה")
         box.setText("האפליקציה נתקלה בשגיאה בעת ההפעלה:\n\n" + msg)
@@ -1445,6 +1451,9 @@ def _focus_running_instance():
 def _run():
     app = QApplication(sys.argv)
     app.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+    # Yes/No/OK/Cancel, file/colour dialogs, right-click menus — all Hebrew (task 3).
+    from utils.ui import install_hebrew_ui
+    install_hebrew_ui(app)
 
     # ── Single-instance guard ─────────────────────────────────────────────────
     # Prevents the app opening twice (e.g. an impatient double-click during the
@@ -1534,16 +1543,21 @@ def _run():
     from utils import updater as _upd
     if _upd.consume_autologin():
         # #dy6yq: relaunched right after a self-update — the password was typed
-        # minutes ago in the previous session; don't ask again.
-        splash.close()
+        # minutes ago in the previous session; don't ask again. The splash stays
+        # up until the main window is shown (no blank gap).
+        pass
     else:
         login = LoginDialog()
         splash.finish(login)
         if login.exec() != QDialog.DialogCode.Accepted:
             _hard_exit(0)
+        # Building MainWindow takes a few seconds — keep something on screen
+        # (no empty desktop between the password and the main window).
+        splash = _show_splash(app, "פותח את התוכנה…")
 
     win = MainWindow()
     win.show_smart()
+    splash.finish(win)
     # Check for updates shortly after the UI is up (background; non-blocking).
     QTimer.singleShot(1500, win._auto_check_updates)
     _hard_exit(app.exec())

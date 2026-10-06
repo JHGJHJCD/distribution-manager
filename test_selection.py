@@ -497,6 +497,19 @@ _picked = selection.balance_by_community(_gated, {}, W_SOULS, 4)
 ok("F10 קהילה שכולה לא-בתור: המכסה עוברת לאחרות ואף לא-בתור לא נשאב להשלמה",
    sorted(r["id"] for r in _picked) == ["B0", "B1", "B2"], str([r["id"] for r in _picked]))
 
+# G — משימה 13: ספירת "נשאר לחד-פעמיים" אחרי הוספה ידנית של קבוע שלא בתורו
+_man = [dict(_reg("m1", "דו-שבועי", _WED - _tdl(days=7)), _extra=True),     # קבוע ידני — תופס מקום
+        dict(_reg("m2", "חודשי", _WED - _tdl(days=7)), _extra=True, _reserve=True),  # רזרבה — לא תופס
+        dict(rec("o1", 3), _extra=True),                                   # חד-פעמי — לא "קבוע ידני"
+        _reg("w1", "שבועי", _WED - _tdl(days=7))]                          # בסיס (לא ידני)
+ok("G1 manual_regular_ids: רק קבוע שנוסף ידנית ולא רזרבה",
+   selection.manual_regular_ids(_man, reserve_ids={"m2"}) == {"m1"},
+   str(selection.manual_regular_ids(_man, reserve_ids={"m2"})))
+ok("G2 manual_regular_ids: אין ידניים → ריק", selection.manual_regular_ids([_reg("w", "שבועי", None)]) == set())
+ok("G3 one_time_slots: 15 מוצרים, 10 קבועים → 5; עם 1 ידני → 4",
+   selection.one_time_slots(15, 10) == 5 and selection.one_time_slots(15, 10, 1) == 4)
+ok("G4 one_time_slots: לא יורד מתחת ל-0", selection.one_time_slots(10, 10, 3) == 0 and selection.one_time_slots(0, 5) == 0)
+
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)

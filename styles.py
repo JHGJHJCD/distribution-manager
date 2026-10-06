@@ -602,7 +602,6 @@ SELECTED_FG = "#0d47a1"
 
 # ── Recipient status colors ──────────────────────────────────────────────────
 SUSPENDED_FG = "#8b6914"
-ENDED_FG     = "#94a3b8"
 
 # ── Legacy alias (used by test_all.py) ─────────────────────────────────────
 DARK_BLUE = EXTRA_QSS

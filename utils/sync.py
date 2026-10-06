@@ -47,7 +47,10 @@ EXCLUDED_SETTINGS = {"password", "win_geometry", "backup_folder", "last_backup_a
                      "app_bg_mode", "app_bg_opacity",   # v3.65 per-machine wallpaper
                      # per-machine display preference (screens differ) + the
                      # per-machine one-time legacy feedback import marker
-                     "ui_font_scale", "ui_font_size", "feedback_legacy_imported"}
+                     "ui_font_scale", "ui_font_size", "feedback_legacy_imported",
+                     # משימה 5 (6/10/2026): מצב החלוקה הוא בחירה לחלוקה הנוכחית בלבד
+                     # ובכל הפעלה חוזר ל'רגיל' — לא מסונכרן, כדי שהמחשב השני לא יחזיר מצב ישן
+                     "dist_regulars_mode"}
 EXCLUDED_SETTING_PREFIXES = ("sync_", "export_dir_")   # export_dir_* are per-machine paths (#5e1jc)
 
 JOURNAL_PREFIX = "journal-"
@@ -55,7 +58,7 @@ ARCHIVE_PREFIX = "archive-"          # compacted-away journals (not read by peer
 JOURNAL_MAX_BYTES = 3 * 1024 * 1024  # compact own journal past this size (v3.51)
 ARCHIVES_KEEP = 2                    # old journals kept per device after compaction
 TOMBSTONES_MAX = 5000                # delete-ops remembered for the compacted head
-_TOMBSTONE_OPS = ("rec_delete", "batch_delete", "dist_delete", "msg_delete")
+_TOMBSTONE_OPS = ("rec_delete", "rec_merge", "batch_delete", "dist_delete", "msg_delete")
 _COMPACTING = False
 _LOCK = threading.RLock()
 _APPLYING = False          # True while applying remote records → suppress logging
@@ -584,6 +587,9 @@ def _apply_rec_upsert(conn, rec: dict):
         return
     cols = _recipient_columns(conn)
     fields = {k: v for k, v in data.items() if k in cols and k not in ("id", "guid")}
+    if "status" in fields:
+        # an older computer may still send the dropped 'הסתיים' → 'מושהה' (v3.78)
+        fields["status"] = db.normalize_status(fields["status"])
     local = _find_recipient_by_guid(conn, guid)
     if local is None:
         match = _adopt_match(conn, data)
@@ -687,6 +693,76 @@ def _apply_rec_delete(conn, rec: dict):
                          f"נמחק מקבל: {before.get('full_name','')}", before, None, rec.get("dev"))
 
 
+def _resolved_guid(conn, guid: str) -> str:
+    """The guid of the card that holds this person NOW: the guid itself when a card
+    with it exists here, else (משימה 7) the card it was merged into."""
+    if not guid or _find_recipient_by_guid(conn, guid) is not None:
+        return guid
+    return db.resolve_merged_guid(conn, guid)
+
+
+def _find_rec_resolved(conn, guid: str):
+    """_find_recipient_by_guid that also follows merges — a distribution row from a
+    computer that has not yet seen a merge still lands on the card that stayed."""
+    return _find_recipient_by_guid(conn, _resolved_guid(conn, guid))
+
+
+def _apply_rec_merge(conn, rec: dict):
+    """Two cards of one person merged on another computer (משימה 7, v3.78): the card
+    `drop_guid` goes into `keep_guid`. Idempotent. Conservative by design — whenever
+    something does not line up (the kept card is unknown/deleted here, the dropped card
+    was edited AFTER the merge, a crossing merge) nothing is deleted: a visible
+    duplicate is fixable, lost data is not. Last-write-wins decides the kept card's
+    fields exactly like any card edit."""
+    global _RECORD_INCOMING
+    keep_g, drop_g = rec.get("keep_guid") or "", rec.get("drop_guid") or ""
+    if not keep_g or not drop_g or keep_g == drop_g:
+        return
+    merged_at = rec.get("merged_at") or rec.get("ts") or ""
+    target = db.resolve_merged_guid(conn, keep_g)
+    if target == drop_g:
+        return                      # crossing merges (each side kept the other) — leave both
+    if target == keep_g:
+        data = (rec.get("keep") or {}).get("data") or {}
+        if data:
+            saved = _RECORD_INCOMING
+            _RECORD_INCOMING = False        # logged once below, as a merge
+            try:
+                _apply_rec_upsert(conn, {"guid": keep_g, "data": data, "ts": merged_at,
+                                         "dev": rec.get("dev")})
+            finally:
+                _RECORD_INCOMING = saved
+    keep_local = _find_recipient_by_guid(conn, target)
+    if keep_local is None:
+        return                      # we do not hold the kept card — never touch the other
+    drop_local = _find_recipient_by_guid(conn, drop_g)
+    before = None
+    if drop_local is not None:
+        if merged_at and (drop_local["updated_at"] or "") > merged_at:
+            return                  # edited after the merge here — keep it (a duplicate, not a loss)
+        before = dict(drop_local)
+        kid, did = keep_local["id"], drop_local["id"]
+        conn.execute("UPDATE distributions SET recipient_id=? WHERE recipient_id=?", (kid, did))
+        conn.execute("UPDATE change_log SET recipient_id=?, rec_guid=? "
+                     "WHERE recipient_id=? OR (rec_guid=? AND rec_guid<>'')",
+                     (kid, target, did, drop_g))
+        conn.execute("DELETE FROM recipients WHERE id=?", (did,))
+        info = rec.get("drop") or {}
+        db._remember_deleted_card(conn, before, "merge",
+                                  device=info.get("device") or "", ts=merged_at)
+    remember_delete(conn, drop_g, merged_at)
+    db.remember_merge(conn, drop_g, target, merged_at)
+    ch = rec.get("change")
+    if ch and ch.get("changes"):
+        ch = dict(ch, rec_guid=target)
+        db._insert_changes(conn, keep_local["id"], ch)
+    db._recompute_recipient_dates(conn, keep_local["id"])
+    if before is not None and _RECORD_INCOMING:
+        _record_incoming(conn, "rec_merge", target, before.get("full_name", ""),
+                         f"מוזג כרטיס כפול: {before.get('full_name','')}", before, None,
+                         rec.get("dev"))
+
+
 def _apply_batch_add(conn, rec: dict):
     guid = rec.get("guid") or ""
     if not guid:
@@ -708,7 +784,7 @@ def _apply_batch_add(conn, rec: dict):
         if row.get("guid") and conn.execute(
                 "SELECT 1 FROM distributions WHERE guid=?", (row["guid"],)).fetchone():
             continue
-        local = _find_recipient_by_guid(conn, row.get("rec_guid") or "")
+        local = _find_rec_resolved(conn, row.get("rec_guid") or "")
         rid = local["id"] if local is not None else None
         conn.execute(
             "INSERT INTO distributions (recipient_id, recipient_name, dist_date, "
@@ -738,7 +814,7 @@ def _apply_dist_add(conn, rec: dict):
     if not guid or conn.execute("SELECT 1 FROM distributions WHERE guid=?",
                                 (guid,)).fetchone():
         return
-    local = _find_recipient_by_guid(conn, rec.get("rec_guid") or "")
+    local = _find_rec_resolved(conn, rec.get("rec_guid") or "")
     rid = local["id"] if local is not None else None
     conn.execute(
         "INSERT INTO distributions (recipient_id, recipient_name, dist_date, area, "
@@ -841,6 +917,9 @@ def _apply_rec_change(conn, rec: dict):
     recorded exactly once across both machines."""
     if not rec.get("rec_guid") or not rec.get("changes"):
         return
+    target = _resolved_guid(conn, rec["rec_guid"])      # a merged-away card → the card that stayed
+    if target != rec["rec_guid"]:
+        rec = dict(rec, rec_guid=target)
     # History of a recipient deleted after these changes (another journal, read
     # later) must not come back — same guard as the card itself.
     if _deleted_after(conn, rec["rec_guid"], rec.get("changed_at") or rec.get("ts") or ""):
@@ -993,6 +1072,7 @@ def _apply_mtpl_upsert(conn, rec: dict):
 _APPLIERS = {
     "rec_upsert":   _apply_rec_upsert,
     "rec_delete":   _apply_rec_delete,
+    "rec_merge":    _apply_rec_merge,
     "rec_change":   _apply_rec_change,
     "batch_add":    _apply_batch_add,
     "batch_delete": _apply_batch_delete,

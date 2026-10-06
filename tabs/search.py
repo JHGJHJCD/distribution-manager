@@ -2,9 +2,9 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QLineEdit, QAbstractItemView,
     QFrame, QPushButton, QMessageBox, QListWidget, QListWidgetItem, QScrollArea,
-    QSizePolicy
+    QSizePolicy, QStyledItemDelegate, QStyleOptionViewItem, QStyle, QApplication
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QFont, QColor
 import database as db
 from utils.ui import (search_icon, busy_cursor, line_icon, enable_touch_scroll,
@@ -22,7 +22,9 @@ _SMALL_BTN = "font-size:11px; min-height:24px; min-width:0; padding:3px 12px;"
 from utils.timefmt import fdate as _fdate   # one shared copy (סקירת בשלות 26/9/2026)
 
 
-HIST_COLS = ["תאריך", "מה חולק", "כמות", "מחלק", "הערות"]
+HIST_COLS = ["תאריך", "מה חולק", "כמות", "מחלק", "הערות", ""]
+_HIST_DEL_COL = len(HIST_COLS) - 1      # the "🗑 מחק" cell at the end of every history row (task 10)
+_HIST_DEL_W = 74
 
 
 def _priority_display(rec: dict) -> str:
@@ -46,6 +48,79 @@ def _make_badge(text: str, colors: dict):
         f"font-weight:700; font-size:13px;")
     lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
     return lab
+
+
+_DETAIL_COLS = 3        # the profile card shows its details in three columns (v3.78)
+_DETAIL_MAX_H = 420     # safety cap — beyond this the card scrolls (tiny windows only)
+
+
+class _DeleteCellDelegate(QStyledItemDelegate):
+    """Paints the history row's "🗑 מחק" cell: red bold text centred in the WHOLE cell.
+    The app stylesheet forces `color` + 11/14px padding on every table item (so
+    setForeground is ignored and a 30px row leaves ~8px for text) — painting the
+    text ourselves keeps it red and never clipped."""
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text = opt.text
+        opt.text = ""
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
+        painter.save()
+        f = QFont(opt.font); f.setBold(True)
+        painter.setFont(f)
+        painter.setPen(QColor("#b91c1c"))
+        painter.drawText(option.rect, int(Qt.AlignmentFlag.AlignCenter), text)
+        painter.restore()
+
+
+class _FitScrollArea(QScrollArea):
+    """A QScrollArea whose height follows its content's height-for-width, so the
+    details card is exactly as tall as its three columns need — no scrollbar and no
+    empty room. Qt's own hasHeightForWidth is not overridable, so fit() measures the
+    content and publishes it as the preferred AND maximum height (on every resize and
+    after every refill). Only in a really short window does it give way: down to a
+    small minimum it then scrolls, instead of overlapping the history below."""
+
+    _MIN_H = 84
+
+    def __init__(self, *a):
+        super().__init__(*a)
+        self._want_h = 0
+
+    def fit(self):
+        w = self.widget()
+        if w is None or w.layout() is None:
+            return
+        width = self.viewport().width()
+        if width <= 1:
+            return
+        h = min(w.layout().totalHeightForWidth(width) + 2 * self.frameWidth(), _DETAIL_MAX_H)
+        if h != self._want_h:
+            self._want_h = h
+            self.setMinimumHeight(min(h, self._MIN_H))
+            self.setMaximumHeight(h)
+            self.updateGeometry()
+
+    def sizeHint(self):
+        sh = super().sizeHint()
+        if self._want_h:
+            sh.setHeight(self._want_h)
+        return sh
+
+    def setWidget(self, w):
+        super().setWidget(w)
+        w.installEventFilter(self)      # content re-laid-out (rows shown/added) → re-fit
+
+    def eventFilter(self, obj, ev):
+        if obj is self.widget() and ev.type() == QEvent.Type.LayoutRequest:
+            QTimer.singleShot(0, self.fit)      # after Qt has shown the new child rows
+        return super().eventFilter(obj, ev)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.fit()
 
 
 class SearchTab(QWidget):
@@ -160,23 +235,28 @@ class SearchTab(QWidget):
         head_v.addWidget(self._hero_phone)
         right_panel.addWidget(self.detail_header)
 
-        # Details card — hugs its content (no forced height, no empty filler) so
-        # the history below can take the remaining room (the old sparse half-empty
-        # card is gone).
+        # Details card — THREE columns grouped by meaning (v3.78, משימה 9: קשר וכתובת ·
+        # משפחה · חלוקות), hugging its content (no forced height, no empty filler) so
+        # the history below can take the remaining room. The scroll area is only a
+        # safety net for absurdly small windows: it asks for exactly the card's
+        # height-for-width, so normally there is nothing to scroll.
         self.detail_card = QFrame()
         self.detail_card.setObjectName("panel")
         self._detail_lay = QGridLayout(self.detail_card)
-        self._detail_lay.setContentsMargins(18, 14, 18, 14)
-        self._detail_lay.setHorizontalSpacing(28)
-        self._detail_lay.setVerticalSpacing(3)
-        self._detail_lay.setColumnStretch(0, 1)
-        self._detail_lay.setColumnStretch(1, 1)
+        self._detail_lay.setContentsMargins(18, 8, 18, 8)
+        self._detail_lay.setHorizontalSpacing(22)
+        self._detail_lay.setVerticalSpacing(1)
+        # contact & address (e-mail, address, synagogue) holds the longest values →
+        # a bit more room than the family / distributions columns.
+        for c, stretch in enumerate((4, 3, 3)):
+            self._detail_lay.setColumnStretch(c, stretch)
+            self._detail_lay.setColumnMinimumWidth(c, 0)
         self._detail_count = 0
-        self.detail_scroll = QScrollArea()
+        self._col_rows = [0] * _DETAIL_COLS
+        self.detail_scroll = _FitScrollArea()
         self.detail_scroll.setWidgetResizable(True)
         self.detail_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self.detail_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        self.detail_scroll.setMaximumHeight(300)
+        self.detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         enable_touch_scroll(self.detail_scroll)
         self.detail_scroll.setWidget(self.detail_card)
         right_panel.addWidget(self.detail_scroll)
@@ -206,13 +286,6 @@ class SearchTab(QWidget):
         self.btn_export_card.setEnabled(False)
         hist_row.addWidget(self.btn_export_card)
 
-        self.btn_del_hist = QPushButton("מחק רישום")
-        self.btn_del_hist.setObjectName("danger")
-        self.btn_del_hist.setStyleSheet(_SMALL_BTN)
-        self.btn_del_hist.setToolTip("מחיקת רישום החלוקה המסומן מהיסטוריית המקבל")
-        self.btn_del_hist.clicked.connect(self._delete_hist_record)
-        self.btn_del_hist.setEnabled(False)
-        hist_row.addWidget(self.btn_del_hist)
         right_panel.addLayout(hist_row)
 
         self.hist_table = QTableWidget()
@@ -230,7 +303,16 @@ class SearchTab(QWidget):
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setResizeContentsPrecision(20)
+        # task 10: the delete cell is plain text + cellClicked (a widget in a cell gets
+        # clipped / not measured here) in a Fixed column ResizeToContents can't shrink.
+        hdr.setSectionResizeMode(_HIST_DEL_COL, QHeaderView.ResizeMode.Fixed)
+        self.hist_table.setColumnWidth(_HIST_DEL_COL, _HIST_DEL_W)
+        self.hist_table.setItemDelegateForColumn(_HIST_DEL_COL, _DeleteCellDelegate(self.hist_table))
+        self.hist_table.cellClicked.connect(self._on_hist_cell_clicked)
         self.hist_table.verticalHeader().setVisible(False)
+        # In a short window the history is the part that gives way (it scrolls on its
+        # own); the details card above never gets squeezed into overlapping it.
+        self.hist_table.setMinimumHeight(60)
         enable_touch_scroll(self.hist_table)
         right_panel.addWidget(self.hist_table, 1)
         # v3.39 — מיילים שנשלחו למקבל הזה (מסך 'מיילים')
@@ -247,6 +329,7 @@ class SearchTab(QWidget):
         chg_row.addWidget(self.lbl_changes, 1)
         self.btn_changes = QPushButton("היסטוריית שינויים…")
         self.btn_changes.setObjectName("neutral")
+        self.btn_changes.setStyleSheet(_SMALL_BTN)      # compact: every pixel of height counts here
         self.btn_changes.setToolTip("היסטוריית השינויים בכרטיס: מה השתנה, מתי ובאיזה מחשב")
         self.btn_changes.clicked.connect(self._open_changes)
         self.btn_changes.setEnabled(False)
@@ -288,7 +371,6 @@ class SearchTab(QWidget):
             self._current_rec_id = None
             self.btn_print_card.setEnabled(False)
             self.btn_export_card.setEnabled(False)
-            self.btn_del_hist.setEnabled(False)
             self._show_empty_profile("לא נמצאו תוצאות")
 
     def _on_result_selected(self, cur, _prev=None):
@@ -305,37 +387,69 @@ class SearchTab(QWidget):
             w = it.widget()
             if w is not None:
                 w.deleteLater()
-        self._detail_lay.setRowStretch(self._detail_count // 2 + 2, 0)
         self._detail_count = 0
+        self._col_rows = [0] * _DETAIL_COLS
 
-    def _add_detail_row(self, icon_name, label, value, ltr=False):
+    def _grid_col(self, col):
+        """Logical column 0 = the first (right-most in Hebrew) → the grid column.
+        QGridLayout already mirrors itself under RTL, so this is the identity;
+        kept as one named place in case the layout direction is ever forced."""
+        return col
+
+    def _add_detail_row(self, icon_name, label, value, ltr=False, col=0):
+        """One 'icon · label · value' line in logical column `col` (0 = right-most).
+        Rows stack down the column; empty values are skipped (no gap)."""
         value = (str(value).strip() if value not in (None, "") else "")
         if not value:
             return
         row = QWidget()
         g = QHBoxLayout(row)
-        g.setContentsMargins(0, 4, 0, 4)
-        g.setSpacing(9)
+        g.setContentsMargins(0, 2, 0, 2)
+        g.setSpacing(6)
         ic = QLabel()
-        ic.setPixmap(line_icon(icon_name, 17, "#0f766e"))
-        ic.setFixedWidth(20)
+        ic.setPixmap(line_icon(icon_name, 16, "#0f766e"))
+        ic.setFixedWidth(18)
         ic.setStyleSheet("background:transparent; border:none;")
         g.addWidget(ic)
         lab = QLabel(label)
         lab.setStyleSheet("color:#64748b; background:transparent; border:none;")
-        lab.setFixedWidth(96)
+        lab.setFixedWidth(lab.fontMetrics().horizontalAdvance(label) + 4)
         g.addWidget(lab)
         val = QLabel(value)
         val.setStyleSheet("color:#1f2937; font-weight:600; background:transparent; border:none;")
         val.setWordWrap(True)
+        val.setToolTip(value)
         val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # Ignored → a long unbreakable value (e-mail) is clipped instead of pushing
+        # the whole column wider than its share; the full text is in the tooltip.
+        val.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        val.setMinimumWidth(0)
+        # Always flush against the label (the physical right edge): a bare number or
+        # date is LTR text and would otherwise drift to the far LEFT of its wide
+        # cell — next to the neighbouring column, reading as that column's value.
+        val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignAbsolute
+                         | Qt.AlignmentFlag.AlignVCenter)
         if ltr:
-            val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             val.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
         g.addWidget(val, 1)
-        # RTL: first field on the right (col 1), second on the left (col 0).
-        r, c = divmod(self._detail_count, 2)
-        self._detail_lay.addWidget(row, r, 1 - c)
+        # +1: row 0 of every column is the group caption.
+        self._detail_lay.addWidget(row, self._col_rows[col] + 1, self._grid_col(col))
+        self._col_rows[col] += 1
+        self._detail_count += 1
+
+    def _add_group_caption(self, col, text):
+        """Small muted caption on top of a column (only when the column has rows)."""
+        cap = QLabel(text)
+        cap.setStyleSheet("color:#0f766e; font-size:12px; font-weight:700;"
+                          " background:transparent; border:none;")
+        self._detail_lay.addWidget(cap, 0, self._grid_col(col))
+
+    def _add_span_widget(self, widget):
+        """Full-width banner (no-show alert, notes) on its own row below all three
+        columns; later rows/banners continue below it."""
+        row = max(self._col_rows) + 1
+        self._detail_lay.addWidget(widget, row, 0, 1, _DETAIL_COLS)
+        self._col_rows = [row] * _DETAIL_COLS
         self._detail_count += 1
 
     def _clear_header(self):
@@ -359,8 +473,6 @@ class SearchTab(QWidget):
         self.hist_table.setRowCount(0)
         refresh_empty_state(self.hist_table)
         self.hist_title.setText("היסטוריית חלוקות")
-        if hasattr(self, "btn_del_hist"):
-            self.btn_del_hist.setEnabled(False)
         if hasattr(self, "lbl_changes"):
             self.lbl_changes.setText("")
             self.btn_changes.setEnabled(False)
@@ -373,13 +485,11 @@ class SearchTab(QWidget):
             self._current_rec_id = None
             self.btn_print_card.setEnabled(False)
             self.btn_export_card.setEnabled(False)
-            self.btn_del_hist.setEnabled(False)
             self._show_empty_profile()
             return
         self._current_rec_id = rec_id
         self.btn_print_card.setEnabled(True)
         self.btn_export_card.setEnabled(True)
-        self.btn_del_hist.setEnabled(True)
 
         hist = db.get_distributions_for_recipient(rec["id"])
 
@@ -417,18 +527,31 @@ class SearchTab(QWidget):
 
         # Detail rows with dignified icons
         self._clear_details()
-        self._add_detail_row("id", "ת״ז בעל", rec.get("id_number"), ltr=True)
-        self._add_detail_row("id", "ת״ז אשה", rec.get("spouse_id_number"), ltr=True)
-        self._add_detail_row("home", "כתובת", rec.get("address"))
-        self._add_detail_row("area", "אזור", rec.get("area"))
-        self._add_detail_row("users", "נפשות", rec.get("souls"))
-        self._add_detail_row("freq", "תדירות", rec.get("frequency"))
-        self._add_detail_row("calendar", "נתמך חגים", holidays.display(rec))
-        self._add_detail_row("calendar", "חלוקה אחרונה", _fdate(rec.get("last_distribution") or ""))
-        self._add_detail_row("calendar", "חלוקה הבאה", _fdate(rec.get("next_distribution") or ""))
-        self._add_detail_row("hash", "סה״כ חלוקות", len(hist))
-        self._add_detail_row("mail", "אימייל", rec.get("email"), ltr=True)
-        self._add_detail_row("synagogue", "בית כנסת", rec.get("synagogue"))
+        # Three columns, right → left: contact & address · family · distributions.
+        # (Which fields go where is a design call — grouped by meaning, balanced
+        # to 4/4/5 rows; the header already carries name, badges and phones.)
+        groups = (
+            ("קשר וכתובת", (
+                ("home", "כתובת", rec.get("address"), False),
+                ("area", "אזור", rec.get("area"), False),
+                ("mail", "אימייל", rec.get("email"), True),
+                ("synagogue", "בית כנסת", rec.get("synagogue"), False))),
+            ("משפחה", (
+                ("id", "ת״ז בעל", rec.get("id_number"), True),
+                ("id", "ת״ז אשה", rec.get("spouse_id_number"), True),
+                ("users", "נפשות", rec.get("souls"), False))),
+            ("חלוקות", (
+                ("freq", "תדירות", rec.get("frequency"), False),
+                ("calendar", "נתמך חגים", holidays.display(rec), False),
+                ("calendar", "חלוקה אחרונה", _fdate(rec.get("last_distribution") or ""), False),
+                ("calendar", "חלוקה הבאה", _fdate(rec.get("next_distribution") or ""), False),
+                ("hash", "סה״כ חלוקות", len(hist), False))),
+        )
+        for col, (caption, fields) in enumerate(groups):
+            for icon_name, label, value, ltr in fields:
+                self._add_detail_row(icon_name, label, value, ltr=ltr, col=col)
+            if self._col_rows[col]:
+                self._add_group_caption(col, caption)
         # No-show alert (v2.60): a red banner when the recipient is on a run of
         # consecutive recorded "לא הגיע" at/over the Settings threshold.
         thr = db.get_no_show_threshold()
@@ -447,9 +570,7 @@ class SearchTab(QWidget):
             wt.setWordWrap(True)
             wt.setStyleSheet("color:#7f1d1d; font-weight:700; background:transparent; border:none;")
             wl.addWidget(wt, 1)
-            warn_row = (self._detail_count + 1) // 2
-            self._detail_lay.addWidget(warn, warn_row, 0, 1, 2)
-            self._detail_count = (warn_row + 1) * 2
+            self._add_span_widget(warn)
 
         notes = (rec.get("notes") or "").strip()
         if notes:
@@ -465,10 +586,8 @@ class SearchTab(QWidget):
             nl.setWordWrap(True)
             nl.setStyleSheet("color:#78350f; background:transparent; border:none;")
             bl.addWidget(nl, 1)
-            # Notes span the full width, on their own row below the field pairs.
-            note_row = (self._detail_count + 1) // 2
-            self._detail_lay.addWidget(box, note_row, 0, 1, 2)
-            self._detail_count = (note_row + 1) * 2
+            # Notes span the full width, on their own row below the three columns.
+            self._add_span_widget(box)
 
         # History
         self.hist_title.setText(f"היסטוריית חלוקות ({len(hist)})")
@@ -511,27 +630,44 @@ class SearchTab(QWidget):
             vals = [_fdate(entry.get("dist_date", "")), what,
                     str(entry.get("quantity", "") or ""), entry.get("distributor", ""),
                     entry.get("notes", "")]
+            vals.append("🗑 מחק")        # task 10 — delete this very row
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(ALIGN_RIGHT)
+                if c == _HIST_DEL_COL:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setForeground(QColor("#b91c1c"))
+                    f = item.font(); f.setBold(True); item.setFont(f)
+                    item.setToolTip("מחיקת רישום החלוקה הזה מההיסטוריה של המקבל")
+                    item.setData(Qt.ItemDataRole.UserRole, entry.get("id"))
+                    self.hist_table.setItem(r, c, item)
+                    continue
                 if c == 0:
                     # "לפני שבועיים" on hover — like the other history tables
                     item.setToolTip(timefmt.relative(entry.get("dist_date", "") or ""))
                 if missed:
                     item.setForeground(QColor("#b91c1c"))
-                # Keep the record id on every cell so a selected row can be deleted.
+                # Keep the record id on every cell (the delete cell reads it too).
                 item.setData(Qt.ItemDataRole.UserRole, entry.get("id"))
                 self.hist_table.setItem(r, c, item)
         refresh_empty_state(self.hist_table)
 
-    def _delete_hist_record(self):
-        """Remove the selected distribution record from this recipient's history.
-        Fixes stale/old records that linger in search (e.g. legacy rows with no
-        batch link, which the 'חלוקות' tab can't delete)."""
+    def _on_hist_cell_clicked(self, row, col):
+        """task 10 — a click on the "🗑 מחק" cell deletes THAT row's record."""
+        if col == _HIST_DEL_COL:
+            self._delete_hist_record(row)
+
+    def _delete_hist_record(self, row=None):
+        """Remove one distribution record from this recipient's history (the row whose
+        delete cell was clicked; row=None → the currently selected row). Fixes
+        stale/old records that linger in search (e.g. legacy rows with no batch link,
+        which the 'חלוקות' tab can't delete). Goes through db.delete_distribution —
+        the one path that re-derives last/next dates and logs the sync op."""
         if not self._current_rec_id:
             QMessageBox.information(self, "", "בחר מקבל תחילה")
             return
-        row = self.hist_table.currentRow()
+        if row is None:
+            row = self.hist_table.currentRow()
         item = self.hist_table.item(row, 0) if row >= 0 else None
         if item is None:
             QMessageBox.information(self, "", "בחר שורת חלוקה למחיקה")

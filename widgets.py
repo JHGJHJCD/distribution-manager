@@ -87,6 +87,19 @@ class WednesdayCalendar(QCalendarWidget):
             cy = rect.bottom() - r - 2
             painter.drawEllipse(cx - r, cy - r, r * 2, r * 2)
             painter.restore()
+        # Today: amber rounded ring + faint amber wash (distinct from the teal
+        # Wednesday colour, so "today" and "Wednesday" never look alike)
+        if date == QDate.currentDate():
+            painter.save()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            ring = rect.adjusted(2, 2, -2, -2)
+            painter.setBrush(QColor(245, 158, 11, 45))
+            pen = painter.pen()
+            pen.setColor(QColor("#f59e0b"))
+            pen.setWidth(2)
+            painter.setPen(pen)
+            painter.drawRoundedRect(ring, 6, 6)
+            painter.restore()
 
     def showEvent(self, event):
         if self.selectedDate() <= self._SENTINEL:

@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from tabs.group_update import (_LBL, _CARD_QSS, _CHIP_QSS, _BTN_PRIMARY, _BTN_GHOST)
 from tabs.tzintukim import _HCHIP_GREEN
-from utils.ui import FlowLayout
+from utils.ui import FlowLayout, ask_choice
 from PyQt6.QtCore import Qt, QDate, QTimer
 from widgets import DateEdit
 from PyQt6.QtGui import QColor
@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 import database as db
 import holidays
-from styles import SUSPENDED_FG, ENDED_FG
+from styles import SUSPENDED_FG
 
 # ── Validation helpers ────────────────────────────────────────────────────────
 _ERR_STYLE = "border: 2px solid #dc2626; background-color: #fff5f5;"
@@ -67,6 +67,81 @@ def save_card_edit(parent, rec_id: int, loaded: dict, dlg, source: str = "edit")
     db.update_recipient(rec_id, dlg.get_data(), source=source)
     return True
 
+
+# ─── מיזוג מקבלים — אותו שם, טלפון שונה (משימה 7, v3.78) ─────────────────────────
+# תמיד הצעה בלבד: ברירת המחדל היא "אלה שני אנשים שונים" / "חזור לעריכה", ולפני כל מיזוג
+# נעשה גיבוי safety (נכשל → המיזוג מבוטל). הלוגיקה עצמה ב-database.merge_* (ו-op rec_merge).
+_MERGE_AFTER_NOTE = ("הכרטיס שיימחק נשמר ב'מקבלים שנמחקו' (בהגדרות) ואפשר לשחזר אותו.\n"
+                     "לפני המיזוג נעשה גיבוי אוטומטי.")
+
+
+def _phones_text(rec: dict) -> str:
+    return ", ".join(db.recipient_phones(rec)) or "אין טלפון"
+
+
+def _history_label(rec_id: int) -> str:
+    n = len(db.get_distributions_for_recipient(rec_id))
+    return "אין חלוקות" if n == 0 else ("חלוקה אחת" if n == 1 else f"{n} חלוקות")
+
+
+def safety_backup_ok(parent) -> bool:
+    """Backup before a merge; False (with a message) when it could not be made."""
+    if auto_backup(kind="safety") is True:
+        return True
+    QMessageBox.warning(parent, "המיזוג בוטל",
+                        "גיבוי הבטיחות נכשל — המיזוג בוטל כדי לא לאבד נתונים.")
+    return False
+
+
+def merge_two_cards_text(keep: dict, drop: dict) -> str:
+    info = db.merge_conflicts_summary(keep, drop)
+    text = (f"נמצאו שני כרטיסים בשם «{keep.get('full_name', '')}»:\n\n"
+            f"• הכרטיס שיישאר — טלפון: {_phones_text(keep)} · {_history_label(keep['id'])}\n"
+            f"• הכרטיס שיתמזג אליו — טלפון: {_phones_text(drop)} · {_history_label(drop['id'])}\n\n"
+            "אם זה אותו אדם, אפשר למזג לכרטיס אחד: שני המספרים נשמרים וההיסטוריה "
+            "של שניהם מתאחדת.\n" + _MERGE_AFTER_NOTE)
+    if info["differs"]:
+        text += ("\n\nשדות שונים בין הכרטיסים (יישאר הערך מהכרטיס שנשאר): "
+                 + ", ".join(info["differs"][:6]))
+    if info["id_differs"]:
+        text += "\n\n⚠ מספרי הזהות שונים — ייתכן מאוד שאלה שני אנשים שונים!"
+    return text
+
+
+def offer_merge_two_cards(parent, a: dict, b: dict) -> bool:
+    """Review tab: ask whether two same-name cards are one person; merge on 'כן'.
+    Returns True when they were merged."""
+    keep, drop = db.pick_merge_keep(a, b)
+    choice = ask_choice(parent, "מיזוג כרטיסים", merge_two_cards_text(keep, drop),
+                        ["מזג לכרטיס אחד", "אלה שני אנשים שונים", "ביטול"],
+                        default=1, cancel=2)
+    if choice != 0 or not safety_backup_ok(parent):
+        return False
+    try:
+        db.merge_recipients(keep["id"], drop["id"])
+    except ValueError as e:
+        QMessageBox.warning(parent, "המיזוג לא בוצע", str(e))
+        return False
+    return True
+
+
+def ask_merge_into_existing(parent, existing: dict, data: dict) -> int:
+    """Manual add of a person whose name already exists with another phone. Returns
+    0 = merge into the existing card · 1 = two different people (add separately) ·
+    2 = back to editing. Does NOT write anything."""
+    text = (f"כבר יש מקבל בשם «{existing.get('full_name', '')}» עם טלפון אחר:\n\n"
+            f"• בכרטיס הקיים — טלפון: {_phones_text(existing)}\n"
+            f"• מה שהקלדת עכשיו — טלפון: "
+            f"{', '.join(p for p in (data.get('phone1'), data.get('phone2'), data.get('phone3')) if p)}\n\n"
+            "אם זה אותו אדם — אפשר למזג: המספר החדש יתווסף לכרטיס הקיים (שני המספרים "
+            "נשמרים), שדות ריקים בו יתמלאו ממה שהקלדת, ולא ייווצר כרטיס נוסף.\n"
+            "אם אלה שני אנשים שונים — יתווסף כרטיס נפרד.\n"
+            "לפני המיזוג נעשה גיבוי אוטומטי.")
+    return ask_choice(parent, "אותו שם — מיזוג?", text,
+                      ["מזג לכרטיס הקיים", "אלה שני אנשים שונים — הוסף", "חזור לעריכה"],
+                      default=2, cancel=2)
+
+
 # key → Hebrew label for the import-review dialog (reuses the export labels).
 _FIELD_LABELS = {k: v for k, v in _FULL_FIELDS}
 
@@ -77,6 +152,10 @@ class ImportReviewDialog(QDialog):
     existing recipient as one checkable row (name + field: old → new). All rows
     are checked by default; the operator unchecks any change to skip. One
     confirmation applies everything selected — no per-recipient prompts."""
+
+    _SAME_CHOICES = [("שני אנשים שונים — הוסף כחדש", "separate"),
+                     ("מזג — אותו אדם, שני המספרים נשמרים", "merge"),
+                     ("דלג (אל תייבא)", "skip")]
 
     def __init__(self, diff: dict, parent=None):
         super().__init__(parent)
@@ -89,9 +168,11 @@ class ImportReviewDialog(QDialog):
 
         n_new = len(diff.get("new", []))
         n_upd = len(diff.get("updates", []))
+        n_same = len(diff.get("same_name", []))
         summary = QLabel(
             f"📥 <b>{n_new}</b> מקבלים חדשים יתווספו · "
-            f"<b>{n_upd}</b> מקבלים קיימים עם שינויים מוצעים.")
+            f"<b>{n_upd}</b> מקבלים קיימים עם שינויים מוצעים"
+            + (f" · <b>{n_same}</b> עם אותו שם וטלפון אחר." if n_same else "."))
         summary.setTextFormat(Qt.TextFormat.RichText)
         summary.setStyleSheet("font-size:13.5px; color:#0f172a;")
         outer.addWidget(summary)
@@ -102,6 +183,56 @@ class ImportReviewDialog(QDialog):
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#475569; font-size:12px;")
         outer.addWidget(hint)
+
+        # משימה 7: אותו שם, טלפון שונה — הצעת מיזוג לכל אחד, בחירה מפורשת (ברירת מחדל:
+        # שני אנשים שונים = כרטיס חדש; לא נדרס ולא נמחק כלום).
+        self._same = list(diff.get("same_name") or [])
+        self._same_combos = []
+        if self._same:
+            lbl = QLabel(
+                f"⚠ <b>{len(self._same)}</b> שמות שכבר קיימים בתוכנה, אבל עם טלפון אחר בקובץ. "
+                "אם זה אותו אדם — בחר \"מזג\" (שני המספרים יישמרו על הכרטיס הקיים). "
+                "אם אלה שני אנשים שונים — יתווסף כרטיס נפרד.")
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet("font-size:12.5px; color:#92400e; background:#fffbeb; "
+                              "border:1px solid #fcd34d; border-radius:8px; padding:8px;")
+            outer.addWidget(lbl)
+            # רשימת שורות רגילה (לא טבלה עם ווידג'טים בתאים — הם נחתכים/נמדדים לא נכון):
+            # שם · טלפון בכרטיס הקיים · טלפון בקובץ · בחירה.
+            from PyQt6.QtWidgets import QScrollArea
+            box = QWidget()
+            box.setObjectName("same_name_box")
+            grid = QGridLayout(box)
+            grid.setContentsMargins(6, 4, 6, 4)
+            grid.setHorizontalSpacing(14)
+            grid.setVerticalSpacing(6)
+            for c, h in enumerate(("שם", "טלפון בכרטיס הקיים", "טלפון בקובץ", "מה לעשות")):
+                hl = QLabel(h)
+                hl.setStyleSheet("font-weight:700; color:#0f766e;")
+                grid.addWidget(hl, 0, c)
+            for i, s in enumerate(self._same, start=1):
+                grid.addWidget(QLabel(s["full_name"]), i, 0)
+                grid.addWidget(QLabel(", ".join(s["existing_phones"])), i, 1)
+                grid.addWidget(QLabel(", ".join(s["incoming_phones"])), i, 2)
+                cb = QComboBox()
+                cb.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+                cb.setMinimumWidth(270)
+                for text, key in self._SAME_CHOICES:
+                    cb.addItem(text, key)
+                cb.setCurrentIndex(0)           # ברירת מחדל: שני אנשים שונים
+                grid.addWidget(cb, i, 3)
+                self._same_combos.append(cb)
+            grid.setColumnStretch(0, 1)
+            self._same_table = QScrollArea()      # (שם היסטורי של השדה — הבדיקות/צילומים)
+            self._same_table.setObjectName("same_name_table")
+            self._same_table.setWidgetResizable(True)
+            self._same_table.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+            self._same_table.setWidget(box)
+            rows_h = 38 + 52 * min(len(self._same), 5)
+            self._same_table.setMinimumHeight(rows_h)
+            self._same_table.setMaximumHeight(rows_h + 6)
+            outer.addWidget(self._same_table)
 
         self._table = QTableWidget()
         self._table.setColumnCount(4)
@@ -168,6 +299,12 @@ class ImportReviewDialog(QDialog):
                 self._table.setItem(r, 3, it_change)
                 self._rows.append((u["id"], field))
                 r += 1
+
+    def selected_same_name(self) -> list:
+        """The operator's choice per same-name/different-phone row, in
+        apply_import_confirmed's shape: [{'id','row','choice': separate|merge|skip}]."""
+        return [{"id": s["id"], "row": s["row"], "choice": cb.currentData()}
+                for s, cb in zip(self._same, self._same_combos)]
 
     def _set_all(self, checked: bool):
         st = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
@@ -377,7 +514,7 @@ class RecipientsTab(QWidget):
         lbl_f.setStyleSheet("color:#64748b; font-size:12.5px; font-weight:700; " + _LBL)
         top.addWidget(lbl_f)
         self.status_filter = QComboBox()
-        self.status_filter.addItems(["הכל", "פעיל", "מושהה", "הסתיים"])
+        self.status_filter.addItems(["הכל", "פעיל", "מושהה"])
         self.status_filter.currentTextChanged.connect(self.refresh)
         top.addWidget(self.status_filter)
 
@@ -599,7 +736,6 @@ class RecipientsTab(QWidget):
 
     def _populate(self, rows):
         _SUSPENDED = QColor(SUSPENDED_FG)
-        _ENDED     = QColor(ENDED_FG)
         _ALIGN     = ALIGN_RIGHT
 
         self.table.blockSignals(True)
@@ -609,9 +745,7 @@ class RecipientsTab(QWidget):
         for r, rec in enumerate(rows):
             rec_id = rec.get("id")
             status = rec.get("status", "")
-            color  = (_SUSPENDED if status == "מושהה"
-                      else _ENDED if status == "הסתיים"
-                      else None)
+            color  = _SUSPENDED if status == "מושהה" else None
             sv = lambda key, _r=rec: self._sv(_r, key)
 
             _first = rec.get("first_name") or ""
@@ -679,12 +813,17 @@ class RecipientsTab(QWidget):
     def _add(self):
         dlg = RecipientDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            db.add_recipient(dlg.get_data())
+            if dlg.merge_into_id:     # משימה 7: המפעיל בחר "מזג לכרטיס הקיים"
+                db.merge_into_recipient(dlg.merge_into_id, dlg.get_data())
+                msg = "הנתונים נוספו לכרטיס הקיים"
+            else:
+                db.add_recipient(dlg.get_data())
+                msg = "מקבל חדש נוסף"
             auto_backup_async()
             self.refresh()
             if self.main_win:
                 self.main_win.refresh_all()
-                self.main_win.status_msg("מקבל חדש נוסף")
+                self.main_win.status_msg(msg)
 
     def _edit(self):
         rec_id = self._selected_id()
@@ -751,29 +890,31 @@ class RecipientsTab(QWidget):
             self.main_win.status_msg(f"סטטוס שונה ל: {status}")
 
     def _import_excel(self):
-        path, _ = QFileDialog.getOpenFileName(self, "בחר קובץ Excel", "", "Excel (*.xlsx *.xls)")
+        path, _ = QFileDialog.getOpenFileName(self, "בחר קובץ Excel", "", "קובצי אקסל (*.xlsx *.xls)")
         if not path:
             return
         self._run_import(path)
 
     def _run_import(self, path: str):
-        # Choose import mode: full replace vs merge into existing data.
-        choice = QMessageBox.question(
-            self, "אופן ייבוא",
-            "להחליף את כל הנתונים הקיימים, או למזג עם הקיים?\n\n"
-            "• כן  = החלפה מלאה (מוחק הכל ומייבא מחדש)\n"
-            "• לא  = מיזוג (מוסיף חדשים; שינויים במקבלים קיימים — רק לאחר אישור)",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.No,
-        )
-        if choice == QMessageBox.StandardButton.Cancel:
-            return
-        replace = (choice == QMessageBox.StandardButton.Yes)
-        if not replace:
-            self._run_merge_import(path)
-            return
-        if replace:
+        # תוכנה ריקה — אין מה להחליף או למזג: מייבאים ישר, בלי לשאול.
+        fresh = not db.get_all_recipients()
+        replace = fresh
+        if not fresh:
+            # Choose import mode: full replace vs merge into existing data.
+            # כפתורים בשמות ברורים (לא כן/לא): 0=החלף הכול · 1=מזג · 2=ביטול.
+            choice = ask_choice(
+                self, "אופן ייבוא",
+                "להחליף את כל הנתונים הקיימים, או למזג עם הקיים?\n\n"
+                "• החלף הכול — מוחק הכל ומייבא מחדש\n"
+                "• מזג — מוסיף חדשים; שינויים במקבלים קיימים — רק לאחר אישור",
+                ["החלף הכול", "מזג", "ביטול"], default=1, cancel=2)
+            if choice == 2:
+                return
+            replace = (choice == 0)
+            if not replace:
+                self._run_merge_import(path)
+                return
+        if replace and not fresh:
             confirm = QMessageBox.warning(
                 self, "אישור החלפה מלאה",
                 "כל המקבלים הקיימים יימחקו ויוחלפו בתוכן הקובץ.\n"
@@ -791,10 +932,11 @@ class RecipientsTab(QWidget):
                     # Safety backup BEFORE wiping — into the durable safety_ bucket
                     # (not the routine one), so it can't be churned out by ordinary
                     # backups later (R2). Abort if it cannot be made.
-                    if auto_backup(kind="safety") is not True:
-                        raise RuntimeError(
-                            "גיבוי הבטיחות נכשל — הייבוא בוטל כדי לא לאבד נתונים.")
-                    db.reset_all_data()
+                    if not fresh:
+                        if auto_backup(kind="safety") is not True:
+                            raise RuntimeError(
+                                "גיבוי הבטיחות נכשל — הייבוא בוטל כדי לא לאבד נתונים.")
+                        db.reset_all_data()
                     # Insert everything (keep duplicates for the review tab).
                     added = db.bulk_insert_recipients(rows)
                     updated, conflicts = 0, []
@@ -803,7 +945,7 @@ class RecipientsTab(QWidget):
                 auto_backup_async()
                 self.refresh()
             dup = len(report["duplicate_names"])
-            msg = f"{'(החלפה מלאה) ' if replace else ''}\nנוספו {added} מקבלים חדשים\n"
+            msg = f"{'(החלפה מלאה) ' if replace and not fresh else ''}\nנוספו {added} מקבלים חדשים\n"
             if not replace:
                 msg += (f"עודכנו {updated} מקבלים קיימים\n"
                         f"נמצאו {len(conflicts)} התנגשויות ייבוא\n")
@@ -839,7 +981,8 @@ class RecipientsTab(QWidget):
             QMessageBox.critical(self, "שגיאה ביבוא", str(e))
             return
         n_new, n_upd = len(diff["new"]), len(diff["updates"])
-        if not n_new and not n_upd:
+        n_same = len(diff.get("same_name") or [])
+        if not n_new and not n_upd and not n_same:
             QMessageBox.information(self, "ייבוא", "אין נתונים חדשים או שינויים — "
                                     "הקובץ תואם למידע הקיים.")
             return
@@ -847,10 +990,15 @@ class RecipientsTab(QWidget):
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         updates = dlg.selected_updates()
+        same = dlg.selected_same_name()
+        if any(d["choice"] == "merge" for d in same):
+            if not safety_backup_ok(self):     # מיזוג = רק אחרי גיבוי safety
+                return
+        else:
+            auto_backup_async()
         try:
             with busy_cursor():
-                auto_backup_async()
-                added, updated = db.apply_import_confirmed(diff["new"], updates)
+                added, updated = db.apply_import_confirmed(diff["new"], updates, same_name=same)
                 self.refresh()
         except Exception as e:
             QMessageBox.critical(self, "שגיאה ביבוא", str(e))
@@ -879,6 +1027,8 @@ class RecipientDialog(QDialog):
         scr = self.screen().availableGeometry().height() if self.screen() else 800
         self.resize(700, max(560, min(780, scr - 80)))
         self._orig_area = ""
+        self._is_new = rec is None
+        self.merge_into_id = None        # set when a new card is merged into an existing one
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self._build(rec)
 
@@ -969,7 +1119,7 @@ class RecipientDialog(QDialog):
         self.f_freq.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         self.f_status = QComboBox()
-        self.f_status.addItems(["פעיל", "מושהה", "הסתיים"])
+        self.f_status.addItems(["פעיל", "מושהה"])
         self.f_status.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
 
         self.f_priority = QComboBox()
@@ -1144,7 +1294,10 @@ class RecipientDialog(QDialog):
             self._orig_area = rec.get("area") or ""
             self.f_souls.setValue(int(rec.get("souls") or 0))
             self.f_freq.setCurrentIndex(max(0, self.f_freq.findText(rec.get("frequency") or "")))
-            self.f_status.setCurrentIndex(max(0, self.f_status.findText(rec.get("status") or "פעיל")))
+            # normalize: a raw legacy ended-status must open as 'מושהה' — findText would
+            # miss it and fall to index 0 ('פעיל'), and a save would reactivate them.
+            self.f_status.setCurrentIndex(
+                max(0, self.f_status.findText(db.normalize_status(rec.get("status")))))
             self.f_notes.setPlainText(rec.get("notes") or "")
             self.f_holiday.setChecked(holidays.is_supported(rec))
             for name in holidays.parse_list(rec.get("holidays")):
@@ -1346,7 +1499,25 @@ class RecipientDialog(QDialog):
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
+        if self._is_new and not self._same_name_ok():
+            return
         self.accept()
+
+    def _same_name_ok(self) -> bool:
+        """משימה 7: הוספה ידנית של שם שכבר קיים עם טלפון אחר → הצעת מיזוג. True = אפשר
+        לשמור (כרטיס חדש, או מיזוג שנבחר ב-`merge_into_id`); False = חזרה לעריכה."""
+        data = self.get_data()
+        cands = db.same_name_conflicts(
+            data["full_name"], [data["phone1"], data["phone2"], data["phone3"]])
+        if len(cands) != 1:          # אין, או כמה כרטיסים קיימים — אין מי שאפשר למזג איתו בוודאות
+            return True
+        choice = ask_merge_into_existing(self, cands[0], data)
+        if choice == 0:
+            if not safety_backup_ok(self):
+                return False
+            self.merge_into_id = cands[0]["id"]
+            return True
+        return choice == 1
 
     def _collect_errors(self) -> list[str]:
         errors: list[str] = []

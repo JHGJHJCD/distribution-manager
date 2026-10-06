@@ -1103,7 +1103,7 @@ class MailsTab(QWidget):
         self._load_templates()
 
     def _pick_attachment(self):
-        path, _ = QFileDialog.getOpenFileName(self, "בחר קובץ לצירוף")
+        path, _ = QFileDialog.getOpenFileName(self, "בחר קובץ לצירוף", "", "כל הקבצים (*.*)")
         if path:
             # v3.46: Gmail מגבילה ל-25MB *אחרי* קידוד (×1.37) ⇒ קובץ עד 18MB
             if os.path.getsize(path) > email_utils.MAX_ATTACHMENT_BYTES:

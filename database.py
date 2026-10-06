@@ -553,6 +553,14 @@ def init_db():
                 source      TEXT DEFAULT '',
                 card_json   TEXT DEFAULT ''
             )""")
+        # משימה 7 (v3.78): כרטיס שמוזג לכרטיס אחר → לאן. מאפשר לחלוקה/היסטוריה שמגיעות
+        # מהמחשב השני עם ה-guid הישן להגיע לכרטיס שנשאר. מקומי, נבנה גם מה-op rec_merge.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS merged_guids (
+                drop_guid  TEXT PRIMARY KEY,
+                keep_guid  TEXT DEFAULT '',
+                ts         TEXT DEFAULT ''
+            )""")
         # v3.75: קובצי-מראה (לוגו / תמונת רקע) נשמרים גם בתוך ה-DB כדי שגיבוי
         # ושחזור במחשב חדש יחזירו אותם לבד (הכרעת יהודה 27/9/2026). לא מסונכרן.
         conn.execute("""
@@ -634,6 +642,7 @@ def init_db():
                          (_hash_password(str(row["value"])),))
 
     _migrate_legacy_dist_dates()
+    _migrate_ended_status()
     try:
         restore_assets_to_disk()
     except Exception:            # noqa: BLE001 — a cosmetic file must never block startup
@@ -677,6 +686,28 @@ def _migrate_legacy_dist_dates():
                          [(iso, did) for iso, did, _ in todo])
         for rid in {rid for _, _, rid in todo if rid}:
             _recompute_recipient_dates(conn, rid)
+
+
+def _migrate_ended_status():
+    """v3.78 (task 6, Yehuda 5/10/2026): the 'הסתיים' recipient status is gone —
+    whoever was marked so becomes 'מושהה' (same effect: not in any list, card and
+    history kept). One-time, after a safety backup. Deliberately NOT stamped with a
+    new updated_at and not journaled: every computer runs the same deterministic
+    conversion on its own start, and a value that still arrives from an older
+    computer is mapped in sync._apply_rec_upsert. Column name unchanged."""
+    with get_connection() as conn:
+        n = conn.execute("SELECT COUNT(*) AS n FROM recipients WHERE status=?",
+                         (_LEGACY_STATUS_ENDED,)).fetchone()["n"]
+    if not n:
+        return
+    try:
+        from utils.backup import auto_backup
+        auto_backup("safety")
+    except Exception:
+        pass
+    with get_connection() as conn:
+        conn.execute("UPDATE recipients SET status=? WHERE status=?",
+                     (STATUS_SUSPENDED, _LEGACY_STATUS_ENDED))
 
 
 # ─── Password hashing ─────────────────────────────────────────────────────────
@@ -906,7 +937,29 @@ _INT_FIELDS = {"souls", "children_home", "children_married", "children_total",
 _NULLABLE_INT_FIELDS = {"priority"}
 
 
+# Recipient status (v3.78, task 6): only 'פעיל' (gets the list by its own priority/
+# frequency setup) or 'מושהה' (a temporary pause). 'הסתיים' was dropped — a legacy
+# value that arrives from an old card / Excel / the other computer maps to 'מושהה'.
+# Every WHO-IS-A-RECIPIENT query compares against STATUS_ACTIVE only.
+STATUS_ACTIVE = "פעיל"
+STATUS_SUSPENDED = "מושהה"
+_LEGACY_STATUS_ENDED = "הסתיים"
+
+
+def normalize_status(val) -> str:
+    """The one place that decides what a recipient status value means: empty →
+    active, the legacy 'הסתיים' → suspended, anything else is kept as it is."""
+    s = str(val or "").strip()
+    if not s or s == "None":
+        return STATUS_ACTIVE
+    if s == _LEGACY_STATUS_ENDED:
+        return STATUS_SUSPENDED
+    return s
+
+
 def _coerce(field: str, val):
+    if field == "status":
+        return normalize_status(val)
     if field in _NULLABLE_INT_FIELDS:
         if val in ("", None):
             return None
@@ -940,6 +993,7 @@ FIELD_LABELS_HE = {
     "priority": "עדיפות", "priority_raw": "עדיפות (מקור)",
     "holiday_support": "נתמך חגים", "holidays": "חגים",
     "last_distribution": "חלוקה אחרונה", "next_distribution": "חלוקה הבאה",
+    "merge": "מיזוג כרטיסים",     # שורת-היסטוריה מיוחדת (משימה 7), לא שדה בכרטיס
 }
 # מה נרשם בהיסטוריה: כל שדה בכרטיס חוץ מהנגזרים (תאריכי החלוקה — יש להם היסטוריה
 # משלהם ב-distributions; last_dist_base הוא קלט טכני שלהם).
@@ -953,7 +1007,7 @@ _TRACKED_FIELDS = [f for f in _RECIPIENT_FIELDS if f not in _UNTRACKED_FIELDS]
 CHANGE_LOG_SEED_MONTHS = 24
 # מקור השינוי (עמודת source) → תווית עברית (חלון ההיסטוריה, אקסל).
 CHANGE_SOURCE_HE = {"edit": "עריכה", "import": "ייבוא מאקסל", "undo": "ביטול (מנהל)",
-                    "auto": "שיוך אוטומטי"}
+                    "auto": "שיוך אוטומטי", "merge": "מיזוג"}
 
 
 def change_source_label(source: str) -> str:
@@ -1016,7 +1070,8 @@ def _device() -> str:
     return name
 
 
-def _log_changes(conn, rec_id: int, old: dict, new: dict, source: str) -> dict | None:
+def _log_changes(conn, rec_id: int, old: dict, new: dict, source: str,
+                 extra: list | None = None, when: str = "") -> dict | None:
     """Write one change_log row per tracked field whose value really changed
     (after normalisation: '' ≡ None, ints ≡ their str). Returns the `rec_change`
     sync payload (one op per recipient per action — not per field, so a 500-row
@@ -1039,9 +1094,10 @@ def _log_changes(conn, rec_id: int, old: dict, new: dict, source: str) -> dict |
             continue
         changes.append({"guid": uuid.uuid4().hex, "field": field,
                         "label": FIELD_LABELS_HE.get(field, field), "old": o, "new": n})
+    changes.extend(extra or [])        # e.g. the "merged" line of a card merge
     if not changes:
         return None
-    when = _utc_now()
+    when = when or _utc_now()
     payload = {"guid": uuid.uuid4().hex, "rec_guid": old.get("guid") or "",
                "rec_name": old.get("full_name") or "", "changed_at": when,
                "device": _device(), "source": source, "changes": changes}
@@ -1155,6 +1211,8 @@ def update_recipient(rec_id: int, data: dict, source: str = "edit"):
     # last/next are DERIVED (history + base + frequency) — never written directly.
     # A deliberately changed "last distribution" (import / script) becomes the base.
     data.pop("next_distribution", None)
+    if "status" in data:
+        data["status"] = normalize_status(data["status"])    # no 'הסתיים' (v3.78)
     if "last_distribution" in data:
         new_last = (data.pop("last_distribution") or "").strip()
         if old is not None and new_last != (old.get("last_distribution") or "").strip():
@@ -1194,7 +1252,7 @@ def _remember_delete(conn, rec):
 
 # ─── מקבלים שנמחקו (v3.75) ────────────────────────────────────────────────────
 SOURCE_LABELS_DELETE = {"delete": "מחיקה", "force": "מחיקה כפויה (עם היסטוריה)",
-                        "dup": "מחיקת כפילות"}
+                        "dup": "מחיקת כפילות", "merge": "מוזג לכרטיס אחר"}
 
 
 def _deleted_card_payload(rec: dict, source: str) -> dict:
@@ -1256,7 +1314,232 @@ def restore_deleted_recipient(guid: str) -> tuple:
     new_id = add_recipient(card)
     with get_connection() as conn:
         conn.execute("DELETE FROM deleted_recipients WHERE guid=?", (guid,))
-    return new_id, f"{name} שוחזר לרשימת המקבלים ✓"
+    note = ("\nשים לב: הכרטיס הזה מוזג בעבר — היסטוריית החלוקות שלו נשארה בכרטיס שאליו מוזג."
+            if row["source"] == "merge" else "")
+    return new_id, f"{name} שוחזר לרשימת המקבלים ✓{note}"
+
+
+# ─── מיזוג מקבלים — אותו שם, טלפון שונה (v3.78, משימה 7) ───────────────────────
+# כלל: מיזוג הוא תמיד הצעה עם אישור (ברירת מחדל "לא"), אחרי גיבוי safety. כרטיס אחד
+# נשאר, השני נמחק (נשמר ב"מקבלים שנמחקו", מקור "merge"); שני המספרים נשמרים, ההיסטוריה
+# מתאחדת. בין שני כרטיסים קיימים = op מסונכרן `rec_merge`; הוספת נתוני נכנס (ייבוא /
+# הוספה ידנית) לכרטיס קיים = update_recipient רגיל (rec_upsert + rec_change).
+_MERGE_FILL_SKIP = {"full_name", "first_name", "last_name", "phone1", "phone2", "phone3",
+                    "notes", "status", "last_distribution", "next_distribution",
+                    "last_dist_base", "priority", "priority_raw"}
+_PHONE_SLOTS = ("phone1", "phone2", "phone3")
+
+
+def phone_key(p) -> str:
+    """Digits only (9-digit numbers get their leading 0) — equality of phones."""
+    d = "".join(ch for ch in str(p or "") if ch.isdigit())
+    return "0" + d if len(d) == 9 else d
+
+
+def recipient_phones(rec: dict) -> list:
+    """The card's phone numbers as typed, in slot order, no blanks, no repeats."""
+    out, seen = [], set()
+    for f in _PHONE_SLOTS:
+        v = str((rec or {}).get(f) or "").strip()
+        k = phone_key(v)
+        if k and k not in seen:
+            seen.add(k)
+            out.append(v)
+    return out
+
+
+def phones_conflict(existing_phones, incoming_phones) -> bool:
+    """True when BOTH sides have numbers and none is shared — the 'same name,
+    different phone' situation. A shared number (or a side with no number at all)
+    is not a conflict: that is the ordinary same-person case."""
+    a = {phone_key(p) for p in existing_phones if phone_key(p)}
+    b = {phone_key(p) for p in incoming_phones if phone_key(p)}
+    return bool(a) and bool(b) and not (a & b)
+
+
+def same_name_conflicts(full_name: str, incoming_phones, exclude_id=None) -> list:
+    """Existing cards with exactly this name whose phones do not overlap the
+    incoming ones (newest data first by id). Empty when the incoming side has no
+    phone — nothing to compare, so no merge is offered."""
+    name = (full_name or "").strip()
+    inc = [p for p in (incoming_phones or []) if phone_key(p)]
+    if not name or not inc:
+        return []
+    with get_connection() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM recipients WHERE TRIM(full_name)=? ORDER BY id", (name,))]
+    return [r for r in rows if r["id"] != exclude_id
+            and phones_conflict(recipient_phones(r), inc)]
+
+
+def _blank_val(v) -> bool:
+    return str(v if v is not None else "").strip() in ("", "0", "None")
+
+
+def _real_priority(v):
+    try:
+        n = int(float(v))
+    except (ValueError, TypeError):
+        return None
+    return n if n in (2, 3, 4) else None
+
+
+def merge_fill_updates(existing: dict, incoming: dict) -> dict:
+    """What to write on `existing` so it also carries `incoming` (pure). Only EMPTY
+    fields are filled — a value the kept card already has is never overwritten.
+    Phones are appended into free slots (overflow → a line in the notes, so no
+    number is ever dropped); the other card's notes are appended; the later
+    'last distribution base' wins."""
+    fields = {}
+    for f in _RECIPIENT_FIELDS:
+        if f in _MERGE_FILL_SKIP:
+            continue
+        if not _blank_val(incoming.get(f)) and _blank_val(existing.get(f)):
+            fields[f] = _coerce(f, incoming.get(f))
+    # priority + its raw text travel together
+    in_pr = _real_priority(incoming.get("priority"))
+    if _real_priority(existing.get("priority")) is None and in_pr is not None:
+        fields["priority"] = in_pr
+        fields["priority_raw"] = str(incoming.get("priority_raw") or in_pr)
+    elif ("בירור" in str(incoming.get("priority_raw") or "")
+          and not str(existing.get("priority_raw") or "").strip()):
+        fields["priority_raw"] = str(incoming.get("priority_raw"))
+    # the later "last distribution" base (ISO only)
+    cand = _valid_iso(incoming.get("last_dist_base")) or _valid_iso(incoming.get("last_distribution"))
+    if cand and cand > _valid_iso(existing.get("last_dist_base")):
+        fields["last_dist_base"] = cand
+    # phones: free slots first, the rest into the notes
+    have = {phone_key(p) for p in recipient_phones(existing)}
+    added = []
+    for p in recipient_phones(incoming):
+        if phone_key(p) not in have:
+            have.add(phone_key(p))
+            added.append(p)
+    free = [f for f in _PHONE_SLOTS if not str(existing.get(f) or "").strip()]
+    overflow = []
+    for p in added:
+        if free:
+            fields[free.pop(0)] = p
+        else:
+            overflow.append(p)
+    notes = str(existing.get("notes") or "").strip()
+    for extra in (str(incoming.get("notes") or "").strip(),
+                  ("מספרים נוספים: " + ", ".join(overflow)) if overflow else ""):
+        if extra and extra not in notes:
+            notes = (notes + "\n" + extra).strip()
+    if notes != str(existing.get("notes") or "").strip():
+        fields["notes"] = notes
+    return fields
+
+
+def merge_into_recipient(rec_id: int, incoming: dict, source: str = "merge") -> bool:
+    """Add what an incoming card/row knows (a second phone, empty fields) to an
+    EXISTING card — import "מזג" and manual add "מזג לכרטיס הקיים". Goes through
+    update_recipient, so sync + change history see it. True when something changed."""
+    existing = get_recipient(rec_id)
+    if not existing:
+        return False
+    fields = merge_fill_updates(existing, incoming)
+    if not fields:
+        return False
+    update_recipient(rec_id, fields, source=source)
+    return True
+
+
+def pick_merge_keep(a: dict, b: dict) -> tuple:
+    """(keep, drop) for two cards of the same person: the one with more distribution
+    history stays; a tie → the older card (created_at), then guid. Deterministic, so
+    two computers merging the same pair pick the same card."""
+    def hist(r):
+        with get_connection() as conn:
+            return conn.execute("SELECT COUNT(*) AS c FROM distributions WHERE recipient_id=?",
+                                (r["id"],)).fetchone()["c"]
+
+    def key(r):
+        return (-hist(r), str(r.get("created_at") or ""), str(r.get("guid") or ""))
+    return (a, b) if key(a) <= key(b) else (b, a)
+
+
+def merge_conflicts_summary(a: dict, b: dict) -> dict:
+    """For the confirmation text: which fields hold DIFFERENT non-empty values in the
+    two cards ('differs' = Hebrew labels; the kept card's value stays) and whether
+    the ID numbers differ ('id_differs' — strong sign these are two people)."""
+    differs = []
+    for f in _TRACKED_FIELDS:
+        if f in ("full_name", "first_name", "last_name", "phone1", "phone2", "phone3",
+                 "notes", "status", "priority", "start_date"):
+            continue
+        va, vb = _hist_norm(a.get(f)), _hist_norm(b.get(f))
+        if va not in ("", "0") and vb not in ("", "0") and va != vb:
+            differs.append(FIELD_LABELS_HE.get(f, f))
+    def _ids(r, f):
+        return _only_digits(r.get(f))
+    id_differs = any(_ids(a, f) and _ids(b, f) and _ids(a, f) != _ids(b, f)
+                     for f in ("id_number", "spouse_id_number"))
+    return {"differs": differs, "id_differs": id_differs}
+
+
+def resolve_merged_guid(conn, guid: str) -> str:
+    """Follow merged_guids (a card that was merged away → the card that stayed).
+    Returns the guid itself when it was never merged. Cycle-safe."""
+    seen, g = set(), guid or ""
+    while g and g not in seen:
+        seen.add(g)
+        row = conn.execute("SELECT keep_guid FROM merged_guids WHERE drop_guid=?", (g,)).fetchone()
+        if not row or not row["keep_guid"]:
+            break
+        g = row["keep_guid"]
+    return g
+
+
+def remember_merge(conn, drop_guid: str, keep_guid: str, ts: str):
+    if drop_guid and keep_guid and drop_guid != keep_guid:
+        conn.execute("INSERT OR REPLACE INTO merged_guids (drop_guid, keep_guid, ts) VALUES (?,?,?)",
+                     (drop_guid, keep_guid, ts or _utc_now()))
+
+
+def merge_recipients(keep_id: int, drop_id: int) -> dict:
+    """Merge card `drop_id` INTO card `keep_id` (the caller asked for confirmation and
+    made the safety backup). One transaction: the kept card gets the other's numbers
+    and empty fields, all distribution rows and change history move to it, the dropped
+    card goes to 'מקבלים שנמחקו' (source merge) and is gone. Then ONE synced op
+    `rec_merge`. Returns {'moved': n, 'phones': [...]}. ValueError on bad input."""
+    if keep_id == drop_id:
+        raise ValueError("אי אפשר למזג כרטיס עם עצמו")
+    stamp = _utc_now()
+    with get_connection() as conn:
+        k = conn.execute("SELECT * FROM recipients WHERE id=?", (keep_id,)).fetchone()
+        d = conn.execute("SELECT * FROM recipients WHERE id=?", (drop_id,)).fetchone()
+        if not k or not d:
+            raise ValueError("אחד הכרטיסים כבר לא קיים")
+        keep, drop = dict(k), dict(d)
+        if not keep.get("guid") or not drop.get("guid"):
+            raise ValueError("לכרטיס חסר מזהה סנכרון")
+        fields = merge_fill_updates(keep, drop)
+        merged_note = f"אוחד עם כרטיס נוסף ({', '.join(recipient_phones(drop)) or 'בלי טלפון'})"
+        extra = [{"guid": uuid.uuid4().hex, "field": "merge",
+                  "label": FIELD_LABELS_HE["merge"], "old": "", "new": merged_note}]
+        change = _log_changes(conn, keep_id, keep, fields, "merge", extra=extra, when=stamp)
+        if fields:
+            sets = ", ".join(f"{c}=?" for c in fields)
+            conn.execute(f"UPDATE recipients SET {sets} WHERE id=?",
+                         list(fields.values()) + [keep_id])
+        conn.execute("UPDATE recipients SET updated_at=? WHERE id=?", (stamp, keep_id))
+        moved = conn.execute("UPDATE distributions SET recipient_id=? WHERE recipient_id=?",
+                             (keep_id, drop_id)).rowcount
+        conn.execute("UPDATE change_log SET recipient_id=?, rec_guid=? "
+                     "WHERE recipient_id=? OR (rec_guid=? AND rec_guid<>'')",
+                     (keep_id, keep["guid"], drop_id, drop["guid"]))
+        _remember_deleted_card(conn, drop, "merge", ts=stamp)
+        conn.execute("INSERT OR REPLACE INTO sync_deleted (guid, ts) VALUES (?,?)",
+                     (drop["guid"], stamp))
+        remember_merge(conn, drop["guid"], keep["guid"], stamp)
+        conn.execute("DELETE FROM recipients WHERE id=?", (drop_id,))
+        _recompute_recipient_dates(conn, keep_id)
+    _sync_log("rec_merge", {"keep_guid": keep["guid"], "drop_guid": drop["guid"],
+                            "keep": _rec_sync_payload(keep_id), "merged_at": stamp,
+                            "drop": _deleted_card_payload(drop, "merge"), "change": change})
+    return {"moved": moved, "phones": recipient_phones(get_recipient(keep_id))}
 
 
 def changed_fields_summary(before: dict, after: dict) -> list:
@@ -1342,7 +1625,7 @@ def delete_recipient(rec_id: int):
         if count > 0:
             raise ValueError(
                 f"למקבל זה יש {count} חלוקות בהיסטוריה.\n"
-                "לא ניתן למחוק — שנה סטטוס ל'הסתיים' במקום."
+                "לא ניתן למחוק — שנה סטטוס ל'מושהה' במקום."
             )
         conn.execute("DELETE FROM recipients WHERE id=?", (rec_id,))
         # The card's change history goes with it (as in the forced delete) —
@@ -1690,6 +1973,19 @@ def get_regulars_mode() -> str:
     return mode if mode in ("schedule", "none", "scored", "filter") else "schedule"
 
 
+def reset_regulars_mode() -> bool:
+    """Task 5 (6/10/2026): every app launch opens the distribution mode on
+    'schedule'; another mode is chosen only for the current round. The setting
+    is per-machine (utils.sync.EXCLUDED_SETTINGS), so this reset is local and
+    the other computer can't bring a stale mode back. Called once from
+    MainWindow.__init__ — never mid-session. The saved filter criteria are kept.
+    Returns True if a different mode had to be reset."""
+    if (get_setting("dist_regulars_mode") or "schedule") == "schedule":
+        return False
+    set_setting("dist_regulars_mode", "schedule")
+    return True
+
+
 # ─── Custom broad filter (mode 'filter') ─────────────────────────────────────
 def get_filter_criteria() -> dict:
     """The persisted broad-filter thresholds (mode 'filter'), as
@@ -1810,7 +2106,7 @@ def apply_inferred_representatives() -> int:
     return len(suggestions)
 
 
-def compute_suggested_n(total_products: int) -> tuple[int, int]:
+def compute_suggested_n(total_products: int, manual_regulars: int = 0) -> tuple[int, int]:
     """Returns (n_for_one_time, regular_count). Regulars are served first; the
     rest of the products go to the one-time priority list. In 'none'/'scored'
     modes regulars are no longer auto-served first, so regular_count is 0 and all
@@ -1819,11 +2115,15 @@ def compute_suggested_n(total_products: int) -> tuple[int, int]:
     regular_count counts ONLY the regulars actually due on THIS week's list (the
     same set get_weekly_list shows), NOT every active regular — a bi-weekly or
     monthly recipient who isn't due this week doesn't consume a portion now, so
-    counting them would wrongly reserve products away from the one-time list."""
+    counting them would wrongly reserve products away from the one-time list.
+
+    `manual_regulars` (task 13): regulars added by hand who are NOT due this week
+    each take a product too, so they come off n (they are not in regular_count —
+    that stays the due-this-week figure the warnings are measured against)."""
     if get_regulars_mode() != "schedule":
         return max(0, total_products), 0
     regular_count = len(get_weekly_list())
-    n = max(0, total_products - regular_count)
+    n = selection.one_time_slots(total_products, regular_count, manual_regulars)
     return n, regular_count
 
 
@@ -2735,7 +3035,6 @@ def get_summary():
     with get_connection() as conn:
         active = conn.execute("SELECT COUNT(*) as c FROM recipients WHERE status='פעיל'").fetchone()["c"]
         suspended = conn.execute("SELECT COUNT(*) as c FROM recipients WHERE status='מושהה'").fetchone()["c"]
-        ended = conn.execute("SELECT COUNT(*) as c FROM recipients WHERE status='הסתיים'").fetchone()["c"]
         total_souls = conn.execute(
             "SELECT COALESCE(SUM(souls),0) as s FROM recipients WHERE status='פעיל'"
         ).fetchone()["s"]
@@ -2762,7 +3061,7 @@ def get_summary():
         ).fetchall()
 
     return {
-        "active": active, "suspended": suspended, "ended": ended,
+        "active": active, "suspended": suspended,
         "total_souls": total_souls, "dists_month": dists_month, "dists_total": dists_total,
         "overdue": overdue,
         "by_freq": [dict(r) for r in by_freq],
@@ -2785,6 +3084,7 @@ def reset_all_data(tzintuk: bool = False):
         conn.execute("DELETE FROM change_log")
         conn.execute("DELETE FROM sync_deleted")
         conn.execute("DELETE FROM deleted_recipients")
+        conn.execute("DELETE FROM merged_guids")
         conn.execute("DELETE FROM recipients")
         # v3.27 — the voice-call history goes too: it holds the phone numbers
         # of the recipients just deleted and drives the "already sent for
@@ -2962,6 +3262,7 @@ def diff_incoming_recipients(rows: list[dict]) -> dict:
             by_ext.setdefault(ext, []).append(r)
 
     new_rows, updates, dupes = [], [], 0
+    same_name = []    # משימה 7: אותו שם, טלפון שונה → הצעת מיזוג (לא "שינוי" שדורס)
     new_by_key = {}   # the same NEW person twice in one file → one card
     for row in rows:
         name = (row.get("full_name") or "").strip()
@@ -2969,9 +3270,11 @@ def diff_incoming_recipients(rows: list[dict]) -> dict:
             continue
         blank = row.get("_blank_fields") or ()   # numeric cells empty in the file
         match = None
+        by_ext_match = False
         ext = (row.get("external_id") or "").strip()
         if ext and len(by_ext.get(ext, [])) == 1:
             match = by_ext[ext][0]
+            by_ext_match = True
         elif len(by_name.get(name, [])) == 1:
             match = by_name[name][0]
         elif len(by_name.get(name, [])) > 1:
@@ -3001,12 +3304,25 @@ def diff_incoming_recipients(rows: list[dict]) -> dict:
             # the file wipe existing data.
             if new_norm and new_norm != old_norm:
                 changes[field] = {"old": match.get(field), "new": row.get(field)}
+        inc_phones = [row.get(f) for f in _PHONE_SLOTS
+                      if row.get(f) and f not in blank and phone_key(row.get(f))]
+        if not by_ext_match and phones_conflict(recipient_phones(match), inc_phones):
+            # Same name, different number: maybe the same person with a second phone,
+            # maybe two people. Never decide silently — the operator chooses.
+            same_name.append({"id": match["id"], "full_name": name,
+                              "existing_phones": recipient_phones(match),
+                              "incoming_phones": [str(p).strip() for p in inc_phones],
+                              "row": {k: v for k, v in row.items() if k != "_blank_fields"}})
+            for f in _PHONE_SLOTS:
+                changes.pop(f, None)
         if changes:
             updates.append({"id": match["id"], "full_name": name, "changes": changes})
-    return {"new": new_rows, "updates": updates, "unmatched_dupes": dupes}
+    return {"new": new_rows, "updates": updates, "unmatched_dupes": dupes,
+            "same_name": same_name}
 
 
-def apply_import_confirmed(new_rows: list[dict], updates: list[dict]) -> tuple[int, int]:
+def apply_import_confirmed(new_rows: list[dict], updates: list[dict],
+                           same_name: list | None = None) -> tuple[int, int]:
     """Apply an import the operator confirmed: insert every row in new_rows and
     apply the approved field changes in updates (each {'id', 'changes': {field:
     {'new':...}}} — the dialog drops fields/rows the operator unchecked). Returns
@@ -3023,4 +3339,13 @@ def apply_import_confirmed(new_rows: list[dict], updates: list[dict]) -> tuple[i
         if fields:
             update_recipient(u["id"], fields, source="import")
             updated += 1
+    # משימה 7 — אותו שם, טלפון שונה: לפי בחירת המפעיל בלבד (merge / separate / skip)
+    for d in same_name or []:
+        choice = d.get("choice")
+        if choice == "merge":
+            if merge_into_recipient(d["id"], d.get("row") or {}, source="merge"):
+                updated += 1
+        elif choice == "separate":
+            add_recipient(d.get("row") or {})
+            added += 1
     return added, updated

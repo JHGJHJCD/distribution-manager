@@ -727,8 +727,9 @@ class OneTimePickerDialog(QDialog):
 
     _COLS = ["✔", "שם מלא", "עדיפות", "ניקוד", "אזור", "טלפון"]
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, manual_regulars: int = 0):
         super().__init__(parent)
+        self._manual_regulars = manual_regulars   # task 13: regulars added by hand
         self.setWindowTitle("בחירת חד-פעמיים לחלוקה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.setMinimumSize(640, 620)
@@ -754,7 +755,7 @@ class OneTimePickerDialog(QDialog):
 
         total, reserve_n = self._shared_counts()
         if total > 0:
-            n, regs = db.compute_suggested_n(total)
+            n, regs = db.compute_suggested_n(total, self._manual_regulars)
         else:
             # No product count set → nothing to recommend: arrive unmarked
             # (reserve included), exactly like the 'חד פעמי' tab in this state.
@@ -1956,6 +1957,7 @@ class GroupUpdateTab(QWidget):
             rec = dict(rec)
             rec["_inactive"] = rec.get("status") != "פעיל"
             rec["_reserve"] = rid in self._reserve_ids
+            rec["_extra"] = True     # joined by pick/manual add, not on the base list
             # Give picks the same recency fields the scored/weekly lists carry, so
             # that in 'scored' mode they can be re-scored on the SAME scale as
             # everyone else (a missing days_since would wrongly zero their ותק).
@@ -2020,21 +2022,32 @@ class GroupUpdateTab(QWidget):
         """How many products are left for one-timers after the regulars due this
         week are served (0 in 'none'/'scored' modes, where regulars aren't
         auto-served first)."""
-        n, _regs = db.compute_suggested_n(self.products_spin.value())
+        n, _regs = db.compute_suggested_n(self.products_spin.value(),
+                                          len(self._manual_regular_ids()))
         return n
+
+    def _manual_regular_ids(self) -> set:
+        """Regulars added by hand who aren't due this week (task 13): they take a
+        product but are not one-time picks."""
+        return selection.manual_regular_ids(self._rows_data, self._reserve_ids)
 
     def _main_pick_count(self) -> int:
         """One-time picks added for THIS distribution that are real recipients
-        (not reserves) — what 'completing the one-time selection' is measured by."""
-        return len(self._extra_ids - self._reserve_ids)
+        (not reserves, and not a manually added regular — that one is counted off
+        the remainder instead) — what 'completing the one-time selection' is
+        measured by."""
+        return len(self._extra_ids - self._reserve_ids - self._manual_regular_ids())
 
     def _update_leftover_hint(self):
         """Explain, live, whether products still need one-time recipients."""
-        def _show(color, weight, text):
+        def _show(color, weight, text, pick_btn=True):
             self.lbl_leftover.setStyleSheet(
                 f"color:{color}; font-size:12.5px; font-weight:{weight};"
                 " background:transparent; border:none;")
             self.lbl_leftover.setText(text)
+            # Task 11: when there aren't even enough products for the regulars,
+            # there is nothing to pick for one-timers — warning only, no button.
+            self.btn_pick_onetime.setVisible(pick_btn)
             self.leftover_card.setVisible(True)
 
         # The 'leftover products → one-timers' concept only exists in the plain
@@ -2053,24 +2066,41 @@ class GroupUpdateTab(QWidget):
             self.lbl_leftover.setText("")
             self.leftover_card.setVisible(False)
             return
-        n, regs = db.compute_suggested_n(total)
+        manual = len(self._manual_regular_ids())
+        n, regs = db.compute_suggested_n(total, manual)
         if regs > 0 and total < regs:
             # Not enough products even for the regulars due this week (bug #m69he).
             _show("#b91c1c", 800,
-                  f"⚠ אין מספיק מוצרים לכל הקבועים! יש {total}, צריך {regs} — חסרים {regs - total}")
+                  f"⚠ אין מספיק מוצרים לכל הקבועים! יש {total}, צריך {regs} — חסרים {regs - total}",
+                  pick_btn=False)
+        elif total < regs + manual:
+            # Task 13: the regulars fit, but the ones added by hand overshoot.
+            _show("#b91c1c", 800,
+                  f"⚠ הוספת ידנית יותר ממה שיש: יש {total} מוצרים, נדרשים {regs + manual}"
+                  f" ({regs} קבועים + {manual} ידניים)", pick_btn=False)
         elif n <= 0:
-            _show("#334155", 700, f"מספיק לקבועים בלבד ({regs}) — אפשר להדפיס ✓")
+            _show("#334155", 700,
+                  f"מספיק לקבועים בלבד ({regs}) — אפשר להדפיס ✓" if not manual else
+                  f"מספיק לקבועים ({regs}) ולמי שהוספת ידנית ({manual}) — אפשר להדפיס ✓")
         else:
             picks = self._main_pick_count()
             done = picks >= n
-            state = "נבחרו ✓" if done else "טרם הושלם — לחץ 'בחר חד-פעמיים'"
-            _show("#334155" if done else "#b45309", 700,
+            # Task 12: mirror the print gate (_one_time_gate_ok) — it lets printing
+            # through after >=1 pick. Only 0 picks is "blocked, please press";
+            # a partial selection is "can print, or complete the rest".
+            if done:
+                state = "נבחרו ✓"
+            elif picks > 0:
+                state = f"אפשר להדפיס, או להשלים עוד {n - picks}"
+            else:
+                state = "טרם נבחרו — לחץ 'בחר חד-פעמיים'"
+            _show("#334155" if picks > 0 else "#b45309", 700,
                   f"נשאר לחד-פעמיים: {n}  ·  נבחרו: {picks}  ({state})")
 
     def _open_one_time_picker(self):
         """Open the in-screen one-time picker dialog; accepted picks flow through
         the same add_one_time_picks() path the 'חד פעמי' tab uses."""
-        dlg = OneTimePickerDialog(self)
+        dlg = OneTimePickerDialog(self, manual_regulars=len(self._manual_regular_ids()))
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         picks = dlg.selected()
@@ -2081,12 +2111,13 @@ class GroupUpdateTab(QWidget):
             self.main_win.status_msg(f"נוספו {added} חד-פעמיים לרשימת החלוקה")
 
     def _special_active(self) -> bool:
-        """A non-default distribution state: an unusual mode or an active broad
-        filter. 'all' (the default) and 'schedule' are both ordinary → NOT special
+        """A non-default distribution state: an unusual mode ('none'/'scored'/
+        'filter'). 'all' (the default) and 'schedule' are both ordinary → NOT special
         (auto weekly name is fine, advanced fold stays closed). (A product count >
         0 is NOT special — every weekly round has leftovers, per the operator.)"""
-        return (self._current_mode() not in ("all", "schedule")
-                or selection.criteria_is_active(db.get_filter_criteria()))
+        # קריטריוני-סינון שמורים משימוש קודם אינם משפיעים מחוץ למצב 'filter'
+        # (משימה 5) — לא מחזיקים בגללם את הקיפול המתקדם פתוח.
+        return self._current_mode() not in ("all", "schedule")
 
     _AUTO_NAME_PREFIX = "חלוקה שבועית "
     # Every auto-generated name starts with one of these (#o2eft added the
@@ -2181,8 +2212,9 @@ class GroupUpdateTab(QWidget):
         # The name/distributor suggestions are synced settings too — a name typed
         # on the other computer used to appear only after a save or a restart.
         self._reload_name_history()
-        # מצב החלוקה הוא הגדרה מסונכרנת — אם המחשב השני החליף מצב, הקומבו והצ'יפ
-        # כאן חייבים לעקוב (אחרת המסך מציג מצב אחד והחישובים ב-DB רצים לפי אחר).
+        # מצב החלוקה הוא הגדרה פר-מחשב (לא מסונכרנת, משימה 5) ונשמר ב-DB לצורך שאר
+        # הצרכנים (חישובי הרשימה) — הקומבו חייב להישאר תואם לו (אחרת המסך מציג מצב
+        # אחד והחישובים ב-DB רצים לפי אחר).
         saved_idx = self.mode_combo.findData(db.get_regulars_mode())
         if saved_idx >= 0 and saved_idx != self.mode_combo.currentIndex():
             self.mode_combo.blockSignals(True)
@@ -2999,7 +3031,7 @@ class GroupUpdateTab(QWidget):
 
     def _import_volunteer_results(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "בחר קובץ שחזר מהמתנדב", "", "Excel (*.xlsx)")
+            self, "בחר קובץ שחזר מהמתנדב", "", "קובצי אקסל (*.xlsx)")
         if not path:
             return
         try:

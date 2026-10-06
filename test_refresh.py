@@ -252,6 +252,31 @@ ok("R11e a card deleted meanwhile is not re-created", save_card_edit(None, _sid,
    and _warned and db.get_recipient(_sid) is None)
 QMessageBox.question = _orig_q
 
+# ── R12: ייבוא אקסל לתוכנה ריקה — לא שואלים "להחליף או למזג" (משימה 2, v3.78) ────
+import tabs.recipients as _tr
+_rows12 = [{"full_name": "ייבוא ראשון", "phone1": "0501234501", "status": "פעיל", "frequency": "שבועי"},
+           {"full_name": "ייבוא שני", "phone1": "0501234502", "status": "פעיל", "frequency": "שבועי"}]
+_orig_imp = _tr.import_from_excel
+_tr.import_from_excel = lambda p: [dict(r) for r in _rows12]
+_asked12 = []
+# משימה 3: השאלה היא עכשיו ask_choice עם כפתורים "החלף הכול / מזג / ביטול" (לא כן/לא)
+_orig_ask = _tr.ask_choice
+_choices12 = []
+_tr.ask_choice = lambda parent, title, text, choices, default=0, cancel=-1: (
+    _asked12.append(title), _choices12.append(list(choices)), cancel)[2]
+rt._run_import("x.xlsx")
+ok("R12a non-empty app still asks replace-or-merge", len(_asked12) == 1, str(_asked12))
+ok("R12a2 the question uses named buttons, not Yes/No",
+   _choices12 == [["החלף הכול", "מזג", "ביטול"]], str(_choices12))
+db.reset_all_data()
+_asked12.clear()
+rt._run_import("x.xlsx")
+ok("R12b empty app imports without asking", not _asked12
+   and {r["full_name"] for r in db.get_all_recipients()} == {"ייבוא ראשון", "ייבוא שני"}, str(_asked12))
+_tr.import_from_excel = _orig_imp
+_tr.ask_choice = _orig_ask
+QMessageBox.question = _orig_q
+
 print()
 print("נכשלו: " + ", ".join(fails) if fails else "הכל עבר ✓")
 sys.exit(1 if fails else 0)

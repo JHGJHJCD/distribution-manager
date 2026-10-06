@@ -10,6 +10,16 @@ try:
 except ImportError:
     qt_material_data = []
 
+# ── Qt's Hebrew dialog catalogue (task 3: כפתורים/תפריטי Qt בעברית) ───────────────
+# utils.ui.install_hebrew_ui loads qtbase_he.qm from <bundle>/translations; the
+# button captions are Hebrew even without it, but menus/file-dialog labels use it.
+try:
+    import PyQt6
+    _qt_tr = os.path.join(os.path.dirname(PyQt6.__file__), 'Qt6', 'translations', 'qtbase_he.qm')
+    qt_translations_data = [(_qt_tr, 'translations')] if os.path.exists(_qt_tr) else []
+except ImportError:
+    qt_translations_data = []
+
 a = Analysis(
     ['main.py'],
     pathex=[],
@@ -21,6 +31,7 @@ a = Analysis(
         ('changelog.txt', '.'),
         ('fonts', 'fonts'),
         *qt_material_data,
+        *qt_translations_data,
     ],
     hiddenimports=[
         # ── theme ────────────────────────────────────────────────────────────

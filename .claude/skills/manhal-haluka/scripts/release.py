@@ -37,6 +37,9 @@ TESTS = [
     "test_volunteer_flow.py", "test_updater.py", "test_sync.py",
     "test_score_scale.py", "test_fixes.py", "test_tzintuk.py", "test_tts.py",
     "test_mail.py", "test_callback_server.py", "test_refresh.py",
+    "test_calendar_today.py", "test_hebrew_buttons.py", "test_onetime_button.py",
+    "test_card_print.py", "test_mode_reset.py", "test_status_simple.py",
+    "test_merge_same_name.py",
 ]
 
 
@@ -81,6 +84,11 @@ def bump(version):
         txt = f.read()
     new = re.sub(r'(APP_VERSION\s*=\s*")[^"]+(")', r"\g<1>" + version + r"\g<2>", txt, count=1)
     if new == txt:
+        # Already at this version (e.g. bumped in the working tree earlier) is fine;
+        # only a missing/odd APP_VERSION line is an error.
+        if re.search(r'APP_VERSION\s*=\s*"' + re.escape(version) + '"', txt):
+            log("APP_VERSION already " + version)
+            return
         die("APP_VERSION unchanged — check version.py format")
     with open(path, "w", encoding="utf-8") as f:
         f.write(new)

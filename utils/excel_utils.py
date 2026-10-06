@@ -88,6 +88,13 @@ EXPORT_KINDS = (
 )
 
 
+def _normalize_status(val) -> str:
+    """A status cell from a file → 'פעיל' / 'מושהה' (empty → active; the dropped
+    legacy 'הסתיים' → 'מושהה'). One rule, owned by database.normalize_status."""
+    import database as _db
+    return _db.normalize_status(val)
+
+
 def export_dir(kind: str = "") -> Path:
     """Destination folder for a given export kind ('dist' / 'recipients' /
     'volunteers'). Uses the per-machine setting 'export_dir_<kind>' when set and
@@ -271,7 +278,7 @@ def import_app_export(path: str) -> List[Dict]:
         if rec["priority"] is None and "בירור" in ptext:
             rec.setdefault("priority_raw", "חובת בירור")
         rec["full_name"] = name
-        rec.setdefault("status", cell("status") or "פעיל")
+        rec["status"] = _normalize_status(rec.get("status") or cell("status"))
         out.append(rec)
     return out
 
@@ -480,7 +487,7 @@ def import_from_excel(path: str) -> List[Dict]:
             "frequency":         frequency,
             "priority":          priority,
             "priority_raw":      priority_raw,
-            "status":            cell("status") or "פעיל",
+            "status":            _normalize_status(cell("status")),
             "last_distribution": _parse_date(raw_cell("last_distribution")),
             "next_distribution": _parse_date(raw_cell("next_distribution")),
             "start_date":        _parse_date(raw_cell("start_date")),

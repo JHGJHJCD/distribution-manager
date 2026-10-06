@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QLabel, QAbstractItemView, QMessageBox,
-    QDialog,
+    QDialog, QInputDialog,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor
@@ -37,6 +37,7 @@ class ReviewTab(QWidget):
         super().__init__(parent)
         self.main_win = parent
         self._row_ids = []   # rec_id per table row
+        self._row_groups = []   # (group type, [member ids]) per table row — for the merge button
         self._build_ui()
 
     def _build_ui(self):
@@ -57,7 +58,8 @@ class ReviewTab(QWidget):
         lay.addLayout(top)
 
         hint = QLabel("שורות עם אותו רקע = אותה קבוצה. לחיצה כפולה לעריכה. "
-                      "אפשר למחוק כפילות מיותרת.")
+                      "אפשר למחוק כפילות מיותרת, או למזג שני כרטיסים של אותו אדם "
+                      "(שם כפול) לכרטיס אחד.")
         hint.setObjectName("subtitle")
         lay.addWidget(hint)
 
@@ -87,6 +89,11 @@ class ReviewTab(QWidget):
         btn_edit = QPushButton("ערוך")
         btn_edit.clicked.connect(self._edit)
         bot.addWidget(btn_edit)
+        self.btn_merge = QPushButton("מזג כפילות")
+        self.btn_merge.setObjectName("btn_merge_dup")
+        self.btn_merge.setToolTip("אותו אדם בשני כרטיסים: שני המספרים נשמרים וההיסטוריה מתאחדת")
+        self.btn_merge.clicked.connect(self._merge)
+        bot.addWidget(self.btn_merge)
         btn_del = QPushButton("מחק כפילות")
         btn_del.setObjectName("danger")
         btn_del.clicked.connect(self._delete)
@@ -104,6 +111,7 @@ class ReviewTab(QWidget):
                 flat.append((gi, g["type"], g["key"], rec))
 
         self._row_ids = []
+        self._row_groups = []
         self.table.blockSignals(True)
         self.table.clearContents()
         self.table.setRowCount(0)
@@ -111,6 +119,7 @@ class ReviewTab(QWidget):
         for r, (gi, gtype, key, rec) in enumerate(flat):
             bg = _GROUP_BG[gi % 2]
             self._row_ids.append(rec.get("id"))
+            self._row_groups.append((gtype, [m.get("id") for m in groups[gi]["members"]]))
             vals = [gtype, key, rec.get("full_name", ""),
                     rec.get("phone1", ""), rec.get("phone2", ""),
                     rec.get("area", ""), _priority_text(rec), rec.get("status", "")]
@@ -158,6 +167,43 @@ class ReviewTab(QWidget):
             self.refresh()
             if self.main_win:
                 self.main_win.status_msg("הרשומה עודכנה")
+                self.main_win.refresh_all()
+
+    def _merge(self):
+        """משימה 7: מיזוג שני כרטיסים באותו שם (טלפון שונה). רק בקבוצת 'שם כפול'."""
+        rec_id = self._selected_id()
+        if not rec_id:
+            QMessageBox.information(self, "", "בחר רשומה תחילה")
+            return
+        gtype, ids = self._row_groups[self.table.currentRow()]
+        if gtype != "שם כפול":
+            QMessageBox.information(self, "", "אפשר למזג רק כרטיסים בעלי אותו שם — בחר שורה "
+                                    "מקבוצה מסוג 'שם כפול'.")
+            return
+        others = [i for i in ids if i != rec_id]
+        other_id = None
+        if len(others) == 1:
+            other_id = others[0]
+        elif others:
+            labels = []
+            for i in others:
+                r = db.get_recipient(i) or {}
+                labels.append(f"טלפון: {', '.join(db.recipient_phones(r)) or 'אין'} (מס' {i})")
+            pick, ok = QInputDialog.getItem(self, "מיזוג כרטיסים", "עם איזה כרטיס למזג?",
+                                            labels, 0, False)
+            if not ok:
+                return
+            other_id = others[labels.index(pick)]
+        a, b = db.get_recipient(rec_id), db.get_recipient(other_id) if other_id else None
+        if not a or not b:
+            QMessageBox.information(self, "", "אחד הכרטיסים כבר לא קיים — הרשימה תתרענן.")
+            self.refresh()
+            return
+        from tabs.recipients import offer_merge_two_cards
+        if offer_merge_two_cards(self, a, b):
+            self.refresh()
+            if self.main_win:
+                self.main_win.status_msg(f"הכרטיסים של {a['full_name']} מוזגו")
                 self.main_win.refresh_all()
 
     def _delete(self):

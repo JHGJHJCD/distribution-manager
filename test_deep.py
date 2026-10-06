@@ -204,8 +204,10 @@ db.bulk_add_distributions(
 
 stats = db.get_summary()
 check("active count = 5", stats["active"] == 5, f"got {stats['active']}")
-check("suspended count = 1", stats["suspended"] == 1, f"got {stats['suspended']}")
-check("ended count = 1", stats["ended"] == 1, f"got {stats['ended']}")
+# v3.78 (משימה 6): "הסתיים" ירד — הערך הישן שנכנס הופך ל"מושהה"
+check("suspended count = 2 (incl. a legacy 'הסתיים' mapped to מושהה)", stats["suspended"] == 2,
+      f"got {stats['suspended']}")
+check("no 'ended' bucket any more", "ended" not in stats)
 check("total_souls = 1+2+3+4+5 = 15", stats["total_souls"] == 15, f"got {stats['total_souls']}")
 check("dists_total = 2", stats["dists_total"] == 2, f"got {stats['dists_total']}")
 

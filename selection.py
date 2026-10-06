@@ -51,6 +51,23 @@ def is_one_time_candidate(rec: dict) -> bool:
     return (rec.get("frequency") or "") == "חד-פעמי" and rec.get("priority") in scoring.PRIORITY_TIERS
 
 
+def manual_regular_ids(rows: list, reserve_ids=()) -> set:
+    """Regulars that joined the list ONLY by a manual add (flagged `_extra` — they
+    are not on this week's due list) and are real recipients, not reserve. Each
+    takes a product that the one-time count must no longer promise to one-timers
+    (task 13). A regular who IS due this week is on the base list and counted
+    there, so he is never flagged `_extra`. Pure."""
+    return {r.get("id") for r in rows
+            if r.get("_extra") and is_regular(r) and not r.get("_reserve")
+            and r.get("id") not in reserve_ids}
+
+
+def one_time_slots(total_products: int, due_regulars: int, manual_regulars: int = 0) -> int:
+    """Products left for one-timers in 'schedule' mode: the total minus the
+    regulars due this week minus regulars added by hand (never below 0). Pure."""
+    return max(0, total_products - due_regulars - manual_regulars)
+
+
 # ── RULE 6 — frequency is a HARD gate in EVERY distribution mode (28/9/2026) ──
 # יהודה, 28/9/2026: "בדרך כלל יש לנו הרבה מוצרים, הרבה מעבר לקבועים — ולכן אנחנו
 # רוצים שדו-שבועי שקיבל שבוע שעבר לא יקבל, גם אם יש מספיק מוצרים. וכן חודשי
