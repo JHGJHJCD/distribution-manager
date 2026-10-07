@@ -28,9 +28,12 @@ import sys
 import json
 import uuid
 import glob
+import re
 import socket
+import sqlite3
 import subprocess
 import threading
+import time
 from datetime import datetime, timezone, timedelta
 
 import database as db
@@ -64,6 +67,30 @@ _LOCK = threading.RLock()
 _APPLYING = False          # True while applying remote records → suppress logging
 _DEFER_FLUSH = False       # True during a bulk seed → buffer, flush once at the end
 _RECORD_INCOMING = False   # True (manager machine) → log incoming changes for undo (#5rhe9)
+
+# A test / dev / one-off script that never redirected db.DB_PATH works on THIS
+# computer's real sync state. On 27/9/2026 exactly that reset the seq counter from
+# 4970 to 802 and left a test recipient in the outbox — the other computer then
+# silently dropped every new change ("seq <= last") and sync stayed dead for weeks.
+# Outside the real app (frozen EXE / `python main.py`) the real state is read-only;
+# a deliberate one-off repair opts in with MANHAL_ALLOW_REAL_SYNC=1.
+_ALLOW_REAL_ENV = "MANHAL_ALLOW_REAL_SYNC"
+
+
+def _is_app_process() -> bool:
+    if getattr(sys, "frozen", False):
+        return True
+    return os.path.basename((sys.argv or [""])[0]).lower() == "main.py"
+
+
+def _foreign_on_real_state() -> bool:
+    if _is_app_process() or os.environ.get(_ALLOW_REAL_ENV) == "1":
+        return False
+    try:
+        real = os.path.abspath(db._data_dir()).lower()
+        return os.path.abspath(os.path.dirname(db.DB_PATH)).lower() == real
+    except Exception:
+        return False
 
 
 def _state_path() -> str:
@@ -114,7 +141,12 @@ def is_enabled() -> bool:
 
 
 def folder_available() -> bool:
-    return bool(get_folder()) and os.path.isdir(get_folder())
+    folder = get_folder()
+    if not folder:
+        return False
+    if os.path.isdir(folder):
+        return True
+    return heal_folder()     # Drive may be back under another drive letter
 
 
 def device_name() -> str:
@@ -211,54 +243,172 @@ def detect_drive_folders() -> list:
     return found
 
 
-def _find_drive_exe() -> str:
+def _version_key(name: str):
+    """'131.0.2.0' → (131, 0, 2, 0); None for anything that is not a dotted version."""
+    if not re.fullmatch(r"\d+(\.\d+)+", name or ""):
+        return None
+    return tuple(int(p) for p in name.split("."))
+
+
+def _find_drive_exe(roots=None) -> str:
     """Locate GoogleDriveFS.exe (the Drive for Desktop client) so we can start it
     if it isn't running. Checks the standard Program Files install and its
-    version-stamped subfolders. Returns '' when not found."""
-    roots = []
-    for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
-        base = os.environ.get(env)
-        if base:
-            roots.append(os.path.join(base, "Google", "Drive File Stream"))
+    version-stamped subfolders — newest NUMERIC version first (a plain string sort
+    puts '99.x' above '131.x' and 'Drivers' above both). Returns '' when not found.
+    `roots` (tests): folders to look in instead of the Program Files ones."""
+    if roots is None:
+        roots = []
+        for env in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"):
+            base = os.environ.get(env)
+            if base:
+                roots.append(os.path.join(base, "Google", "Drive File Stream"))
     for d in roots:
         direct = os.path.join(d, "GoogleDriveFS.exe")
         if os.path.isfile(direct):
             return direct
         if os.path.isdir(d):
-            # Newest version subfolder first (e.g. '105.0.3.0').
-            for sub in sorted(os.listdir(d), reverse=True):
+            subs = [(k, s) for s in os.listdir(d) if (k := _version_key(s)) is not None]
+            for _k, sub in sorted(subs, reverse=True):
                 exe = os.path.join(d, sub, "GoogleDriveFS.exe")
                 if os.path.isfile(exe):
                     return exe
     return ""
 
 
-_drive_launch_tried = False
+def drive_running() -> bool:
+    """True while a GoogleDriveFS.exe process exists (signed in or not)."""
+    if sys.platform != "win32":
+        return False
+    try:
+        out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq GoogleDriveFS.exe", "/NH", "/FO", "CSV"],
+                             capture_output=True, text=True, timeout=8,
+                             creationflags=0x08000000).stdout     # CREATE_NO_WINDOW
+        return "googledrivefs.exe" in (out or "").lower()
+    except Exception:
+        return False
 
 
-def ensure_drive_running() -> bool:
+_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def _exe_from_command(cmd: str) -> str:
+    """The .exe path inside a Run-key command line (quoted or not)."""
+    m = re.match(r'\s*"([^"]+)"', cmd or "") or re.match(r"\s*(\S+?\.exe)", cmd or "", re.I)
+    return m.group(1) if m else ""
+
+
+def ensure_drive_autostart(key_path: str = _RUN_KEY, name: str = "GoogleDriveFS",
+                           exe: str = "") -> str:
+    """Drive updates itself into a NEW version folder and removes the old one; when its
+    own Run-key entry is not refreshed (seen 22/9/2026: it kept pointing at 130.0.2.0
+    after the update to 131) Windows starts nothing at boot and sync stays offline.
+    Rewrites ONLY a stale entry (exe missing) to the current exe, exactly as Drive
+    registers itself. An absent entry is left alone — turning Drive's autostart off is
+    the user's right. Returns 'fixed' when it rewrote the entry, else ''."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
+                            winreg.KEY_READ | winreg.KEY_SET_VALUE) as k:
+            try:
+                val, _typ = winreg.QueryValueEx(k, name)
+            except FileNotFoundError:
+                return ""
+            cur = _exe_from_command(str(val))
+            if cur and os.path.isfile(cur):
+                return ""
+            exe = exe or _find_drive_exe()
+            if not exe:
+                return ""
+            winreg.SetValueEx(k, name, 0, winreg.REG_SZ, f'"{exe}" --startup_mode')
+            return "fixed"
+    except Exception:
+        return ""
+
+
+DRIVE_RETRY_S = 120.0        # how often a missing Drive is (re)started while sync is on
+_drive_last_try = 0.0
+
+
+def ensure_drive_running(force: bool = False) -> bool:
     """If no Drive root is mounted (Drive for Desktop hasn't started yet — common
     right after a reboot, #kzuo2), try to launch it in the background. Best-effort
     and non-blocking: returns True if a Drive root is already present, otherwise
-    fires the launcher once per app session and returns False (the mount appears a
-    few seconds later, and the periodic sync picks it up automatically)."""
-    global _drive_launch_tried
+    returns False after (at most every DRIVE_RETRY_S seconds) starting Drive when no
+    GoogleDriveFS process exists — the mount appears a few seconds later and the
+    periodic sync picks it up. Retrying matters: the single attempt per session this
+    used to make left sync dead for the whole session when that one try failed."""
+    global _drive_last_try
     if sys.platform != "win32":
         return bool(detect_drive_folders())
     if detect_drive_folders():
         return True
-    if _drive_launch_tried:
+    now = time.monotonic()
+    if not force and _drive_last_try and now - _drive_last_try < DRIVE_RETRY_S:
         return False
-    _drive_launch_tried = True
+    _drive_last_try = now
+    if drive_running():
+        return False          # already up (maybe still signing in) — a 2nd launch would only open its window
     exe = _find_drive_exe()
     if not exe:
         return False
     try:
         flags = 0x00000008 | 0x08000000    # DETACHED_PROCESS | CREATE_NO_WINDOW
-        subprocess.Popen([exe], creationflags=flags, close_fds=True)
+        subprocess.Popen([exe, "--startup_mode"], creationflags=flags, close_fds=True)
     except Exception:
         return False
     return False
+
+
+_HEAL_EVERY_S = 30.0
+_heal_last = 0.0
+
+
+def _rel_inside_my_drive(path: str) -> str:
+    """'G:/האחסון שלי/מנהל חלוקה סינכרון' → 'מנהל חלוקה סינכרון' ('' when the path is not
+    inside a 'My Drive' folder)."""
+    parts = [p for p in re.split(r"[\\/]+", path or "") if p]
+    for i, p in enumerate(parts):
+        if p in _MY_DRIVE_NAMES:
+            return os.path.join(*parts[i + 1:]) if parts[i + 1:] else ""
+    return ""
+
+
+def heal_folder(force: bool = False) -> bool:
+    """Drive's letter is not fixed (G: can become H: when another disk takes G:), and
+    then the stored shared-folder path points at nothing although Drive is fine. When
+    the stored path is gone, look for the SAME relative folder under every Drive root
+    found now and adopt it — but only when exactly one candidate exists AND it already
+    holds sync journals, so a look-alike folder can never hijack the connection.
+    Returns True when the folder is available (after healing)."""
+    global _heal_last
+    state = _load_state()
+    folder = state.get("folder") or ""
+    if not folder:
+        return False
+    if os.path.isdir(folder):
+        return True
+    now = time.monotonic()
+    if not force and _heal_last and now - _heal_last < _HEAL_EVERY_S:
+        return False
+    _heal_last = now
+    rel = _rel_inside_my_drive(folder)
+    if not rel or _foreign_on_real_state():
+        return False
+    cands = []
+    for root in detect_drive_folders():
+        c = os.path.join(root, rel)
+        if os.path.isdir(c) and glob.glob(os.path.join(c, JOURNAL_PREFIX + "*.jsonl")):
+            if c not in cands:
+                cands.append(c)
+    if len(cands) != 1:
+        return False
+    with _LOCK:
+        state = _load_state()
+        state["folder"] = cands[0].replace("\\", "/") if "/" in folder else cands[0]
+        _save_state(state)
+    return True
 
 
 # A FIXED subfolder name. Because both computers derive the same canonical name
@@ -329,7 +479,7 @@ def log_change(op: str, payload: dict, ts: str = ""):
     `ts` (internal, compaction only) stamps the record with an older time so
     last-write-wins on the peers stays truthful."""
     global _APPLYING
-    if _APPLYING or not is_enabled():
+    if _APPLYING or not is_enabled() or _foreign_on_real_state():
         return
     if op == "setting" and not _setting_syncable(payload.get("key", "")):
         return
@@ -370,7 +520,7 @@ def _journal_path(dev: str) -> str:
 def flush() -> int:
     """Move buffered outbox records into this device's journal in the shared
     folder. Returns how many were pushed (0 when offline/nothing pending)."""
-    if not is_enabled() or not folder_available():
+    if not is_enabled() or not folder_available() or _foreign_on_real_state():
         return 0
     with _LOCK:
         try:
@@ -420,7 +570,8 @@ def compact_journal() -> int:
     climbing, so every peer applies the head exactly once — and a computer
     joining later still receives everything. Returns records written."""
     global _COMPACTING, _DEFER_FLUSH
-    if _COMPACTING or not is_enabled() or not folder_available():
+    if (_COMPACTING or not is_enabled() or not folder_available()
+            or _foreign_on_real_state()):
         return 0
     _COMPACTING = True
     try:
@@ -1095,7 +1246,7 @@ def pull_changes() -> int:
     """Read the OTHER devices' journals and apply every record not yet seen.
     Returns how many records were applied."""
     global _APPLYING, _RECORD_INCOMING
-    if not is_enabled() or not folder_available():
+    if not is_enabled() or not folder_available() or _foreign_on_real_state():
         return 0
     applied = 0
     want_snapshot = False
@@ -1148,7 +1299,12 @@ def pull_changes() -> int:
                             elif op in _APPLIERS:
                                 _APPLIERS[op](conn, rec)
                                 applied += 1
-                        except Exception:
+                        except Exception as e:
+                            if _is_transient_db_error(e):
+                                # a busy/locked DB is not a bad record: stop the pass (the
+                                # transaction rolls back, offsets stay put) and retry next tick
+                                # — swallowing it would drop this record for good.
+                                raise
                             pass   # one bad record must not stall the stream
                         last = seq
                     seen[dev] = last
@@ -1159,6 +1315,7 @@ def pull_changes() -> int:
             _APPLYING = False
             _RECORD_INCOMING = False
         state["last_run"] = _utc_now()
+        state["last_error"] = ""      # a clean pass clears an old error (else the LED stays red)
         _save_state(state)
     if want_snapshot:
         # Outside the lock: snapshot() journals through log_change (re-entrant
@@ -1168,6 +1325,11 @@ def pull_changes() -> int:
         except Exception:
             pass
     return applied
+
+
+def _is_transient_db_error(e: Exception) -> bool:
+    return (isinstance(e, sqlite3.OperationalError)
+            and any(w in str(e).lower() for w in ("locked", "busy")))
 
 
 SNAP_REQ_MAX_AGE_H = 48
@@ -1185,7 +1347,7 @@ def restart_from_peer() -> int:
     for a fresh full snapshot (data only — local settings are kept). Returns how
     many records were applied right away; the rest arrives on later runs once
     the other computer answers the request."""
-    if not is_enabled():
+    if not is_enabled() or _foreign_on_real_state():
         return 0
     with _LOCK:
         state = _load_state()
@@ -1211,6 +1373,10 @@ def restart_from_peer() -> int:
             os.remove(_outbox_path())
         except OSError:
             pass
+    try:
+        repair_seq(force=True)      # a regressed counter would make the peer drop this very request
+    except Exception:
+        pass
     log_change("snap_req", {})
     try:
         flush()
@@ -1222,11 +1388,62 @@ def restart_from_peer() -> int:
         return 0
 
 
+_SEQ_TAIL_BYTES = 64 * 1024
+_seq_checked = None        # (journal path) already verified in this process
+
+
+def _tail_max_seq(path: str) -> int:
+    """Highest `seq` among the last lines of a .jsonl file (0 when unreadable)."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if size > _SEQ_TAIL_BYTES:
+                f.seek(size - _SEQ_TAIL_BYTES)
+                f.readline()                 # drop the (probably partial) first line
+            data = f.read()
+    except OSError:
+        return 0
+    best = 0
+    for ln in data.splitlines():
+        try:
+            best = max(best, int(json.loads(ln.decode("utf-8", "replace")).get("seq") or 0))
+        except Exception:
+            pass
+    return best
+
+
+def repair_seq(force: bool = False) -> int:
+    """Never let this device's seq counter run BEHIND what it already published.
+    The other computer drops every record whose seq is <= the highest it has seen from
+    us, so a regressed counter (a state file overwritten or restored from an old copy)
+    silently kills sync in one direction. Looks at the tail of our shared journal and
+    at the outbox; raises the counter when needed. Runs once per process (and journal
+    path) unless forced. Returns the new seq, or 0 when nothing had to change."""
+    global _seq_checked
+    if not is_enabled() or _foreign_on_real_state():
+        return 0
+    path = _journal_path(device_id()) if folder_available() else ""
+    if not force and _seq_checked == path and path:
+        return 0
+    with _LOCK:
+        state = _load_state()
+        best = _tail_max_seq(_outbox_path())
+        if path:
+            best = max(best, _tail_max_seq(path))
+            _seq_checked = path
+        if best > int(state.get("seq") or 0):
+            state["seq"] = best
+            _save_state(state)
+            return best
+    return 0
+
+
 def run_sync() -> dict:
     """One full cycle: push buffered changes, then pull+apply the others'.
     Returns {'pushed': n, 'applied': n, 'error': str}."""
     out = {"pushed": 0, "applied": 0, "error": ""}
     try:
+        repair_seq()
         out["pushed"] = flush()
         out["applied"] = pull_changes()
     except Exception as e:
@@ -1418,6 +1635,8 @@ def enable_sync(folder: str, seed: bool = True) -> int:
     """Turn sync on against the given shared folder. When seed=True the whole
     current dataset is journaled so other computers receive it. Returns the
     number of seeded records."""
+    if _foreign_on_real_state():
+        return 0
     os.makedirs(folder, exist_ok=True)
     with _LOCK:
         state = _load_state()
@@ -1430,6 +1649,8 @@ def enable_sync(folder: str, seed: bool = True) -> int:
 
 
 def disable_sync():
+    if _foreign_on_real_state():
+        return
     with _LOCK:
         state = _load_state()
         state["enabled"] = False

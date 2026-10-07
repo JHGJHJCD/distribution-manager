@@ -54,6 +54,10 @@ class _SyncWorker(QThread):
 
     def run(self):
         try:
+            # Drive not mounted (not started after boot, or it died): start it — here, off
+            # the UI thread, and throttled inside (every 2 min) so sync reconnects by itself.
+            if self._sync.is_enabled() and not self._sync.folder_available():
+                self._sync.ensure_drive_running()
             res = self._sync.run_sync()
             self.done.emit(int(res.get("applied", 0) or 0))
         except Exception:
@@ -944,12 +948,13 @@ class MainWindow(QMainWindow):
         self._sync_timer.setInterval(10000)
         self._sync_timer.timeout.connect(self._tick_sync)
         self._sync_timer.start()
-        # If sync is on but the shared Drive folder isn't mounted yet (Drive for
-        # Desktop hasn't started after a reboot — #kzuo2), nudge Drive to launch
-        # in the background so sync connects without opening anything manually.
-        if sync.is_enabled() and not sync.folder_available():
+        # Sync on but Drive not mounted (Drive for Desktop hasn't started after a reboot
+        # — #kzuo2): the sync worker starts it and keeps retrying (see _SyncWorker.run), so
+        # sync connects without opening anything manually. Here we only repair Drive's own
+        # start-with-Windows entry when an update left it pointing at a deleted version.
+        if sync.is_enabled():
             try:
-                sync.ensure_drive_running()
+                sync.ensure_drive_autostart()
             except Exception:
                 pass
         # A first pass shortly after startup pulls anything the other computer
