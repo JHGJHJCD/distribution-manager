@@ -373,6 +373,40 @@ _lim3 = [{"id": i, "full_name": f"מ{i}"} for i in range(1, 6)]
 ok("L3 products=0 → no limit (everyone stays)",
    len(selection.limit_to_products(_lim3, 0, 5)) == 5)
 
+# ── RULE 8 (7/10/2026): fewer products than due regulars → longest wait first ─
+def _wr(i, days, souls=1):
+    return {"id": i, "full_name": f"ק{i}", "frequency": "שבועי", "priority": 4,
+            "days_since": days, "souls": souls}
+
+_w = selection.rank_by_wait([_wr(1, 14), _wr(2, 44), _wr(3, 14, souls=9), _wr(4, 0)], W_SOULS)
+ok("W1 longest wait first; equal wait → higher need-score",
+   [r["id"] for r in _w] == [2, 3, 1, 4], str([r["id"] for r in _w]))
+_w_name = selection.rank_by_wait([_wr(2, 7), _wr(1, 7)], W_SOULS)
+ok("W1b equal wait and score → by name", [r["id"] for r in _w_name] == [1, 2])
+
+_due = [_wr(i, d) for i, d in ((1, 14), (2, 44), (3, 21), (4, 14), (5, 30), (6, 7))]
+_cut = selection.limit_due_regulars(_due, W_SOULS, 2, 2)
+ok("W2 2 products + 2 reserve of 6 due → 4 rows, by wait",
+   [r["id"] for r in _cut] == [2, 5, 3, 1], str([r["id"] for r in _cut]))
+ok("W2b first 2 main, next 2 reserve",
+   [bool(r["_reserve"]) for r in _cut] == [False, False, True, True])
+_same = [_wr(i, 7) for i in (3, 1, 2)]
+_keep = selection.limit_due_regulars(_same, W_SOULS, 3, 5)
+ok("W3 enough products → list unchanged (same order, nobody reserve)",
+   _keep is _same and [r["id"] for r in _keep] == [3, 1, 2]
+   and not any(r.get("_reserve") for r in _keep))
+ok("W4 products=0 (not set) → no limit",
+   len(selection.limit_due_regulars([_wr(i, i) for i in range(1, 6)], W_SOULS, 0, 2)) == 5)
+_man = selection.limit_due_regulars([_wr(i, i) for i in range(1, 6)], W_SOULS, 5, 1,
+                                    manual_regulars=2)
+ok("W5 a manual regular takes a product: 5 products, 2 manual → 3 main + 1 reserve",
+   [r["id"] for r in _man] == [5, 4, 3, 2]
+   and [bool(r["_reserve"]) for r in _man] == [False, False, False, True],
+   str([(r["id"], r["_reserve"]) for r in _man]))
+ok("W6 no reserve asked → exactly the products",
+   len(selection.limit_due_regulars([_wr(i, i) for i in range(1, 6)], W_SOULS, 2, 0)) == 2)
+ok("W7 empty list is safe", selection.limit_due_regulars([], W_SOULS, 3, 2) == [])
+
 # ── v3.52: נתמך חגים — general mark + per-holiday subset, holiday gate ───────
 import holidays
 _h_all  = {"id": 1, "full_name": "כללי",  "holiday_support": 1, "holidays": ""}

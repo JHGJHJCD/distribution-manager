@@ -54,6 +54,16 @@ tab's UI code can't be tested, gets duplicated, and silently drifts.
    default `ONE_TIME_COOLDOWN_WEEKS_DEFAULT`=3; 0 = off). Same `is_due` gate.
    Manual add always stays possible (flagged "⚠ לא בתור" + confirm dialog).
 
+7. **The list never runs past the product count, in ANY mode (RULE 8, 7/10/2026)** —
+   `schedule` short of products → `limit_due_regulars`: whoever WAITED LONGEST
+   (`rank_by_wait`: `days_since` → need-score → name) takes the products, then the
+   reserve, the rest are off the list (not recorded as no-shows). A manually added
+   regular takes a product; a one-time pick never pushes a due regular out (red
+   warning instead). `filter` without community balance → same wait order, cut by
+   `limit_to_products`. `scored` stays by need-score. Products = 0 means "not set"
+   → no cut. Screen-level proof: `test_products_limit.py` (all four modes) — any
+   new mode must be added there.
+
 ## How to add a rule — the recipe
 
 1. **Read first.** Open `selection.py` and find the closest existing function

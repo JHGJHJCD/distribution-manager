@@ -289,6 +289,38 @@ def limit_to_products(ordered: list, portions, reserve_count: int = 0,
     return [r for r in ordered if r.get("_role") != ROLE_OUT]
 
 
+def rank_by_wait(rows: list, weights: dict) -> list:
+    """RULE 8 (יהודה 7/10/2026): order by WHO HAS WAITED LONGEST — the most days
+    since the last distribution first (`days_since`; never served = since
+    registration). Equal wait → higher need-score → name. Scores every row in
+    place (for the tie-break and the display) and returns a NEW list. Pure."""
+    scoring.annotate_need_scores(rows, weights)
+    return sorted(rows, key=lambda r: (-(r.get("days_since") or 0),
+                                       -(r.get("need_score") or 0),
+                                       r.get("full_name") or ""))
+
+
+def limit_due_regulars(regulars: list, weights: dict, portions, reserve_count: int = 0,
+                       manual_regulars: int = 0) -> list:
+    """RULE 8 — 'schedule' mode when there are FEWER products than regulars due
+    this week (יהודה 7/10/2026: "מופיעים אנשים למרות שיש פחות מוצרים"): the
+    regulars who waited longest take the products, the next `reserve_count` are
+    the reserve, the rest are left off the list this round (they were not
+    invited, so they are not recorded as no-shows and keep their place).
+    A regular added by hand takes one of the products (`manual_regulars`), like
+    the scored modes (#fuzpd). One-time picks never push a due regular out.
+    `portions` <= 0 / None, or enough products for everyone → the list is
+    returned UNCHANGED (same order, no roles). Pure."""
+    if not portions or portions <= 0:
+        return regulars
+    slots = max(0, portions - max(0, int(manual_regulars or 0)))
+    if len(regulars) <= slots:
+        return regulars
+    ranked = rank_by_wait(regulars, weights)
+    assign_roles(ranked, slots, reserve_count)
+    return [r for r in ranked if r.get("_role") != ROLE_OUT]
+
+
 def recorded_by_default(rec: dict) -> bool:
     """RULE 3: whether this row should be ticked-for-recording by default when a
     distribution is saved. Main picks yes; reserve (standby) no — a reserve is

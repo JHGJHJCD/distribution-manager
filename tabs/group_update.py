@@ -1998,25 +1998,31 @@ class GroupUpdateTab(QWidget):
         """Show the auto-leaders hint only in the scored mode, and the 'edit
         filter' button only in the filter mode."""
         mode = self._current_mode()
-        self.lbl_leaders_hint.setVisible(mode in ("scored", "all"))
+        by_wait = mode == "filter" and not self._filter_balanced()
+        self.lbl_leaders_hint.setText(
+            "הרשימה מוגבלת אוטומטית למספר המוצרים הזמינים (מי שמחכה הכי הרבה זמן), "
+            "ואחריהם הרזרבה" if by_wait else
+            "הרשימה מוגבלת אוטומטית למספר המוצרים הזמינים (הגבוהים בניקוד), "
+            "ואחריהם הרזרבה")
+        self.lbl_leaders_hint.setVisible(mode in ("scored", "all") or by_wait)
         self.btn_edit_filter.setVisible(mode == "filter")
         self._refresh_header_chips()
 
+    def _filter_balanced(self) -> bool:
+        """Whether 'סינון מותאם' splits the products between the communities
+        (the default). Unbalanced, the list is cut by who waited longest."""
+        return bool((db.get_filter_criteria() or {}).get("balance_communities", True))
+
     def _on_products_changed(self, *_):
         db.set_setting("available_products", str(self.products_spin.value()))
-        self._update_leftover_hint()
-        # #c9k0m: in the scored modes the list length follows the count live.
-        # In 'filter' mode with community balance the products count is split
-        # between the communities (#lejmr), so changing it must rebuild the list
-        # too — otherwise the balanced list stayed stuck on the old count.
-        if self._current_mode() in ("scored", "all", "filter"):
-            self.refresh()
+        # The list length follows the product count live in EVERY mode (RULE 8;
+        # #c9k0m scored, #lejmr community balance) — refresh() also redraws the
+        # leftover hint.
+        self.refresh()
 
     def _on_reserve_changed(self, *_):
         db.set_setting("reserve_count", str(self.reserve_spin.value()))
-        self._update_leftover_hint()
-        if self._current_mode() in ("scored", "all"):
-            self.refresh()
+        self.refresh()
 
     def _one_time_remainder(self) -> int:
         """How many products are left for one-timers after the regulars due this
@@ -2068,22 +2074,33 @@ class GroupUpdateTab(QWidget):
             return
         manual = len(self._manual_regular_ids())
         n, regs = db.compute_suggested_n(total, manual)
+        picks = self._main_pick_count()
+        cut = getattr(self, "_sched_cut", None)
+        # RULE 8: who stayed on the list when the products don't cover everyone.
+        who = (f" ברשימה {cut['main']} שמחכים הכי הרבה זמן + {cut['reserve']} רזרבה,"
+               f" {cut['out']} לא נכנסו הפעם." if cut else "")
         if regs > 0 and total < regs:
             # Not enough products even for the regulars due this week (bug #m69he).
             _show("#b91c1c", 800,
-                  f"⚠ אין מספיק מוצרים לכל הקבועים! יש {total}, צריך {regs} — חסרים {regs - total}",
-                  pick_btn=False)
+                  f"⚠ אין מספיק מוצרים לכל הקבועים! יש {total}, צריך {regs} — חסרים {regs - total}."
+                  + who, pick_btn=False)
         elif total < regs + manual:
             # Task 13: the regulars fit, but the ones added by hand overshoot.
             _show("#b91c1c", 800,
                   f"⚠ הוספת ידנית יותר ממה שיש: יש {total} מוצרים, נדרשים {regs + manual}"
-                  f" ({regs} קבועים + {manual} ידניים)", pick_btn=False)
+                  f" ({regs} קבועים + {manual} ידניים)." + who, pick_btn=False)
+        elif picks > n:
+            # One-timers picked while there were more products: they are never
+            # dropped silently, and never push a due regular out — say so.
+            _show("#b91c1c", 800,
+                  f"⚠ נבחרו {picks} חד-פעמיים, אבל אחרי הקבועים יש מקום רק ל-{n} — "
+                  f"{picks - n} יותר מדי. הסר חד-פעמיים או עדכן את מספר המוצרים",
+                  pick_btn=False)
         elif n <= 0:
             _show("#334155", 700,
                   f"מספיק לקבועים בלבד ({regs}) — אפשר להדפיס ✓" if not manual else
                   f"מספיק לקבועים ({regs}) ולמי שהוספת ידנית ({manual}) — אפשר להדפיס ✓")
         else:
-            picks = self._main_pick_count()
             done = picks >= n
             # Task 12: mirror the print gate (_one_time_gate_ok) — it lets printing
             # through after >=1 pick. Only 0 picks is "blocked, please press";
@@ -2261,6 +2278,36 @@ class GroupUpdateTab(QWidget):
         self.lbl_regulars_count.setText(reg_word)
         extras = self._extra_recipients(base_ids)
         self._rows_data = base + extras
+        products, reserve_n = self.products_spin.value(), self.reserve_spin.value()
+        # RULE 8 (7/10/2026): the list never runs past the product count in ANY
+        # mode. 'schedule' short of products → the regulars who waited longest,
+        # then the reserve; the rest are off the list this round.
+        self._sched_cut = None
+        if mode == "schedule":
+            manual = len(selection.manual_regular_ids(extras, self._reserve_ids))
+            kept = selection.limit_due_regulars(
+                base, db.get_need_weights(), products, reserve_n, manual)
+            if len(kept) < len(base) or any(r.get("_reserve") for r in kept):
+                n_res = sum(1 for r in kept if r.get("_reserve"))
+                self._sched_cut = {"main": len(kept) - n_res, "reserve": n_res,
+                                   "out": len(base) - len(kept)}
+                self.lbl_regulars_count.setText(
+                    f"{reg_word}  ·  מוצגים {len(kept)} (מוצרים + רזרבה)")
+            self._rows_data = kept + extras
+            if self._sched_cut:      # the waiting list reads last, after any manual add
+                self._rows_data.sort(key=lambda r: bool(
+                    r.get("_reserve") or r.get("id") in self._reserve_ids))
+        elif mode == "filter" and not self._filter_balanced():
+            # 'סינון מותאם' בלי איזון קהילות: the list comes ordered by who waited
+            # longest (db.get_filtered_list) and is cut to products + reserve; a
+            # manual add takes the place of the last one in (#fuzpd).
+            shown_before = len(self._rows_data)
+            self._rows_data = selection.limit_to_products(
+                self._rows_data, products, reserve_n,
+                keep_ids=self._extra_ids, reserve_ids=self._reserve_ids)
+            if len(self._rows_data) < shown_before:
+                self.lbl_regulars_count.setText(
+                    f"{reg_word}  ·  מוצגים {len(self._rows_data)} (מוצרים + רזרבה)")
         if mode in ("scored", "all"):
             # Score EVERYONE (base + picks) together on ONE need scale, then order
             # by need (highest first), ties by name. Scoring the picks separately
@@ -2288,7 +2335,7 @@ class GroupUpdateTab(QWidget):
         self._checked_ids &= live      # forget ticks for people no longer listed
         self._populate()
         self._update_leftover_hint()
-        self._refresh_header_chips()
+        self._update_mode_controls()     # the hint follows the filter's balance switch
         self._mark_dependents_stale()
 
     def _mark_dependents_stale(self):

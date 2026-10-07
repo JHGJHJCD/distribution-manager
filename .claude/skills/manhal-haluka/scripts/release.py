@@ -39,7 +39,7 @@ TESTS = [
     "test_mail.py", "test_callback_server.py", "test_refresh.py",
     "test_calendar_today.py", "test_hebrew_buttons.py", "test_onetime_button.py",
     "test_card_print.py", "test_mode_reset.py", "test_status_simple.py",
-    "test_merge_same_name.py",
+    "test_merge_same_name.py", "test_products_limit.py",
 ]
 
 

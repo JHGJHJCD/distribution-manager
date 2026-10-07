@@ -1738,6 +1738,7 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
                     pass
             r["_status"] = r.get("weekly_status", "") or ""
             r["days_left"] = (nd - today).days
+            r["days_since"] = recency_days(r, today)   # RULE 8: who waited longest
             # A regular is on this week's list if their turn is due by the cutoff,
             # OR they were already served for THIS week's cycle — so recording a
             # distribution to a regular doesn't make them vanish the same week and
@@ -2046,7 +2047,9 @@ def get_filtered_list(criteria: dict = None, area_filter: str = "הכל"):
         return selection.balance_by_community(
             rows, criteria, get_need_weights(), products, get_community_quotas())
     rows = selection.filter_by_criteria(rows, criteria)
-    return selection.rank_by_need(rows, get_need_weights())
+    # RULE 8 (יהודה 7/10/2026): without the community balance the matching set is
+    # ordered by who has WAITED LONGEST — the screen cuts it to products + reserve.
+    return selection.rank_by_wait(rows, get_need_weights())
 
 
 # ─── Communities (שם נציג) — balance data + auto-assignment ──────────────────
