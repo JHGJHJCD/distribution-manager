@@ -16,6 +16,7 @@ from datetime import date
 from widgets import DateEdit
 import database as db
 import selection
+import scoring
 import holidays
 from utils.backup import auto_backup_async
 from utils.excel_utils import (export_distribution_to_excel, export_full_distribution_to_excel,
@@ -558,6 +559,8 @@ class _ManualAddDialog(QDialog):
         # only while the priority filter is 'קבוע'; otherwise it resets and greys out.
         self._freq_filter = QComboBox()
         for label in ("כל התדירויות", "שבועי", "דו-שבועי", "תלת-שבועי", "חודשי"):
+            if label in self._hide_freq:
+                continue          # #o16li: 'בלי קבועים' — those frequencies aren't offered
             self._freq_filter.addItem(label)
         self._freq_filter.currentIndexChanged.connect(self._refill)
         self._freq_filter.setToolTip("סינון לפי תדירות — רלוונטי רק לקבועים")
@@ -581,6 +584,8 @@ class _ManualAddDialog(QDialog):
             "QTableWidget{background:#ffffff; border:1px solid #d7dfea; border-radius:8px;}"
             "QTableWidget::item{padding:4px 8px; border-bottom:1px solid #f1f4f9;}")
         self._table.itemChanged.connect(self._on_item_changed)
+        self._table.cellClicked.connect(self._on_cell_clicked)
+        self._shown = []
         enable_touch_scroll(self._table)
         outer.addWidget(self._table, 1)
 
@@ -652,6 +657,7 @@ class _ManualAddDialog(QDialog):
         txt = self._search.text().strip()
         rows = db.filter_recipients(self._all, txt, limit=100000) if txt else self._all
         rows = [r for r in rows if self._passes_filters(r)]
+        self._shown = rows
         t = self._table
         t.blockSignals(True)
         t.setRowCount(len(rows))
@@ -683,6 +689,9 @@ class _ManualAddDialog(QDialog):
                 it = QTableWidgetItem(vals[c])
                 it.setTextAlignment(ALIGN_RIGHT if c != 4 else
                                     Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+                if c == 4 and score_txt:
+                    it.setToolTip("לחיצה — פירוט הניקוד")
+                    it.setForeground(QColor("#0f766e"))
                 t.setItem(i, c, it)
             if not_due:
                 t.item(i, 2).setBackground(QColor("#fef3c7"))
@@ -699,6 +708,11 @@ class _ManualAddDialog(QDialog):
                   f"מוסתרים במצב 'בלי קבועים')" if self._hidden_count else "")
         self._lbl_count.setText(f"מוצגים {len(rows)} מתוך {len(self._all)} מקבלים{hidden} · "
                                 f"נבחרו {len(self._checked)}")
+
+    def _on_cell_clicked(self, row, col):
+        """#5ft0t: a click on the score shows WHY it is what it is."""
+        if col == 4 and 0 <= row < len(self._shown) and self._shown[row].get("_score_parts"):
+            show_score_breakdown(self, self._shown[row])
 
     def _on_item_changed(self, item):
         if item.column() != 0:
@@ -727,9 +741,10 @@ class OneTimePickerDialog(QDialog):
 
     _COLS = ["✔", "שם מלא", "עדיפות", "ניקוד", "אזור", "טלפון"]
 
-    def __init__(self, parent=None, manual_regulars: int = 0):
+    def __init__(self, parent=None, manual_regulars: int = 0, removed_regulars: int = 0):
         super().__init__(parent)
         self._manual_regulars = manual_regulars   # task 13: regulars added by hand
+        self._removed_regulars = removed_regulars  # #andd6: due regulars taken off the list
         self.setWindowTitle("בחירת חד-פעמיים לחלוקה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.setMinimumSize(640, 620)
@@ -756,6 +771,10 @@ class OneTimePickerDialog(QDialog):
         total, reserve_n = self._shared_counts()
         if total > 0:
             n, regs = db.compute_suggested_n(total, self._manual_regulars)
+            gone = min(self._removed_regulars, regs)
+            if gone:
+                regs -= gone
+                n = selection.one_time_slots(total, regs, self._manual_regulars)
         else:
             # No product count set → nothing to recommend: arrive unmarked
             # (reserve included), exactly like the 'חד פעמי' tab in this state.
@@ -967,6 +986,12 @@ def _make_suggestions_deletable(combo, hist_key, tab):
     by parenting the helper to the combo."""
     combo._suggestion_deleter = _ComboSuggestionDeleter(combo, hist_key, tab)
 
+# The little status panel under 'מוצרים זמינים': neutral, and the soft-red variant
+# a warning line wears (#fyctc).
+_LEFTOVER_QSS = ("QFrame#leftover-card{background:#f8fafc; border:1px solid #e2e8f0;"
+                 " border-radius:10px;}")
+_LEFTOVER_WARN_QSS = ("QFrame#leftover-card{background:#fef2f2; border:1px solid #fecaca;"
+                      " border-radius:10px;}")
 # colours for one-time picks (+ reserve)
 _RESERVE_BG, _RESERVE_FG = "#ede7f6", "#5e35b1"
 _SMALL_BTN = "font-size:11px; min-height:24px; min-width:0; padding:3px 12px;"
@@ -1212,10 +1237,11 @@ from utils.timefmt import fdate as _fdate   # one shared copy (סקירת בשל
 
 # Merged tab: viewing the week's list AND checking who received + recording it.
 COLS = ["✔", "שם מלא", "טלפון 1", "טלפון 2", "טלפון 3", "אזור",
-        "תדירות", "חלוקה הבאה", "ילדים", "נפשות", "הערות"]
+        "תדירות", "חלוקה הבאה", "ילדים", "נפשות", "הערות", "הסרה"]
 _COL_CHILDREN = 8
 _COL_SOULS = 9
 _COL_NOTES = 10
+_COL_DEL = 11        # 🗑 — takes the person off THIS list only (#andd6); prep stage only
 
 SCOPE_WEEK = "חלוקת השבוע"
 SCOPE_ALL = "כל הקבועים"
@@ -1238,6 +1264,12 @@ class GroupUpdateTab(QWidget):
         self._extra_ids: set = set()     # one-time picks added from the one-time tab
         self._reserve_ids: set = set()   # which of those are reserves
         self._row_notes: dict = {}       # inline-typed notes by recipient id (survive repopulate)
+        # #andd6 (7/10/2026): people taken OFF this distribution's list with the 🗑
+        # column. Only the list is touched, never the recipient. Kept until a new
+        # distribution / recording; deliberately NOT persisted (a restart brings
+        # them back rather than silently dropping someone).
+        self._removed_ids: set = set()
+        self._removed_due = 0            # how many due regulars of the base list are removed
         self._load_extras()
         self._build_ui()
         self._update_mode_controls()
@@ -1370,6 +1402,7 @@ class GroupUpdateTab(QWidget):
             if rid not in self._extra_ids:
                 added += 1
             self._extra_ids.add(rid)
+            self._removed_ids.discard(rid)    # picked again on purpose → back on the list
             if rec.get("_reserve"):
                 self._reserve_ids.add(rid)
             else:
@@ -1485,9 +1518,9 @@ class GroupUpdateTab(QWidget):
                                      "במצב רגיל החד-פעמיים הבאים בתור, ובמצב לפי "
                                      "ניקוד/סינון הבאים בתור בכל הרשימה")
         try:
-            self.reserve_spin.setValue(int(db.get_setting("reserve_count") or 5))
+            self.reserve_spin.setValue(int(db.get_setting("reserve_count") or 0))
         except (TypeError, ValueError):
-            self.reserve_spin.setValue(5)
+            self.reserve_spin.setValue(0)
         self.reserve_spin.valueChanged.connect(self._on_reserve_changed)
 
         # Live "how many portions are left for one-timers" hint — wrapped in its
@@ -1497,9 +1530,7 @@ class GroupUpdateTab(QWidget):
         self.lbl_leftover.setWordWrap(True)
         self.leftover_card = QFrame()
         self.leftover_card.setObjectName("leftover-card")
-        self.leftover_card.setStyleSheet(
-            "QFrame#leftover-card{background:#f8fafc; border:1px solid #e2e8f0;"
-            " border-radius:10px;}")
+        self.leftover_card.setStyleSheet(_LEFTOVER_QSS)
         _lc = QHBoxLayout(self.leftover_card)
         _lc.setContentsMargins(12, 8, 12, 8)
         _lc.addWidget(self.lbl_leftover, 1)
@@ -1521,12 +1552,25 @@ class GroupUpdateTab(QWidget):
         # #l56pm (23/9/2026): the form fields sit one under another in a single
         # column, and 'מוצרים זמינים' stands beside them as ONE big framed panel in
         # the app's own teal — emphasised by size and frame, not by a foreign colour.
+        # #6bff5 (7/10/2026): two columns of fields beside the products panel, and the
+        # two fold-away cards (מצבי מתקדמים / שליחה למתנדב) as compact buttons under
+        # them — no control above the table takes a whole row any more.
         form = QVBoxLayout()
         form.setSpacing(8)
-        form.addLayout(_field("שם החלוקה", self.name_input))
-        form.addLayout(_field("תאריך", self.date_edit))
-        form.addLayout(_field("מחלק", self.dist_input))
-        form.addLayout(_field("הערה כללית לחלוקה", self.note_input))
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+        grid.addLayout(_field("שם החלוקה", self.name_input), 0, 0)
+        grid.addLayout(_field("תאריך", self.date_edit), 0, 1)
+        grid.addLayout(_field("מחלק", self.dist_input), 1, 0)
+        grid.addLayout(_field("הערה כללית לחלוקה", self.note_input), 1, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        form.addLayout(grid)
+        # Stacked (not side by side): with both folds open at 1280px the pair overlapped.
+        self._form_tools = QVBoxLayout()      # filled below with the two fold-away cards
+        self._form_tools.setSpacing(6)
+        form.addLayout(self._form_tools)
         form.addStretch(1)
 
         self.products_spin.setMinimumHeight(72)
@@ -1620,7 +1664,10 @@ class GroupUpdateTab(QWidget):
         self.adv_section.body_layout.addLayout(adv_row)
         if self._special_active():
             self.adv_section.set_open(True)
-        lay.addWidget(self.adv_section)
+        self.adv_section.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.lbl_leaders_hint.setWordWrap(True)
+        self.lbl_leaders_hint.setMaximumWidth(360)
+        self._form_tools.addWidget(self.adv_section, 0, Qt.AlignmentFlag.AlignTop)
 
         # ── Collapsible: volunteer messaging ──────────────────────────────────
         self.vol_section = _CollapsibleCard(
@@ -1665,7 +1712,8 @@ class GroupUpdateTab(QWidget):
         auto_hint = QLabel("↻ תוצאות שהמתנדב שולח חזרה במייל נקלטות אוטומטית")
         auto_hint.setStyleSheet("color:#7c3aed; font-size:12px; " + _LBL)
         self.vol_section.body_layout.addWidget(auto_hint)
-        lay.addWidget(self.vol_section)
+        self.vol_section.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self._form_tools.addWidget(self.vol_section, 0, Qt.AlignmentFlag.AlignTop)
 
         # ── Step ②: recipient list ────────────────────────────────────────────
         card2, c2, h2 = _step_card("2", "רשימת המקבלים",
@@ -1764,6 +1812,9 @@ class GroupUpdateTab(QWidget):
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(_COL_NOTES, QHeaderView.ResizeMode.Stretch)
+        # The 🗑 column is a plain text cell + cellClicked (no cell-widget), Fixed width.
+        hdr.setSectionResizeMode(_COL_DEL, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(_COL_DEL, 64)
         hdr.setMinimumSectionSize(60)
         hdr.setResizeContentsPrecision(100)
         self.table.verticalHeader().setVisible(False)
@@ -1896,7 +1947,26 @@ class GroupUpdateTab(QWidget):
 
     def _on_stage_toggle(self, stage: str):
         """The animated stage toggle was clicked (#k6bqi)."""
+        if stage == "record" and not self._rows_data:
+            # Nothing to record on an empty list (no products set yet / nobody on it).
+            self._need_list("לעבור לרישום")
+            self.stage_toggle.set_stage(self._stage)
+            return
         self._set_stage(stage)
+
+    def _need_list(self, action: str) -> bool:
+        """#a0r4i: the list stays empty until 'מוצרים זמינים' is set, so printing /
+        PDF / Excel / the volunteer mail / the record stage have nothing to work on
+        yet — say so instead of producing an empty page. True = there is a list."""
+        if self._rows_data:
+            return True
+        if self.products_spin.value() <= 0:
+            QMessageBox.information(
+                self, "", f"הקלד קודם כמה מוצרים זמינים כדי {action} — "
+                          "עד אז הרשימה ריקה.")
+        else:
+            QMessageBox.information(self, "", f"אין מקבלים ברשימה — אין מה {action}.")
+        return False
 
     def _set_stage(self, stage: str, clear=None):
         """Switch between the prep and record stages (v2.60).
@@ -1925,6 +1995,7 @@ class GroupUpdateTab(QWidget):
         the record stage; prep is a clean, checkbox-free list."""
         record = self._stage == "record"
         self.table.setColumnHidden(0, not record)
+        self.table.setColumnHidden(_COL_DEL, record)    # taking people off = prep only
         self.btn_check_all.setVisible(record)
         self.btn_uncheck_all.setVisible(record)
         # Pre-distribution export belongs to the prep stage only.
@@ -2028,9 +2099,20 @@ class GroupUpdateTab(QWidget):
         """How many products are left for one-timers after the regulars due this
         week are served (0 in 'none'/'scored' modes, where regulars aren't
         auto-served first)."""
-        n, _regs = db.compute_suggested_n(self.products_spin.value(),
-                                          len(self._manual_regular_ids()))
-        return n
+        return self._slots()[0]
+
+    def _slots(self):
+        """(products left for one-timers, regulars due) — like
+        db.compute_suggested_n, but a due regular taken off the list with the 🗑
+        no longer holds a product (#andd6)."""
+        total = self.products_spin.value()
+        manual = len(self._manual_regular_ids())
+        n, regs = db.compute_suggested_n(total, manual)
+        gone = min(self._removed_due, regs)
+        if gone:
+            regs -= gone
+            n = selection.one_time_slots(total, regs, manual)
+        return n, regs
 
     def _manual_regular_ids(self) -> set:
         """Regulars added by hand who aren't due this week (task 13): they take a
@@ -2046,11 +2128,14 @@ class GroupUpdateTab(QWidget):
 
     def _update_leftover_hint(self):
         """Explain, live, whether products still need one-time recipients."""
-        def _show(color, weight, text, pick_btn=True):
+        def _show(color, weight, text, pick_btn=True, warn=False, tip=""):
             self.lbl_leftover.setStyleSheet(
                 f"color:{color}; font-size:12.5px; font-weight:{weight};"
                 " background:transparent; border:none;")
             self.lbl_leftover.setText(text)
+            self.lbl_leftover.setToolTip(tip)
+            # #fyctc: a warning is ONE short line in a soft red pill, not a paragraph.
+            self.leftover_card.setStyleSheet(_LEFTOVER_WARN_QSS if warn else _LEFTOVER_QSS)
             # Task 11: when there aren't even enough products for the regulars,
             # there is nothing to pick for one-timers — warning only, no button.
             self.btn_pick_onetime.setVisible(pick_btn)
@@ -2073,29 +2158,31 @@ class GroupUpdateTab(QWidget):
             self.leftover_card.setVisible(False)
             return
         manual = len(self._manual_regular_ids())
-        n, regs = db.compute_suggested_n(total, manual)
+        n, regs = self._slots()
         picks = self._main_pick_count()
         cut = getattr(self, "_sched_cut", None)
-        # RULE 8: who stayed on the list when the products don't cover everyone.
-        who = (f" ברשימה {cut['main']} שמחכים הכי הרבה זמן + {cut['reserve']} רזרבה,"
+        # RULE 8: who stayed on the list when the products don't cover everyone —
+        # the detail lives in the tooltip (the header chip already counts them).
+        who = (f"ברשימה {cut['main']} שמחכים הכי הרבה זמן + {cut['reserve']} רזרבה,"
                f" {cut['out']} לא נכנסו הפעם." if cut else "")
         if regs > 0 and total < regs:
             # Not enough products even for the regulars due this week (bug #m69he).
-            _show("#b91c1c", 800,
-                  f"⚠ אין מספיק מוצרים לכל הקבועים! יש {total}, צריך {regs} — חסרים {regs - total}."
-                  + who, pick_btn=False)
+            _show("#991b1b", 800, f"⚠ אין מספיק לקבועים — חסרים {regs - total} מוצרים",
+                  pick_btn=False, warn=True, tip=who)
         elif total < regs + manual:
             # Task 13: the regulars fit, but the ones added by hand overshoot.
-            _show("#b91c1c", 800,
-                  f"⚠ הוספת ידנית יותר ממה שיש: יש {total} מוצרים, נדרשים {regs + manual}"
-                  f" ({regs} קבועים + {manual} ידניים)." + who, pick_btn=False)
+            _show("#991b1b", 800,
+                  f"⚠ הוספת ידנית יותר ממה שיש — חסרים {regs + manual - total} מוצרים",
+                  pick_btn=False, warn=True,
+                  tip=f"יש {total} מוצרים, נדרשים {regs + manual} "
+                      f"({regs} קבועים + {manual} ידניים). " + who)
         elif picks > n:
             # One-timers picked while there were more products: they are never
             # dropped silently, and never push a due regular out — say so.
-            _show("#b91c1c", 800,
-                  f"⚠ נבחרו {picks} חד-פעמיים, אבל אחרי הקבועים יש מקום רק ל-{n} — "
-                  f"{picks - n} יותר מדי. הסר חד-פעמיים או עדכן את מספר המוצרים",
-                  pick_btn=False)
+            _show("#991b1b", 800, f"⚠ נבחרו {picks - n} חד-פעמיים יותר מדי",
+                  pick_btn=False, warn=True,
+                  tip=f"נבחרו {picks}, אבל אחרי הקבועים יש מקום רק ל-{n}. "
+                      "הסר חד-פעמיים או עדכן את מספר המוצרים.")
         elif n <= 0:
             _show("#334155", 700,
                   f"מספיק לקבועים בלבד ({regs}) — אפשר להדפיס ✓" if not manual else
@@ -2108,16 +2195,20 @@ class GroupUpdateTab(QWidget):
             if done:
                 state = "נבחרו ✓"
             elif picks > 0:
-                state = f"אפשר להדפיס, או להשלים עוד {n - picks}"
+                state = f"אפשר להדפיס, או להוסיף עוד {n - picks} ב'＋ הוסף מקבל'"
             else:
                 state = "טרם נבחרו — לחץ 'בחר חד-פעמיים'"
+            # #szhaf: once one-timers were chosen the button is gone for good (it
+            # returns after 'חלוקה חדשה' or when the chosen ones are all removed).
             _show("#334155" if picks > 0 else "#b45309", 700,
-                  f"נשאר לחד-פעמיים: {n}  ·  נבחרו: {picks}  ({state})")
+                  f"נשאר לחד-פעמיים: {n}  ·  נבחרו: {picks}  ({state})",
+                  pick_btn=picks == 0)
 
     def _open_one_time_picker(self):
         """Open the in-screen one-time picker dialog; accepted picks flow through
         the same add_one_time_picks() path the 'חד פעמי' tab uses."""
-        dlg = OneTimePickerDialog(self, manual_regulars=len(self._manual_regular_ids()))
+        dlg = OneTimePickerDialog(self, manual_regulars=len(self._manual_regular_ids()),
+                                  removed_regulars=self._removed_due)
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         picks = dlg.selected()
@@ -2260,7 +2351,7 @@ class GroupUpdateTab(QWidget):
             base = db.get_weekly_list(area_filter="הכל")
         # Pick up the shared product/reserve counts if another tab changed them.
         for spin, key, default in ((self.products_spin, "available_products", 0),
-                                   (self.reserve_spin, "reserve_count", 5)):
+                                   (self.reserve_spin, "reserve_count", 0)):
             try:
                 spin.blockSignals(True)
                 spin.setValue(int(db.get_setting(key) or default))
@@ -2268,6 +2359,13 @@ class GroupUpdateTab(QWidget):
                 pass
             finally:
                 spin.blockSignals(False)
+        # #andd6: anyone taken off THIS list stays off — before the product limit,
+        # so the freed product goes to the next in line like any other absence.
+        self._removed_due = 0
+        if self._removed_ids:
+            self._removed_due = sum(1 for r in base if r["id"] in self._removed_ids
+                                    and selection.is_regular(r))
+            base = [r for r in base if r["id"] not in self._removed_ids]
         base_ids = {r["id"] for r in base}
         # Show the real regulars count for this list (bug #jcncv).
         reg_word = {"none": "בלי קבועים",
@@ -2276,7 +2374,8 @@ class GroupUpdateTab(QWidget):
                     "filter": f"לפי סינון: {len(base)} מקבלים"}.get(
             mode, f"קבועים השבוע: {len(base)}")
         self.lbl_regulars_count.setText(reg_word)
-        extras = self._extra_recipients(base_ids)
+        extras = [r for r in self._extra_recipients(base_ids)
+                  if r["id"] not in self._removed_ids]
         self._rows_data = base + extras
         products, reserve_n = self.products_spin.value(), self.reserve_spin.value()
         # RULE 8 (7/10/2026): the list never runs past the product count in ANY
@@ -2323,6 +2422,15 @@ class GroupUpdateTab(QWidget):
             if len(self._rows_data) < shown_before:
                 self.lbl_regulars_count.setText(
                     f"{reg_word}  ·  מוצגים {len(self._rows_data)} (מוצרים + רזרבה)")
+        if mode == "none" and self._rows_data:
+            # #5ft0t: 'בלי קבועים' lists only hand-picked people, who carry no score
+            # yet — score them (on the settings' weights, like the other score
+            # modes) so a click on a row can explain WHY.
+            scoring.annotate_need_scores(self._rows_data, db.get_need_weights())
+        if products <= 0:
+            # #a0r4i (יהודה 7/10/2026): an EMPTY table until the products are set,
+            # in every mode — no list is meaningful before we know how many get one.
+            self._rows_data = []
         live = {r.get("id") for r in self._rows_data}
         # EVERYONE starts UNticked (bugs #ebnr2, #p5vv0): the operator ticks who
         # actually received — nobody is pre-marked as 'received'. One-time picks
@@ -2509,6 +2617,14 @@ class GroupUpdateTab(QWidget):
                             item.setToolTip("התשובה שהקיש בסקר הטלפוני (שלוחה "
                                             f"{yemot.SURVEY_EXT}) אחרי הצינתוק של השבוע")
                 self.table.setItem(r, col, item)
+            trash = QTableWidgetItem("🗑")
+            trash.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            trash.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            trash.setBackground(bg)
+            trash.setForeground(QColor("#b91c1c"))
+            tf = trash.font(); tf.setPointSize(13); trash.setFont(tf)
+            trash.setToolTip("הסר מהרשימה של החלוקה הזו (המקבל עצמו לא נמחק)")
+            self.table.setItem(r, _COL_DEL, trash)
 
         self.table.blockSignals(False)
         self._update_counts()
@@ -2517,7 +2633,9 @@ class GroupUpdateTab(QWidget):
         # bare "no recipients".
         lbl = getattr(self.table, "_empty_label", None)
         if lbl is not None:
-            if self._current_mode() == "none":
+            if self.products_spin.value() <= 0:
+                lbl.setText("הקלד כמה מוצרים זמינים כדי לראות את הרשימה")
+            elif self._current_mode() == "none":
                 lbl.setText("מצב 'בלי קבועים': הקבועים אינם בחלוקה זו.\n\n"
                             "כדי להוסיף מקבלים — הזן 'מוצרים זמינים' ולחץ "
                             "'בחר חד-פעמיים', או השתמש ב'＋ הוסף מקבל'.")
@@ -2555,18 +2673,43 @@ class GroupUpdateTab(QWidget):
         """Clicking a name (col 1) opens an explanation of why the recipient is on
         the list. In 'filter' mode that's the filter/community reason (#6clvq); in
         the other modes it's the need-score breakdown."""
-        if col != 1:
+        if col not in (1, _COL_DEL):
             return
         rows = self._visible_rows()
         if not (0 <= row < len(rows)):
             return
         rec = rows[row]
+        if col == _COL_DEL:
+            if self._stage != "record":
+                self._remove_from_list(rec)
+            return
         if self._current_mode() == "filter":
             # People here are chosen by criteria + community balance, not by score,
             # so showing the score would mislead — show the actual filter reason.
             show_filter_breakdown(self, rec, db.get_filter_criteria())
         elif rec.get("_score_parts"):
             show_score_breakdown(self, rec)
+
+    def _remove_from_list(self, rec: dict):
+        """#andd6: take one person OFF this distribution's list (the 🗑 column). Only
+        the list changes — the recipient is untouched in the database. He is not
+        recorded as a no-show (he is simply not on the list any more), and a
+        one-time/manual pick also leaves the saved picks. Stays off until
+        'חלוקה חדשה' / recording, or until added again by hand."""
+        rid = rec.get("id")
+        if rid is None:
+            return
+        self._removed_ids.add(rid)
+        self._extra_ids.discard(rid)
+        self._reserve_ids.discard(rid)
+        self._checked_ids.discard(rid)
+        self._row_notes.pop(rid, None)
+        self._persist_extras()
+        self.refresh()
+        if self.main_win:
+            self.main_win.status_msg(
+                f"{rec.get('full_name', '')} הוסר מהרשימה "
+                "(אפשר להחזיר ב'＋ הוסף מקבל')")
 
     def _on_item_changed(self, item):
         """Keep _checked_ids / _row_notes in sync when the operator ticks a row
@@ -2758,6 +2901,7 @@ class GroupUpdateTab(QWidget):
         not recorded a second time, clear ticks/notes, back to the prep stage."""
         self._extra_ids.clear()
         self._reserve_ids.clear()
+        self._removed_ids.clear()
         self._persist_extras()
         self._checked_ids.clear()
         self._seen_ids.clear()
@@ -2843,6 +2987,8 @@ class GroupUpdateTab(QWidget):
         return rows if rows else list(self._rows_data)
 
     def _export_excel(self):
+        if not self._need_list("לייצא לאקסל"):
+            return
         if not self._ensure_one_time_picks("ייצוא לאקסל"):
             return
         checked = self._get_export_rows()
@@ -2860,6 +3006,8 @@ class GroupUpdateTab(QWidget):
         """Pre-distribution FULL export (#gli21): every recipient field of the
         prepared list, before anyone is recorded. Same detailed sheet as the
         post-save export, but the status column reads 'ברשימה/רזרבה'."""
+        if not self._need_list("לייצא לאקסל"):
+            return
         if not self._ensure_one_time_picks("ייצוא לאקסל"):
             return
         rows = self._get_export_rows()
@@ -2881,6 +3029,8 @@ class GroupUpdateTab(QWidget):
     # ── send list to a volunteer by email / import their filled results ────────
 
     def _send_to_volunteer(self):
+        if not self._need_list("לשלוח למתנדב"):
+            return
         dist_name   = self._effective_dist_name() or ""
         what        = ""     # products list removed (bug #9)
         distributor = self.dist_input.currentText().strip()
@@ -3096,6 +3246,8 @@ class GroupUpdateTab(QWidget):
                                f"מי קיבל מופיע ב'חלוקות קודמות' ובכרטיס של כל מקבל.")
 
     def _print(self):
+        if not self._need_list("להדפיס"):
+            return
         # Plain weekly round with no name → auto-named ('חלוקה שבועית DD/MM');
         # a special distribution (mode/filter) still requires a meaningful name.
         name = self._effective_dist_name()
@@ -3141,6 +3293,8 @@ class GroupUpdateTab(QWidget):
     def _export_pdf(self):
         """Save the marked distribution list as a PDF in Downloads and open it —
         same gating and content as printing, no printer required (#qxnvx)."""
+        if not self._need_list("לשמור PDF"):
+            return
         name = self._effective_dist_name()
         if not name:
             self.name_input.setStyleSheet(
@@ -3215,6 +3369,7 @@ class GroupUpdateTab(QWidget):
             if rid not in self._extra_ids:
                 added += 1
             self._extra_ids.add(rid)
+            self._removed_ids.discard(rid)   # added again on purpose → back on the list
             self._reserve_ids.discard(rid)   # manual adds are MAIN, never reserve
             self._checked_ids.add(rid)       # arrive ticked (chosen on purpose)
         self._persist_extras()
@@ -3239,13 +3394,14 @@ class GroupUpdateTab(QWidget):
         self._row_notes.clear()
         self._extra_ids.clear()
         self._reserve_ids.clear()
+        self._removed_ids.clear()
         self._persist_extras()
         self.name_input.setCurrentText("")
         self.note_input.clear()
         for spin, key in ((self.products_spin, "available_products"),
                           (self.reserve_spin, "reserve_count")):
             spin.blockSignals(True)
-            spin.setValue(0 if key == "available_products" else 5)
+            spin.setValue(0)          # no default for the reserve either (יהודה 7/10/2026)
             spin.blockSignals(False)
             db.set_setting(key, str(spin.value()))
         # Fold the advanced section back down unless a non-default mode/filter

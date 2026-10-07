@@ -64,6 +64,7 @@ ok("M3c an incoming journal record for the mode is ignored", db.get_setting("dis
 # ── M4: 'סינון מותאם' + חג שנשארו שמורים — בהפעלה הבאה המסך על 'רגיל' והחג לא פעיל ──
 db.set_filter_criteria({"children_total": {"min": 2, "max": None}, "holiday": "פסח"})
 db.set_setting("dist_regulars_mode", "filter")
+db.set_setting("available_products", "50")   # v3.81: בלי מוצרים הטבלה ריקה
 win2 = MainWindow()
 gt2 = win2.group_tab
 ok("M4a restart with a saved filter mode: back to 'schedule'", gt2._current_mode() == "schedule",

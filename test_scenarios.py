@@ -31,6 +31,7 @@ for i, (nm, pr) in enumerate([("פלוני א", 3), ("פלוני ב", 3), ("פל
 # by timetable + separate one-time picking). The app default is now 'all' (everyone
 # by score), so pin schedule BEFORE the window builds its mode combo.
 db.set_setting("dist_regulars_mode", "schedule")
+db.set_setting("available_products", "50")   # 7/10/2026: the list is empty until products are set
 from main import MainWindow
 win = MainWindow()
 

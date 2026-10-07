@@ -8,7 +8,7 @@ received and the full note."""
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QHeaderView, QLabel, QPushButton, QMessageBox, QAbstractItemView,
-    QDialog, QListWidget, QListWidgetItem, QMenu
+    QDialog, QListWidget, QListWidgetItem, QMenu, QLineEdit
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -71,6 +71,13 @@ class BatchDetailsDialog(QDialog):
         got = [r for r in recs if (r.get("received", 1) or 0) != 0]
         missed = [r for r in recs if (r.get("received", 1) or 0) == 0]
 
+        self.search_edit = QLineEdit()
+        self.search_edit.setObjectName("batch_search")
+        self.search_edit.setPlaceholderText("🔍 חיפוש שם ברשימות…")
+        self.search_edit.setClearButtonEnabled(True)
+        lay.addWidget(self.search_edit)
+        self._lists = []
+
         got_lbl = QLabel(f"מקבלים שקיבלו ({len(got)}):"
                          "  <span style='color:#64748b;font-size:12px;'>לחיצה כפולה על שם פותחת את הכרטיס</span>")
         got_lbl.setTextFormat(Qt.TextFormat.RichText)
@@ -83,11 +90,13 @@ class BatchDetailsDialog(QDialog):
             it = QListWidgetItem(f"{nm}" + (f"   —   {pnote}" if pnote else ""))
             it.setData(Qt.ItemDataRole.UserRole, r.get("recipient_id"))
             lst.addItem(it)
+        self._lists.append(lst)
         lst.itemDoubleClicked.connect(self._open_card)      # v3.75 (הכרעת יהודה 27/9/2026)
         lay.addWidget(lst, 1)
 
         if missed:
-            lbl_missed = QLabel(f"לא קיבלו ({len(missed)}):")
+            lbl_missed = QLabel(f"היו ברשימה ולא סומנו שקיבלו ({len(missed)}):")
+            lbl_missed.setToolTip("מי שהיה ברשימה ולא סומן בשלב הרישום נרשם 'לא הגיע'.")
             lbl_missed.setStyleSheet("color:#b91c1c; font-weight:600;")
             lay.addWidget(lbl_missed)
             lst_missed = QListWidget()
@@ -99,12 +108,21 @@ class BatchDetailsDialog(QDialog):
                 it.setData(Qt.ItemDataRole.UserRole, r.get("recipient_id"))
                 lst_missed.addItem(it)
             lst_missed.itemDoubleClicked.connect(self._open_card)
+            self._lists.append(lst_missed)
             lay.addWidget(lst_missed, 1)
+        self.search_edit.textChanged.connect(self._filter_lists)
 
         btn = QPushButton("סגור")
         btn.setObjectName("neutral")
         btn.clicked.connect(self.accept)
         lay.addWidget(btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+    def _filter_lists(self, text):
+        q = (text or "").strip().lower()
+        for lst in self._lists:
+            for i in range(lst.count()):
+                it = lst.item(i)
+                it.setHidden(bool(q) and q not in it.text().lower())
 
     def _open_card(self, item):
         """v3.75 — a double-click on a name opens the recipient's card (like the

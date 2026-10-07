@@ -142,7 +142,7 @@ def _valid_date(s) -> _date | None:
 # הכי נצרך יקבל כל שבוע". A non-regular who received is out of the automatic
 # list for ONE_TIME_COOLDOWN_WEEKS_DEFAULT weeks (setting
 # `onetime_cooldown_weeks`, synced, 0 = off) and then competes by need again.
-ONE_TIME_COOLDOWN_WEEKS_DEFAULT = 3
+ONE_TIME_COOLDOWN_WEEKS_DEFAULT = 4     # יהודה 7/10/2026: 4 שבועות (היה 3)
 
 
 def _one_time_turn(last: _date, cooldown_weeks: int) -> _date:
@@ -160,15 +160,17 @@ def is_due(rec: dict, base_wed: _date,
     writes; else computed from `last_distribution`) is on or before base_wed.
     Non-regulars (one-timers, data rows): due unless served within the last
     `cooldown_weeks` cycles (0 = no rotation).
-    Either way, someone already served in THIS cycle stays due (keeps him on
-    the list the moment his round is recorded, as the weekly list does). Pure."""
+    A REGULAR already served in THIS cycle stays due (keeps him on the list the
+    moment his round is recorded, as the weekly list does). A ONE-TIMER who was
+    served leaves the lists at once, even this very cycle (יהודה 7/10/2026) —
+    unless the rotation is off (cooldown 0). Pure."""
     last = _valid_date(rec.get("last_distribution"))
     if last is None:
         return True
-    if last <= base_wed and cycle_wednesday(last) == base_wed:
-        return True                                # served this very cycle
     freq = (rec.get("frequency") or "").strip()
     if is_regular(rec):
+        if last <= base_wed and cycle_wednesday(last) == base_wed:
+            return True                            # regular served this very cycle
         if freq not in SPACED_FREQUENCIES:
             return True
         turn = _valid_date(rec.get("next_distribution")) or next_due(last.isoformat(), freq, base_wed)
@@ -223,15 +225,20 @@ def rank_by_need(rows: list, weights: dict) -> list:
                                        r.get("full_name") or ""))
 
 
-def rank_one_time_priority(rows: list, weights: dict) -> list:
+def rank_one_time_priority(rows: list, weights: dict = None) -> list:
     """Score every row (in place) and return a NEW list ordered for the one-time
     PRIORITY distribution: RULE 1 — priority DOMINATES, so every ראשונה(3) comes
     before every שנייה(2); need-score only orders WITHIN a tier; ties by NAME.
 
     This is the ordering the חד-פעמי tab's 'חשב המלצה' uses, distinct from the
     merged scored mode (rank_by_need). Tie-break within a tier+score: whoever has
-    WAITED LONGEST (days_since, desc), then name as a final stable fallback."""
-    scoring.annotate_need_scores(rows, weights)
+    WAITED LONGEST (days_since, desc), then name as a final stable fallback.
+
+    יהודה 7/10/2026: the queue formula is FIXED in code
+    (`scoring.ONE_TIME_QUEUE_WEIGHTS`: 50% wait · 25% disposable-per-soul · 25%
+    souls, by place in the queue) — `weights` is accepted for compatibility but
+    IGNORED, so the settings' need_w_* never reach the one-timers' queue."""
+    scoring.annotate_need_scores(rows, scoring.ONE_TIME_QUEUE_WEIGHTS)
     return sorted(rows, key=lambda r: (-(r.get("priority") or 0),
                                        -(r.get("need_score") or 0),
                                        -(r.get("days_since") or 0),
@@ -647,13 +654,20 @@ def community_quotas(n_products: int, sizes: dict, manual_pcts: dict = None) -> 
 
 
 def balance_by_community(rows: list, criteria: dict, weights: dict,
-                         n_products: int, manual_pcts: dict = None) -> list:
+                         n_products: int, manual_pcts: dict = None,
+                         reserve_count: int = 0) -> list:
     """The community-balanced filter pick: choose ~n_products recipients from
     the ACTIVE list so each community receives its quota (proportional to size or
     operator-pinned percent). Within a community: filter-qualifiers first by
     need score, then (if the quota isn't filled) other members by need score,
     each marked rec['_balance_fill']=True. Every pick carries rec['_community'].
-    Returns the picked list ordered by need score (desc). Pure."""
+    Returns the picked list ordered by need score (desc). Pure.
+
+    RESERVE (יהודה 7/10/2026, #yukxp): with `reserve_count` R > 0 the R people
+    who rank next AFTER the N picks — across ALL communities together, not per
+    community — are appended, flagged `_reserve`/ROLE_RESERVE. Order: filter
+    qualifiers first (by need score), then the near-misses by closeness to the
+    filter (RULE 4: missing data last)."""
     if n_products is None or n_products <= 0:
         return rank_by_need(filter_by_criteria(rows, criteria), weights)
     groups = {}
@@ -700,7 +714,30 @@ def balance_by_community(rows: list, criteria: dict, weights: dict,
     # comparable across communities (each community was ranked on its own
     # normalization above — fine for choosing WITHIN a community, but the merged
     # list should read consistently).
-    scoring.annotate_need_scores(picked, weights)
-    return sorted(picked, key=lambda r: (-(r.get("need_score") or 0),
+    reserve = []
+    if reserve_count and reserve_count > 0:
+        taken = {id(r) for r in picked}
+        left = [r for r in rows if id(r) not in taken]
+        scoring.annotate_need_scores(left, weights)
+        qualifies = {id(r) for r in filter_by_criteria(left, criteria)}
+        left.sort(key=lambda r: (id(r) not in qualifies,
+                                 criteria_missing(r, criteria),
+                                 criteria_gap(r, criteria),
+                                 -(r.get("need_score") or 0),
+                                 -(r.get("days_since") or 0),
+                                 r.get("full_name") or ""))
+        reserve = left[:int(reserve_count)]
+        for r in reserve:
+            r["_community"] = community_key(r) or NO_COMMUNITY_LABEL
+    scoring.annotate_need_scores(picked + reserve, weights)
+    main = sorted(picked, key=lambda r: (-(r.get("need_score") or 0),
                                          -(r.get("days_since") or 0),
                                          r.get("full_name") or ""))
+    for i, r in enumerate(main):
+        r["_role"] = ROLE_MAIN
+        r["_reserve"] = False
+    for i, r in enumerate(reserve):
+        r["_role"] = ROLE_RESERVE
+        r["_reserve"] = True
+        r["_plan_reason"] = _reason_for(r, ROLE_RESERVE, len(main) + i)
+    return main + reserve

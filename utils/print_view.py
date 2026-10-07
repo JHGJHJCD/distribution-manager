@@ -71,10 +71,21 @@ def _th(txt: str, cls: str = "", extra: str = "") -> str:
     return _TH.format(attrs=(f" class='{cls}'" if cls else "") + (f" {extra}" if extra else ""), txt=txt)
 
 
-_THEAD = ("<thead><tr>"
-          + _th("אזור") + _th("טלפון / ים") + _th("תשובה", "chk") + _th("שם מלא")
-          + _th("מס'", "num") + _th("✓ סימון", "chk")
-          + "</tr></thead>")
+def _has_answers(rows: List[Dict]) -> bool:
+    """#kxyse — the 'תשובה' column (callback/confirmation answer) is shown only
+    when at least one row actually has an answer."""
+    return any(r.get("_answer") or r.get("_confirmed") for r in rows)
+
+
+def _thead(answers: bool = True) -> str:
+    return ("<thead><tr>"
+            + _th("אזור") + _th("טלפון / ים")
+            + (_th("תשובה", "chk") if answers else "") + _th("שם מלא")
+            + _th("מס'", "num") + _th("✓ סימון", "chk")
+            + "</tr></thead>")
+
+
+_THEAD = _thead(True)   # kept for any external caller
 
 
 def _esc(v) -> str:
@@ -83,7 +94,7 @@ def _esc(v) -> str:
     return html.escape(str(v if v is not None else ""))
 
 
-def _table_rows(rows: List[Dict]) -> str:
+def _table_rows(rows: List[Dict], answers: bool = True) -> str:
     # Emitted in SOURCE order אזור/טלפון/שם/מס'/✓ — QTextDocument lays columns in
     # source order regardless of RTL, so this prints (right→left) as
     # ✓ · מס' · שם · טלפון · אזור, putting the manual-mark column on the right.
@@ -97,7 +108,8 @@ def _table_rows(rows: List[Dict]) -> str:
             f"<tr>"
             f"<td>{_esc(rec.get('area', ''))}</td>"
             f"<td>{_esc(phones)}</td>"
-            f"<td class='chk'>{_esc(rec.get('_answer') or ('✓' if rec.get('_confirmed') else ''))}</td>"
+            + (f"<td class='chk'>{_esc(rec.get('_answer') or ('✓' if rec.get('_confirmed') else ''))}</td>"
+               if answers else "") +
             f"<td><b>{_esc(rec.get('full_name', ''))}</b></td>"
             f"<td class='num'>{i}</td>"
             f"<td class='chk'>☐</td>"
@@ -137,7 +149,8 @@ def _build_html(recipients: List[Dict], dist_date: str, has_logo: bool = False,
     mains = sorted(mains, key=lambda r: r.get("full_name", ""))
     # reserves are NOT re-sorted — they arrive in priority order (call order).
 
-    body = f"<table>{_THEAD}<tbody>{_table_rows(mains)}</tbody></table>"
+    _ans = _has_answers(mains)
+    body = f"<table>{_thead(_ans)}<tbody>{_table_rows(mains, _ans)}</tbody></table>"
     if reserves:
         body += (
             "<div class='reserve-h'>רזרבה — לפי סדר עדיפות (להתקשר לפי הסדר)</div>"
@@ -434,7 +447,7 @@ def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
     # last (right side, where a Hebrew reader starts), value first.
     details = (
         "<table class='card' border='1' cellspacing='0' cellpadding='6' width='100%'>"
-        "<thead><tr>" + _th("פרטי המקבל", "sec-title", "colspan='2' dir='rtl' align='left'")
+        "<thead><tr>" + _th("פרטי המקבל", "sec-title", "colspan='2' dir='rtl' align='right'")
         + "</tr></thead><tbody>"
         + "".join(
             f"<tr>{_cell(val)}{_cell(label, head=True)}</tr>"
@@ -460,7 +473,7 @@ def _card_html(rec: Dict, history: List[Dict], has_logo: bool) -> str:
     hist_table = (
         "<table class='card' border='1' cellspacing='0' cellpadding='6' width='100%'>"
         "<thead>"
-        + "<tr>" + _th("היסטוריית חלוקות", "sec-title", "colspan='6' dir='rtl' align='left'") + "</tr>"
+        + "<tr>" + _th("היסטוריית חלוקות", "sec-title", "colspan='6' dir='rtl' align='right'") + "</tr>"
         + "<tr>" + "".join(_card_th(t, f"width='{w}%'") for t, w in
                            (("הערות", 34), ("מחלק", 14), ("כמות", 9),
                             ("מה חולק", 17), ("תאריך", 18), ("מס'", 8))) + "</tr>"

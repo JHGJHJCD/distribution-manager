@@ -25,6 +25,7 @@ for i in range(4):
 db.add_recipient({"full_name": "לוי אחר", "status": "פעיל", "frequency": "שבועי",
                   "priority": 4, "souls": 2, "phone1": "0541234567"})
 db.set_setting("dist_regulars_mode", "schedule")
+db.set_setting("available_products", "50")   # 7/10/2026: the list is empty until products are set
 from main import MainWindow
 win = MainWindow()
 gt, tz, ml = win.group_tab, win.tzintukim_tab, win.mails_tab

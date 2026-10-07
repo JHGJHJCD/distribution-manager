@@ -53,7 +53,9 @@ EXCLUDED_SETTINGS = {"password", "win_geometry", "backup_folder", "last_backup_a
                      "ui_font_scale", "ui_font_size", "feedback_legacy_imported",
                      # משימה 5 (6/10/2026): מצב החלוקה הוא בחירה לחלוקה הנוכחית בלבד
                      # ובכל הפעלה חוזר ל'רגיל' — לא מסונכרן, כדי שהמחשב השני לא יחזיר מצב ישן
-                     "dist_regulars_mode"}
+                     "dist_regulars_mode",
+                     # 7/10/2026: דגל המרה חד-פעמית של הפסקת החד-פעמיים 3→4 שבועות — פר-מחשב
+                     "onetime_cooldown_4_done"}
 EXCLUDED_SETTING_PREFIXES = ("sync_", "export_dir_")   # export_dir_* are per-machine paths (#5e1jc)
 
 JOURNAL_PREFIX = "journal-"

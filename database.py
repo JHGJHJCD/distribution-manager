@@ -643,6 +643,7 @@ def init_db():
 
     _migrate_legacy_dist_dates()
     _migrate_ended_status()
+    _migrate_cooldown_4_weeks()
     try:
         restore_assets_to_disk()
     except Exception:            # noqa: BLE001 — a cosmetic file must never block startup
@@ -708,6 +709,21 @@ def _migrate_ended_status():
     with get_connection() as conn:
         conn.execute("UPDATE recipients SET status=? WHERE status=?",
                      (STATUS_SUSPENDED, _LEGACY_STATUS_ENDED))
+
+
+def _migrate_cooldown_4_weeks():
+    """7/10/2026 (יהודה): the one-timers' pause after receiving is now 4 weeks
+    (was 3). A STORED "3" is converted once to "4" on every computer. Written
+    straight to the table — no journal op: each computer converts its own copy, and
+    the flag is excluded from sync (utils.sync.EXCLUDED_SETTINGS) so one computer's
+    flag can never stop the other from converting."""
+    with get_connection() as conn:
+        if conn.execute("SELECT 1 FROM settings WHERE key='onetime_cooldown_4_done'").fetchone():
+            return
+        conn.execute("UPDATE settings SET value='4' WHERE key='onetime_cooldown_weeks' "
+                     "AND TRIM(value)='3'")
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES "
+                     "('onetime_cooldown_4_done','1')")
 
 
 # ─── Password hashing ─────────────────────────────────────────────────────────
@@ -1875,7 +1891,9 @@ def get_one_time_list(area_filter: str = "הכל"):
     # RULE 1 (one-time priority distribution): priority DOMINATES — every ראשונה(3)
     # before every שנייה(2), need-score orders only WITHIN a tier. Ranking lives in
     # the pure selection core (distinct from the merged scored mode's pure-score).
-    in_dist = selection.rank_one_time_priority(in_dist, get_need_weights())
+    # יהודה 7/10/2026: the one-timers' queue uses the FIXED formula
+    # (scoring.ONE_TIME_QUEUE_WEIGHTS), never the settings' need_w_* weights.
+    in_dist = selection.rank_one_time_priority(in_dist, scoring.ONE_TIME_QUEUE_WEIGHTS)
     for r in others:
         r["need_score"] = None
     others.sort(key=lambda x: (x["last_dist_date"], -(x.get("souls") or 0)))
@@ -2043,13 +2061,26 @@ def get_filtered_list(criteria: dict = None, area_filter: str = "הכל"):
         products = int(get_setting("available_products") or 0)
     except (TypeError, ValueError):
         products = 0
+    try:
+        reserve_n = max(0, int(get_setting("reserve_count") or 0))
+    except (TypeError, ValueError):
+        reserve_n = 0
     if balance and products > 0:
+        # #yukxp (7/10/2026): the N picks, then the next `reserve_n` by score across
+        # ALL communities together, flagged `_reserve`.
         return selection.balance_by_community(
-            rows, criteria, get_need_weights(), products, get_community_quotas())
+            rows, criteria, get_need_weights(), products, get_community_quotas(),
+            reserve_count=reserve_n)
     rows = selection.filter_by_criteria(rows, criteria)
     # RULE 8 (יהודה 7/10/2026): without the community balance the matching set is
-    # ordered by who has WAITED LONGEST — the screen cuts it to products + reserve.
-    return selection.rank_by_wait(rows, get_need_weights())
+    # ordered by who has WAITED LONGEST. With products set it is cut here to N
+    # (`_role` main) + the next `reserve_n` (`_reserve`) — the screen's own cut is
+    # then a no-op on the same order.
+    ranked = selection.rank_by_wait(rows, get_need_weights())
+    if products > 0:
+        selection.assign_roles(ranked, products, reserve_n)
+        ranked = [r for r in ranked if r.get("_role") != selection.ROLE_OUT]
+    return ranked
 
 
 # ─── Communities (שם נציג) — balance data + auto-assignment ──────────────────
@@ -2267,7 +2298,8 @@ def get_one_time_cooldown_weeks() -> int:
     """RULE 7 (v3.76): weeks a one-timer (עדיפות ראשונה/שנייה, or anyone who is
     not a regular) stays out of the automatic list after receiving — so the
     one-timers rotate instead of the neediest one receiving every week.
-    Synced setting `onetime_cooldown_weeks`; default 3 (יהודה 28/9/2026); 0 = off."""
+    Synced setting `onetime_cooldown_weeks`; default 4 (יהודה 7/10/2026, היה 3);
+    0 = off."""
     try:
         return max(0, int(get_setting("onetime_cooldown_weeks") or
                           selection.ONE_TIME_COOLDOWN_WEEKS_DEFAULT))

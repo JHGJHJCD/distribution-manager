@@ -163,5 +163,35 @@ check("'yes' deletes exactly the clicked row", _left, {_ids_before[0], _ids_befo
 check("table refreshed to 2 rows, same person still shown",
       (tab.hist_table.rowCount(), tab._current_rec_id), (2, _cohen["id"]))
 
+print("\nReport C (ג1/ג3/ג4/ג5):")
+check("ג1 search tab has no top 'חיפוש מהיר' title label",
+      [l for l in tab.findChildren(_QLabel) if l.text() == "חיפוש מהיר"], [])
+from tabs.distributions import BatchDetailsDialog
+_bid = db.bulk_add_distributions([db.get_recipient(_cohen["id"])], _w.isoformat(), "", "", "",
+                                 dist_name="חלוקת בדיקה", general_note="")
+_batch = {"id": None, "dist_name": "חלוקת בדיקה", "dist_date": _w.isoformat()}
+_b = [b for b in db.get_distribution_batches()]
+_bd = next((b for b in _b if b.get("dist_name") == "חלוקת בדיקה"), None)
+if _bd:
+    _dlg = BatchDetailsDialog(_bd)
+    _all = [_dlg.search_edit.parent().layout().itemAt(i).widget() for i in range(_dlg.search_edit.parent().layout().count())]
+    _lbls = [w.text() for w in _all if isinstance(w, _QLabel)]
+    check("ג3 dialog has search field", _dlg.search_edit.placeholderText() != "", True)
+    _lst = _dlg._lists[0]
+    check("ג3 list has the person", _lst.count() >= 1 and not _lst.item(0).isHidden(), True)
+    _dlg.search_edit.setText("zzzz")
+    check("ג3 filter hides non-matching", all(_lst.item(i).isHidden() for i in range(_lst.count())), True)
+    _dlg.search_edit.setText("כהן")
+    check("ג3 filter shows matching", not _lst.item(0).isHidden(), True)
+    _dlg.close(); _dlg.deleteLater()
+from utils.print_view import _build_html as _bh
+_r1 = [{"full_name": "א"}, {"full_name": "ב"}]
+check("ג5 no answers -> no תשובה column", "תשובה" in _bh(_r1, "01/01/2026"), False)
+_h2 = _bh([{"full_name": "א", "_answer": "מגיע"}, {"full_name": "ב"}], "01/01/2026")
+check("ג5 with an answer -> column shown", ("תשובה" in _h2, "מגיע" in _h2), (True, True))
+_h3 = _bh([{"full_name": "א", "_confirmed": True}, {"full_name": "ר", "_reserve": True}], "01/01/2026")
+check("ג5 confirmed + reserve section", ("תשובה" in _h3, "רזרבה" in _h3), (True, True))
+
 print("\nRESULT:", "ALL PASS ✓" if ok else "FAILURES ✗")
-sys.exit(0 if ok else 1)
+sys.stdout.flush()
+os._exit(0 if ok else 1)   # skip Qt teardown (segfault with the dialog probe)

@@ -72,8 +72,9 @@ ok("S1c the reserve are the next in line", reserves() == [REG[4], REG[3]], str(r
 ok("S1d other screens (צינתוקים/מיילים) get only the 3",
    [r["id"] for r in gt.week_rows()] == [REG[7], REG[6], REG[5]])
 ok("S1e the screen SAYS why (red hint names who stayed)",
-   "אין מספיק מוצרים" in gt.lbl_leftover.text() and "3 לא נכנסו" in gt.lbl_leftover.text(),
-   gt.lbl_leftover.text())
+   "אין מספיק לקבועים" in gt.lbl_leftover.text() and "חסרים 5 מוצרים" in gt.lbl_leftover.text()
+   and "3 לא נכנסו" in gt.lbl_leftover.toolTip(),
+   gt.lbl_leftover.text() + " | " + gt.lbl_leftover.toolTip())
 ok("S1f the count label keeps the real number due", "8" in gt.lbl_regulars_count.text()
    and "מוצגים 5" in gt.lbl_regulars_count.text(), gt.lbl_regulars_count.text())
 ok("S1g 'בחר הכל' ticks the 3, never the reserve",
@@ -87,7 +88,9 @@ gt.reserve_spin.setValue(2)
 gt.products_spin.setValue(8)
 ok("S3 enough products → all 8, nobody reserve", len(mains()) == 8 and not reserves(), str(rows()))
 gt.products_spin.setValue(0)
-ok("S4 products not set (0) → everyone due is listed", len(mains()) == 8, str(rows()))
+ok("S4 products not set (0) → EMPTY table (#a0r4i, 7/10/2026)", rows() == [], str(rows()))
+ok("S4b …with the short explanation", "הקלד כמה מוצרים זמינים" in gt.table._empty_label.text())
+ok("S4c …other screens get an empty week list", gt.week_rows() == [])
 
 # a regular added by hand takes a product from the last one in line (#fuzpd)
 gt.products_spin.setValue(8)
@@ -149,7 +152,8 @@ ok("M1 scored: 3 products + 2 reserve", len(mains()) == 3 and len(reserves()) ==
 # ── filter ────────────────────────────────────────────────────────────────────
 db.set_filter_criteria({"children_total": {"min": 1, "max": None}, "balance_communities": True})
 set_mode("filter")
-ok("F1 filter + community balance: exactly the 3 products", len(rows()) == 3, str(rows()))
+ok("F1 filter + community balance: the 3 products + 2 reserve (#yukxp, 7/10/2026)",
+   len(mains()) == 3 and len(reserves()) == 2 and len(rows()) == 5, str(rows()))
 
 db.set_filter_criteria({"children_total": {"min": 1, "max": None}, "balance_communities": False})
 gt.refresh()
@@ -159,7 +163,7 @@ ok("F2b …ordered by who waited longest", mains() == [REG[7], REG[6], REG[5]], 
 ok("F2c the hint says so", "מחכה הכי הרבה זמן" in gt.lbl_leaders_hint.text()
    and not gt.lbl_leaders_hint.isHidden())
 gt.products_spin.setValue(0)
-ok("F3 filter, products not set → everyone matching", len(rows()) == 8, str(rows()))
+ok("F3 filter, products not set → empty table", rows() == [], str(rows()))
 
 # ── none ──────────────────────────────────────────────────────────────────────
 gt.products_spin.setValue(3)

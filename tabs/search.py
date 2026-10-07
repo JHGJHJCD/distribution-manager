@@ -142,10 +142,8 @@ class SearchTab(QWidget):
         lay.setSpacing(10)
         lay.setContentsMargins(12, 12, 12, 12)
 
-        title = QLabel("חיפוש מהיר")
-        title.setObjectName("title")
-        lay.addWidget(title)
-
+        # #aernm — no top title: the tab already says "חיפוש מהיר"; the space goes
+        # to the history list.
         # Two columns: RIGHT = search + name list · LEFT = the selected person's
         # profile (details + history). In an RTL layout the first-added widget
         # sits on the right.

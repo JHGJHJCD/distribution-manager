@@ -224,20 +224,37 @@ class SettingsTab(QWidget):
         s_lay.setContentsMargins(0, 0, 0, 0)
         s_lay.setSpacing(0)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea{background:transparent;}"
-                             "QScrollArea>QWidget>QWidget{background:transparent;}")
-        enable_touch_scroll(scroll)   # finger-drag scrolling on a touch screen
-        content = QWidget()
-        scroll.setWidget(content)
-        lay = QVBoxLayout(content)
-        lay.setSpacing(10)
-        lay.setContentsMargins(20, 12, 20, 16)
-        s_lay.addWidget(scroll, 1)
-
+        # ד3 — לשוניות צד מימין: רשימת קטגוריות + מסך נפרד לכל קטגוריה.
+        # כל קטגוריה = עמוד גלילה משלה; ה-attributes של הווידג'טים לא השתנו.
         from PyQt6.QtCore import QTimer
+        from PyQt6.QtWidgets import QListWidget, QListWidgetItem, QStackedWidget
+        self._pages_scrolls = []
+        self._page_lays = []
+
+        def new_page(name: str) -> QVBoxLayout:
+            if self._page_lays:
+                self._page_lays[-1].addStretch()      # העמוד הקודם נארז למעלה
+            sc = QScrollArea()
+            sc.setWidgetResizable(True)
+            sc.setFrameShape(QScrollArea.Shape.NoFrame)
+            sc.setStyleSheet("QScrollArea{background:transparent;}"
+                             "QScrollArea>QWidget>QWidget{background:transparent;}")
+            enable_touch_scroll(sc)   # finger-drag scrolling on a touch screen
+            cont = QWidget()
+            sc.setWidget(cont)
+            pl = QVBoxLayout(cont)
+            pl.setSpacing(10)
+            pl.setContentsMargins(20, 12, 20, 16)
+            self.page_stack.addWidget(sc)
+            self.nav_list.addItem(QListWidgetItem(name))
+            self._pages_scrolls.append(sc)
+            self._page_lays.append(pl)
+            return pl
+
+        head_wrap = QWidget()
+        lay = QVBoxLayout(head_wrap)
+        lay.setContentsMargins(20, 12, 20, 4)
+        s_lay.addWidget(head_wrap)
 
         # ── Header: title · subtitle · live status chips ──────────────────────
         head = QHBoxLayout()
@@ -261,8 +278,31 @@ class SettingsTab(QWidget):
         head.addWidget(self.chip_mail)
         lay.addLayout(head)
 
+        body_wrap = QWidget()
+        body_wrap.setLayoutDirection(Qt.LayoutDirection.RightToLeft)   # הרשימה בצד ימין
+        bw = QHBoxLayout(body_wrap)
+        bw.setContentsMargins(14, 4, 0, 0)
+        bw.setSpacing(0)
+        self.nav_list = QListWidget()
+        self.nav_list.setObjectName("settings_nav")
+        self.nav_list.setFixedWidth(190)
+        self.nav_list.setFrameShape(QFrame.Shape.NoFrame)
+        self.nav_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.nav_list.setStyleSheet(
+            "QListWidget#settings_nav{background:transparent; outline:0;}"
+            "QListWidget#settings_nav::item{padding:11px 14px; margin:2px 0;"
+            " border-radius:10px; color:#334155; font-size:14px; font-weight:700;}"
+            "QListWidget#settings_nav::item:hover{background:#e6f4ee;}"
+            "QListWidget#settings_nav::item:selected{background:#0f9d78; color:#ffffff;}")
+        self.page_stack = QStackedWidget()
+        self.page_stack.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        bw.addWidget(self.nav_list)
+        bw.addWidget(self.page_stack, 1)
+        s_lay.addWidget(body_wrap, 1)
+        self.nav_list.currentRowChanged.connect(self._on_nav_changed)
+
         # ═════════════════════════ כללי ומראה ═════════════════════════
-        lay.addLayout(_section("כללי ומראה"))
+        lay = new_page("כללי ומראה")
         row = _row(); lay.addLayout(row)
 
         # ── כללי: text size · no-show alerts · password ──
@@ -407,7 +447,7 @@ class SettingsTab(QWidget):
         _place(row, card, body)
 
         # ═════════════════════════ נתונים וגיבוי ═════════════════════════
-        lay.addLayout(_section("נתונים וגיבוי"))
+        lay = new_page("נתונים וגיבוי")
         row = _row(); lay.addLayout(row)
 
         # ── גיבויים ──
@@ -470,7 +510,7 @@ class SettingsTab(QWidget):
         self._refresh_export_labels()
 
         # ═════════════════════════ חיבורים ═════════════════════════
-        lay.addLayout(_section("חיבורים"))
+        lay = new_page("חיבורים")
         row = _row(); lay.addLayout(row)
 
         # ── חשבון Google (v3.39; #vtf2f 23/9/2026: עוצב מחדש — מצב אחד, פעולה אחת,
@@ -713,7 +753,7 @@ class SettingsTab(QWidget):
         _place(row, card, body)
 
         # ═════════════════════════ עבודה משני מחשבים ═════════════════════════
-        lay.addLayout(_section("עבודה משני מחשבים"))
+        lay = new_page("עבודה משני מחשבים")
         row = _row(); lay.addLayout(row)
 
         # ── סנכרון (v2.61) ──
@@ -762,15 +802,18 @@ class SettingsTab(QWidget):
         self._refresh_manager_status()
 
         # ═════════════════════════ חישוב החלוקה ═════════════════════════
-        lay.addLayout(_section("חישוב החלוקה"))
+        lay = new_page("חישוב החלוקה")
         row = _row(); lay.addLayout(row)
 
         # ── משקלי ניקוד ──
         card, body, _h = _card("משקלי ניקוד הצורך", "weights", "מה משפיע על דירוג המקבלים")
         body.addWidget(_desc(
-            "המשקל של כל נתון בחישוב 'ניקוד הצורך' שלפיו מדורגים המקבלים. המשקלים הם "
-            "אחוזים שמסתכמים תמיד ל-100% — הגדלת אחד מקטינה אוטומטית את האחרים. "
+            "המשקל של כל נתון בחישוב 'ניקוד הצורך' שלפיו מדורגים המקבלים. כתוב בכל שדה "
+            "את האחוז הרצוי — הסכום חייב להיות בדיוק 100% כדי לשמור. "
             "0% = להתעלם מהנתון."))
+        body.addWidget(_hint(
+            "משפיע על המצבים: לפי ניקוד, סינון מותאם, בלי קבועים. התור הרגיל של "
+            "החד-פעמיים מחושב בנוסחה קבועה.", "#64748b"))
         self._balancing = False
         self._weight_spins = {}
         g = QGridLayout()
@@ -794,9 +837,13 @@ class SettingsTab(QWidget):
         self.lbl_weight_preview.setWordWrap(True)
         self.lbl_weight_preview.setStyleSheet(_DESC)
         body.addWidget(self.lbl_weight_preview)
+        self.btn_save_weights = _btn("שמור משקלים", _BTN_PRIMARY, self._save_weights,
+                                     "שמור את המשקלים וחשב מחדש את ניקוד העדיפות")
+        self.btn_save_weights.setStyleSheet(
+            self.btn_save_weights.styleSheet()
+            + "QPushButton:disabled{background:#cbd5e1; color:#64748b; border:none;}")
         body.addLayout(_btn_row(
-            _btn("שמור משקלים", _BTN_PRIMARY, self._save_weights,
-                 "שמור את המשקלים וחשב מחדש את ניקוד העדיפות"),
+            self.btn_save_weights,
             _btn("אפס לברירת מחדל", _BTN_GHOST, self._reset_weights)))
         _place(row, card, body)
 
@@ -811,7 +858,7 @@ class SettingsTab(QWidget):
         _place(row, card, body)
 
         # ═════════════════════════ התוכנה ═════════════════════════
-        lay.addLayout(_section("התוכנה"))
+        lay = new_page("התוכנה")
         row = _row(); lay.addLayout(row)
 
         # ── עדכון תוכנה ──
@@ -856,7 +903,9 @@ class SettingsTab(QWidget):
         self._refresh_feedback_inbox_btn()
         _place(row, card, body)
 
+
         # ═════════════════════════ אזור מסוכן ═════════════════════════
+        lay = new_page("אזור מסוכן")
         card, body, _h = _card("אזור מסוכן", "danger", "פעולות בלתי הפיכות", danger=True)
         d_row = QHBoxLayout()
         d_row.setSpacing(12)
@@ -869,6 +918,11 @@ class SettingsTab(QWidget):
         lay.addWidget(card)
         lay.addStretch()
         self._refresh_header_chips()
+        self.nav_list.setCurrentRow(0)
+
+    def _on_nav_changed(self, row: int):
+        if 0 <= row < self.page_stack.count():
+            self.page_stack.setCurrentIndex(row)
 
     def _refresh_header_chips(self):
         """The title-row chips: sync / yemot / mail state at a glance."""
@@ -1082,43 +1136,37 @@ class SettingsTab(QWidget):
             self._balancing = False
         self._update_weight_total()
 
-    def _rebalance(self, changed: str):
-        """Keep the weights summing to 100%: when one changes, distribute the
-        remaining budget across the others in proportion to their current values
-        (so raising one lowers the rest, which is what users expect)."""
+    def _rebalance(self, changed: str = None):
+        """ד1 — כל שדה מוקלד חופשי; אין איזון אוטומטי של האחרים. רק מראים כמה
+        חסר/עודף, ו"שמור" נחסם עד שהסכום בדיוק 100."""
         if self._balancing:
             return
         self._weights_dirty = True
-        self._balancing = True
-        try:
-            keys = [f["key"] for f in db.NEED_FACTORS]
-            v = self._weight_spins[changed].value()
-            others = [k for k in keys if k != changed]
-            budget = 100 - v
-            osum = sum(self._weight_spins[o].value() for o in others)
-            if budget <= 0:
-                newvals = {o: 0 for o in others}
-            elif osum <= 0:
-                newvals = self._even_split(budget, others)
-            else:
-                raw = {o: budget * self._weight_spins[o].value() / osum for o in others}
-                newvals = {o: int(raw[o]) for o in others}
-                rem = budget - sum(newvals.values())
-                for o in sorted(others, key=lambda o: raw[o] - newvals[o], reverse=True)[:rem]:
-                    newvals[o] += 1
-            for o in others:
-                self._weight_spins[o].setValue(newvals[o])
-        finally:
-            self._balancing = False
         self._update_weight_total()
 
+    def _weights_total(self) -> int:
+        return sum(s.value() for s in self._weight_spins.values())
+
     def _update_weight_total(self):
-        total = sum(s.value() for s in self._weight_spins.values())
-        self.lbl_weight_preview.setText(f"סה\"כ: {total}%")
+        total = self._weights_total()
+        if total == 100:
+            txt, color = 'סה"כ 100% ✓', "#0f766e"
+        elif total < 100:
+            txt, color = f'סה"כ {total}% — חסרים {100 - total}%', "#b91c1c"
+        else:
+            txt, color = f'סה"כ {total}% — עודפים {total - 100}%', "#b91c1c"
+        self.lbl_weight_preview.setText(txt)
         self.lbl_weight_preview.setStyleSheet(
-            "color:#334155;" if total == 100 else "color:#b45309;")
+            f"color:{color}; font-size:13.5px; font-weight:800; " + _LBL)
+        self.btn_save_weights.setEnabled(total == 100)
+        self.btn_save_weights.setToolTip(
+            "שמור את המשקלים וחשב מחדש את ניקוד העדיפות" if total == 100
+            else "אי אפשר לשמור — הסכום חייב להיות בדיוק 100%")
 
     def _save_weights(self):
+        if self._weights_total() != 100:
+            self._update_weight_total()
+            return
         db.set_need_weights({k: s.value() for k, s in self._weight_spins.items()})
         self._weights_dirty = False
         if self.main_win:
@@ -2437,7 +2485,8 @@ class CommunityQuotasDialog(QDialog):
         self._spins = {}
         outer = QVBoxLayout(self)
         intro = QLabel("קבע אחוז קבוע לקהילה (לפי שם נציג). קהילה שנשארת על 0 = "
-                       "אוטומטי (חלק יחסי לגודלה). סכום מעל 100% ינורמל אוטומטית.")
+                       "אוטומטי (חלק יחסי לגודלה). הסכום לא יכול לעבור 100%; אם כל הקהילות "
+                       "הוגדרו ידנית — הסכום חייב להיות בדיוק 100%.")
         intro.setWordWrap(True)
         intro.setStyleSheet("color:#475569; font-size:12.5px;")
         outer.addWidget(intro)
@@ -2480,15 +2529,21 @@ class CommunityQuotasDialog(QDialog):
                 " margin:4px 8px; min-width:110px;}")
             table.setCellWidget(r, 2, spin)
             self._spins[c] = spin
+            spin.valueChanged.connect(lambda _v: self._update_total())
         enable_touch_scroll(table)
         outer.addWidget(table, 1)
         if not communities:
             outer.addWidget(QLabel("עדיין אין קהילות (שם נציג) במקבלים."))
+        self.lbl_total = QLabel("")
+        self.lbl_total.setWordWrap(True)
+        outer.addWidget(self.lbl_total)
 
         btns = QHBoxLayout()
         btn_save = QPushButton("שמור")
         btn_save.setObjectName("primary")
         btn_save.clicked.connect(self._save)
+        self.btn_save = btn_save
+        btn_save.setStyleSheet("QPushButton:disabled{background:#cbd5e1; color:#64748b;}")
         btn_cancel = QPushButton("ביטול")
         btn_cancel.setObjectName("neutral")
         btn_cancel.clicked.connect(self.reject)
@@ -2496,8 +2551,33 @@ class CommunityQuotasDialog(QDialog):
         btns.addWidget(btn_save)
         btns.addWidget(btn_cancel)
         outer.addLayout(btns)
+        self._update_total()
+
+    def _quota_problem(self):
+        """ד2 — (סכום, האם שגוי): מעל 100, או שכל הקהילות ידניות והסכום ≠ 100."""
+        vals = [round(sp.value(), 1) for sp in self._spins.values()]
+        total = round(sum(vals), 1)
+        all_manual = bool(vals) and all(v > 0 for v in vals)
+        bad = total > 100.0 or (all_manual and abs(total - 100.0) > 0.05)
+        return total, bad
+
+    def _update_total(self):
+        total, bad = self._quota_problem()
+        shown = f"{total:g}"
+        if bad:
+            self.lbl_total.setText(f'סה"כ {shown}% — אחוזים שגויים')
+            self.lbl_total.setStyleSheet("color:#b91c1c; font-size:13.5px; font-weight:800;")
+        else:
+            self.lbl_total.setText(f'סה"כ {shown}% — השאר יחולק אוטומטית' if total < 100
+                                   else f'סה"כ {shown}% ✓')
+            self.lbl_total.setStyleSheet("color:#0f766e; font-size:13.5px; font-weight:800;")
+        self.btn_save.setEnabled(not bad)
+        self.btn_save.setToolTip("אי אפשר לשמור — האחוזים שגויים" if bad else "")
 
     def _save(self):
+        if self._quota_problem()[1]:
+            self._update_total()
+            return
         quotas = {c: spin.value() for c, spin in self._spins.items() if spin.value() > 0}
         db.set_community_quotas(quotas)
         QMessageBox.information(self, "נשמר", "אחוזי הקהילות נשמרו ✓")

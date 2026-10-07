@@ -103,3 +103,10 @@ The rule lives in `selection.py`, `test_selection.py` proves it (new + boundary
 cases pass), no tab embeds the logic, and — if it changes what the operator sees —
 you captured a screenshot with the `visual-check` skill. Then give the user one
 plain-Hebrew line describing the new behavior.
+
+## עדכון 7/10/2026 (v3.81) — ניקוד לפי מקום בתור + נוסחה קבועה לחד-פעמיים
+- `scoring.annotate_need_scores` מנרמל **לפי מקום בתור** (`_rank_components`: ערכים שונים במדרגות שוות k/n, ערכים שווים = אותה מדרגה), לא לפי סכום. אל תחזיר נרמול ליניארי — חריג אחד שיטח את כולם (הכרעת יהודה).
+- התור הרגיל של החד-פעמיים (`rank_one_time_priority`, `get_one_time_list`) משתמש ב-`scoring.ONE_TIME_QUEUE_WEIGHTS` (50% המתנה / 25% פנוי לנפש / 25% נפשות) ו**מתעלם** מהמשקלים שמועברים אליו. משקלי ההגדרות חלים רק על `scored` / `filter` / `none`.
+- `is_due`: החריג "קיבל במחזור הזה ⇒ נשאר" חל רק על קבועים; חד-פעמי שקיבל יוצא מיד. הפסקה ברירת מחדל 4 שבועות.
+- `balance_by_community(..., reserve_count=R)`: אחרי N הנבחרים — R הבאים מכל הקהילות יחד, `_reserve`.
+- לפני שינוי משקל/הפסקה: להריץ סימולציית שנה על **עותק** של ה-DB (52 מנות) ולבדוק טווח קבלות, ממוצע לפי שלישי צורך, והמתנה מרבית. התוצאה שנבחרה: כולם 9–13 קבלות בשנה, המתנה מרבית 7 שבועות, בלי מנות אבודות; הפסקה 5 = מנות בלי מקבל.

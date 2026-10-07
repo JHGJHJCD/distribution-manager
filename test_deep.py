@@ -371,7 +371,7 @@ db.set_setting("available_products", "0")
 
 # D8 — כלל 7 (v3.76, יהודה 28/9/2026): חד-פעמיים מתחלפים — הפסקה של 3 שבועות (ברירת מחדל) אחרי קבלה
 print("\n=== D8: תחלופה בין החד-פעמיים ===")
-check("D8 ברירת המחדל של ההפסקה = 3 שבועות", db.get_one_time_cooldown_weeks() == 3)
+check("D8 ברירת המחדל של ההפסקה = 4 שבועות (7/10/2026)", db.get_one_time_cooldown_weeks() == 4)
 _d8 = db.add_recipient({"full_name": "ד8-ראשונה-קיבל", "status": "פעיל", "frequency": "חד-פעמי",
                         "priority": 3, "souls": 9, "income": "500"})
 db.bulk_add_distributions([{"id": _d8, "full_name": "ד8-ראשונה-קיבל", "frequency": "חד-פעמי"}],
@@ -393,6 +393,28 @@ db.set_setting("onetime_cooldown_weeks", "2")
 check("D8 הפסקה שבועיים: קיבל שבוע שעבר → עדיין לא",
       "ד8-ראשונה-קיבל" not in {r["full_name"] for r in db.get_scored_all()})
 db.set_setting("onetime_cooldown_weeks", "")
+db.set_setting("available_products", "0")
+
+# א3/א4 (7/10/2026): המרת 3→4 חד-פעמית; חד-פעמי שקיבל היום יוצא מיד, קבוע שבועי נשאר
+print("\n=== D8b: המרת הפסקה 3→4 + חד-פעמי שקיבל היום ===")
+db.set_setting("onetime_cooldown_weeks", "3")
+with db.get_connection() as _c:
+    _c.execute("DELETE FROM settings WHERE key='onetime_cooldown_4_done'")
+db._migrate_cooldown_4_weeks()
+check("D8b ערך שמור '3' הומר ל-4", db.get_setting("onetime_cooldown_weeks") == "4")
+db.set_setting("onetime_cooldown_weeks", "2"); db._migrate_cooldown_4_weeks()
+check("D8b ההמרה חד-פעמית (דגל) — '2' לא נוגע", db.get_setting("onetime_cooldown_weeks") == "2")
+db.set_setting("onetime_cooldown_weeks", "")
+_d8b1 = db.add_recipient({"full_name": "ד8ב-חדפעמי", "status": "פעיל", "frequency": "חד-פעמי", "priority": 3, "souls": 5})
+_d8b2 = db.add_recipient({"full_name": "ד8ב-שבועי", "status": "פעיל", "frequency": "שבועי", "priority": 4, "souls": 5})
+db.set_setting("available_products", "50")
+check("D8b לפני הרישום שניהם ברשימה", {"ד8ב-חדפעמי", "ד8ב-שבועי"} <= {r["full_name"] for r in db.get_scored_all()})
+db.bulk_add_distributions([{"id": _d8b1, "full_name": "ד8ב-חדפעמי", "frequency": "חד-פעמי"},
+                           {"id": _d8b2, "full_name": "ד8ב-שבועי", "frequency": "שבועי"}],
+                          date.today().isoformat(), "", 1, "", dist_name="D8b")
+_names8b = {r["full_name"] for r in db.get_scored_all()}
+check("D8b חד-פעמי שקיבל היום — לא ברשימה של אותו שבוע", "ד8ב-חדפעמי" not in _names8b)
+check("D8b קבוע שבועי שקיבל היום — עדיין ברשימה", "ד8ב-שבועי" in _names8b)
 db.set_setting("available_products", "0")
 
 # D6 — תאריך עתידי (טעות הקלדה מהאקסל) מתעלמים ממנו: הקבוע נכנס לרשימת השבוע (הכרעה 27/9/2026)
@@ -734,7 +756,12 @@ db.set_need_weights({"souls": 100, "money": 0, "recency": 0,
 check("souls-weighted → big family first", db.get_one_time_list()[0]["full_name"] == "גדולה")
 db.set_need_weights({"income": 100, "souls": 0, "money": 0,
                      "recency": 0, "housing": 0, "medical": 0})
-check("income-weighted → low income first", db.get_one_time_list()[0]["full_name"] == "עניה")
+# 7/10/2026: the one-timers' queue is a FIXED formula — the weights above no longer reach it
+check("one-time queue ignores need_w_* (fixed formula) → big family still first",
+      db.get_one_time_list()[0]["full_name"] == "גדולה")
+import selection as _sel
+check("income-weighted still drives the scored modes → low income first",
+      _sel.rank_by_need(db.get_all_recipients(status_filter="פעיל"), db.get_need_weights())[0]["full_name"] == "עניה")
 db.set_need_weights(db.DEFAULT_NEED_WEIGHTS)   # restore default
 
 

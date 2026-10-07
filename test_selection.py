@@ -486,15 +486,15 @@ _ot = lambda days: rec("o", priority=3, last_distribution=(_WED - _tdl(days=days
 ok("F11 הפסקה 3 שבועות: קיבל לפני 7/14 ימים — לא; לפני 21 — כן",
    not selection.is_due(_ot(7), _WED, 3) and not selection.is_due(_ot(14), _WED, 3)
    and selection.is_due(_ot(21), _WED, 3))
-ok("F11 ברירת המחדל = 3 שבועות", selection.ONE_TIME_COOLDOWN_WEEKS_DEFAULT == 3
-   and not selection.is_due(_ot(14), _WED) and selection.is_due(_ot(21), _WED))
+ok("F11 ברירת המחדל = 4 שבועות (יהודה 7/10/2026, היה 3)", selection.ONE_TIME_COOLDOWN_WEEKS_DEFAULT == 4
+   and not selection.is_due(_ot(21), _WED) and selection.is_due(_ot(28), _WED))
 # N = "חוזר לרשימה N שבועות אחרי שקיבל": 2 = לא פעמיים ברצף; 1 = בלי השפעה בפועל.
 ok("F11 הפסקה שבועיים: קיבל שבוע שעבר לא, לפני שבועיים כן",
    not selection.is_due(_ot(7), _WED, 2) and selection.is_due(_ot(14), _WED, 2))
 ok("F11 קיבל שבוע שעבר ביום חמישי (נרשם באיחור) — נספר למחזור של שבוע שעבר",
    not selection.is_due(_ot(6), _WED, 2) and selection.is_due(_ot(13), _WED, 2))
-ok("F12 קיבל במחזור הזה — נשאר ברשימה; מעולם לא קיבל — בתור",
-   selection.is_due(_ot(0), _WED, 3) and selection.is_due(rec("n", priority=3), _WED, 3))
+ok("F12 חד-פעמי שקיבל במחזור הזה — יוצא מיד (הכרעה 5, 7/10/2026); מעולם לא קיבל — בתור",
+   not selection.is_due(_ot(0), _WED, 3) and selection.is_due(rec("n", priority=3), _WED, 3))
 ok("F12 ההפסקה חלה גם על מי שאינו קבוע ובלי עדיפות (במצב סינון)",
    not selection.is_due(rec("c", priority=None, freq="", last_distribution=(_WED - _tdl(days=7)).isoformat()), _WED, 3))
 ok("F12 ההפסקה לא נוגעת בקבוע שבועי",
@@ -543,6 +543,43 @@ ok("G2 manual_regular_ids: אין ידניים → ריק", selection.manual_reg
 ok("G3 one_time_slots: 15 מוצרים, 10 קבועים → 5; עם 1 ידני → 4",
    selection.one_time_slots(15, 10) == 5 and selection.one_time_slots(15, 10, 1) == 4)
 ok("G4 one_time_slots: לא יורד מתחת ל-0", selection.one_time_slots(10, 10, 3) == 0 and selection.one_time_slots(0, 5) == 0)
+
+# ── 7/10/2026 (יהודה): נוסחה קבועה לתור החד-פעמיים; רזרבה ב-filter; חד-פעמי שקיבל ──
+print("\n── חבילה א' (7/10/2026) ──")
+_W_IGN = {"money": 0, "souls": 100, "recency": 0, "income": 0, "housing": 0, "medical": 0}
+_x = rec("x-נפשות", 3, souls=9, days_since=1, per_soul="1000")
+_y = rec("y-המתנה", 3, souls=1, days_since=400, per_soul="1000")
+_o1 = [r["full_name"] for r in selection.rank_one_time_priority([dict(_x), dict(_y)], _W_IGN)]
+_o2 = [r["full_name"] for r in selection.rank_one_time_priority([dict(_x), dict(_y)], {"souls": 0, "recency": 100})]
+ok("A2 תור חד-פעמיים: משקלי ההגדרות מתעלמים — אותו סדר בכל משקל; המתנה (50%) גוברת על נפשות (25%)",
+   _o1 == _o2 == ["y-המתנה", "x-נפשות"], f"{_o1} {_o2}")
+ok("A2 הקבוע = 50/25/25", scoring.ONE_TIME_QUEUE_WEIGHTS["recency"] == 50
+   and scoring.ONE_TIME_QUEUE_WEIGHTS["money"] == 25 and scoring.ONE_TIME_QUEUE_WEIGHTS["souls"] == 25)
+# א1 — חריג קיצוני לא משטח את השאר (גם במצבי scored/filter/none)
+_ext = [dict(rec("e%d" % i, None, per_soul=str(1000 + 100 * i))) for i in range(4)] + \
+       [dict(rec("חריג", None, per_soul="-9999999"))]
+_sc = {r["full_name"]: r["need_score"] for r in selection.rank_by_need(_ext, {"money": 100, "souls": 0, "recency": 0, "income": 0, "housing": 0, "medical": 0})}
+ok("A1 חריג קיצוני לא משטח: ארבעת האחרים עדיין שונים זה מזה ובמדרגות שוות",
+   _sc["חריג"] == 100 and len({_sc["e%d" % i] for i in range(4)}) == 4
+   and abs((_sc["e0"] - _sc["e1"]) - (_sc["e1"] - _sc["e2"])) < 0.2, str(_sc))
+# א4 — חד-פעמי שקיבל היום יוצא; קבוע שבועי שקיבל היום נשאר
+_today_s = _WED.isoformat()
+ok("A4 חד-פעמי שקיבל היום — לא ב-is_due; קבוע שבועי שקיבל היום — כן",
+   not selection.is_due(rec("ot", 3, last_distribution=_today_s), _WED)
+   and selection.is_due(_reg("wk", "שבועי", _WED), _WED))
+# א5 — רזרבה ב-filter, עם ובלי איזון קהילות
+_rows5 = [crec("א%d" % i, "נציג א", 500 + 100 * i) for i in range(3)] + \
+         [crec("ב%d" % i, "נציג ב", 900 + 100 * i) for i in range(5)]
+_crit5 = {"income": {"min": None, "max": 5000}}
+_bal = selection.balance_by_community([dict(r) for r in _rows5], _crit5, W_INCOME, 4, None, reserve_count=2)
+_mains = [r for r in _bal if not r["_reserve"]]; _res = [r for r in _bal if r["_reserve"]]
+ok("A5 filter + איזון קהילות: N=4 ראשיים + R=2 רזרבה מסומנים, ללא חפיפה",
+   len(_mains) == 4 and len(_res) == 2 and not ({r["id"] for r in _mains} & {r["id"] for r in _res})
+   and _bal[-2:] == _res, str([(r["id"], r["_reserve"]) for r in _bal]))
+ok("A5 הרזרבה היא מכל הקהילות יחד (לא מכסה לכל קהילה)",
+   len(_bal) == 6 and all(r["_role"] in (selection.ROLE_MAIN, selection.ROLE_RESERVE) for r in _bal))
+_nb = selection.balance_by_community([dict(r) for r in _rows5], _crit5, W_INCOME, 4, None)
+ok("A5 בלי רזרבה (R=0) — בדיוק N, בלי סימון רזרבה", len(_nb) == 4 and not any(r.get("_reserve") for r in _nb))
 
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")
