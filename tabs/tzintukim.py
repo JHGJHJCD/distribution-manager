@@ -2376,10 +2376,26 @@ class TzintukimTab(QWidget):
         except OSError as e:
             QMessageBox.warning(self, "השמעה", f"פתיחת הנגן נכשלה: {e}")
 
+    _FUTURE_WEEK_NOTE = ("המסך \"חלוקה\" מוצג על שבוע עתידי — החזר אותו לתאריך של "
+                         "החלוקה הקרובה כדי לצלצל לרשימת השבוע")
+
+    def _week_is_future(self) -> bool:
+        """הכנה קדימה: the 'חלוקה ורישום' screen shows a COMING week (a read-only
+        forecast). A campaign is always tagged to the real upcoming Wednesday
+        (db.next_wednesday), so it must never ring that forecast list."""
+        gt = getattr(self.main, "group_tab", None)
+        try:
+            return bool(gt is not None and gt.list_is_future())
+        except Exception:                        # noqa: BLE001
+            return False
+
     def _refresh_week_tile(self):
         """The 'current list' tile says how many families the week list holds
         right now (cheap: reads what the main screen already built)."""
         base = "הזכאים ממסך \"חלוקה ורישום\" (בלי הרזרבות) — הבחירה הרגילה"
+        if self._week_is_future():
+            self.lbl_tile_week.setText(base + f"<br><b>⚠ {self._FUTURE_WEEK_NOTE}</b>")
+            return
         gt = getattr(self.main, "group_tab", None)
         try:
             n = len(gt.week_rows()) if gt is not None else 0
@@ -2582,7 +2598,7 @@ class TzintukimTab(QWidget):
             except Exception:
                 return []
         gt = getattr(self.main, "group_tab", None)
-        if gt is None:
+        if gt is None or self._week_is_future():     # a forecast week is never rung
             return []
         try:
             return [dict(r) for r in gt.week_rows()]
@@ -2676,7 +2692,12 @@ class TzintukimTab(QWidget):
         if self._batch is None:
             self.batch_frame.setVisible(False)
             if self._list_loaded:                # v3.53 — the week list says which
-                self.lbl_week.setText("📋 רשימת החלוקה הנוכחית — " + self._week_list_name())
+                if self._week_is_future():
+                    self.lbl_week.setText("⚠ " + self._FUTURE_WEEK_NOTE)
+                    self.lbl_week.setStyleSheet("color:#92600a; font-weight:700; " + _LBL)
+                else:
+                    self.lbl_week.setText("📋 רשימת החלוקה הנוכחית — " + self._week_list_name())
+                    self.lbl_week.setStyleSheet("color:#3730a3; font-weight:600; " + _LBL)
                 self.week_frame.setVisible(True)
             return
         name = self._batch.get("dist_name") or ""

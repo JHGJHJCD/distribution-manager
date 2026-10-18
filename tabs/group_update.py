@@ -150,6 +150,13 @@ from styles import (OVERDUE_BG, OVERDUE_FG, TODAY_BG, TODAY_FG, WEEK_BG, WEEK_FG
 
 _EMAIL_RE = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 
+
+def _is_future_week(d) -> bool:
+    """True when `d` belongs to a distribution week AFTER the real upcoming one — the
+    "הכנה קדימה" forecast. The same week, a past date or a retroactive entry are not
+    (they keep working exactly as before)."""
+    return selection.upcoming_wednesday(d) > selection.upcoming_wednesday()
+
 # The auto-complete suggestion list of an editable QComboBox is a SEPARATE
 # top-level QCompleter popup — it isn't reached by the app's "QComboBox
 # QAbstractItemView" theme rule, so without this it rendered as unreadable
@@ -477,7 +484,7 @@ class _ManualAddDialog(QDialog):
     HIDE_FREQ_NO_REGULARS = frozenset({"שבועי", "דו-שבועי"})
 
     def __init__(self, parent=None, exclude_ids: set = None,
-                 hide_frequencies: set = None):
+                 hide_frequencies: set = None, on_date=None):
         super().__init__(parent)
         self.setWindowTitle("הוספת מקבל ידנית לחלוקה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
@@ -485,7 +492,8 @@ class _ManualAddDialog(QDialog):
         self._exclude = exclude_ids or set()
         self._hide_freq = set(hide_frequencies or ())
         self._checked = set()
-        self._base_wed = selection.upcoming_wednesday()
+        self._on_date = on_date          # forecast week (הכנה קדימה) — None = the real upcoming one
+        self._base_wed = selection.upcoming_wednesday(on_date)
         self._cooldown = db.get_one_time_cooldown_weeks()
         # EVERYONE — active and inactive alike (#6gcqq: "אני מעוניין שיופיע שם
         # כל האנשים"). Inactive rows are tagged and stay inactive when added.
@@ -498,7 +506,7 @@ class _ManualAddDialog(QDialog):
         # Need-score every row on one common scale so the ניקוד column means
         # the same thing for everyone (whole numbers only, per the operator).
         for r in self._all:
-            r["days_since"] = db.recency_days(r)
+            r["days_since"] = db.recency_days(r, on_date)
         import scoring as _scoring
         _scoring.annotate_need_scores(self._all, db.get_need_weights())
         # Default order: neediest first (#hkdif) — the operator wants people in the
@@ -742,14 +750,16 @@ class OneTimePickerDialog(QDialog):
 
     _COLS = ["✔", "שם מלא", "עדיפות", "ניקוד", "אזור", "טלפון"]
 
-    def __init__(self, parent=None, manual_regulars: int = 0, removed_regulars: int = 0):
+    def __init__(self, parent=None, manual_regulars: int = 0, removed_regulars: int = 0,
+                 on_date=None):
         super().__init__(parent)
         self._manual_regulars = manual_regulars   # task 13: regulars added by hand
         self._removed_regulars = removed_regulars  # #andd6: due regulars taken off the list
+        self._on_date = on_date                    # forecast week (הכנה קדימה); None = the real upcoming one
         self.setWindowTitle("בחירת חד-פעמיים לחלוקה")
         self.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         self.setMinimumSize(640, 620)
-        self._rows = [r for r in db.get_one_time_list(area_filter="הכל")
+        self._rows = [r for r in db.get_one_time_list(area_filter="הכל", on_date=on_date)
                       if r.get("in_distribution")]
         self._build()
 
@@ -771,7 +781,7 @@ class OneTimePickerDialog(QDialog):
 
         total, reserve_n = self._shared_counts()
         if total > 0:
-            n, regs = db.compute_suggested_n(total, self._manual_regulars)
+            n, regs = db.compute_suggested_n(total, self._manual_regulars, on_date=self._on_date)
             gone = min(self._removed_regulars, regs)
             if gone:
                 regs -= gone
@@ -1321,6 +1331,8 @@ class GroupUpdateTab(QWidget):
             received_ids += ids
             if meta.get("dist_name"):
                 names.append(meta["dist_name"])
+            if getattr(self, "_import_blocked_path", None) == p:
+                continue              # a forecast week's file was refused — keep it, never lose the answers
             try:
                 os.remove(p)
             except Exception:
@@ -1376,6 +1388,8 @@ class GroupUpdateTab(QWidget):
                 g = rec.get("guid") or ""
                 out.append(g if g else str(rid))
             return ",".join(out)
+        if self.list_is_future():        # belt and braces: a forecast never writes the real picks
+            return
         db.set_setting("weekly_extra_ids", _guids(self._extra_ids))
         db.set_setting("weekly_reserve_ids", _guids(self._reserve_ids))
 
@@ -1463,6 +1477,20 @@ class GroupUpdateTab(QWidget):
         head.addWidget(self.chip_mode)
         lay.addLayout(head)
 
+        # Forecast note (הכנה קדימה, שלב 1) — visible only while the date on screen belongs
+        # to a week after the upcoming distribution: the list is a read-only preview. Under
+        # the header, not in the list card, so it is seen without scrolling.
+        self.lbl_future_note = QLabel("")
+        self.lbl_future_note.setObjectName("lbl_future_note")
+        self.lbl_future_note.setWordWrap(True)
+        self.lbl_future_note.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self.lbl_future_note.setAlignment(ALIGN_RIGHT)
+        self.lbl_future_note.setStyleSheet(
+            "QLabel{background:#fdf0d5; color:#92600a; border:none; border-radius:10px;"
+            " padding:9px 14px; font-size:13px; font-weight:700;}")
+        self.lbl_future_note.setVisible(False)
+        lay.addWidget(self.lbl_future_note)
+
         # ── Step ①: distribution details ──────────────────────────────────────
         card1, c1, _h1 = _step_card("1", "פרטי החלוקה", "שם, תאריך, כמות המוצרים והרזרבה")
         self.name_input = QComboBox()
@@ -1479,7 +1507,10 @@ class GroupUpdateTab(QWidget):
 
         self.date_edit = DateEdit(allow_empty=False)
         self.date_edit.setMinimumWidth(130)
-        self.date_edit.setToolTip("תאריך החלוקה — ימי רביעי מסומנים בכחול")
+        self.date_edit.setToolTip("תאריך החלוקה — ימי רביעי מסומנים בכחול. "
+                                  "תאריך של שבוע הבא מציג תחזית לרשימה של אותו שבוע.")
+        # הכנה קדימה (שלב 1): the list follows the date on screen.
+        self.date_edit.dateChanged.connect(self._on_date_changed)
 
         self.dist_input = QComboBox()
         self.dist_input.setEditable(True)
@@ -1958,6 +1989,12 @@ class GroupUpdateTab(QWidget):
 
     def _on_stage_toggle(self, stage: str):
         """The animated stage toggle was clicked (#k6bqi)."""
+        if stage == "record" and self.list_is_future():
+            # A forecast list can be printed but not recorded — don't let the operator
+            # tick a whole list first and only find out at 'שמור' (הכנה קדימה, שלב 1).
+            self._warn_future_list()
+            self.stage_toggle.set_stage(self._stage)
+            return
         if stage == "record" and not self._rows_data:
             # Nothing to record on an empty list (no products set yet / nobody on it).
             self._need_list("לעבור לרישום")
@@ -2049,7 +2086,7 @@ class GroupUpdateTab(QWidget):
             except ValueError:
                 ld = date(2000, 1, 1)
             rec["last_dist_date"] = ld
-            rec["days_since"] = db.recency_days(rec)   # registration-based ותק
+            rec["days_since"] = db.recency_days(rec, self._list_date())   # registration-based ותק
             out.append(rec)
         return out
 
@@ -2118,7 +2155,7 @@ class GroupUpdateTab(QWidget):
         no longer holds a product (#andd6)."""
         total = self.products_spin.value()
         manual = len(self._manual_regular_ids())
-        n, regs = db.compute_suggested_n(total, manual)
+        n, regs = db.compute_suggested_n(total, manual, on_date=self._list_date())
         gone = min(self._removed_due, regs)
         if gone:
             regs -= gone
@@ -2218,8 +2255,11 @@ class GroupUpdateTab(QWidget):
     def _open_one_time_picker(self):
         """Open the in-screen one-time picker dialog; accepted picks flow through
         the same add_one_time_picks() path the 'חד פעמי' tab uses."""
+        if self._block_picks_in_forecast():
+            return
         dlg = OneTimePickerDialog(self, manual_regulars=len(self._manual_regular_ids()),
-                                  removed_regulars=self._removed_due)
+                                  removed_regulars=self._removed_due,
+                                  on_date=self._list_date())
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         picks = dlg.selected()
@@ -2306,6 +2346,10 @@ class GroupUpdateTab(QWidget):
         # picks to complete — so never block those with the picker (bug #y0rrd).
         if self._current_mode() != "schedule":
             return True
+        if self.list_is_future():
+            # A forecast can be printed as it is: the hand-picks are refused on it
+            # (_block_picks_in_forecast), so the gate would never be satisfiable.
+            return True
         n = self._one_time_remainder()
         if n <= 0 or self._main_pick_count() > 0:
             return True
@@ -2324,6 +2368,69 @@ class GroupUpdateTab(QWidget):
         self._open_one_time_picker()
         return self._main_pick_count() > 0
 
+    # ── הכנה קדימה (שלב 1, יהודה 18/10/2026): the list follows the date on screen ──
+    _FUTURE_BLOCK_MSG = ("זו רשימה לשבוע עתידי. אפשר להדפיס אותה, אבל אי אפשר לרשום עליה "
+                         "חלוקה לפני שהיא מתקיימת. החזר את התאריך לחלוקה הקרובה.")
+
+    def _list_date(self):
+        """The date the list is prepared FOR when it is a forecast: the date on screen,
+        only if its distribution week (the Wednesday of that date) is after the real
+        upcoming one. None = the ordinary list — this week, a past date or a
+        retroactive entry — exactly as it always was."""
+        try:
+            chosen = date.fromisoformat(self.date_edit.get_iso())
+        except (ValueError, TypeError):
+            return None
+        return chosen if _is_future_week(chosen) else None
+
+    def list_is_future(self) -> bool:
+        """True while the list on screen is a read-only forecast of a coming week.
+        The call list (צינתוקים) and every recording path check this."""
+        return self._list_date() is not None
+
+    def _warn_future_list(self, extra: str = ""):
+        QMessageBox.warning(self, "רשימה לשבוע עתידי", self._FUTURE_BLOCK_MSG + extra)
+
+    def _block_picks_in_forecast(self) -> bool:
+        """The hand-picks (one-time picks, manual adds, 🗑 removals) are ONE saved setting
+        that belongs to the real list and syncs to the other computer — made on a
+        forecast they would land on this week's list. Until each week keeps its own picks
+        (stage 2, the lock) they are refused here. Returns True when refused."""
+        if not self.list_is_future():
+            return False
+        QMessageBox.information(
+            self, "רשימה לשבוע עתידי",
+            "זו תצוגה מקדימה לשבוע עתידי, ובחירות ידניות (חד-פעמיים, הוספה והסרה) עדיין "
+            "נשמרות רק לרשימה של החלוקה הקרובה, ולכן הן נחסמות כאן.\n"
+            "החזר את התאריך לחלוקה הקרובה כדי לשנות את הרשימה.")
+        return True
+
+    def _sync_future_note(self):
+        """Show / hide the forecast note and add the forecast suffix to the count chip."""
+        ld = self._list_date()
+        if ld is None:
+            self.lbl_future_note.setText("")
+            self.lbl_future_note.setVisible(False)
+            return
+        wed = selection.upcoming_wednesday(ld)
+        self.lbl_future_note.setText(
+            f"תצוגה מקדימה לרביעי {wed:%d/%m/%Y} — לפי מה שנרשם עד היום. "
+            "אפשר להדפיס ולייצא; רישום חלוקה אפשרי רק בתאריך של החלוקה הקרובה.")
+        self.lbl_future_note.setVisible(True)
+        self.lbl_regulars_count.setText(
+            self.lbl_regulars_count.text() + f"  ·  תחזית לרביעי {wed:%d/%m}")
+
+    def _on_date_changed(self, *_):
+        """The date field changed: the list is rebuilt for that date. An auto-generated
+        name carries the OLD date ('חלוקת פרשת … ז׳ חשון'), so it is cleared and made
+        again from the new date when it is next needed; a name the operator typed stays."""
+        cur = self.name_input.currentText().strip()
+        if cur and self._is_auto_name(cur):
+            self.name_input.setCurrentText("")
+        if self._stage == "record" and self.list_is_future():
+            self._set_stage("prep", clear=False)     # ticks are kept — a forecast is never recorded
+        self.refresh()
+
     def refresh(self):
         # Re-read the one-time picks: they are a synced setting, so a pick made
         # on the other computer arrives through the sync refresh.
@@ -2341,25 +2448,26 @@ class GroupUpdateTab(QWidget):
             self.mode_combo.blockSignals(False)
             self._update_mode_controls()
         mode = self._current_mode()
+        ld = self._list_date()      # הכנה קדימה: the forecast week's date, None = the ordinary list
         if mode == "none":
             base = []
         elif mode == "all":
             # 'כל המקבלים' (default) — regulars AND one-time priority candidates
             # together on ONE need scale, highest need first (#0e037). No separate
             # 'בחר חד-פעמיים' step: everyone eligible is already on the list.
-            base = db.get_scored_all(area_filter="הכל")
+            base = db.get_scored_all(area_filter="הכל", on_date=ld)
         elif mode == "scored":
             # 'קבועים לפי ניקוד' — regulars ranked by need-score. One-timers are
             # NOT auto-included here (they used to appear before being chosen, bug
             # #12); they join the list only when explicitly added from the חד-פעמי
             # tab, exactly like the schedule mode.
-            base = db.get_regulars_scored(area_filter="הכל")
+            base = db.get_regulars_scored(area_filter="הכל", on_date=ld)
         elif mode == "filter":
             # 'לפי סינון מותאם' — everyone active matching the numeric criteria,
             # regardless of priority/frequency (broad filter, #vq4fx).
-            base = db.get_filtered_list(area_filter="הכל")
+            base = db.get_filtered_list(area_filter="הכל", on_date=ld)
         else:
-            base = db.get_weekly_list(area_filter="הכל")
+            base = db.get_weekly_list(area_filter="הכל", on_date=ld)
         # Pick up the shared product/reserve counts if another tab changed them.
         for spin, key, default in ((self.products_spin, "available_products", 0),
                                    (self.reserve_spin, "reserve_count", 0)):
@@ -2451,10 +2559,14 @@ class GroupUpdateTab(QWidget):
         # keeps its state across search/refresh. (A volunteer import records the
         # round straight to history and resets the cycle — no ticks drawn.)
         self._seen_ids = set(live)
-        self._checked_ids &= live      # forget ticks for people no longer listed
+        if ld is None:
+            self._checked_ids &= live      # forget ticks for people no longer listed
+        # (a forecast keeps the ticks of the real list: a stray scroll-wheel turn of the
+        # date must not wipe what the operator marked — they are back when the date is)
         self._populate()
         self._update_leftover_hint()
         self._update_mode_controls()     # the hint follows the filter's balance switch
+        self._sync_future_note()
         self._mark_dependents_stale()
 
     def _mark_dependents_stale(self):
@@ -2476,7 +2588,9 @@ class GroupUpdateTab(QWidget):
     def week_rows(self) -> list:
         """מקור-אמת יחיד ל"רשימת השבוע בלי רזרבות" עבור מסכים אחרים (צינתוקים,
         מיילים). מרענן קודם אם הרשימה סומנה כמיושנת (`refresh_all` רק מסמן מסך
-        שאינו מוצג) — אחרת מקבל שנערך/נוסף/נמחק במסך אחר לא היה מגיע לשם."""
+        שאינו מוצג) — אחרת מקבל שנערך/נוסף/נמחק במסך אחר לא היה מגיע לשם.
+        כשהמסך על שבוע עתידי (`list_is_future()`, הכנה קדימה) זו רשימת התחזית — צינתוקים
+        מחזירים אז רשימה ריקה במקום לצלצל אליה, ומיילים נושאים את התאריך העתידי."""
         if getattr(self, "_needs_refresh", False) or not self._rows_data:
             self.refresh()
             self._needs_refresh = False
@@ -2530,7 +2644,7 @@ class GroupUpdateTab(QWidget):
         days_left = rec.get("days_left")
         if days_left is None and nd:
             try:
-                days_left = (date.fromisoformat(nd) - date.today()).days
+                days_left = (date.fromisoformat(nd) - (self._list_date() or date.today())).days
             except ValueError:
                 days_left = None
         if days_left is not None and days_left < 0:
@@ -2567,7 +2681,10 @@ class GroupUpdateTab(QWidget):
         # 3 unsure) — parsed from the synced campaign reports.
         try:
             from utils import yemot
-            answers = yemot.answers_for_date(db.next_wednesday().isoformat())
+            # The survey answers belong to the tzintuk of THIS week; a forecast week has none yet.
+            _ld = self._list_date()
+            answers = yemot.answers_for_date(
+                (selection.upcoming_wednesday(_ld) if _ld else db.next_wednesday()).isoformat())
             labels = yemot.answer_labels() if answers else {}
         except Exception:
             yemot, answers, labels = None, {}, {}
@@ -2656,13 +2773,13 @@ class GroupUpdateTab(QWidget):
                             "כדי לשנות את התנאים.")
             elif self._search_text:
                 lbl.setText("אין תוצאות לחיפוש זה")
-            elif self._current_mode() == "schedule" and db.get_regulars_scored():
+            elif self._current_mode() == "schedule" and db.get_regulars_scored(on_date=self._list_date()):
                 # Schedule mode shows only regulars DUE this week. When none are due
                 # but regulars exist, a bare "no recipients" reads like the data is
                 # gone (bug #abv1w). Say what's happening and point to the full list.
-                n = len(db.get_regulars_scored())
-                lbl.setText(f"אין קבועים שתורם השבוע לפי לוח הזמנים "
-                            f"({n} קבועים בסה\"כ).\n\n"
+                n = len(db.get_regulars_scored(on_date=self._list_date()))
+                lbl.setText(f"אין קבועים שתורם {'בשבוע הזה' if self.list_is_future() else 'השבוע'} "
+                            f"לפי לוח הזמנים ({n} קבועים בסה\"כ).\n\n"
                             "לרשימת כל הקבועים — פתח את 'מצבי חלוקה מתקדמים' "
                             "ובחר במצב 'קבועים לפי ניקוד'.")
             else:
@@ -2708,7 +2825,7 @@ class GroupUpdateTab(QWidget):
         one-time/manual pick also leaves the saved picks. Stays off until
         'חלוקה חדשה' / recording, or until added again by hand."""
         rid = rec.get("id")
-        if rid is None:
+        if rid is None or self._block_picks_in_forecast():
             return
         self._removed_ids.add(rid)
         self._extra_ids.discard(rid)
@@ -2813,6 +2930,10 @@ class GroupUpdateTab(QWidget):
         return self._active_holiday() or (holidays.BONUS if self.chk_bonus.isChecked() else "")
 
     def _save(self):
+        if self.list_is_future():
+            # הכנה קדימה: a forecast list may be printed / exported / sent, never recorded.
+            self._warn_future_list()
+            return
         if self._stage != "record":
             # Saving records reality — it happens only from the record stage.
             self._set_stage("record")
@@ -3194,6 +3315,21 @@ class GroupUpdateTab(QWidget):
             return 0, meta, [], False
 
         dist_date = meta.get("dist_date") or self.date_edit.get_iso()
+        # הכנה קדימה: a round of a week that has not come yet is never recorded — the file
+        # of a forecast list (or the screen's date, when the file carries none) is refused.
+        # The file itself stays where it is: the caller must not delete it (_on_inbox_found).
+        try:
+            _future = _is_future_week(date.fromisoformat(str(dist_date)[:10]))
+        except (ValueError, TypeError):
+            _future = False
+        if _future:
+            self._import_blocked_path = path
+            if confirm:
+                self._warn_future_list(
+                    f"\n\nהקובץ לא נקלט (תאריך החלוקה בו: {_fdate(str(dist_date)[:10])}) "
+                    f"ונשאר במקומו:\n{path}")
+                return 0, meta, [], False
+            return 0, meta, [], True          # automatic pull → ask the operator (like a duplicate)
         # Duplicate guard (bug H2): a batch with the SAME date+name and overlapping
         # recipients almost certainly means this round was already recorded (the
         # volunteer replied twice, or it was both auto-pulled and imported by hand).
@@ -3364,12 +3500,15 @@ class GroupUpdateTab(QWidget):
         of mode, filter criteria or weekly schedule (#243lo). Picked people join
         the list via the existing one-time-picks mechanism (as MAIN, not reserve),
         arrive ticked, and are recorded like any other pick when the operator saves."""
+        if self._block_picks_in_forecast():
+            return
         already = {r.get("id") for r in self._rows_data}
         # 'בלי קבועים' (#lsyyv): weekly/bi-weekly regulars are not part of this
         # distribution, so they're left out of the picker; everyone else appears.
         hide = (_ManualAddDialog.HIDE_FREQ_NO_REGULARS
                 if self._current_mode() == "none" else None)
-        dlg = _ManualAddDialog(self, exclude_ids=already, hide_frequencies=hide)
+        dlg = _ManualAddDialog(self, exclude_ids=already, hide_frequencies=hide,
+                               on_date=self._list_date())
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         ids = dlg.selected_ids()
@@ -3377,7 +3516,7 @@ class GroupUpdateTab(QWidget):
             return
         # RULE 6 (v3.76): adding a regular whose turn hasn't come is allowed but
         # confirmed — the list itself never shows him this week.
-        base_wed = selection.upcoming_wednesday()
+        base_wed = selection.upcoming_wednesday(self._list_date())
         cooldown = db.get_one_time_cooldown_weeks()
         early = []
         recs = [dict(db.get_recipient(rid) or {}) for rid in ids]
