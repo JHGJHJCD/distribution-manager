@@ -1691,7 +1691,7 @@ def calculate_next_dist(last_date_str: str, frequency: str) -> date:
 
 # ─── Weekly distribution list ─────────────────────────────────────────────────
 
-def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
+def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל", on_date=None):
     """Returns active recurring recipients due by the cutoff, sorted by name.
 
     By default the window reaches ONLY the upcoming distribution Wednesday
@@ -1709,9 +1709,16 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
     RULE 9 (18/10/2026): a regular already served in this distribution week
     (Sunday..Wednesday of the upcoming Wednesday) is NOT listed again — see
     selection.received_this_round.
+
+    `on_date` (18/10/2026, "הכנה קדימה"): prepare the list OF THAT DATE — who is due on
+    the Wednesday of `on_date`, with "today" read as `on_date` (waiting time, days left).
+    It is a read-only forecast from what is recorded so far: a list for a week that is
+    not the real upcoming one never writes the self-healed `next_distribution`.
     """
-    today = date.today()
+    real_wed = selection.upcoming_wednesday(date.today())
+    today = on_date or date.today()
     base_wed = today if today.weekday() == 2 else next_wednesday(today)
+    persist = base_wed == real_wed                  # derived dates are written for the real week only
     cutoff = max(today + timedelta(days=days_ahead), base_wed)
     with get_connection() as conn:
         rows = conn.execute(
@@ -1772,7 +1779,7 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
                 continue
             if nd <= cutoff:
                 result.append(r)
-        if updates:
+        if updates and persist:
             conn.executemany("UPDATE recipients SET next_distribution=? WHERE id=?", updates)
     return sorted(result, key=lambda x: x["full_name"])
 
@@ -1846,7 +1853,7 @@ def recency_days(rec: dict, today: date = None) -> int:
     return 0
 
 
-def get_one_time_list(area_filter: str = "הכל"):
+def get_one_time_list(area_filter: str = "הכל", on_date=None):
     """One-time recipients ranked for the priority distribution: priority-3 first
     then priority-2, each ordered by need-score (desc). Other codes
     (1/0/none/חובת בירור) are kept visible but listed afterwards, by recency."""
@@ -1855,7 +1862,7 @@ def get_one_time_list(area_filter: str = "הכל"):
             "SELECT * FROM recipients WHERE status='פעיל' AND frequency='חד-פעמי' ORDER BY full_name"
         ).fetchall()
     result = []
-    base_wed = selection.upcoming_wednesday()
+    base_wed = selection.upcoming_wednesday(on_date)
     cooldown = get_one_time_cooldown_weeks()
     for r in rows:
         r = dict(r)
@@ -1867,7 +1874,7 @@ def get_one_time_list(area_filter: str = "הכל"):
         except ValueError:
             ld = date(2000, 1, 1)
         r["last_dist_date"] = ld
-        r["days_since"] = recency_days(r)
+        r["days_since"] = recency_days(r, on_date)
         r["in_distribution"] = r.get("priority") in PRIORITY_TIERS
         # RULE 7 (v3.76): received within the cooldown → not a candidate this week
         # (listed after the candidates, like the other non-distribution rows).
@@ -1890,7 +1897,7 @@ def get_one_time_list(area_filter: str = "הכל"):
     return in_dist + others
 
 
-def get_regulars_scored(area_filter: str = "הכל"):
+def get_regulars_scored(area_filter: str = "הכל", on_date=None):
     """Regulars (frequency != חד-פעמי / not empty) ranked by need-score for the
     'קבועים לפי ניקוד' distribution mode: every active regular gets a need_score
     (same scoring the one-time list uses) and the list is ordered by that score
@@ -1903,7 +1910,7 @@ def get_regulars_scored(area_filter: str = "הכל"):
             "ORDER BY full_name"
         ).fetchall()
     result = []
-    base_wed = selection.upcoming_wednesday()
+    base_wed = selection.upcoming_wednesday(on_date)
     rows = tag_round_served([dict(r) for r in rows], base_wed)          # RULE 9 tags
     for r in rows:
         if area_filter != "הכל" and r.get("area", "") != area_filter:
@@ -1918,14 +1925,14 @@ def get_regulars_scored(area_filter: str = "הכל"):
         except ValueError:
             ld = date(2000, 1, 1)
         r["last_dist_date"] = ld
-        r["days_since"] = recency_days(r)
+        r["days_since"] = recency_days(r, on_date)
         r["_scored_regular"] = True
         result.append(r)
     # Highest need first, ties by NAME only — the one pure ranking used everywhere.
     return selection.rank_by_need(result, get_need_weights())
 
 
-def get_scored_all(area_filter: str = "הכל"):
+def get_scored_all(area_filter: str = "הכל", on_date=None):
     """Merged need-score ranking of EVERYONE active in a distribution — the
     regulars AND the one-time priority candidates — scored on ONE shared scale
     and ordered by need (highest first). This powers the 'קבועים לפי ניקוד' mode,
@@ -1936,7 +1943,7 @@ def get_scored_all(area_filter: str = "הכל"):
     (empty frequency and not קבוע, or one-timers with no distribution priority)
     are excluded. Regulars are flagged `_scored_regular`; one-timers keep their
     'חד-פעמי' frequency so the UI tints them distinctly."""
-    today = date.today()
+    today = on_date or date.today()
     base_wed = selection.upcoming_wednesday(today)
     cooldown = get_one_time_cooldown_weeks()
     with get_connection() as conn:
@@ -2014,7 +2021,7 @@ def set_filter_criteria(criteria: dict):
     set_setting("dist_filter_criteria", json.dumps(criteria or {}))
 
 
-def get_filtered_list(criteria: dict = None, area_filter: str = "הכל"):
+def get_filtered_list(criteria: dict = None, area_filter: str = "הכל", on_date=None):
     """The distribution list for the custom 'filter' mode: every ACTIVE recipient
     that satisfies the numeric thresholds (priority/frequency are ignored — this
     is a deliberate broad filter over the whole list). Rows are need-scored and
@@ -2032,7 +2039,7 @@ def get_filtered_list(criteria: dict = None, area_filter: str = "הכל"):
     if area_filter != "הכל":
         rows = [r for r in rows if r.get("area", "") == area_filter]
     for r in rows:
-        r["days_since"] = recency_days(r)
+        r["days_since"] = recency_days(r, on_date)
         r["_filtered"] = True
     # v3.52: a holiday distribution is a HARD gate — people not marked as
     # holiday-supported never enter, not even as a community top-up.
@@ -2043,7 +2050,7 @@ def get_filtered_list(criteria: dict = None, area_filter: str = "הכל"):
     # receive this week (a quota a community can't fill moves to the others).
     # A holiday round is an extra distribution (v3.75) — the gate is skipped.
     # RULE 7 (v3.76): the same pass rotates the one-timers (cooldown weeks).
-    _wed = selection.upcoming_wednesday()
+    _wed = selection.upcoming_wednesday(on_date)
     tag_round_served(rows, _wed)                                         # RULE 9 tags
     rows = selection.due_filter(rows, _wed,
                                 ignore=bool(selection.holiday_criterion(criteria)),
@@ -2132,7 +2139,7 @@ def apply_inferred_representatives() -> int:
     return len(suggestions)
 
 
-def compute_suggested_n(total_products: int, manual_regulars: int = 0) -> tuple[int, int]:
+def compute_suggested_n(total_products: int, manual_regulars: int = 0, on_date=None) -> tuple[int, int]:
     """Returns (n_for_one_time, regular_count). Regulars are served first; the
     rest of the products go to the one-time priority list. In 'none'/'scored'
     modes regulars are no longer auto-served first, so regular_count is 0 and all
@@ -2148,7 +2155,7 @@ def compute_suggested_n(total_products: int, manual_regulars: int = 0) -> tuple[
     that stays the due-this-week figure the warnings are measured against)."""
     if get_regulars_mode() != "schedule":
         return max(0, total_products), 0
-    regular_count = len(get_weekly_list())
+    regular_count = len(get_weekly_list(on_date=on_date))
     n = selection.one_time_slots(total_products, regular_count, manual_regulars)
     return n, regular_count
 

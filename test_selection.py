@@ -734,6 +734,46 @@ ok("R9k get_scored_all / get_regulars_scored מסננים כמו get_weekly_list
    and (("ר9-מצבים" in {r["full_name"] for r in db.get_regulars_scored()}) != _inR),
    f"in_window={_inR}")
 
+# ── הכנה קדימה, שלב 1 (יהודה 18/10/2026): הרשימה עוקבת אחרי התאריך שנבחר (on_date) ──
+# אחרי שנרשמה חלוקת השבוע, רשימת השבוע הבא מציגה רק מי שתורו הגיע ביום ההוא —
+# ובלי לכתוב ל-DB שום תאריך נגזר (התחזית קריאה-בלבד).
+print("\n── הכנה קדימה: on_date ──")
+db.date = _FakeB                                         # "היום" = רביעי הקרוב (או היום)
+try:
+    db.reset_all_data()
+    _ids10 = {}
+    for _nm, _fq in (("שבועי", "שבועי"), ("דו-שבועי", "דו-שבועי"), ("חודשי", "חודשי")):
+        _r10 = db.add_recipient({"full_name": f"ק-{_nm}", "status": "פעיל", "frequency": _fq, "priority": 4, "souls": 3})
+        db.bulk_add_distributions([{"id": _r10, "full_name": f"ק-{_nm}", "frequency": _fq}], _wedT.isoformat(), "", 1, "")
+        _ids10[_nm] = _r10
+    _never = db.add_recipient({"full_name": "ק-טרם-קיבל", "status": "פעיל", "frequency": "שבועי", "priority": 4})
+    _nd_before = db.get_recipient(_never)["next_distribution"]
+    _names = lambda rows: {r["full_name"] for r in rows}
+    _cur = _names(db.get_weekly_list())
+    _w1 = _names(db.get_weekly_list(on_date=_wedT + timedelta(days=7)))
+    _w2 = _names(db.get_weekly_list(on_date=_wedT + timedelta(days=14)))
+    _w4 = _names(db.get_weekly_list(on_date=_wedT + timedelta(days=28)))
+    _nd_after = db.get_recipient(_never)["next_distribution"]
+    _sa1 = _names(db.get_scored_all(on_date=_wedT + timedelta(days=7)))
+    _rs1 = _names(db.get_regulars_scored(on_date=_wedT + timedelta(days=7)))
+    _n_sug, _reg_sug = db.compute_suggested_n(10, on_date=_wedT + timedelta(days=7))
+finally:
+    db.date = _Real9
+ok("R10a השבוע הנוכחי (בלי on_date): מי שנרשם עכשיו לא ברשימה, רק מי שטרם קיבל",
+   _cur == {"ק-טרם-קיבל"}, str(sorted(_cur)))
+ok("R10b שבוע הבא: השבועי חוזר, הדו-שבועי והחודשי עוד לא (התור שלהם מתקדם)",
+   _w1 == {"ק-שבועי", "ק-טרם-קיבל"}, str(sorted(_w1)))
+ok("R10c בעוד שבועיים: גם הדו-שבועי; בעוד 4 שבועות: גם החודשי",
+   _w2 == {"ק-שבועי", "ק-דו-שבועי", "ק-טרם-קיבל"} and _w4 == {"ק-שבועי", "ק-דו-שבועי", "ק-חודשי", "ק-טרם-קיבל"},
+   f"{sorted(_w2)} | {sorted(_w4)}")
+ok("R10d התחזית לשבוע עתידי לא כותבת next_distribution של מי שטרם קיבל",
+   _nd_before == _nd_after, f"{_nd_before} -> {_nd_after}")
+ok("R10e גם 'כל המקבלים' ו'קבועים לפי ניקוד' עוקבים אחרי התאריך",
+   {"ק-שבועי"} <= _sa1 and "ק-חודשי" not in _sa1 and "ק-דו-שבועי" not in _sa1
+   and {"ק-שבועי"} <= _rs1 and "ק-חודשי" not in _rs1, f"{sorted(_sa1)} | {sorted(_rs1)}")
+ok("R10f compute_suggested_n לפי התאריך: 2 קבועים בתור בשבוע הבא (שבועי + טרם קיבל)",
+   _reg_sug == 2 and _n_sug == 8, f"reg={_reg_sug} n={_n_sug}")
+
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")
 sys.exit(1 if fails else 0)
