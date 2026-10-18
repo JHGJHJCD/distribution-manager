@@ -63,6 +63,8 @@ tab's UI code can't be tested, gets duplicated, and silently drifts.
    `limit_to_products`. `scored` stays by need-score. Products = 0 means "not set"
    → no cut. Screen-level proof: `test_products_limit.py` (all four modes) — any
    new mode must be added there.
+8. **A regular who already received this week stays off every later list of that
+   week (RULE 9, 18/10/2026)** — see "עדכון 18/10/2026" at the end of this file.
 
 ## How to add a rule — the recipe
 
@@ -107,6 +109,13 @@ plain-Hebrew line describing the new behavior.
 ## עדכון 7/10/2026 (v3.81) — ניקוד לפי מקום בתור + נוסחה קבועה לחד-פעמיים
 - `scoring.annotate_need_scores` מנרמל **לפי מקום בתור** (`_rank_components`: ערכים שונים במדרגות שוות k/n, ערכים שווים = אותה מדרגה), לא לפי סכום. אל תחזיר נרמול ליניארי — חריג אחד שיטח את כולם (הכרעת יהודה).
 - התור הרגיל של החד-פעמיים (`rank_one_time_priority`, `get_one_time_list`) משתמש ב-`scoring.ONE_TIME_QUEUE_WEIGHTS` (50% המתנה / 25% פנוי לנפש / 25% נפשות) ו**מתעלם** מהמשקלים שמועברים אליו. משקלי ההגדרות חלים רק על `scored` / `filter` / `none`.
-- `is_due`: החריג "קיבל במחזור הזה ⇒ נשאר" חל רק על קבועים; חד-פעמי שקיבל יוצא מיד. הפסקה ברירת מחדל 4 שבועות.
+- `is_due`: חד-פעמי שקיבל יוצא מיד. הפסקה ברירת מחדל 4 שבועות. (החריג הישן "קבוע שקיבל במחזור הזה נשאר ברשימה" בוטל ב-18/10/2026 — ראה כלל 9 למטה.)
 - `balance_by_community(..., reserve_count=R)`: אחרי N הנבחרים — R הבאים מכל הקהילות יחד, `_reserve`.
 - לפני שינוי משקל/הפסקה: להריץ סימולציית שנה על **עותק** של ה-DB (52 מנות) ולבדוק טווח קבלות, ממוצע לפי שלישי צורך, והמתנה מרבית. התוצאה שנבחרה: כולם 9–13 קבלות בשנה, המתנה מרבית 7 שבועות, בלי מנות אבודות; הפסקה 5 = מנות בלי מקבל.
+
+## עדכון 18/10/2026 — כלל 9: קבוע שקיבל השבוע לא חוזר (הכרעת יהודה)
+- קבוע (כל תדירות, גם שבועי) שנרשם שקיבל בחלון `base_wed−ROUND_WINDOW_DAYS` (3) עד `base_wed` — א'–ד' של הרביעי הקרוב — **לא נכנס לשום רשימה נוספת של אותו שבוע**, גם לא לרשימת הרביעי.
+- הכלל ב-`selection.py`: `received_this_round(rec, base_wed)`; `is_due` מחזיר False; `not_due_reason` = "… · קיבל ב-DD/MM · כבר בחלוקה של השבוע". `database.get_weekly_list` מדלג (`served_recently` הוסר). אל תחזיר "קבוע שקיבל נשאר ברשימה".
+- חמישי–שבת לא נספר (נרשם באיחור לרביעי הקודם). חלוקת חג (`ignore=True` ב-`due_filter`) עדיין לא מסננת.
+- **תקרית:** 18/10 רון הוציא שתי חלוקות; 38 קבועים (28 חודשיים/דו-שבועיים) הופיעו בשתיהן. מגבלה ידועה: החישוב תמיד לפי הרביעי הקרוב מהיום, לא לפי תאריך החלוקה שנבחר (ראה "הכנה קדימה" ב-`NEXT_TASK.md`).
+- **הרחבה (יהודה, 18/10):** כל חלוקה רגילה שנרשמת — בכל יום, גם א'–ג' — מוציאה את הקבוע מהרשימות של השבוע **וגם מזיזה את התור הקבוע שלו**. רק חלוקה שסומנה "בונוס" (`holidays.BONUS`, נשמר בעמודה `holiday`; בגרסה ישנה במחשב השני נראית נוספת — נכון) או חלוקת חג לא מבטלת. הכרעת 25/9 ("א'–ג' = נוספת") בוטלה 18/10 והוחלפה בסימון; חלוקות לפני 18/10 נשארות נוספות לפי יום (`database.EXTRA_BY_WEEKDAY_BEFORE`). קוד: `holidays.is_extra_dist`/`is_bonus_dist`, `database._regular_rounds_sql`/`_mark_round_served`/`tag_round_served`; `received_this_round` קורא את התגית `round_served` (בלי תגית — חלון על `last_distribution`).
