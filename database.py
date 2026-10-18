@@ -1705,6 +1705,10 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
     "Regular" = anyone who is not one-time: a real recurring frequency, OR marked
     priority 'קבוע' (4) even if the frequency field was left blank — otherwise a
     person tagged קבוע without a frequency would silently drop off the list.
+
+    RULE 9 (18/10/2026): a regular already served in this distribution week
+    (Sunday..Wednesday of the upcoming Wednesday) is NOT listed again — see
+    selection.received_this_round.
     """
     today = date.today()
     base_wed = today if today.weekday() == 2 else next_wednesday(today)
@@ -1715,10 +1719,10 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
             "AND frequency != 'חד-פעמי' AND (frequency != '' OR priority = 4) "
             "ORDER BY full_name"
         ).fetchall()
+        rows = _mark_round_served(conn, [dict(r) for r in rows], base_wed)   # RULE 9 tags
         result = []
         updates = []
         for r in rows:
-            r = dict(r)
             if area_filter != "הכל" and r.get("area", "") != area_filter:
                 continue
             nd_str = r.get("next_distribution") or ""
@@ -1755,32 +1759,18 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל"):
             r["_status"] = r.get("weekly_status", "") or ""
             r["days_left"] = (nd - today).days
             r["days_since"] = recency_days(r, today)   # RULE 8: who waited longest
-            # A regular is on this week's list if their turn is due by the cutoff,
-            # OR they were already served for THIS week's cycle — so recording a
-            # distribution to a regular doesn't make them vanish the same week and
-            # you can still hand them another round (bug 2).
-            ld_str2 = r.get("last_distribution") or ""
-            try:
-                ld2 = date.fromisoformat(ld_str2) if ld_str2 else None
-            except ValueError:
-                ld2 = None
-            # "Served for THIS cycle" = the distribution's cycle-Wednesday equals
-            # the upcoming distribution Wednesday (base_wed). This keeps a regular
-            # on the list the moment their distribution is recorded (the operator
-            # normally dates it on the coming Wednesday, which pushes
-            # next_distribution a week out — without this the person would vanish
-            # from the list the instant it is saved). Using cycle equality instead
-            # of a raw "last 6 days" window is what stops LAST week's distribution
-            # — especially one recorded a day or two LATE (Thu-Sat), which is
-            # normal — from dragging every bi-weekly/monthly recipient back onto
-            # THIS week's list (they'd look like their frequency was ignored).
-            # A date AFTER the upcoming Wednesday can't be a real (late-recorded)
-            # distribution of this cycle yet — it's a future-dated typo. Without
-            # the upper bound, on Thu–Sat a typo 1–6 days past next Wednesday
-            # landed in base_wed's cycle and put the person on this week's list.
-            served_recently = (ld2 is not None and ld2 <= max(today, base_wed)
-                               and cycle_wednesday(ld2) == base_wed)
-            if nd <= cutoff or served_recently:
+            # RULE 9 (יהודה 18/10/2026): a regular already served in THIS
+            # distribution week (Sunday..Wednesday — the Wednesday itself, or an
+            # extra Sun–Tue round that does not move his turn) is on no further
+            # list of the week. Until v3.82 he stayed on it (so he would not vanish
+            # the instant his round was recorded), and a second list pulled the
+            # same bi-weekly / monthly families in again. A Thu–Sat record belongs
+            # to the Wednesday BEFORE it, so last week's late-recorded round is
+            # outside the window and cannot hide anybody; a typo dated past the
+            # upcoming Wednesday never reaches here (_recompute ignores it).
+            if selection.received_this_round(r, base_wed):
+                continue
+            if nd <= cutoff:
                 result.append(r)
         if updates:
             conn.executemany("UPDATE recipients SET next_distribution=? WHERE id=?", updates)
@@ -1914,8 +1904,8 @@ def get_regulars_scored(area_filter: str = "הכל"):
         ).fetchall()
     result = []
     base_wed = selection.upcoming_wednesday()
+    rows = tag_round_served([dict(r) for r in rows], base_wed)          # RULE 9 tags
     for r in rows:
-        r = dict(r)
         if area_filter != "הכל" and r.get("area", "") != area_filter:
             continue
         # RULE 6 (v3.76): a bi-weekly/tri-weekly/monthly regular whose turn has
@@ -1952,8 +1942,8 @@ def get_scored_all(area_filter: str = "הכל"):
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM recipients WHERE status='פעיל'").fetchall()
     result = []
+    rows = tag_round_served([dict(r) for r in rows], base_wed)          # RULE 9 tags
     for r in rows:
-        r = dict(r)
         if area_filter != "הכל" and r.get("area", "") != area_filter:
             continue
         freq = r.get("frequency") or ""
@@ -2053,7 +2043,9 @@ def get_filtered_list(criteria: dict = None, area_filter: str = "הכל"):
     # receive this week (a quota a community can't fill moves to the others).
     # A holiday round is an extra distribution (v3.75) — the gate is skipped.
     # RULE 7 (v3.76): the same pass rotates the one-timers (cooldown weeks).
-    rows = selection.due_filter(rows, selection.upcoming_wednesday(),
+    _wed = selection.upcoming_wednesday()
+    tag_round_served(rows, _wed)                                         # RULE 9 tags
+    rows = selection.due_filter(rows, _wed,
                                 ignore=bool(selection.holiday_criterion(criteria)),
                                 cooldown_weeks=get_one_time_cooldown_weeks())
     balance = (criteria or {}).get("balance_communities", True)
@@ -2172,7 +2164,10 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
     `holiday` (v3.75): '' = a regular round; '*' / a holiday name = a HOLIDAY
     distribution — remembered on the batch and on every row, shown in the
     family's history, and treated as an EXTRA round that never moves the
-    regular Wednesday turn (user decision 27/9/2026).
+    regular Wednesday turn (user decision 27/9/2026). holidays.BONUS ("בונוס",
+    user decision 18/10/2026) is the same kind of extra round, marked by the
+    operator; an unmarked round — on ANY weekday — is a regular one (it moves
+    the turn and takes the family off the rest of that week's lists, RULE 9).
 
     Also records ONE batch row (the distribution event) that the "חלוקות" tab
     lists — capturing the shared header, the multi-product breakdown (carried in
@@ -2444,18 +2439,61 @@ def _valid_iso(s) -> str:
         return ""
 
 
+# What counts as an EXTRA round (never moves the regular turn, never takes the family off
+# the week's lists). Until 18/10/2026 every Sun–Tue distribution was one automatically
+# (user decision 25/9/2026); from that day an extra round must be MARKED — a holiday
+# distribution (v3.75) or a "בונוס" one (holidays.BONUS), both carried in the `holiday`
+# column (user decision 18/10/2026: "רק אם חלוקה תסומן כבונוס היא לא תבטל"). Rows dated
+# before the cutover keep the old weekday rule, so no past turn shifts and a computer
+# that has not been updated yet derives the same dates.
+EXTRA_BY_WEEKDAY_BEFORE = "2026-10-18"
+
+
+def _regular_rounds_sql():
+    """(SQL fragment, params) that keeps only REGULAR rounds of a `distributions` query."""
+    return (" AND COALESCE(holiday,'')=''"
+            " AND NOT (strftime('%w', dist_date) IN ('0','1','2') AND dist_date < ?)",
+            [EXTRA_BY_WEEKDAY_BEFORE])
+
+
+def _mark_round_served(conn, rows, base_wed):
+    """RULE 9 — tag every row in `rows` with `round_served`: has this person been
+    served by a REGULAR round (not a holiday / bonus one) in the distribution week of
+    `base_wed` (Sunday..Wednesday)? selection.received_this_round reads the tag, so a
+    bonus round never takes anybody off a list. A card whose imported
+    `last_dist_base` falls in the window (no history behind it) counts too."""
+    lo = (base_wed - timedelta(days=selection.ROUND_WINDOW_DAYS)).isoformat()
+    hi = base_wed.isoformat()
+    frag, xargs = _regular_rounds_sql()
+    served = {r["recipient_id"] for r in conn.execute(
+        "SELECT DISTINCT recipient_id FROM distributions WHERE received=1 "
+        "AND dist_date >= ? AND dist_date <= ? AND dist_date GLOB "
+        "'[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'" + frag, [lo, hi] + xargs)}
+    for r in rows:
+        base = _valid_iso(r.get("last_dist_base"))
+        r["round_served"] = r.get("id") in served or (bool(base) and lo <= base <= hi)
+    return rows
+
+
+def tag_round_served(rows, base_wed=None):
+    """Public wrapper of _mark_round_served for callers that hold plain recipient rows
+    (the manual-add dialog, screens): opens its own connection."""
+    base_wed = base_wed or selection.upcoming_wednesday()
+    with get_connection() as conn:
+        return _mark_round_served(conn, rows, base_wed)
+
+
 def _history_last(conn, rec_id, regular_only: bool = False, max_date: str = "") -> str:
     # received=1 only: a recorded no-show must never become someone's
     # "last distribution" — they didn't actually receive anything.
     # Only real ISO dates compete: one junk legacy value ("26/08/2026") sorts above
     # every ISO string and would otherwise hide the whole history.
-    # regular_only: skip Sun–Tue (strftime %w 0–2) — at this fund a distribution on
-    # those days is an EXTRA round, not the Wednesday one (user decision 25/9/2026).
-    # A holiday distribution (v3.75) is an extra round too — even on a Wednesday.
+    # regular_only: skip EXTRA rounds — a holiday or bonus distribution (the
+    # `holiday` code, see _regular_rounds_sql) and, for rows dated before
+    # EXTRA_BY_WEEKDAY_BEFORE, any Sun–Tue one (user decision 25/9/2026).
     # max_date: ignore rows dated after it (a far-future typo, see _recompute).
-    extra = (" AND strftime('%w', dist_date) NOT IN ('0','1','2')"
-             " AND COALESCE(holiday,'')=''") if regular_only else ""
-    args = [rec_id]
+    extra, xargs = _regular_rounds_sql() if regular_only else ("", [])
+    args = [rec_id] + xargs
     if max_date:
         extra += " AND dist_date <= ?"
         args.append(max_date)

@@ -99,14 +99,32 @@ def from_text(text) -> tuple:
 #   ''   → a regular round;  '*' → a general holiday distribution;  'פסח' → that holiday.
 ANY = "*"
 
+# חלוקת בונוס (יהודה 18/10/2026): חלוקה שהמפעיל סימן במפורש כ"נוספת" — כמו חלוקת חג היא לא מזיזה
+# את התור הקבוע ולא מוציאה את המקבל מהרשימות של אותו שבוע (כלל 9). משתמשת באותה עמודה
+# (`holiday`) ובאותו מסלול סנכרון, בקוד שמור שאינו שם של חג: בגרסה ישנה במחשב השני היא נראית
+# כחלוקה נוספת — וזו בדיוק ההתנהגות הנכונה. כל קוד לא ריק = חלוקה נוספת (is_extra_dist).
+BONUS = "בונוס"
+
 
 def dist_label(code) -> str:
-    """Short Hebrew tag for a distribution's holiday code: '' / 'חלוקת חג' / 'חלוקת פסח'."""
+    """Short Hebrew tag for a distribution's extra-round code: '' / 'חלוקת חג' /
+    'חלוקת פסח' / 'חלוקת בונוס'."""
     code = (str(code or "")).strip()
     if not code:
         return ""
     return "חלוקת חג" if code == ANY else f"חלוקת {code}"
 
 
-def is_holiday_dist(row: dict) -> bool:
+def is_extra_dist(row: dict) -> bool:
+    """Any EXTRA round (holiday or bonus): never moves the regular turn and never takes
+    the family off the week's lists. The one definition database.py and selection.py use."""
     return bool((str((row or {}).get("holiday") or "")).strip())
+
+
+def is_bonus_dist(row: dict) -> bool:
+    return (str((row or {}).get("holiday") or "")).strip() == BONUS
+
+
+def is_holiday_dist(row: dict) -> bool:
+    """A real HOLIDAY distribution (not a bonus one)."""
+    return is_extra_dist(row) and not is_bonus_dist(row)

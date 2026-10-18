@@ -504,8 +504,10 @@ ok("F13 not_due_reason לחד-פעמי", selection.not_due_reason(_ot(7), _WED, 
 ok("F13 due_filter עם הפסקה: מי שקיבל שבוע שעבר יוצא, ומי שקיבל לפני חודש נשאר",
    [r["id"] for r in selection.due_filter([_ot(7), dict(_ot(28), id="old")], _WED, cooldown_weeks=3)] == ["old"])
 ok("F4 קבוע שמעולם לא קיבל — בתור", selection.is_due(_reg("a", "חודשי"), _WED))
-ok("F5 קיבל במחזור הזה (הרביעי עצמו) — נשאר ברשימה, כמו ברשימת השבוע",
-   selection.is_due(_reg("a", "דו-שבועי", _WED), _WED))
+# F5 שונה ב-18/10/2026 (כלל 9, הכרעת יהודה): קבוע שקיבל בשבוע החלוקה כבר לא "נשאר ברשימה" —
+# הוא יוצא מכל רשימה נוספת של אותו שבוע (היה: is_due(...) == True). ראו R9c.
+ok("F5 קיבל במחזור הזה (הרביעי עצמו) — יוצא מרשימה נוספת של אותו שבוע (כלל 9)",
+   not selection.is_due(_reg("a", "דו-שבועי", _WED), _WED))
 ok("F6 next_distribution הנגזר גובר על החישוב (חלוקת חג לא הזיזה את התור)",
    selection.is_due(_reg("a", "דו-שבועי", _WED - _tdl(days=7), nxt=_WED), _WED)
    and not selection.is_due(_reg("a", "דו-שבועי", _WED - _tdl(days=14), nxt=_WED + _tdl(days=7)), _WED))
@@ -562,11 +564,12 @@ _sc = {r["full_name"]: r["need_score"] for r in selection.rank_by_need(_ext, {"m
 ok("A1 חריג קיצוני לא משטח: ארבעת האחרים עדיין שונים זה מזה ובמדרגות שוות",
    _sc["חריג"] == 100 and len({_sc["e%d" % i] for i in range(4)}) == 4
    and abs((_sc["e0"] - _sc["e1"]) - (_sc["e1"] - _sc["e2"])) < 0.2, str(_sc))
-# א4 — חד-פעמי שקיבל היום יוצא; קבוע שבועי שקיבל היום נשאר
+# א4 — חד-פעמי שקיבל היום יוצא; (עד 18/10/2026 גם: קבוע שבועי שקיבל היום נשאר —
+# שונה בכלל 9: גם הוא יוצא מרשימה נוספת של אותו שבוע, ראו R9b/R9c)
 _today_s = _WED.isoformat()
-ok("A4 חד-פעמי שקיבל היום — לא ב-is_due; קבוע שבועי שקיבל היום — כן",
+ok("A4 חד-פעמי שקיבל היום — לא ב-is_due; גם קבוע שבועי שקיבל היום — לא (כלל 9)",
    not selection.is_due(rec("ot", 3, last_distribution=_today_s), _WED)
-   and selection.is_due(_reg("wk", "שבועי", _WED), _WED))
+   and not selection.is_due(_reg("wk", "שבועי", _WED), _WED))
 # א5 — רזרבה ב-filter, עם ובלי איזון קהילות
 _rows5 = [crec("א%d" % i, "נציג א", 500 + 100 * i) for i in range(3)] + \
          [crec("ב%d" % i, "נציג ב", 900 + 100 * i) for i in range(5)]
@@ -580,6 +583,156 @@ ok("A5 הרזרבה היא מכל הקהילות יחד (לא מכסה לכל ק
    len(_bal) == 6 and all(r["_role"] in (selection.ROLE_MAIN, selection.ROLE_RESERVE) for r in _bal))
 _nb = selection.balance_by_community([dict(r) for r in _rows5], _crit5, W_INCOME, 4, None)
 ok("A5 בלי רזרבה (R=0) — בדיוק N, בלי סימון רזרבה", len(_nb) == 4 and not any(r.get("_reserve") for r in _nb))
+
+# ── כלל 9 (יהודה 18/10/2026) — מי שכבר קיבל בשבוע החלוקה לא נכנס לרשימה נוספת ──
+# התקרית: רון הוציא שתי חלוקות ביום ראשון; הראשונה נרשמה (חלוקה נוספת — התור לא זז),
+# ואותם חודשיים/דו-שבועיים נכנסו שוב לשנייה (ובביום רביעי היו נכנסים בפעם השלישית).
+print("\n── כלל 9: קיבל בשבוע החלוקה (א'–ד') — לא ברשימה נוספת ──")
+_sun9 = _WED - _tdl(days=3)
+ok("R9a חודשי שקיבל ביום ראשון (חלוקה נוספת, התור עדיין ברביעי) — לא בתור [המקרה של רון]",
+   not selection.is_due(_reg("a", "חודשי", _sun9, nxt=_WED), _WED))
+ok("R9a דו-שבועי שקיבל ביום ראשון — לא בתור",
+   not selection.is_due(_reg("a", "דו-שבועי", _sun9, nxt=_WED), _WED))
+ok("R9b שבועי שקיבל ביום שני / שלישי — לא בתור",
+   not selection.is_due(_reg("w", "שבועי", _WED - _tdl(days=2)), _WED)
+   and not selection.is_due(_reg("w", "שבועי", _WED - _tdl(days=1)), _WED))
+ok("R9c קיבל ברביעי עצמו — לא בתור (במקום 'נשאר ברשימה' הישן)",
+   not selection.is_due(_reg("a", "דו-שבועי", _WED), _WED)
+   and not selection.is_due(_reg("w", "שבועי", _WED), _WED))
+ok("R9d גבול: חמישי / שבת שלפני (נרשם באיחור לרביעי הקודם) — שבועי עדיין בתור",
+   selection.is_due(_reg("w", "שבועי", _WED - _tdl(days=6)), _WED)
+   and selection.is_due(_reg("w", "שבועי", _WED - _tdl(days=4)), _WED))
+ok("R9d גבול: יום ראשון הקודם (שבוע לפני) — שבועי בתור, חודשי שתורו הגיע בתור",
+   selection.is_due(_reg("w", "שבועי", _sun9 - _tdl(days=7)), _WED)
+   and selection.is_due(_reg("m", "חודשי", _sun9 - _tdl(days=7), nxt=_WED), _WED))
+ok("R9e קבוע שמעולם לא קיבל — בתור", selection.is_due(_reg("n", "שבועי"), _WED))
+ok("R9f חלוקת חג (ignore=True) לא מסננת גם את מי שקיבל השבוע",
+   len(selection.due_filter([_reg("x", "דו-שבועי", _sun9, nxt=_WED)], _WED, ignore=True)) == 1)
+ok("R9g הכלל חל על קבועים: חד-פעמי עם הפסקה כבויה (0) שקיבל ביום ראשון — כמו קודם, בתור",
+   selection.is_due(rec("o", priority=3, last_distribution=_sun9.isoformat()), _WED, 0))
+ok("R9h not_due_reason מסביר מי שקיבל השבוע",
+   selection.not_due_reason(_reg("a", "חודשי", _sun9, nxt=_WED), _WED) == "חודשי · קיבל ב-28/06 · כבר בחלוקה של השבוע",
+   selection.not_due_reason(_reg("a", "חודשי", _sun9, nxt=_WED), _WED))
+ok("R9i received_this_round: טהור — חלון ראשון עד רביעי בלבד",
+   selection.received_this_round(_reg("a", "חודשי", _sun9), _WED)
+   and selection.received_this_round(_reg("a", "חודשי", _WED), _WED)
+   and not selection.received_this_round(_reg("a", "חודשי", _sun9 - _tdl(days=1)), _WED)
+   and not selection.received_this_round(_reg("a", "חודשי"), _WED))
+
+# ── אותו כלל דרך ה-DB, בכל יום בשבוע (גם get_weekly_list של מצב 'רגיל') ──
+from datetime import date as _dr9
+_Real9 = db.date
+for _off9 in range(7):
+    _ft9 = _dr9.today() + timedelta(days=_off9)
+    class _Fake9(_Real9):
+        @classmethod
+        def today(cls, _d=_ft9):
+            return _Real9(_d.year, _d.month, _d.day)
+    db.date = _Fake9
+    try:
+        db.reset_all_data()
+        _bw9 = _ft9 if _ft9.weekday() == 2 else selection.next_wednesday(_ft9)
+        # היום הראשון האחרון שלא אחרי היום (בפועל: מה שאפשר כבר לרשום)
+        _rsun = _ft9 - timedelta(days=(_ft9.weekday() + 1) % 7)
+        _in_window = _bw9 - timedelta(days=3) <= _rsun <= _bw9
+        _ids9 = {}
+        for _nm, _fq, _wk in (("חודשי", "חודשי", 28), ("דו-שבועי", "דו-שבועי", 14), ("שבועי", "שבועי", 7)):
+            _rid = db.add_recipient({"full_name": f"ר9-{_nm}", "status": "פעיל", "frequency": _fq, "priority": 4})
+            _row9 = [{"id": _rid, "full_name": f"ר9-{_nm}", "frequency": _fq}]
+            db.bulk_add_distributions(_row9, (_bw9 - timedelta(days=_wk)).isoformat(), "", 1, "")   # רביעי רגיל → תורו ברביעי הקרוב
+            db.bulk_add_distributions(_row9, _rsun.isoformat(), "", 1, "")                          # ראשון = חלוקה נוספת (רישום של רון)
+            _ids9[_nm] = _rid
+        _ctl = db.add_recipient({"full_name": "ר9-ביקורת", "status": "פעיל", "frequency": "חודשי", "priority": 4})
+        db.bulk_add_distributions([{"id": _ctl, "full_name": "ר9-ביקורת", "frequency": "חודשי"}],
+                                  (_bw9 - timedelta(days=28)).isoformat(), "", 1, "")                # תורו הגיע, לא קיבל השבוע
+        _wk9 = {r["full_name"] for r in db.get_weekly_list()}
+        _got = {n for n in ("ר9-חודשי", "ר9-דו-שבועי", "ר9-שבועי") if n in _wk9}
+    finally:
+        db.date = _Real9
+    # בשבוע החלוקה: אף אחד מהם לא ברשימה. בשבוע הבא (חמישי–שבת): חלוקת הראשון הייתה רגילה (לא סומנה בונוס)
+    # ולכן הזיזה את התור — השבועי חוזר, החודשי והדו-שבועי לא (התור שלהם התקדם מהראשון).
+    ok(f"R9j get_weekly_list [יום {_ft9.weekday()}, ראשון האחרון {_rsun}, רביעי {_bw9}]: "
+       + ("מי שקיבל ביום ראשון של השבוע הזה — לא ברשימה" if _in_window
+          else "ראשון רגיל של שבוע קודם — השבועי חוזר, החודשי והדו-שבועי התור שלהם התקדם"),
+       (_got == set() if _in_window else _got == {"ר9-שבועי"}) and "ר9-ביקורת" in _wk9,
+       f"in_window={_in_window} got={sorted(_got)} all={sorted(_wk9)}")
+
+# ── בונוס / חג: חלוקה שסומנה כנוספת לא מבטלת ולא מזיזה (הכרעת יהודה 18/10/2026) ──
+import holidays as _hol9
+_wedT = _dr9.today() + timedelta(days=(2 - _dr9.today().weekday()) % 7)      # רביעי הקרוב (או היום)
+class _FakeB(_Real9):                                    # "היום" = יום הרביעי עצמו, כדי שהסבב כולו כבר קרה
+    @classmethod
+    def today(cls):
+        return _Real9(_wedT.year, _wedT.month, _wedT.day)
+for _code, _lbl in ((_hol9.BONUS, "בונוס"), (_hol9.ANY, "חג")):
+    for _gap, _day in ((3, "ראשון"), (0, "רביעי")):
+        db.date = _FakeB
+        try:
+            db.reset_all_data()
+            _recb = {}
+            for _nm, _fq, _wk in (("חודשי", "חודשי", 28), ("דו-שבועי", "דו-שבועי", 14), ("שבועי", "שבועי", 7)):
+                _rid = db.add_recipient({"full_name": f"ב-{_nm}", "status": "פעיל", "frequency": _fq, "priority": 4})
+                _rw = [{"id": _rid, "full_name": f"ב-{_nm}", "frequency": _fq}]
+                db.bulk_add_distributions(_rw, (_wedT - timedelta(days=_wk)).isoformat(), "", 1, "")   # רביעי רגיל — תורו ברביעי
+                db.bulk_add_distributions(_rw, (_wedT - timedelta(days=_gap)).isoformat(), "", 1, "", holiday=_code)
+                _recb[_nm] = _rid
+            _wkb = {r["full_name"] for r in db.get_weekly_list()}
+            _nxt = {n: db.get_recipient(i)["next_distribution"] for n, i in _recb.items()}
+        finally:
+            db.date = _Real9
+        ok(f"R9l חלוקת {_lbl} שנרשמה ב{_day} לא מוציאה מהרשימה ולא מזיזה את התור",
+           _wkb == {"ב-חודשי", "ב-דו-שבועי", "ב-שבועי"}
+           and _nxt["חודשי"] == _wedT.isoformat() and _nxt["דו-שבועי"] == _wedT.isoformat(),
+           f"list={sorted(_wkb)} next={_nxt} wed={_wedT}")
+
+# חלוקה רגילה (לא מסומנת) ביום ראשון נספרת לרביעי שאחריה: הכרטיס והרשימה מתאימים — לא "באיחור"
+db.date = _FakeB
+try:
+    db.reset_all_data()
+    _rn = db.add_recipient({"full_name": "ר9-שבועי-ראשון", "status": "פעיל", "frequency": "שבועי", "priority": 4})
+    _rnw = [{"id": _rn, "full_name": "ר9-שבועי-ראשון", "frequency": "שבועי"}]
+    db.bulk_add_distributions(_rnw, (_wedT - timedelta(days=7)).isoformat(), "", 1, "")
+    db.bulk_add_distributions(_rnw, (_wedT - timedelta(days=3)).isoformat(), "", 1, "")      # ראשון רגיל
+    _nn = db.get_recipient(_rn)["next_distribution"]
+    _onlist = "ר9-שבועי-ראשון" in {r["full_name"] for r in db.get_weekly_list()}
+finally:
+    db.date = _Real9
+ok("R9n שבועי שנרשם ביום ראשון (רגיל): לא ברשימת הרביעי, והחלוקה הבאה בכרטיס = הרביעי שאחריו",
+   not _onlist and _nn == (_wedT + timedelta(days=7)).isoformat(), f"onlist={_onlist} next={_nn} wed={_wedT}")
+
+# …ולפני 18/10/2026 חלוקה בימים א'–ג' עדיין "נוספת" אוטומטית (שום תור עבר לא זז)
+class _FakeLeg(_Real9):
+    @classmethod
+    def today(cls):
+        return _Real9(2026, 10, 14)                       # רביעי
+db.date = _FakeLeg
+try:
+    db.reset_all_data()
+    _rl = db.add_recipient({"full_name": "ישן-חודשי", "status": "פעיל", "frequency": "חודשי", "priority": 4})
+    _rwl = [{"id": _rl, "full_name": "ישן-חודשי", "frequency": "חודשי"}]
+    db.bulk_add_distributions(_rwl, "2026-09-16", "", 1, "")          # רביעי רגיל → התור 14/10
+    db.bulk_add_distributions(_rwl, "2026-10-11", "", 1, "")          # ראשון ישן, לא מסומן → נוספת אוטומטית (לפני החיתוך)
+    _lw = {r["full_name"] for r in db.get_weekly_list()}
+    _ln = db.get_recipient(_rl)["next_distribution"]
+finally:
+    db.date = _Real9
+ok("R9m חלוקת ראשון לפני 18/10/2026 (לא מסומנת) עדיין נוספת: התור לא זז והמקבל ברשימה",
+   "ישן-חודשי" in _lw and _ln == "2026-10-14", f"list={sorted(_lw)} next={_ln}")
+
+# …ועל התאריך האמיתי גם שאר המצבים (ניקוד / כל המקבלים) — אותה שער
+db.reset_all_data()
+_todayR = _dr9.today()
+_bwR = _todayR if _todayR.weekday() == 2 else selection.next_wednesday(_todayR)
+_rsunR = _todayR - timedelta(days=(_todayR.weekday() + 1) % 7)
+_inR = _bwR - timedelta(days=3) <= _rsunR <= _bwR
+_ridR = db.add_recipient({"full_name": "ר9-מצבים", "status": "פעיל", "frequency": "חודשי", "priority": 4})
+_rowR = [{"id": _ridR, "full_name": "ר9-מצבים", "frequency": "חודשי"}]
+db.bulk_add_distributions(_rowR, (_bwR - timedelta(days=28)).isoformat(), "", 1, "")
+db.bulk_add_distributions(_rowR, _rsunR.isoformat(), "", 1, "")
+ok("R9k get_scored_all / get_regulars_scored מסננים כמו get_weekly_list",
+   (("ר9-מצבים" in {r["full_name"] for r in db.get_scored_all()}) != _inR)
+   and (("ר9-מצבים" in {r["full_name"] for r in db.get_regulars_scored()}) != _inR),
+   f"in_window={_inR}")
 
 print()
 print("RESULT:", "ALL SELECTION SCENARIOS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")

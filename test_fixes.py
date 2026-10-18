@@ -38,8 +38,10 @@ ok("#14 weekly shows regulars before distribution", len(wk) == 3)
 wed = _next_wed(date.today())
 bid = db.bulk_add_distributions([dict(r) for r in wk], wed.isoformat(), "", 0, "מחלק",
                                 dist_name="בדיקה", general_note="הערה כללית")
-ok("#14 regulars STILL on the weekly list after a Wednesday-dated distribution",
-   len(db.get_weekly_list()) == 3, str([r["full_name"] for r in db.get_weekly_list()]))
+# שונה 18/10/2026 (כלל 9, הכרעת יהודה): היה "STILL on the weekly list" — עכשיו מי שנרשם שקיבל
+# בשבוע החלוקה לא חוזר לרשימה נוספת של אותו שבוע; מחיקת האצווה מחזירה אותם.
+ok("#14 (כלל 9) regulars are NOT listed again after a Wednesday-dated distribution",
+   len(db.get_weekly_list()) == 0, str([r["full_name"] for r in db.get_weekly_list()]))
 
 # ── #7: the general note is stored once on the batch, not on each recipient ────
 batch = db.get_distribution_batches()[0]
@@ -49,6 +51,8 @@ ok("#7 general note NOT duplicated into recipients",
 
 # ── #4: deleting the batch rolls back last/next distribution ───────────────────
 db.delete_batch(bid)
+ok("#14 (כלל 9) deleting the batch puts the regulars back on the weekly list",
+   len(db.get_weekly_list()) == 3, str([r["full_name"] for r in db.get_weekly_list()]))
 regs = [r for r in db.get_all_recipients() if r["frequency"] != "חד-פעמי"]
 # v3.60: the rollback lands on the pre-history (imported) date, not on blank.
 ok("#4 delete_batch rolls last_distribution back to the imported date",

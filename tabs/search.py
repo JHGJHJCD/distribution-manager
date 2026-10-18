@@ -624,7 +624,7 @@ class SearchTab(QWidget):
             # v3.75: a holiday distribution is tagged in the family's history
             hol = holidays.dist_label(entry.get("holiday"))
             if hol:
-                what = f"🎉 {hol}" + (f" · {what}" if what else "")
+                what = f"{'🎁' if holidays.is_bonus_dist(entry) else '🎉'} {hol}" + (f" · {what}" if what else "")
             vals = [_fdate(entry.get("dist_date", "")), what,
                     str(entry.get("quantity", "") or ""), entry.get("distributor", ""),
                     entry.get("notes", "")]

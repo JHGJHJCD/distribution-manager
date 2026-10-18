@@ -47,8 +47,9 @@ class BatchDetailsDialog(QDialog):
             f"<span style='font-size:18px;font-weight:800;color:#0d2a4a;'>"
             f"{batch.get('dist_name') or 'חלוקה'}</span>"
             + (f"<br><span style='background:#fef3c7;color:#92400e;border-radius:8px;"
-               f"padding:1px 8px;font-size:12px;'>🎉 {holidays.dist_label(batch.get('holiday'))}"
-               f" · חלוקה נוספת — לא מזיזה את התור הקבוע</span>" if holidays.is_holiday_dist(batch) else "")
+               f"padding:1px 8px;font-size:12px;'>"
+               f"{'🎁' if holidays.is_bonus_dist(batch) else '🎉'} {holidays.dist_label(batch.get('holiday'))}"
+               f" · חלוקה נוספת — לא מזיזה את התור הקבוע</span>" if holidays.is_extra_dist(batch) else "")
             + f"<br>"
             f"<span style='color:#475569;'>{_fdate(batch.get('dist_date',''))} · "
             f"{batch.get('products') or ''} · מחלק: {batch.get('distributor') or '—'}</span></div>")

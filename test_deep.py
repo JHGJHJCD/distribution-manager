@@ -93,8 +93,13 @@ for _late in ("2026-06-04", "2026-06-05", "2026-06-06"):   # חמישי / שיש
 # ראשון–שלישי לפני החלוקה: ההתנהגות הקיימת נשמרת (לא משתנה בתיקון)
 check("דו-שבועי מיום שלישי → רביעי שאחרי שבועיים",
       calculate_next_dist("2026-06-02", "דו-שבועי") == date(2026, 6, 17))
-check("שבועי מיום ראשון → רביעי הקרוב (חלוקה מיוחדת לא מבטלת את רביעי)",
-      calculate_next_dist("2026-05-31", "שבועי") == date(2026, 6, 3))
+# שונה 18/10/2026 (כלל 9): היה "שבועי מיום ראשון → רביעי הקרוב (03/06)" כי כל חלוקת א'–ג' נחשבה נוספת.
+# מעכשיו חלוקה רגילה ביום ראשון נספרת לרביעי שלפניה — התור הבא הוא הרביעי שאחריו; נוספת = רק בסימון בונוס/חג
+# (ואז היא לא מגיעה לכאן בכלל — database._history_last(regular_only=True) מסנן אותה).
+check("שבועי מיום ראשון → הרביעי שאחרי רביעי אותו שבוע (כלל 9: חלוקה רגילה)",
+      calculate_next_dist("2026-05-31", "שבועי") == date(2026, 6, 10))
+check("חודשי מיום ראשון זהה לחודשי מרביעי אותו שבוע",
+      calculate_next_dist("2026-05-31", "חודשי") == calculate_next_dist("2026-06-03", "חודשי"))
 
 # ── A2: דו-שבועי שקיבל שבוע שעבר לא חוזר לרשימת השבוע — גם אם החלוקה נרשמה
 #        באיחור (חמישי/שישי/ראשון). זו הייתה תקלה חמורה: חלון "6 ימים אחורה"
@@ -122,13 +127,13 @@ for _off, _lbl in ((0, "רביעי"), (1, "חמישי"), (3, "שבת")):
     _wk = {x["full_name"] for x in db.get_weekly_list()}
     check(f"דו-שבועי שקיבל שבוע שעבר ({_lbl}) לא ברשימת השבוע", _n not in _wk,
           f"appears; next={db.get_recipient(_r)['next_distribution']}")
-# מנגד: מקבל שקיבל את מחזור השבוע (רביעי הקרוב) כן נשאר ברשימה — כדי שלא ייעלם
-# מיד אחרי הרישום ואפשר עדיין לתת לו סבב נוסף.
+# מנגד: מקבל שקיבל את מחזור השבוע (רביעי הקרוב) — עד 18/10/2026 נשאר ברשימה "כדי שלא ייעלם
+# מיד אחרי הרישום"; הכרעת יהודה 18/10/2026 (כלל 9): הוא יוצא מכל רשימה נוספת של אותו שבוע.
 _wn = "דושב-השבוע"
 _wr = _mk_bw(_wn)
 _serve(_wr, _wn, _base_wed)
-check("דו-שבועי שקיבל את מחזור השבוע כן נשאר ברשימת השבוע",
-      _wn in {x["full_name"] for x in db.get_weekly_list()})
+check("דו-שבועי שקיבל את מחזור השבוע לא חוזר לרשימה נוספת של אותו שבוע (כלל 9)",
+      _wn not in {x["full_name"] for x in db.get_weekly_list()})
 db.DB_PATH = _a2_prev                        # החזרת ה-DB המשותף לרבדים הבאים
 try:
     os.remove(_a2_db)
@@ -272,12 +277,19 @@ check("D3 חלוקה נוספת נשמרת כחלוקה אחרונה (21/06)", _
       f"got {_r['last_distribution']}")
 check("D3 התור הקבוע לא זז — שבועיים מהרביעי (01/07)", _r["next_distribution"] == "2026-07-01",
       f"got {_r['next_distribution']}")
+_bw_d3 = date.today() if date.today().weekday() == 2 else next_wednesday(date.today())
 rid_ex2 = db.add_recipient({"full_name": "נוספת-ראשונה", "status": "פעיל", "frequency": "שבועי"})
 db.bulk_add_distributions([{"id": rid_ex2, "full_name": "נוספת-ראשונה", "frequency": "שבועי"}],
-                          (date.today() - timedelta(days=(date.today().weekday() + 1) % 7)).isoformat(),
+                          (_bw_d3 - timedelta(days=10)).isoformat(),      # ראשון של שבוע החלוקה הקודם
                           "עוף", 1, "")
-check("D3 קבוע שקיבל רק חלוקה נוספת — עדיין ברשימת הרביעי הקרוב",
+check("D3 קבוע שקיבל רק חלוקה נוספת בשבוע הקודם — עדיין ברשימת הרביעי הקרוב",
       any(r["id"] == rid_ex2 for r in db.get_weekly_list()))
+# כלל 9 (18/10/2026): חלוקה נוספת בראשון של שבוע החלוקה הזה — לא ברשימה נוספת, גם לא ברביעי
+rid_ex3 = db.add_recipient({"full_name": "נוספת-השבוע", "status": "פעיל", "frequency": "שבועי"})
+db.bulk_add_distributions([{"id": rid_ex3, "full_name": "נוספת-השבוע", "frequency": "שבועי"}],
+                          (_bw_d3 - timedelta(days=3)).isoformat(), "עוף", 1, "")
+check("D3/כלל 9 קבוע שקיבל חלוקה נוספת ביום ראשון של השבוע הזה — לא ברשימת הרביעי",
+      not any(r["id"] == rid_ex3 for r in db.get_weekly_list()))
 
 # D4 — תאריך ישן בפורמט "16/09/2026" מומר לבד בהפעלה (הכרעת יהודה 25/9/2026), אחרי גיבוי
 _bk_prev = db.BACKUP_DIR
@@ -414,7 +426,11 @@ db.bulk_add_distributions([{"id": _d8b1, "full_name": "ד8ב-חדפעמי", "fre
                           date.today().isoformat(), "", 1, "", dist_name="D8b")
 _names8b = {r["full_name"] for r in db.get_scored_all()}
 check("D8b חד-פעמי שקיבל היום — לא ברשימה של אותו שבוע", "ד8ב-חדפעמי" not in _names8b)
-check("D8b קבוע שבועי שקיבל היום — עדיין ברשימה", "ד8ב-שבועי" in _names8b)
+# כלל 9 (18/10/2026): קבוע שקיבל בשבוע החלוקה (ראשון–רביעי) יוצא; חמישי–שבת = נרשם באיחור לרביעי הקודם → נשאר
+_bw8b = date.today() if date.today().weekday() == 2 else next_wednesday(date.today())
+_in_win8b = _bw8b - timedelta(days=3) <= date.today() <= _bw8b
+check("D8b קבוע שבועי שקיבל היום — לפי כלל 9: " + ("יוצא (ראשון–רביעי)" if _in_win8b else "נשאר (חמישי–שבת, איחור)"),
+      ("ד8ב-שבועי" in _names8b) != _in_win8b)
 db.set_setting("available_products", "0")
 
 # D6 — תאריך עתידי (טעות הקלדה מהאקסל) מתעלמים ממנו: הקבוע נכנס לרשימת השבוע (הכרעה 27/9/2026)

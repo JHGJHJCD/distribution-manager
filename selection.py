@@ -111,7 +111,8 @@ def next_due(last_iso: str, frequency: str, today: _date = None) -> _date:
     """The Wednesday a regular is next due, from his last distribution.
     THE single interval table (database.calculate_next_dist delegates here).
     Never served → the upcoming Wednesday. A Thu–Sat date is snapped back to
-    its cycle Wednesday (recorded a day or two late — normal). Pure."""
+    its cycle Wednesday (recorded a day or two late — normal); a Sun–Tue date is
+    snapped forward to the Wednesday it precedes (RULE 9). Pure."""
     today = today or _date.today()
     if not last_iso:
         return next_wednesday(today) if frequency == "חד-פעמי" else upcoming_wednesday(today)
@@ -121,12 +122,18 @@ def next_due(last_iso: str, frequency: str, today: _date = None) -> _date:
         last = today
     if last.weekday() in (3, 4, 5):
         last -= _td(days=last.weekday() - 2)
+    elif last.weekday() in (6, 0, 1):
+        # RULE 9 (18/10/2026): a Sun–Tue round belongs to the Wednesday it precedes (as a
+        # Thu–Sat one belongs to the Wednesday before it). Only a REGULAR round reaches
+        # here — an extra (bonus / holiday / pre-18/10 Sun–Tue) round is filtered out by
+        # database._history_last(regular_only=True). Without this a weekly family served
+        # on Sunday kept next == that very Wednesday and the card flagged him overdue.
+        last += _td(days=(2 - last.weekday()) % 7)
     days = FREQUENCY_INTERVAL_DAYS.get(frequency)
     if not days:                                   # חד-פעמי / blank
         return next_wednesday(today)
     if days == 7:
-        # weekly = the first Wednesday after the last day (a Sun–Tue extra round
-        # doesn't cancel this Wednesday — test_deep "שבועי מיום ראשון")
+        # weekly = the Wednesday after his cycle Wednesday
         return next_wednesday(last + _td(days=1))
     return next_wednesday(last + _td(days=days - 1))
 
@@ -150,27 +157,55 @@ def _one_time_turn(last: _date, cooldown_weeks: int) -> _date:
     return cycle_wednesday(last) + _td(days=7 * max(0, int(cooldown_weeks)))
 
 
+# RULE 9 — one distribution WEEK, one portion (יהודה 18/10/2026). The fund's
+# distribution week runs Sunday → Wednesday (a Thu–Sat record belongs to the
+# Wednesday BEFORE it). A regular already served anywhere in that window — the
+# Wednesday itself, or an extra Sun–Tue round that does not move his turn — is
+# off every further list of that week, the Wednesday's included. Until now a
+# second list of the same week pulled the same bi-weekly / monthly families in
+# again (Ron, 18/10: two lists, 38 families on both).
+ROUND_WINDOW_DAYS = 3                    # Sunday = Wednesday − 3
+
+
+def received_this_round(rec: dict, base_wed: _date) -> bool:
+    """RULE 9 — has this REGULAR already been served by a REGULAR round in the
+    distribution week of `base_wed` (Sunday..Wednesday)? One-timers are not covered
+    here: they leave the lists through the rotation (RULE 7).
+
+    A holiday or bonus round (user decision 18/10/2026) is an EXTRA round and never
+    counts. database.py tags the rows it fetches with `round_served` (it can see the
+    history rows, which know which round was extra); a bare row without the tag falls
+    back to the window test on `last_distribution` — what unit tests and ad-hoc
+    callers pass. Pure."""
+    if not is_regular(rec):
+        return False
+    if "round_served" in rec:
+        return bool(rec["round_served"])
+    last = _valid_date(rec.get("last_distribution"))
+    return last is not None and base_wed - _td(days=ROUND_WINDOW_DAYS) <= last <= base_wed
+
+
 def is_due(rec: dict, base_wed: _date,
            cooldown_weeks: int = ONE_TIME_COOLDOWN_WEEKS_DEFAULT) -> bool:
-    """RULES 6+7 — may this person be on the list of the distribution on base_wed?
+    """RULES 6+7+9 — may this person be on the list of the distribution on base_wed?
 
-    Regulars: weekly / blank frequency / never served → always due. A
+    Regulars: weekly / blank frequency / never served → due. A
     דו-שבועי/תלת-שבועי/חודשי regular is due only when his turn
     (`next_distribution`, the derived field database._recompute_recipient_dates
     writes; else computed from `last_distribution`) is on or before base_wed.
+    A REGULAR already served in this distribution week (Sun–Wed, RULE 9,
+    `received_this_round`) is NOT due again, whatever his frequency.
     Non-regulars (one-timers, data rows): due unless served within the last
-    `cooldown_weeks` cycles (0 = no rotation).
-    A REGULAR already served in THIS cycle stays due (keeps him on the list the
-    moment his round is recorded, as the weekly list does). A ONE-TIMER who was
-    served leaves the lists at once, even this very cycle (יהודה 7/10/2026) —
-    unless the rotation is off (cooldown 0). Pure."""
+    `cooldown_weeks` cycles (0 = no rotation); a ONE-TIMER who was served leaves
+    the lists at once, even this very cycle (יהודה 7/10/2026) — unless the
+    rotation is off (cooldown 0). Pure."""
     last = _valid_date(rec.get("last_distribution"))
     if last is None:
         return True
     freq = (rec.get("frequency") or "").strip()
     if is_regular(rec):
-        if last <= base_wed and cycle_wednesday(last) == base_wed:
-            return True                            # regular served this very cycle
+        if received_this_round(rec, base_wed):
+            return False                           # RULE 9 — already served this week
         if freq not in SPACED_FREQUENCIES:
             return True
         turn = _valid_date(rec.get("next_distribution")) or next_due(last.isoformat(), freq, base_wed)
@@ -198,6 +233,9 @@ def not_due_reason(rec: dict, base_wed: _date,
     last = _valid_date(rec.get("last_distribution"))
     freq = (rec.get("frequency") or "").strip()
     if is_regular(rec):
+        if received_this_round(rec, base_wed):
+            return (f"{FREQ_LABEL.get(freq, freq) or 'קבוע'} · קיבל ב-{last.strftime('%d/%m')} · "
+                    "כבר בחלוקה של השבוע")
         turn = _valid_date(rec.get("next_distribution")) or next_due(last.isoformat(), freq, base_wed)
         return (f"{FREQ_LABEL.get(freq, freq)} · קיבל ב-{last.strftime('%d/%m')} · "
                 f"התור הבא {turn.strftime('%d/%m')}")

@@ -490,6 +490,7 @@ class _ManualAddDialog(QDialog):
         # EVERYONE — active and inactive alike (#6gcqq: "אני מעוניין שיופיע שם
         # כל האנשים"). Inactive rows are tagged and stay inactive when added.
         roster = [r for r in db.get_all_recipients() if r.get("id") not in self._exclude]
+        db.tag_round_served(roster, self._base_wed)      # RULE 9: "⚠ לא בתור" counts only regular rounds
         self._all = [r for r in roster if not self._hidden_regular(r)]
         # How many regulars this mode left out — shown in the count line, so
         # "503 מתוך 503" doesn't read as "the regulars are still there" (7/9/2026).
@@ -1564,6 +1565,16 @@ class GroupUpdateTab(QWidget):
         grid.addLayout(_field("תאריך", self.date_edit), 0, 1)
         grid.addLayout(_field("מחלק", self.dist_input), 1, 0)
         grid.addLayout(_field("הערה כללית לחלוקה", self.note_input), 1, 1)
+        # Bonus round (18/10/2026, יהודה): only an explicit tick makes a round "extra" —
+        # it then neither moves the regular turn nor takes the family off the week's lists.
+        self.chk_bonus = QCheckBox("חלוקת בונוס — לא מזיזה את התור ולא מוציאה מהרשימות")
+        self.chk_bonus.setObjectName("chk_bonus")
+        self.chk_bonus.setToolTip(
+            "סמן רק אם זו חלוקה נוספת מעבר לחלוקה הרגילה של השבוע.\n"
+            "בלי סימון — מי שקיבל נרשם כקיבל השבוע, התור שלו יזוז, והוא לא יופיע "
+            "ברשימה נוספת של אותו שבוע.")
+        self.chk_bonus.setStyleSheet("color:#334155; font-size:12.5px; font-weight:700; " + _LBL)
+        grid.addWidget(self.chk_bonus, 2, 0, 1, 2)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         form.addLayout(grid)
@@ -2795,6 +2806,12 @@ class GroupUpdateTab(QWidget):
                 result.append(rec_copy)
         return result
 
+    def _round_extra_code(self) -> str:
+        """The `holiday` code recorded with the round on screen: a holiday round keeps its
+        holiday code, otherwise 'בונוס' when the bonus box is ticked, else '' (a regular
+        round, which moves the turn and takes the family off the week's other lists)."""
+        return self._active_holiday() or (holidays.BONUS if self.chk_bonus.isChecked() else "")
+
     def _save(self):
         if self._stage != "record":
             # Saving records reality — it happens only from the record stage.
@@ -2848,6 +2865,9 @@ class GroupUpdateTab(QWidget):
         if prod and n > prod:
             confirm_msg += (f"\n\n⚠ סימנת {n} מקבלים, אך 'מוצרים זמינים' = {prod}. "
                             f"ודא שאכן חולקו {n} מנות ולא פחות.")
+        is_bonus = self._round_extra_code() == holidays.BONUS
+        if is_bonus:
+            confirm_msg += "\n\nתירשם כחלוקת בונוס — התור הקבוע לא יזוז."
         if QMessageBox.question(
                 self, "אישור רישום חלוקה", confirm_msg,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -2862,7 +2882,7 @@ class GroupUpdateTab(QWidget):
             db.bulk_add_distributions(checked, dist_date, "", 0, distributor,
                                       dist_name=dist_name, general_note=general_note,
                                       not_received=not_received,
-                                      holiday=self._active_holiday())
+                                      holiday=self._round_extra_code())
             auto_backup_async()
             # Merged action: also export a full Excel (of who received) to Downloads.
             try:
@@ -2882,6 +2902,8 @@ class GroupUpdateTab(QWidget):
         if export_path:
             reveal_in_folder(export_path)   # open Downloads with the file selected
         msg = f"נשמרה חלוקה ל-{len(checked)} מקבלים."
+        if is_bonus:
+            msg += "\n\nהחלוקה נרשמה כחלוקת בונוס — התור הקבוע לא זז."
         if left_holiday:
             msg += ("\n\nחלוקת החג נרשמה כחלוקה נוספת (התור הקבוע לא זז), "
                     "והמסך חזר למצב חלוקה רגילה.")
@@ -2907,7 +2929,8 @@ class GroupUpdateTab(QWidget):
         self._seen_ids.clear()
         self._row_notes.clear()
         self.note_input.clear()
-        self._record_visited = False     # new cycle → record opens blank again (#13)
+        self.chk_bonus.setChecked(False)     # a bonus mark belongs to the one round just recorded
+        self._record_visited = False    # new cycle → record opens blank again (#13)
         self._set_stage("prep", clear=False)
         # An auto-generated weekly name is date-stamped — clear it after saving
         # so next week's round regenerates with the right date instead of
@@ -3186,6 +3209,8 @@ class GroupUpdateTab(QWidget):
             )
             if meta.get("general_note"):
                 summary += f"\n\nהערה כללית מהמתנדב: {meta['general_note']}"
+            if self._round_extra_code() == holidays.BONUS:
+                summary += "\n\nתירשם כחלוקת בונוס — התור הקבוע לא יזוז."
             if unmatched:
                 summary += (f"\n\n⚠ {len(unmatched)} שורות לא זוהו ולא ייובאו: "
                            + ", ".join(unmatched[:10]))
@@ -3222,7 +3247,10 @@ class GroupUpdateTab(QWidget):
                 general_note=meta.get("general_note") or "",
                 # Rows the volunteer marked "לא" are explicit no-shows — recorded
                 # as received=0 so the streak alerts see them (v2.60).
-                not_received=no_shows)
+                not_received=no_shows,
+                # The volunteer's file carries no round type: it takes the box on screen
+                # (bonus ticked → bonus; holiday mode → holiday; otherwise a regular round).
+                holiday=self._round_extra_code())
             auto_backup_async()
         return len(records), meta, [r.get("id") for r in received], False
 
@@ -3352,8 +3380,9 @@ class GroupUpdateTab(QWidget):
         base_wed = selection.upcoming_wednesday()
         cooldown = db.get_one_time_cooldown_weeks()
         early = []
-        for rid in ids:
-            rec = db.get_recipient(rid) or {}
+        recs = [dict(db.get_recipient(rid) or {}) for rid in ids]
+        db.tag_round_served([r for r in recs if r], base_wed)   # RULE 9 (bonus/holiday rounds don't count)
+        for rec in recs:
             reason = selection.not_due_reason(rec, base_wed, cooldown)
             if reason:
                 early.append(f"• {rec.get('full_name', '')} — {reason}")
