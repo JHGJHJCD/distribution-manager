@@ -2490,6 +2490,263 @@ def tag_round_served(rows, base_wed=None):
         return _mark_round_served(conn, rows, base_wed)
 
 
+# ─── Locked future lists — "הכנה קדימה" שלב 2 (נעילה, 18/10/2026) ─────────────────
+# A list the operator LOCKS for a coming Wednesday is ONE settings row,
+# `planned_dist:<ISO Wednesday>`, whose value is a JSON document (members by GUID —
+# never by local id). It rides the existing synced `setting` op: no table, no new op,
+# nothing in sync.py, and an older version on the other computer simply keeps the unknown
+# key. EVERY access goes through the functions below, so moving to a table later is one
+# commit. This is a READ-ONLY layer over the data: nothing here may write
+# recipients.last_distribution / next_distribution (`_recompute_recipient_dates` stays the
+# only writer). Whether a lock was "executed" (a REGULAR round was recorded that week) or
+# went "stale" is derived on read (selection.plan_state), so a lock frees its people by
+# itself and nobody vanishes for good: every doubtful case fails OPEN (the person stays
+# listable, with the reason shown). Plan: docs/plans/הכנה_קדימה_נעילה.md.
+PLAN_PREFIX = "planned_dist:"
+PLAN_VERSION = 1
+PLAN_ROLES = (selection.ROLE_MAIN, selection.ROLE_RESERVE)
+PLAN_KINDS = ("reg", "one", "man")          # regular due · one-timer pick · added by hand
+
+
+class PlanConflict(Exception):
+    """save_plan(expected_updated_at=…): the stored lock changed since the editor loaded it
+    (another computer, or another window). The caller reloads or asks before overwriting."""
+
+
+def _plan_wed(week_wed) -> date:
+    """A lock is keyed by a WEDNESDAY (date or ISO text). ValueError otherwise."""
+    if isinstance(week_wed, str):
+        week_wed = date.fromisoformat(week_wed.strip()[:10])
+    if isinstance(week_wed, datetime):
+        week_wed = week_wed.date()
+    if not isinstance(week_wed, date) or week_wed.weekday() != 2:
+        raise ValueError("נעילה היא תמיד ליום רביעי")
+    return week_wed
+
+
+def _plan_dev() -> str:
+    """This computer's sync device id, READ-ONLY (never creates the state file)."""
+    try:
+        from utils import sync
+        return sync._load_state().get("device_id") or ""
+    except Exception:
+        return ""
+
+
+def _plan_parse(raw, week_wed: date):
+    """A stored value → the lock document, or None when it is empty or corrupt (a bad row
+    must never take a list down — it simply is not a lock)."""
+    try:
+        doc = json.loads(raw or "")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(doc, dict) or not isinstance(doc.get("members", []), list):
+        return None
+    doc["week_wed"] = week_wed.isoformat()
+    doc.setdefault("members", [])
+    doc.setdefault("removed", [])
+    return doc
+
+
+def _plan_rows(conn, week_wed=None):
+    """[(date, document)] of every stored lock row (deleted ones included), by date."""
+    if week_wed is not None:
+        cur = conn.execute("SELECT key, value FROM settings WHERE key=?",
+                           (PLAN_PREFIX + week_wed.isoformat(),))
+    else:
+        # GLOB, not LIKE: the '_' of a LIKE pattern is a wildcard
+        cur = conn.execute("SELECT key, value FROM settings WHERE key GLOB ?", (PLAN_PREFIX + "*",))
+    out = []
+    for row in cur.fetchall():
+        try:
+            wed = _plan_wed(row["key"][len(PLAN_PREFIX):])
+        except ValueError:
+            continue
+        doc = _plan_parse(row["value"], wed)
+        if doc is not None:
+            out.append((wed, doc))
+    return sorted(out, key=lambda t: t[0])
+
+
+def _plan_clean_members(members) -> list:
+    """Only guid / role / kind / note / name-snapshot are ever stored — frequency, dates,
+    score, phone are read live from the card (a single source of truth)."""
+    out, seen = [], set()
+    for m in members or []:
+        if not isinstance(m, dict):
+            continue
+        g = str(m.get("g") or "").strip()
+        if not g or g in seen:
+            continue
+        seen.add(g)
+        out.append({"g": g,
+                    "role": m.get("role") if m.get("role") in PLAN_ROLES else selection.ROLE_MAIN,
+                    "kind": m.get("kind") if m.get("kind") in PLAN_KINDS else "reg",
+                    "note": str(m.get("note") or ""), "n": str(m.get("n") or "")})
+    return out
+
+
+def _plan_int(v) -> int:
+    try:
+        return max(0, int(v))
+    except (TypeError, ValueError):
+        return 0
+
+
+def get_plan(week_wed, include_deleted: bool = False):
+    """The lock of that Wednesday as a dict, or None (no lock / soft-deleted / unreadable)."""
+    wed = _plan_wed(week_wed)
+    with get_connection() as conn:
+        rows = _plan_rows(conn, wed)
+    if not rows or (rows[0][1].get("deleted") and not include_deleted):
+        return None
+    return rows[0][1]
+
+
+def list_plans(from_wed=None, include_deleted: bool = False) -> list:
+    """Stored locks by date, soft-deleted ones left out. `from_wed`: that Wednesday on."""
+    lo = _plan_wed(from_wed) if from_wed else None
+    with get_connection() as conn:
+        rows = _plan_rows(conn)
+    return [doc for wed, doc in rows
+            if (include_deleted or not doc.get("deleted")) and (lo is None or wed >= lo)]
+
+
+def save_plan(plan: dict, expected_updated_at=None) -> dict:
+    """Create / replace the lock of `plan["week_wed"]` (a Wednesday) and return the stored
+    document. `updated_at` is NOW (the moment of writing — never the business date: an LWW
+    stamp of a far-future Wednesday would beat every later edit, the v2.97 lesson).
+    `expected_updated_at` = the stamp the editor loaded ('' = it expects NO live lock):
+    a different stored stamp raises PlanConflict; None skips the check."""
+    wed = _plan_wed(plan.get("week_wed"))
+    with get_connection() as conn:
+        rows = _plan_rows(conn, wed)
+    old = rows[0][1] if rows else None
+    live = old if old and not old.get("deleted") else None
+    if expected_updated_at is not None and ((live or {}).get("updated_at") or "") != expected_updated_at:
+        raise PlanConflict("הרשימה הנעולה שונתה במחשב אחר")
+    now, dev = _utc_now(), _plan_dev()
+    members = _plan_clean_members(plan.get("members"))
+    held = {m["g"] for m in members}
+    doc = {"v": PLAN_VERSION, "week_wed": wed.isoformat(),
+           "dist_date": str(plan.get("dist_date") or wed.isoformat())[:10],
+           "name": str(plan.get("name") or ""),
+           "products": _plan_int(plan.get("products")), "reserve": _plan_int(plan.get("reserve")),
+           "mode": str(plan.get("mode") or "schedule"), "note": str(plan.get("note") or ""),
+           "members": members,
+           "removed": [g for g in dict.fromkeys(str(x).strip() for x in (plan.get("removed") or []))
+                       if g and g not in held],
+           "created_at": (live or {}).get("created_at") or now,
+           "created_dev": (live or {}).get("created_dev") or dev,
+           "updated_at": now, "updated_dev": dev, "deleted": 0}
+    set_setting(PLAN_PREFIX + wed.isoformat(), json.dumps(doc, ensure_ascii=False, separators=(",", ":")))
+    return doc
+
+
+def delete_plan(week_wed) -> bool:
+    """Soft-delete the lock (the key stays with a minimal value — settings are never
+    deleted by sync). Returns False when there was no live lock."""
+    wed = _plan_wed(week_wed)
+    with get_connection() as conn:
+        rows = _plan_rows(conn, wed)
+    if not rows or rows[0][1].get("deleted"):
+        return False
+    set_setting(PLAN_PREFIX + wed.isoformat(), json.dumps(
+        {"v": PLAN_VERSION, "week_wed": wed.isoformat(), "members": [], "removed": [],
+         "deleted": 1, "updated_at": _utc_now(), "updated_dev": _plan_dev()},
+        ensure_ascii=False, separators=(",", ":")))
+    return True
+
+
+def _executed_weeks(conn, weds) -> set:
+    """The Wednesdays in `weds` for which a REGULAR round was recorded: a batch (holiday /
+    bonus batches never count) whose date maps to that Wednesday by
+    selection.round_wednesday — Sun–Wed forward, Thu–Sat back, exactly RULE 9."""
+    if not weds:
+        return set()
+    lo = (min(weds) - timedelta(days=selection.PLAN_GRACE_DAYS)).isoformat()
+    hi = (max(weds) + timedelta(days=selection.PLAN_GRACE_DAYS)).isoformat()
+    frag, xargs = _regular_rounds_sql()
+    out = set()
+    for r in conn.execute(
+            "SELECT DISTINCT dist_date FROM dist_batches WHERE dist_date >= ? AND dist_date <= ? "
+            "AND dist_date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'" + frag,
+            [lo, hi] + xargs):
+        try:
+            out.add(selection.round_wednesday(date.fromisoformat(r["dist_date"])))
+        except ValueError:
+            pass
+    return out
+
+
+def plan_states(today=None) -> dict:
+    """{Wednesday: 'current' | 'future' | 'executed' | 'stale'} for every live lock —
+    derived from the history on every call, never stored."""
+    today = today or date.today()
+    with get_connection() as conn:
+        plans = [(w, d) for w, d in _plan_rows(conn) if not d.get("deleted")]
+        executed = _executed_weeks(conn, [w for w, _ in plans])
+    return {w: selection.plan_state(w, today, w in executed) for w, _ in plans}
+
+
+def _live_plan_index(conn, today=None, exclude_wed=None) -> dict:
+    """{recipient guid: [Wednesdays of the LIVE locks he is a MAIN member of]} — reserve
+    never holds anybody, and executed / stale / deleted locks hold nobody. A merged-away
+    card's guid follows `merged_guids` to the card that stayed."""
+    today = today or date.today()
+    plans = [(w, d) for w, d in _plan_rows(conn) if not d.get("deleted")]
+    if not plans:
+        return {}
+    skip = None
+    if exclude_wed is not None:
+        try:
+            skip = _plan_wed(exclude_wed)
+        except ValueError:
+            skip = None
+    executed = _executed_weeks(conn, [w for w, _ in plans])
+    index = {}
+    for wed, doc in plans:
+        if wed == skip or selection.plan_state(wed, today, wed in executed) not in ("current", "future"):
+            continue
+        for m in doc["members"]:
+            g = resolve_merged_guid(conn, str((m or {}).get("g") or "")) if isinstance(m, dict) else ""
+            if g and m.get("role", selection.ROLE_MAIN) == selection.ROLE_MAIN:
+                index.setdefault(g, []).append(wed)
+    return index
+
+
+def live_plan_index(today=None, exclude_wed=None) -> dict:
+    """Public wrapper of _live_plan_index (opens its own connection)."""
+    with get_connection() as conn:
+        return _live_plan_index(conn, today, exclude_wed)
+
+
+def _tag_planned(conn, rows, base_wed, today=None):
+    """RULE 10 — tag the rows held by a live lock of ANOTHER Wednesday with
+    `planned_elsewhere` (that Wednesday's ISO); selection.is_due / not_due_reason read it.
+    With no live lock the rows come back UNTOUCHED (not even a key added), so a computer
+    that never locks anything gets exactly the lists it always did."""
+    index = _live_plan_index(conn, today, exclude_wed=base_wed)
+    if not index:
+        return rows
+    cooldown = get_one_time_cooldown_weeks()
+    for r in rows:
+        held = selection.planned_elsewhere(r, base_wed, index, cooldown)
+        if held:
+            r["planned_elsewhere"] = held.isoformat()
+        else:
+            r.pop("planned_elsewhere", None)
+    return rows
+
+
+def tag_planned(rows, base_wed=None, today=None):
+    """Public wrapper of _tag_planned for callers that hold plain recipient rows (the
+    manual-add dialog, screens): opens its own connection."""
+    base_wed = base_wed or selection.upcoming_wednesday()
+    with get_connection() as conn:
+        return _tag_planned(conn, rows, base_wed, today)
+
+
 def _history_last(conn, rec_id, regular_only: bool = False, max_date: str = "") -> str:
     # received=1 only: a recorded no-show must never become someone's
     # "last distribution" — they didn't actually receive anything.
