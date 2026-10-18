@@ -1400,15 +1400,20 @@ tab._load_week_list()
 ok("מעבר לרשימת השבוע מנקה את רשימת הנכשלים של הרשימה הקודמת",
    tab._last_failed == [] and tab.btn_resend.isHidden())
 # (א2) שיגור חכם: הנכשלים של *כל* הקבוצות נשמרים לשליחה חוזרת (לא רק האחרונה)
-tab.load_batch({"id": 4343, "dist_name": "חלוקת סוכות", "dist_date": "2026-10-21"})
-gG = db.add_tzintuk_campaign("קבוצה 10", "2026-10-21", "T10", "camp-G", 1)
+# תאריך החלוקה של הקמפיינים כאן חייב להיות שונה מ"רשימת השבוע" (db.next_wednesday()) שנבדקת
+# בהמשך (שורה ~1506): היה קבוע "2026-10-21" ונפל בכל השבוע שלפניו (14–20/10/2026) כי אז הוא
+# היה בדיוק הרביעי הקרוב והקמפיינים נמזגו לרשימה. עכשיו: שבועיים אחרי הרביעי הקרוב — תמיד שונה.
+from datetime import timedelta as _tdg
+_gdate = (db.next_wednesday() + _tdg(days=14)).isoformat()
+tab.load_batch({"id": 4343, "dist_name": "חלוקת סוכות", "dist_date": _gdate})
+gG = db.add_tzintuk_campaign("קבוצה 10", _gdate, "T10", "camp-G", 1)
 tab._active_guid = gG
 tab._start_tracking("camp-G", 1, "")
 tab._on_tick({"finished": True, "total": 1, "delivered": 0, "failed": 1, "pending": 0,
               "entries": [{"phone": "0524444444", "failed": True, "status": "no_answer"}]},
              tab._worker)
 tab._on_worker_done()
-gH = db.add_tzintuk_campaign("קבוצה 12", "2026-10-21", "T12", "camp-H", 1)
+gH = db.add_tzintuk_campaign("קבוצה 12", _gdate, "T12", "camp-H", 1)
 tab._active_guid = gH
 tab._start_tracking("camp-H", 1, "")
 tab._on_tick({"finished": True, "total": 1, "delivered": 0, "failed": 1, "pending": 0,
