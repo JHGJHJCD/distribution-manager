@@ -40,7 +40,7 @@ TESTS = [
     "test_calendar_today.py", "test_hebrew_buttons.py", "test_onetime_button.py",
     "test_card_print.py", "test_mode_reset.py", "test_status_simple.py",
     "test_merge_same_name.py", "test_products_limit.py", "test_settings_report.py", "test_group_report.py",
-    "test_bonus_dist.py", "test_date_follow.py",
+    "test_bonus_dist.py", "test_date_follow.py", "test_plan_selection.py",
 ]
 
 

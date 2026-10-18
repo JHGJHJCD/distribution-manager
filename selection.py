@@ -185,10 +185,83 @@ def received_this_round(rec: dict, base_wed: _date) -> bool:
     return last is not None and base_wed - _td(days=ROUND_WINDOW_DAYS) <= last <= base_wed
 
 
+# RULE 10 — a LOCKED future list holds its people (יהודה 18/10/2026, "הכנה קדימה"
+# שלב 2). Whoever is a MAIN recipient (not reserve) of a live locked list for another
+# Wednesday cannot appear on a list within his own interval of it — in BOTH directions
+# (a lock on week 4 keeps him off week 2 even if his turn has already come). Only
+# regular rounds are locked. database.py reads the live locks and tags each row it
+# fetches with `planned_elsewhere` (the other Wednesday, or None); `is_due` /
+# `not_due_reason` read the tag. A bare row without the tag is unaffected — the gate
+# fails OPEN: a duplicate wastes a portion, a family that vanishes for weeks is harm.
+PLAN_GRACE_DAYS = 3        # a lock still holds until Saturday after its Wednesday (registration window)
+
+
+def round_wednesday(d: _date) -> _date:
+    """The distribution Wednesday a DATE belongs to (the same snapping RULE 9 uses for
+    a recorded round): Sun–Wed → the Wednesday on or after it, Thu–Sat → the Wednesday
+    before it. The one mapping from a registration date to a locked week. Pure."""
+    wd = d.weekday()
+    if wd in (3, 4, 5):
+        return d - _td(days=wd - 2)
+    return d + _td(days=(2 - wd) % 7)
+
+
+def plan_interval_days(rec: dict, cooldown_weeks: int = ONE_TIME_COOLDOWN_WEEKS_DEFAULT) -> int:
+    """How many days after a distribution this person may be listed again — the span a
+    lock holds him. Regular: his frequency (blank / weekly = 7, so a weekly regular is
+    never blocked); one-timer: the RULE 7 pause (`cooldown_weeks`; 0 = rotation off → 7).
+    Pure."""
+    if is_regular(rec):
+        return FREQUENCY_INTERVAL_DAYS.get((rec.get("frequency") or "").strip(), 7)
+    try:
+        weeks = int(cooldown_weeks or 0)
+    except (TypeError, ValueError):
+        weeks = 0
+    return 7 * weeks if weeks > 0 else 7
+
+
+def planned_elsewhere(rec: dict, base_wed: _date, plan_index: dict,
+                      cooldown_weeks: int = ONE_TIME_COOLDOWN_WEEKS_DEFAULT) -> _date | None:
+    """The Wednesday of the live lock that holds this person AWAY from `base_wed`, else
+    None. `plan_index` = {recipient guid: [Wednesdays of the live locks he is MAIN in]}.
+    A lock on P blocks every week Q with 0 < |Q−P| < interval — the mirror of
+    `next_due` (served on P → back on P+interval). His own week (d = 0) is never
+    blocked. If several locks hold him, the nearest is returned. Pure; no clock."""
+    guid = rec.get("guid")
+    if not guid or not plan_index:
+        return None
+    interval = plan_interval_days(rec, cooldown_weeks)
+    best = None
+    for p in plan_index.get(guid, ()):
+        p = _valid_date(p) if not isinstance(p, _date) else p
+        if p is None:
+            continue
+        dist = abs((p - base_wed).days)
+        if 0 < dist < interval and (best is None or (dist, p) < best[0]):
+            best = ((dist, p), p)
+    return best[1] if best else None
+
+
+def plan_state(week_wed: _date, today: _date, executed: bool) -> str:
+    """Life-cycle of a lock, DERIVED (never stored): 'executed' (a regular round was
+    recorded for that week — the history is the truth from then on), 'stale' (more than
+    PLAN_GRACE_DAYS after its Wednesday, i.e. past Saturday, with nothing recorded), else live —
+    'current' for the week being prepared or still inside its registration window, and
+    'future' for a later one. Only 'current' / 'future' hold people. `today` is
+    passed in. Pure."""
+    if executed:
+        return "executed"
+    if today > week_wed + _td(days=PLAN_GRACE_DAYS):
+        return "stale"
+    return "current" if week_wed <= upcoming_wednesday(today) else "future"
+
+
 def is_due(rec: dict, base_wed: _date,
            cooldown_weeks: int = ONE_TIME_COOLDOWN_WEEKS_DEFAULT) -> bool:
-    """RULES 6+7+9 — may this person be on the list of the distribution on base_wed?
+    """RULES 6+7+9+10 — may this person be on the list of the distribution on base_wed?
 
+    A person tagged `planned_elsewhere` (RULE 10 — held by a live lock on another
+    Wednesday) is NOT due, before anything else (even one who never received).
     Regulars: weekly / blank frequency / never served → due. A
     דו-שבועי/תלת-שבועי/חודשי regular is due only when his turn
     (`next_distribution`, the derived field database._recompute_recipient_dates
@@ -199,6 +272,8 @@ def is_due(rec: dict, base_wed: _date,
     `cooldown_weeks` cycles (0 = no rotation); a ONE-TIMER who was served leaves
     the lists at once, even this very cycle (יהודה 7/10/2026) — unless the
     rotation is off (cooldown 0). Pure."""
+    if rec.get("planned_elsewhere"):
+        return False                               # RULE 10 — locked on another week's list
     last = _valid_date(rec.get("last_distribution"))
     if last is None:
         return True
@@ -230,6 +305,10 @@ def not_due_reason(rec: dict, base_wed: _date,
     'קיבל ב-17/06 · הפסקה של 3 שבועות · חוזר ב-08/07'. For tooltips/warnings."""
     if is_due(rec, base_wed, cooldown_weeks):
         return ""
+    if rec.get("planned_elsewhere"):                # RULE 10 — held by a lock on another week
+        held = _valid_date(rec["planned_elsewhere"])
+        return (f"נעול ברשימה של {held.strftime('%d/%m')}" if held
+                else "נעול ברשימה של שבוע אחר")
     last = _valid_date(rec.get("last_distribution"))
     freq = (rec.get("frequency") or "").strip()
     if is_regular(rec):
