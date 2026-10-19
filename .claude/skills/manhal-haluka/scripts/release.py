@@ -103,11 +103,21 @@ def bump(version):
     log("bumped APP_VERSION -> " + version)
 
 
+# Tests that read a private file that exists only on Yehuda's computer (real
+# recipient data, never in git). They still run locally in `ship`; in the GitHub
+# cloud build they are skipped on purpose and the log says so.
+LOCAL_ONLY_TESTS = {"test_priority_import.py"}
+
+
 def test():
     failed = []
+    in_cloud = os.environ.get("GITHUB_ACTIONS") == "true"
     for t in TESTS:
         if not os.path.exists(os.path.join(REPO, t)):
             log("skip (missing): " + t)
+            continue
+        if in_cloud and t in LOCAL_ONLY_TESTS:
+            log("skip (needs a private local file, runs on Yehuda's computer only): " + t)
             continue
         log("running " + t)
         env = dict(os.environ, PYTHONUTF8="1")
