@@ -1,0 +1,84 @@
+name: build
+
+# בנייה ושחרור בענן של גיטהאב.
+#  - דחיפת תגית v* (למשל v3.84)  -> בדיקות + בניית EXE + יצירת Release עם Manhal-Haluka.exe
+#  - הפעלה ידנית (Run workflow)  -> בדיקות + בניית EXE כקובץ להורדה (Artifact), בלי Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Tag matches version.py
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          ver=$(python -c "import version; print(version.APP_VERSION)")
+          if [ "v$ver" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME != version.py ($ver)"
+            exit 1
+          fi
+
+      - name: Tests
+        run: python .claude/skills/manhal-haluka/scripts/release.py test
+
+      - name: Build EXE
+        run: python .claude/skills/manhal-haluka/scripts/release.py build
+
+      - name: Smoke test (EXE starts and stays up)
+        shell: pwsh
+        run: |
+          $exe = Join-Path (Get-Location) "dist/Manhal-Haluka.exe"
+          $p = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) { Write-Error "EXE exited early with code $($p.ExitCode)"; exit 1 }
+          Stop-Process -Id $p.Id -Force
+          Write-Host "EXE stayed up for 15s"
+
+      - name: Upload EXE (manual runs)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Manhal-Haluka
+          path: dist/Manhal-Haluka.exe
+          retention-days: 14
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # הערות השחרור = הודעת הקומיט שעליו עומדת התגית (בלי שורות קרדיט)
+          git log -1 --format=%B "$GITHUB_REF_NAME" | grep -viE '^(Co-Authored-By|Generated with)' > notes.txt
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/Manhal-Haluka.exe --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/Manhal-Haluka.exe \
+              --latest --title "$GITHUB_REF_NAME" --notes-file notes.txt
+          fi
