@@ -117,6 +117,120 @@ ok("S5c חלון 'תכנונים' מציג 'נרשם אוטומטית' ושהנ�
    pd.table.item(0, 5).text().startswith("נרשם אוטומטית") and pd.table.item(0, 4).text() == "בוצעה",
    f"{pd.table.item(0, 5).text()} / {pd.table.item(0, 4).text()}")
 
+
+# ═══ S6 — תיקון: שלב הרישום עם כולם מסומנים, שמירה מחליפה את האוטומטית ═══════════════════════
+gu.export_full_distribution_to_excel = lambda *a, **k: None
+gu.reveal_in_folder = lambda *a, **k: None
+db.reset_all_data(); db.delete_plan(W1); db.set_setting(db.AUTOREG_PREFIX + W1.isoformat(), "")
+db.set_setting("dist_regulars_mode", "schedule")
+db.set_setting("available_products", "50"); db.set_setting("reserve_count", "2")
+db.set_setting("weekly_extra_ids", ""); db.set_setting("weekly_reserve_ids", "")
+WK = [db.add_recipient({"full_name": f"ש-{i}", "status": "פעיל", "frequency": "שבועי", "priority": 4,
+                        "souls": 3, "children_total": 3}) for i in range(4)]
+R_M = db.add_recipient({"full_name": "חודשי-ב", "status": "פעיל", "frequency": "חודשי", "priority": 4, "souls": 3})
+ALL = WK + [R_M]
+_Fake._today = SUN
+gt.date_edit.set_from_iso(SUN.isoformat()); gt._set_stage("prep", clear=False); gt.refresh()
+gt.dist_input.setCurrentText("רון")
+gt._lock_plan()
+_Fake._today = THU
+gt.autoreg_tick(THU_0600)
+auto = db.get_distribution_batches()[0]
+ok("S6a הוכן: אצווה אוטומטית עם כל החמישה", db.is_auto_batch(auto) and auto["recipient_count"] == 5)
+shown.clear()
+pre_checked = {99999}
+gt._checked_ids = set(pre_checked)
+gt.start_autoreg_fix(auto)
+ok("S6b מצב תיקון: שלב רישום, כל החמישה מסומנים, התאריך נעול על 21/10",
+   gt._fix_mode() and gt._stage == "record" and gt._checked_ids == set(ALL) and not gt.date_edit.isEnabled()
+   and gt.date_edit.get_iso() == W1.isoformat(), str(gt._checked_ids))
+ok("S6c הכפתור 'שמור תיקון', 'בטל תיקון' גלוי, באנר השלב מסביר", gt.btn_save.text().strip().startswith("שמור תיקון")
+   and gt.btn_fix_cancel.isVisibleTo(gt) and "תיקון הרישום האוטומטי" in gt.stage_banner.text(),
+   f"{gt.btn_save.text()!r} {gt.btn_fix_cancel.isVisibleTo(gt)} {gt.stage_banner.text()[:40]!r}")
+ok("S6d המחלק של הנעילה הועתק, ההערה הכללית בלי הקידומת האוטומטית", gt.dist_input.currentText() == "רון"
+   and not gt.note_input.text().startswith("נרשם אוטומטית"), gt.note_input.text())
+ok("S6e הצינתוק/מייל לא מקבלים את רשימת התיקון (week_rows ריק)", gt.week_rows() == [])
+ok("S6f הרשימה קבועה: הוספה/חד-פעמיים/הסרה חסומות", gt._block_picks_in_forecast() is True and len(gt._rows_data) == 5)
+ok("S6g 'חלוקה חדשה' נחסמת בזמן תיקון", (gt._reset_for_new(), gt._fix_mode() and len(gt._rows_data) == 5)[1])
+real_before = {k: db.get_setting(k) for k in ("weekly_extra_ids", "weekly_reserve_ids", "available_products")}
+
+gone_a, gone_b = WK[0], R_M
+gt._checked_ids -= {gone_a, gone_b}                       # לא הגיעו
+shown.clear()
+gt._save()
+bs = db.get_distribution_batches()
+ok("S6h נשארה אצווה אחת, והיא אמיתית (לא אוטומטית) ובתאריך 21/10", len(bs) == 1 and not db.is_auto_batch(bs[0])
+   and bs[0]["dist_date"] == W1.isoformat() and bs[0]["id"] != auto["id"], str([(b["dist_name"], b["dist_date"]) for b in bs]))
+rows = {r["recipient_id"]: r["received"] for r in db.get_batch_recipients(bs[0]["id"])}
+ok("S6i שלושה קיבלו, שניים נרשמו 'לא הגיע' (מזין התראות)",
+   sorted(k for k, v in rows.items() if v == 1) == sorted(set(ALL) - {gone_a, gone_b})
+   and sorted(k for k, v in rows.items() if v == 0) == sorted([gone_a, gone_b]), str(rows))
+ok("S6j מי שלא הגיע: אין לו תאריך אחרון; מי שהגיע: 21/10 והתור זז",
+   db.get_recipient(gone_b)["last_distribution"] in ("", None)
+   and db.get_recipient(WK[1])["last_distribution"] == W1.isoformat()
+   and db.get_recipient(WK[1])["next_distribution"] == "2026-10-28")
+ok("S6k רצף אי-ההגעה נספר (1)", db.consecutive_no_shows(gone_b) == 1)
+ok("S6l יצאנו ממצב תיקון: השדות והמצב חזרו (תאריך, סימונים, כפתור שמירה)",
+   not gt._fix_mode() and gt.date_edit.isEnabled() and gt.date_edit.get_iso() == SUN.isoformat()
+   and gt.btn_save.text().strip().startswith("שמור חלוקה") and not gt.btn_fix_cancel.isVisibleTo(gt))
+ok("S6m ההגדרות של השבוע האמיתי לא נגעו בתיקון", {k: db.get_setting(k) for k in real_before} == real_before)
+ok("S6n לא נרשם שוב אוטומטית (הסימון שרד, וגם 'בוצעה')", gt.autoreg_tick(THU_0600) == [] and len(db.get_distribution_batches()) == 1)
+ok("S6o הבאנר 'נרשם אוטומטית' נעלם (האצווה האוטומטית נמחקה)", not gt.autoreg_banner_frame.isVisibleTo(gt))
+
+# ביטול תיקון: לא משנה כלום
+db.reset_all_data(); db.delete_plan(W1); db.set_setting(db.AUTOREG_PREFIX + W1.isoformat(), "")
+W = [db.add_recipient({"full_name": f"ג-{i}", "status": "פעיל", "frequency": "שבועי", "priority": 4, "souls": 3}) for i in range(3)]
+_Fake._today = SUN
+gt.date_edit.set_from_iso(SUN.isoformat()); gt._set_stage("prep", clear=False); gt.refresh()
+db.set_setting("available_products", "50"); gt.refresh()
+db.set_setting("last_distributor", ""); gt.dist_input.setCurrentText("")   # בלי מחלק: ברירת המחדל 'רישום אוטומטי' / last_distributor
+gt._lock_plan()
+_Fake._today = THU
+gt.autoreg_tick(THU_0600)
+auto2 = db.get_distribution_batches()[0]
+snap_b = [(b["id"], b["guid"]) for b in db.get_distribution_batches()]
+gt.start_autoreg_fix(auto2)
+ok("S7a מחלק שנשאר 'רישום אוטומטי' לא מועתק — חייבים להקליד מחלק אמיתי", gt.dist_input.currentText() == "", gt.dist_input.currentText())
+gt.btn_fix_cancel.click()
+ok("S7b ביטול תיקון: אין שינוי בהיסטוריה, יצאנו מהמצב, הבאנר עדיין מוצג",
+   not gt._fix_mode() and [(b["id"], b["guid"]) for b in db.get_distribution_batches()] == snap_b
+   and (gt._autoreg_refresh_notice(), gt.autoreg_banner_frame.isVisibleTo(gt))[1])
+
+# ═══ S8 — קובץ מתנדב מחליף את האוטומטית (במקום התראת כפילות) ═════════════════════════════════
+from utils import excel_utils
+volunteer_result = {"received": [dict(db.get_recipient(W[0]), notes="")], "not_received": [dict(db.get_recipient(W[1]))],
+                    "unmatched": [], "meta": {"dist_date": W1.isoformat(), "dist_name": auto2["dist_name"],
+                                              "distributor": "מתנדב", "what": "", "qty": 0, "general_note": "מהמתנדב"}}
+gu.import_volunteer_checklist = lambda path: volunteer_result
+shown.clear()
+n, meta, ids, needs_review = gt._apply_checklist_file("x.xlsx", confirm=False)
+bs = db.get_distribution_batches()
+ok("S8a קליטה אוטומטית של קובץ מתנדב: לא נחשב כפילות, האוטומטית הוחלפה", n == 1 and needs_review is False
+   and len(bs) == 1 and not db.is_auto_batch(bs[0]) and bs[0]["distributor"] == "מתנדב", str((n, needs_review, len(bs))))
+rows = {r["recipient_id"]: r["received"] for r in db.get_batch_recipients(bs[0]["id"])}
+ok("S8b מה שהמתנדב סימן הוא האמת: אחד קיבל, אחד 'לא הגיע', והשלישי (שלא בקובץ) לא נרשם",
+   rows == {W[0]: 1, W[1]: 0}, str(rows))
+ok("S8c ההחלפה נרשמה להודעה", gt._replaced_auto == [W1.isoformat()], str(getattr(gt, "_replaced_auto", None)))
+
+# קובץ מתנדב ידני: חלון האישור מציין מה יוחלף
+db.reset_all_data(); db.delete_plan(W1); db.set_setting(db.AUTOREG_PREFIX + W1.isoformat(), "")
+W = [db.add_recipient({"full_name": f"ד-{i}", "status": "פעיל", "frequency": "שבועי", "priority": 4, "souls": 3}) for i in range(2)]
+_Fake._today = SUN
+gt.date_edit.set_from_iso(SUN.isoformat()); gt._set_stage("prep", clear=False); gt.refresh()
+db.set_setting("available_products", "50"); gt.refresh(); gt._lock_plan()
+_Fake._today = THU
+gt.autoreg_tick(THU_0600)
+auto3 = db.get_distribution_batches()[0]
+volunteer_result["received"] = [dict(db.get_recipient(W[0]), notes="")]
+volunteer_result["not_received"] = [dict(db.get_recipient(W[1]))]
+volunteer_result["meta"]["dist_name"] = auto3["dist_name"]
+asked_texts = []
+QMessageBox.question = staticmethod(lambda *a, **k: (asked_texts.append(a[2]), QMessageBox.StandardButton.Yes)[1])
+gt._apply_checklist_file("x.xlsx", confirm=True)
+ok("S8d בקליטה ידנית חלון האישור אומר שיוחלף הרישום האוטומטי (ולא 'כבר קיימת חלוקה')",
+   len(asked_texts) == 1 and "יוחלף הרישום האוטומטי" in asked_texts[0] and "ייבוא חוזר" not in asked_texts[0], asked_texts[0][:120])
+ok("S8e והאוטומטית נמחקה", len(db.get_distribution_batches()) == 1 and not db.is_auto_batch(db.get_distribution_batches()[0]))
+
 print()
 print("FAILED:" if fails else "ALL OK", *fails)
 sys.stdout.flush(); os._exit(1 if fails else 0)

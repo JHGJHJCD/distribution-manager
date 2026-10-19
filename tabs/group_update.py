@@ -1360,7 +1360,10 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
                 self, "תוצאות מתנדב התקבלו במייל",
                 f"התקבלה במייל רשימה שמולאה על ידי המתנדב ({title}).\n"
                 f"נרשמו אוטומטית {total} חלוקות להיסטוריה ✓\n"
-                f"מי קיבל מופיע ב'חלוקות קודמות' ובכרטיס של כל מקבל.")
+                f"מי קיבל מופיע ב'חלוקות קודמות' ובכרטיס של כל מקבל."
+                + ("\nהקובץ החליף את הרישום האוטומטי של " + ", ".join(_fdate(d) for d in self._replaced_auto)
+                   if getattr(self, "_replaced_auto", None) else ""))
+            self._replaced_auto = []
 
     # ── one-time-pick persistence (survive restart + save) ─────────────────────
     def _load_extras(self):
@@ -1396,7 +1399,7 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
                 g = rec.get("guid") or ""
                 out.append(g if g else str(rid))
             return ",".join(out)
-        if self.list_is_future() or self._plan_mode():   # a forecast / a locked list never writes the real picks
+        if self.list_is_future() or self._plan_mode() or self._fix_mode():   # a forecast / a lock / a correction never writes the real picks
             return
         db.set_setting("weekly_extra_ids", _guids(self._extra_ids))
         db.set_setting("weekly_reserve_ids", _guids(self._reserve_ids))
@@ -2005,6 +2008,9 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
 
     def _on_stage_toggle(self, stage: str):
         """The animated stage toggle was clicked (#k6bqi)."""
+        if self._fix_mode():
+            self.stage_toggle.set_stage(self._stage)
+            return
         if stage == "record" and self.list_is_future():
             # A forecast list can be printed but not recorded — don't let the operator
             # tick a whole list first and only find out at 'שמור' (הכנה קדימה, שלב 1).
@@ -2147,7 +2153,7 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
             "ואחריהם הרזרבה")
         self.lbl_leaders_hint.setVisible(mode in ("scored", "all") or by_wait)
         self.btn_edit_filter.setVisible(mode == "filter")
-        self.mode_combo.setEnabled(not self._plan_mode())      # a locked list was built in ONE mode
+        self.mode_combo.setEnabled(not self._plan_mode() and not self._fix_mode())      # a locked list was built in ONE mode
         self._refresh_header_chips()
 
     def _filter_balanced(self) -> bool:
@@ -2256,7 +2262,7 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         # list is chosen a different way (by score / by criteria / not at all), so
         # the leftover hint + 'בחר חד-פעמיים' button are irrelevant there and were
         # showing a nonsensical "מספיק לקבועים בלבד (0)" (bug #6kms5) — hide them.
-        if self._current_mode() != "schedule" or self._plan_mode():
+        if self._current_mode() != "schedule" or self._plan_mode() or self._fix_mode():
             self.lbl_leftover.setText("")
             self.leftover_card.setVisible(False)
             return
@@ -2457,6 +2463,11 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         that belongs to the real list and syncs to the other computer — made on a
         forecast they would land on this week's list. Until each week keeps its own picks
         (stage 2, the lock) they are refused here. Returns True when refused."""
+        if self._fix_mode():              # the list of a correction is fixed — only the ticks change
+            QMessageBox.information(self, "תיקון רישום אוטומטי",
+                                    "בזמן תיקון אפשר רק להוריד את הסימון ממי שלא הגיע. "
+                                    "שמור את התיקון או בטל אותו, ואז שנה את הרשימה.")
+            return True
         if not self.list_is_future() or self._plan_mode():     # a locked forecast IS editable
             return False
         QMessageBox.information(
@@ -2494,6 +2505,9 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         self.refresh()
 
     def refresh(self):
+        if self._fix_mode():             # RULE 11: a correction of an automatic registration is open
+            self._refresh_fix()
+            return
         # Re-read the one-time picks: they are a synced setting, so a pick made
         # on the other computer arrives through the sync refresh.
         # (הכנה קדימה, נעילה: a week with a live lock shows the lock — _refresh_locked — and
@@ -2659,7 +2673,7 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         שאינו מוצג) — אחרת מקבל שנערך/נוסף/נמחק במסך אחר לא היה מגיע לשם.
         כשהמסך על שבוע עתידי (`list_is_future()`, הכנה קדימה) זו רשימת התחזית — צינתוקים
         מחזירים אז רשימה ריקה במקום לצלצל אליה, ומיילים נושאים את התאריך העתידי."""
-        if self.list_is_future():
+        if self.list_is_future() or self._fix_mode():
             # הכנה קדימה: a forecast is NEVER a list to call or mail — fail CLOSED (empty), so a
             # consumer that forgets its own check cannot reach the wrong week's families.
             return []
@@ -2964,7 +2978,9 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         self.lbl_checked.setText(f"סומנו: {checked}")
         self.lbl_souls.setText(f"נפשות: {souls}")
         # v3.75: the save button says how many will be recorded (like "שלח עכשיו ל-N")
-        self.btn_save.setText(f" שמור חלוקה ל-{checked}" if self._stage == "record" and checked
+        self.btn_save.setText(f" שמור תיקון ל-{checked}" if self._fix_mode() and checked else
+                              " שמור תיקון" if self._fix_mode() else
+                              f" שמור חלוקה ל-{checked}" if self._stage == "record" and checked
                               else " שמור חלוקה")
         # Live one-line summary for the sticky bottom bar (v3.03) — in the record
         # stage it leads with how many are ticked; in prep it's the list size.
@@ -3006,6 +3022,8 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         """The `holiday` code recorded with the round on screen: a holiday round keeps its
         holiday code, otherwise 'בונוס' when the bonus box is ticked, else '' (a regular
         round, which moves the turn and takes the family off the week's other lists)."""
+        if self._fix_mode():             # the correction replaces a REGULAR round
+            return ""
         return self._active_holiday() or (holidays.BONUS if self.chk_bonus.isChecked() else "")
 
     def _save(self):
@@ -3068,6 +3086,7 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         is_bonus = self._round_extra_code() == holidays.BONUS
         if is_bonus:
             confirm_msg += "\n\nתירשם כחלוקת בונוס — התור הקבוע לא יזוז."
+        confirm_msg += self._fix_confirm_text()
         if QMessageBox.question(
                 self, "אישור רישום חלוקה", confirm_msg,
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -3083,6 +3102,7 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
                                       dist_name=dist_name, general_note=general_note,
                                       not_received=not_received,
                                       holiday=self._round_extra_code())
+            self._fix_replace_batch()          # RULE 11 correction: the new record is in, the automatic one goes
             auto_backup_async()
             # Merged action: also export a full Excel (of who received) to Downloads.
             try:
@@ -3097,11 +3117,14 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         self._push_name_history(dist_name)
         self._reload_name_history()
 
+        was_fix = self._fix_mode()
         left_holiday = self._after_round_recorded(dist_name)
 
         if export_path:
             reveal_in_folder(export_path)   # open Downloads with the file selected
         msg = f"נשמרה חלוקה ל-{len(checked)} מקבלים."
+        if was_fix:
+            msg += "\n\nהרישום האוטומטי הוחלף ברישום הזה."
         if is_bonus:
             msg += "\n\nהחלוקה נרשמה כחלוקת בונוס — התור הקבוע לא זז."
         if left_holiday:
@@ -3121,6 +3144,9 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         """The round is in history (saved here or imported from the volunteer's
         file) — start a clean next cycle: drop the one-time picks so they are
         not recorded a second time, clear ticks/notes, back to the prep stage."""
+        if self._fix_mode():              # a correction was saved: put the screen back as it was, touch nothing else
+            self._fix_leave()
+            return False
         if self._plan_mode():             # the lock is now an executed round — back to the draft state
             self._plan_leave()
         self._extra_ids.clear()
@@ -3416,6 +3442,11 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         # volunteer replied twice, or it was both auto-pulled and imported by hand).
         dup = db.find_matching_batch(dist_date, meta.get("dist_name") or "",
                                      [r.get("id") for r in received])
+        # RULE 11: a returning volunteer file REPLACES the automatic registration of that week
+        # (it is the real record) — it is not a duplicate of it.
+        auto = db.find_auto_batch(dist_date)
+        if auto and dup and dup.get("id") == auto.get("id"):
+            dup = None
 
         if confirm:
             summary = (
@@ -3431,6 +3462,10 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
             if unmatched:
                 summary += (f"\n\n⚠ {len(unmatched)} שורות לא זוהו ולא ייובאו: "
                            + ", ".join(unmatched[:10]))
+            if auto:
+                summary = (f"⚠ יוחלף הרישום האוטומטי של {_fdate(auto.get('dist_date', ''))} "
+                           f"({auto.get('recipient_count', 0)} מקבלים שסומנו אוטומטית כמי שקיבלו) — "
+                           "במקומו יירשם מה שהמתנדב סימן.\n\n") + summary
             if dup:
                 summary = (
                     f"⚠ כבר קיימת חלוקה בשם '{dup.get('dist_name') or '—'}' "
@@ -3468,6 +3503,9 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
                 # The volunteer's file carries no round type: it takes the box on screen
                 # (bonus ticked → bonus; holiday mode → holiday; otherwise a regular round).
                 holiday=self._round_extra_code())
+            if auto:
+                db.delete_auto_batch(auto["id"])
+                self._replaced_auto = getattr(self, "_replaced_auto", []) + [auto.get("dist_date", "")]
             auto_backup_async()
         return len(records), meta, [r.get("id") for r in received], False
 
@@ -3638,6 +3676,9 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         """Reset the screen for a fresh distribution (#c8m83): clear products/
         reserve counts, name, general note, all ticks and one-time picks, so the
         operator can start recording a new round from scratch."""
+        if self._fix_mode():
+            QMessageBox.information(self, "תיקון רישום אוטומטי", "שמור את התיקון או בטל אותו לפני \"חלוקה חדשה\".")
+            return
         if self.list_is_future():          # it would wipe the REAL week's shared picks and counts
             QMessageBox.information(
                 self, "רשימה לשבוע עתידי",

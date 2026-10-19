@@ -2766,13 +2766,14 @@ def peer_app_versions() -> dict:
     return out
 
 
-def plan_rows(plan: dict, on_date=None):
+def plan_rows(plan: dict, on_date=None, keep_inactive: bool = False):
     """The rows of a LOCKED list for the screen, in the saved order: (rows, info). Each row
     is the live card plus `_reserve` / `_extra` (kind one|man) / `_plan_guid`, with the
     need-score and waiting time computed for display only. A member whose card is gone is
     skipped (info['missing']); one who was PAUSED since is skipped too (info['inactive'])
     unless he was added by hand — nobody paused is mailed, called or printed. A guid of a
-    merged-away card follows `merged_guids` to the card that stayed."""
+    merged-away card follows `merged_guids` to the card that stayed. `keep_inactive`: the
+    correction of an automatic registration shows everybody who was registered, paused or not."""
     rows, info, seen = [], {"missing": 0, "inactive": 0}, set()
     with get_connection() as conn:
         for m in (plan or {}).get("members", []):
@@ -2786,7 +2787,7 @@ def plan_rows(plan: dict, on_date=None):
                 continue
             kind = m.get("kind") or "reg"
             r["_inactive"] = r.get("status") != "פעיל"
-            if r["_inactive"] and kind != "man":
+            if r["_inactive"] and kind != "man" and not keep_inactive:
                 info["inactive"] += 1
                 continue
             seen.add(r["id"])

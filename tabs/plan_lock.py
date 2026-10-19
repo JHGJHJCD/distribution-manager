@@ -75,6 +75,7 @@ class PlanLockMixin:
         self._plan_stash = None      # the draft's memory-only state, put aside while a lock is shown
         self._plan_info = {}         # {'missing': n, 'inactive': n} of the loaded lock
         self._plan_cmp = None        # comparison with the live data (S4c)
+        self._fix = None             # RULE 11 correction of an automatic registration (dict) or None
 
     def _plan_mode(self) -> bool:
         return getattr(self, "_plan", None) is not None
@@ -230,6 +231,13 @@ class PlanLockMixin:
         self.lbl_autoreg.setAlignment(_ALIGN_R)
         self.lbl_autoreg.setStyleSheet("color:#7c4a03; font-size:13px; font-weight:700; " + _LBL)
         arow.addWidget(self.lbl_autoreg, 1)
+        self.btn_autoreg_fix = QPushButton("תקן — מי שלא הגיע")
+        self.btn_autoreg_fix.setObjectName("btn_autoreg_fix")
+        self.btn_autoreg_fix.setStyleSheet(_BTN_LOCK)
+        self.btn_autoreg_fix.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_autoreg_fix.setToolTip("פותח את שלב הרישום עם כולם מסומנים — מורידים את מי שלא הגיע ושומרים")
+        self.btn_autoreg_fix.clicked.connect(self._autoreg_fix_clicked)
+        arow.addWidget(self.btn_autoreg_fix)
         self.btn_autoreg_ok = QPushButton("הכול נכון ✓")
         self.btn_autoreg_ok.setObjectName("btn_autoreg_ok")
         self.btn_autoreg_ok.setStyleSheet(_BTN_SMALL)
@@ -249,6 +257,15 @@ class PlanLockMixin:
         self.btn_lock_plan.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_lock_plan.clicked.connect(self._on_lock_clicked)
         bar.addWidget(self.btn_lock_plan)
+        self.btn_fix_cancel = QPushButton("✕ בטל תיקון")
+        self.btn_fix_cancel.setObjectName("btn_fix_cancel")
+        self.btn_fix_cancel.setStyleSheet(_BTN_SMALL)
+        self.btn_fix_cancel.setMinimumHeight(46)
+        self.btn_fix_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_fix_cancel.setToolTip("חוזר למסך הרגיל בלי לשנות את הרישום האוטומטי")
+        self.btn_fix_cancel.clicked.connect(lambda: self._fix_leave())
+        self.btn_fix_cancel.setVisible(False)
+        bar.addWidget(self.btn_fix_cancel)
 
     # ═══ תצוגה: כפתור, באנר, צ'יפים ═════════════════════════════════════════════
     def _plan_peer_block(self) -> str:
@@ -631,7 +648,7 @@ class PlanLockMixin:
     def autoreg_tick(self, now=None):
         """Register the locks that are due (RULE 11). Never raises, never pops a dialog — the
         program is open in front of the operator. Returns the registrations made."""
-        if getattr(self, "_autoreg_busy", False):
+        if getattr(self, "_autoreg_busy", False) or self._fix_mode():
             return []
         self._autoreg_busy = True
         try:
@@ -702,11 +719,140 @@ class PlanLockMixin:
             txt += f"  ·  ועוד {len(pend) - 1} ממתינות"
         self.lbl_autoreg.setText(txt)
 
+    def _autoreg_fix_clicked(self):
+        if self._autoreg_pending:
+            self.start_autoreg_fix(self._autoreg_pending[0]["batch"])
+
     def _autoreg_confirm(self):
         if not self._autoreg_pending:
             return
         db.mark_autoreg_reviewed(self._autoreg_pending[0]["week_wed"])
         self._autoreg_refresh_notice()
+
+    # ═══ תיקון הרישום האוטומטי (כלל 11) ═════════════════════════════════════════════
+    def _fix_mode(self) -> bool:
+        return getattr(self, "_fix", None) is not None
+
+    def start_autoreg_fix(self, batch):
+        """Open the RECORD stage with everyone of the automatic batch ticked as "received": the
+        operator unticks whoever did not come and saves — the save is the ordinary one (an
+        un-ticked person is recorded "לא הגיע"), and afterwards the automatic batch is deleted
+        (the new record is written first, so there is never a moment with no history)."""
+        if self._fix_mode():
+            return
+        batch = db.get_batch_by_guid((batch or {}).get("guid") or "")
+        if batch is None or not db.is_auto_batch(batch):
+            QMessageBox.information(self, "תיקון רישום אוטומטי", "הרישום האוטומטי הזה כבר תוקן או נמחק.")
+            return
+        members = []
+        for dr in db.get_batch_recipients(batch["id"]):
+            if (dr.get("received", 1) or 0) == 0 or dr.get("recipient_id") is None:
+                continue
+            card = db.get_recipient(dr["recipient_id"])
+            if card and (card.get("guid") or "").strip():
+                members.append({"g": card["guid"].strip(), "role": selection.ROLE_MAIN, "kind": "reg",
+                                "note": dr.get("notes") or "", "n": card.get("full_name", "")})
+        rows, _info = db.plan_rows({"members": members}, keep_inactive=True)
+        if not rows:
+            QMessageBox.information(self, "תיקון רישום אוטומטי", "אין מקבלים בחלוקה הזו לתיקון.")
+            return
+        if self._plan_mode():
+            self._plan_leave(reload=False)
+        stash = {"extra": set(self._extra_ids), "reserve": set(self._reserve_ids), "removed": set(self._removed_ids),
+                 "notes": dict(self._row_notes), "checked": set(self._checked_ids), "seen": set(self._seen_ids),
+                 "stage": self._stage, "visited": self._record_visited, "date": self.date_edit.get_iso(),
+                 "name": self.name_input.currentText(), "dist": self.dist_input.currentText(),
+                 "note": self.note_input.text(), "bonus": self.chk_bonus.isChecked(),
+                 "banner": self.stage_banner.text(), "save": self.btn_save.text()}
+        self._fix = {"batch_id": batch["id"], "batch_guid": batch["guid"], "date": batch["dist_date"],
+                     "n": batch.get("recipient_count") or len(rows), "rows": rows, "stash": stash}
+        wk = selection.round_wednesday(date.fromisoformat(batch["dist_date"]))
+        self._extra_ids, self._reserve_ids, self._removed_ids = set(), set(), set()
+        self._row_notes = {r["id"]: r["_plan_note"] for r in rows if r.get("_plan_note")}
+        self._checked_ids = {r["id"] for r in rows}
+        self._seen_ids = set(self._checked_ids)
+        self.date_edit.blockSignals(True)
+        self.date_edit.set_from_iso(batch["dist_date"])
+        self.date_edit.blockSignals(False)
+        self.name_input.setCurrentText(batch.get("dist_name") or "")
+        dist = (batch.get("distributor") or "").strip()
+        self.dist_input.setCurrentText("" if dist == db.AUTO_DISTRIBUTOR else dist)
+        note = (batch.get("general_note") or "").strip()
+        note = note[len(db.AUTO_NOTE):].lstrip(" —-") if note.startswith(db.AUTO_NOTE) else note
+        self.note_input.setText(note)
+        self.chk_bonus.setChecked(False)
+        self._record_visited = True
+        self._stage = "record"
+        self.stage_banner.setText(
+            f"✎ תיקון הרישום האוטומטי של רביעי {_fmt_wed(wk)} — כולם מסומנים כמי שקיבלו. הסר את הסימון ממי שלא הגיע "
+            "ולחץ \"שמור תיקון\": הרישום האוטומטי יוחלף, ומי שלא סומן יירשם \"לא הגיע\".")
+        self.btn_save.setText(" שמור תיקון")
+        self.btn_fix_cancel.setVisible(True)
+        for w in (self.date_edit, self.products_spin, self.reserve_spin, self.stage_toggle):
+            w.setEnabled(False)
+        self._apply_stage()
+        self.refresh()
+        mw = getattr(self, "main_win", None)
+        if mw is not None and hasattr(mw, "navigate_to_tab"):
+            try:
+                mw.navigate_to_tab(self)
+            except Exception:                                     # noqa: BLE001
+                pass
+
+    def _refresh_fix(self):
+        """refresh() while a correction is open: the list IS the automatic batch."""
+        fx = self._fix
+        self._rows_data = list(fx["rows"])
+        self._sched_cut = None
+        self._removed_due = 0
+        live = {r["id"] for r in self._rows_data}
+        self._checked_ids &= live
+        self._seen_ids = set(live)
+        self.lbl_regulars_count.setText(f"תיקון רישום אוטומטי: {len(self._rows_data)} מקבלים")
+        self._populate()
+        self._update_leftover_hint()
+        self._update_mode_controls()
+        self._sync_future_note()
+        self._plan_refresh_ui()
+        self._mark_dependents_stale()
+
+    def _fix_confirm_text(self) -> str:
+        if not self._fix_mode():
+            return ""
+        wk = selection.round_wednesday(date.fromisoformat(self._fix["date"]))
+        return (f"\n\n⚠ זה מחליף את הרישום האוטומטי של רביעי {_fmt_wed(wk)} ({self._fix['n']} מקבלים שסומנו "
+                "אוטומטית כמי שקיבלו): הוא יימחק, ויירשם במקומו הרישום הזה.")
+
+    def _fix_replace_batch(self):
+        """Called by _save right after the real batch is written: the automatic one goes."""
+        if self._fix_mode():
+            db.delete_auto_batch(self._fix["batch_id"])
+
+    def _fix_leave(self, reload=True):
+        fx = self._fix
+        if fx is None:
+            return
+        st = fx["stash"]
+        self._fix = None
+        self._extra_ids, self._reserve_ids, self._removed_ids = st["extra"], st["reserve"], st["removed"]
+        self._row_notes, self._checked_ids, self._seen_ids = st["notes"], st["checked"], st["seen"]
+        self._record_visited = st["visited"]
+        self.date_edit.blockSignals(True)
+        self.date_edit.set_from_iso(st["date"])
+        self.date_edit.blockSignals(False)
+        self.name_input.setCurrentText(st["name"])
+        self.dist_input.setCurrentText(st["dist"])
+        self.note_input.setText(st["note"])
+        self.chk_bonus.setChecked(st["bonus"])
+        self.stage_banner.setText(st["banner"])
+        self.btn_save.setText(st["save"])
+        self.btn_fix_cancel.setVisible(False)
+        for w in (self.date_edit, self.products_spin, self.reserve_spin, self.stage_toggle):
+            w.setEnabled(True)
+        self._stage = st["stage"]
+        self._apply_stage()
+        if reload:
+            self.refresh()
 
     # ═══ חלון התכנונים (S4d) ════════════════════════════════════════════════════
     def _open_plans_dialog(self):

@@ -116,10 +116,29 @@ class BatchDetailsDialog(QDialog):
             lay.addWidget(lst_missed, 1)
         self.search_edit.textChanged.connect(self._filter_lists)
 
+        self._batch = batch
+        row = QHBoxLayout()
+        if db.is_auto_batch(batch):
+            self.btn_fix = QPushButton("✎ תקן את הרישום האוטומטי")
+            self.btn_fix.setObjectName("btn_fix_auto")
+            self.btn_fix.setToolTip("פותח את שלב הרישום עם כולם מסומנים — מורידים את מי שלא הגיע ושומרים")
+            self.btn_fix.clicked.connect(self._fix_auto)
+            row.addWidget(self.btn_fix)
         btn = QPushButton("סגור")
         btn.setObjectName("neutral")
         btn.clicked.connect(self.accept)
-        lay.addWidget(btn, alignment=Qt.AlignmentFlag.AlignLeft)
+        row.addWidget(btn)
+        row.addStretch()
+        lay.addLayout(row)
+
+    def _fix_auto(self):
+        """RULE 11: the screen's record stage, with this automatic batch's people all ticked."""
+        mw = getattr(self.parent(), "main_win", None)
+        gt = getattr(mw, "group_tab", None)
+        if gt is None:
+            return
+        self.accept()
+        gt.start_autoreg_fix(self._batch)
 
     def _filter_lists(self, text):
         q = (text or "").strip().lower()
