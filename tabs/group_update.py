@@ -1534,6 +1534,7 @@ class GroupUpdateTab(QWidget):
         # (#ss0lm): the whole distribution starts from ONE place (single source of
         # truth via the 'available_products'/'reserve_count' settings). The count
         # drives how many portions are left for one-timers after regulars.
+        self._forecast_counts = {}      # {forecast Wednesday ISO: [products, reserve]} — memory only (הכנה קדימה)
         self.products_spin = QSpinBox()
         self.products_spin.setRange(0, 99999)
         self.products_spin.setToolTip("כמה מנות/מוצרים יש בחלוקה. במצב רגיל הקבועים "
@@ -2133,15 +2134,50 @@ class GroupUpdateTab(QWidget):
         (the default). Unbalanced, the list is cut by who waited longest."""
         return bool((db.get_filter_criteria() or {}).get("balance_communities", True))
 
+    def _forecast_key(self):
+        """ISO of the forecast week's Wednesday while the screen shows a coming week, else None."""
+        ld = self._list_date()
+        return selection.upcoming_wednesday(ld).isoformat() if ld is not None else None
+
+    @staticmethod
+    def _real_counts():
+        """(products, reserve) of the REAL week — the two shared, synced settings."""
+        out = []
+        for key in ("available_products", "reserve_count"):
+            try:
+                out.append(max(0, int(db.get_setting(key) or 0)))
+            except (TypeError, ValueError):
+                out.append(0)
+        return tuple(out)
+
+    def _screen_counts(self):
+        """(products, reserve) the screen works with. The real week reads the shared settings; a
+        forecast week keeps its own pair in memory ONLY (never written to the settings, so it
+        can't reach this week's list or the other computer) — a new forecast starts from the real
+        week's numbers as a visible suggestion (יהודה 18/10/2026)."""
+        key = self._forecast_key()
+        if key is None:
+            return self._real_counts()
+        if key not in self._forecast_counts:
+            self._forecast_counts[key] = list(self._real_counts())
+        return tuple(self._forecast_counts[key])
+
+    def _store_count(self, idx: int, key: str, value: int):
+        fk = self._forecast_key()
+        if fk is None:
+            db.set_setting(key, str(value))
+        else:
+            self._forecast_counts.setdefault(fk, list(self._real_counts()))[idx] = value
+
     def _on_products_changed(self, *_):
-        db.set_setting("available_products", str(self.products_spin.value()))
+        self._store_count(0, "available_products", self.products_spin.value())
         # The list length follows the product count live in EVERY mode (RULE 8;
         # #c9k0m scored, #lejmr community balance) — refresh() also redraws the
         # leftover hint.
         self.refresh()
 
     def _on_reserve_changed(self, *_):
-        db.set_setting("reserve_count", str(self.reserve_spin.value()))
+        self._store_count(1, "reserve_count", self.reserve_spin.value())
         self.refresh()
 
     def _one_time_remainder(self) -> int:
@@ -2450,6 +2486,7 @@ class GroupUpdateTab(QWidget):
             self._update_mode_controls()
         mode = self._current_mode()
         ld = self._list_date()      # הכנה קדימה: the forecast week's date, None = the ordinary list
+        f_products, f_reserve = self._screen_counts() if ld is not None else (None, None)
         if mode == "none":
             base = []
         elif mode == "all":
@@ -2466,19 +2503,16 @@ class GroupUpdateTab(QWidget):
         elif mode == "filter":
             # 'לפי סינון מותאם' — everyone active matching the numeric criteria,
             # regardless of priority/frequency (broad filter, #vq4fx).
-            base = db.get_filtered_list(area_filter="הכל", on_date=ld)
+            base = db.get_filtered_list(area_filter="הכל", on_date=ld,
+                                        products=f_products, reserve=f_reserve)
         else:
             base = db.get_weekly_list(area_filter="הכל", on_date=ld)
         # Pick up the shared product/reserve counts if another tab changed them.
-        for spin, key, default in ((self.products_spin, "available_products", 0),
-                                   (self.reserve_spin, "reserve_count", 0)):
-            try:
-                spin.blockSignals(True)
-                spin.setValue(int(db.get_setting(key) or default))
-            except (TypeError, ValueError):
-                pass
-            finally:
-                spin.blockSignals(False)
+        # (a forecast week reads its own in-memory pair — _screen_counts)
+        for spin, value in zip((self.products_spin, self.reserve_spin), self._screen_counts()):
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
         # #andd6: anyone taken off THIS list stays off — before the product limit,
         # so the freed product goes to the next in line like any other absence.
         self._removed_due = 0
@@ -2592,6 +2626,10 @@ class GroupUpdateTab(QWidget):
         שאינו מוצג) — אחרת מקבל שנערך/נוסף/נמחק במסך אחר לא היה מגיע לשם.
         כשהמסך על שבוע עתידי (`list_is_future()`, הכנה קדימה) זו רשימת התחזית — צינתוקים
         מחזירים אז רשימה ריקה במקום לצלצל אליה, ומיילים נושאים את התאריך העתידי."""
+        if self.list_is_future():
+            # הכנה קדימה: a forecast is NEVER a list to call or mail — fail CLOSED (empty), so a
+            # consumer that forgets its own check cannot reach the wrong week's families.
+            return []
         if getattr(self, "_needs_refresh", False) or not self._rows_data:
             self.refresh()
             self._needs_refresh = False
@@ -3551,6 +3589,12 @@ class GroupUpdateTab(QWidget):
         """Reset the screen for a fresh distribution (#c8m83): clear products/
         reserve counts, name, general note, all ticks and one-time picks, so the
         operator can start recording a new round from scratch."""
+        if self.list_is_future():          # it would wipe the REAL week's shared picks and counts
+            QMessageBox.information(
+                self, "רשימה לשבוע עתידי",
+                "זו תצוגה מקדימה לשבוע עתידי, ו\"חלוקה חדשה\" מאפסת את הרשימה של החלוקה הקרובה.\n"
+                "החזר את התאריך לחלוקה הקרובה כדי לאפס אותה.")
+            return
         if QMessageBox.question(
                 self, "חלוקה חדשה",
                 "לאפס את המסך לחלוקה חדשה?\n\n"

@@ -552,6 +552,16 @@ def _(y, t, test, rel):
     return bool(okk), ""
 
 
+@lint("I54", "הכנה קדימה (שלב 2, 18/10/2026) — week_rows() נכשל סגור: בתחזית (list_is_future) מחזיר [] לפני כל חישוב, וצינתוקים בודק _week_is_future ב-_distribution_rows. צרכן שישכח בדיקה לא ידליף רשימת שבוע אחר")
+def _(y, t, test, rel):
+    gu = _read("tabs/group_update.py")
+    wr = _func_body(gu, "week_rows")
+    okk = "if self.list_is_future():" in wr and "return []" in wr.split("self.refresh()")[0]
+    okk = okk and "_week_is_future()" in _func_body(t, "_distribution_rows")
+    okk = okk and "week_rows() בתחזית ריק" in _read("test_plan_screen.py")
+    return bool(okk), ""
+
+
 if __name__ == "__main__":
     args = set(sys.argv[1:])
     ok = True

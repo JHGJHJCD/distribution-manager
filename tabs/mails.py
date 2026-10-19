@@ -790,6 +790,15 @@ class MailsTab(QWidget):
             cur_n = None
         self.btn_mode_current.setText(self._MODE_TEXT["current"] + (f" · {cur_n}" if cur_n else ""))
 
+    def _week_is_future(self) -> bool:
+        """הכנה קדימה: מסך החלוקה מציג שבוע עתידי (תחזית לקריאה בלבד) — אין אז "רשימת
+        חלוקה נוכחית" למייל: `week_rows()` ריק, וגם שליחה שנבנתה קודם נחסמת."""
+        gt = getattr(self.main, "group_tab", None)
+        try:
+            return bool(gt is not None and gt.list_is_future())
+        except Exception:                        # noqa: BLE001
+            return False
+
     def _set_mode(self, mode):
         self._mode = mode
         self._removed.clear()
@@ -887,6 +896,9 @@ class MailsTab(QWidget):
             self.lbl_list_empty.setText(
                 "הרשימה ריקה — בחר אנשים עם <b>＋ הוסף אדם</b>, או הוסף <b>כתובת מייל חיצונית</b>."
                 if self._mode == self.MODE_MANUAL else
+                "מסך החלוקה מציג כרגע תחזית לשבוע עתידי, ומייל לרשימת החלוקה נשלח רק לחלוקה הקרובה — "
+                "החזר את התאריך במסך \"חלוקה\", או בחר \"כל המקבלים\"."
+                if self._mode == self.MODE_CURRENT and self._week_is_future() else
                 "אין כרגע רשימת חלוקה — הכן את החלוקה במסך \"חלוקה\", או בחר \"כל המקבלים\"."
                 if self._mode == self.MODE_CURRENT else "אין עדיין מקבלים פעילים בתוכנה.")
         self.lbl_list_empty.setVisible(empty)
@@ -1184,6 +1196,11 @@ class MailsTab(QWidget):
 
     def _send(self, targets=None, audience=None, subject=None, body=None,
               attachment=None, with_header=None):
+        if targets is None and self._mode == self.MODE_CURRENT and self._week_is_future():
+            QMessageBox.information(self, "רשימה לשבוע עתידי",
+                                    "מסך החלוקה מציג תחזית לשבוע עתידי — מייל לרשימת החלוקה נשלח רק לחלוקה "
+                                    "הקרובה. החזר את התאריך במסך \"חלוקה\" ונסה שוב.")
+            return
         # v3.46: subject/body מפורשים = שליחה-חוזרת של הודעה ישנה; בלעדיהם = הטיוטה שבשדות.
         # כך "שלח שוב לנכשלים" לא דורס את מה שהמפעיל כתב (גם כשהוא מבטל בחלון האישור).
         # v3.47: גם attachment/with_header מפורשים — שליחה-חוזרת עם הקובץ *המקורי*.

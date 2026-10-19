@@ -2029,7 +2029,8 @@ def set_filter_criteria(criteria: dict):
     set_setting("dist_filter_criteria", json.dumps(criteria or {}))
 
 
-def get_filtered_list(criteria: dict = None, area_filter: str = "הכל", on_date=None):
+def get_filtered_list(criteria: dict = None, area_filter: str = "הכל", on_date=None,
+                      products=None, reserve=None):
     """The distribution list for the custom 'filter' mode: every ACTIVE recipient
     that satisfies the numeric thresholds (priority/frequency are ignored — this
     is a deliberate broad filter over the whole list). Rows are need-scored and
@@ -2065,12 +2066,20 @@ def get_filtered_list(criteria: dict = None, area_filter: str = "הכל", on_dat
                                 ignore=bool(selection.holiday_criterion(criteria)),
                                 cooldown_weeks=get_one_time_cooldown_weeks())
     balance = (criteria or {}).get("balance_communities", True)
+    # `products` / `reserve`: a forecast week keeps its counts in the screen's memory only
+    # (הכנה קדימה) — passed in, so the shared settings of the real week are never consulted.
+    if products is None:
+        try:
+            products = int(get_setting("available_products") or 0)
+        except (TypeError, ValueError):
+            products = 0
+    if reserve is None:
+        try:
+            reserve = int(get_setting("reserve_count") or 0)
+        except (TypeError, ValueError):
+            reserve = 0
     try:
-        products = int(get_setting("available_products") or 0)
-    except (TypeError, ValueError):
-        products = 0
-    try:
-        reserve_n = max(0, int(get_setting("reserve_count") or 0))
+        reserve_n = max(0, int(reserve))
     except (TypeError, ValueError):
         reserve_n = 0
     if balance and products > 0:

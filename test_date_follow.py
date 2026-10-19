@@ -124,8 +124,11 @@ ok("D3 תחזית 18/11: גם החודשי", names(gt._rows_data) == {"ק-שבו
 gt.refresh = _orig_refresh
 del gt.refresh
 set_date(W1)
-ok("D3 week_rows() (מקור הצינתוקים והמיילים) הוא הרשימה העתידית", names(gt.week_rows()) == {"ק-שבועי", "ק-חדש"},
-   str(sorted(names(gt.week_rows()))))
+# שונה ב-S0 של הנעילה (18/10/2026): week_rows() נכשל סגור — בתחזית הוא ריק (היה: הרשימה העתידית), כדי
+# שצינתוק/מייל לא יגיעו לבני משפחה של שבוע אחר; המסך עצמו עדיין מציג את התחזית (_rows_data).
+ok("D3 week_rows() בתחזית ריק (נכשל סגור), והמסך עדיין מציג את הרשימה העתידית",
+   gt.week_rows() == [] and names(gt._rows_data) == {"ק-שבועי", "ק-חדש"},
+   f"{sorted(names(gt.week_rows()))} / {sorted(names(gt._rows_data))}")
 ok("D3 תחזית לא כתבה next_distribution של מי שטרם קיבל",
    db.get_recipient(ids["ק-חדש"])["next_distribution"] in ("", W0.isoformat(), None),
    str(db.get_recipient(ids["ק-חדש"])["next_distribution"]))
@@ -314,8 +317,16 @@ ok("D11 הכרטיסייה חזרה למנות משפחות", "שבוע עתיד
 ml._mode = ml.MODE_CURRENT
 set_date(W1)
 src = {r.get("full_name") for r in ml._source_recs()}
-ok("D12 מיילים 'רשימת החלוקה הנוכחית' = הרשימה העתידית, והתאריך = התאריך שבמסך",
-   src == names(gt.week_rows()) and ml._dist_iso() == W1.isoformat(), f"{sorted(src)} / {ml._dist_iso()}")
+# שונה ב-S0 של הנעילה: במקום "הרשימה העתידית" — מייל לרשימת החלוקה בתחזית ריק ומוסבר, והשליחה חסומה.
+ml._rebuild_targets()
+_sent = []
+_orig_info = QMessageBox.information
+QMessageBox.information = staticmethod(lambda *a, **k: _sent.append(" ".join(str(x) for x in a[1:3])))
+ml._send()
+QMessageBox.information = _orig_info
+ok("D12 מיילים 'רשימת החלוקה הנוכחית' בתחזית: אין נמענים, יש הסבר, ושליחה נחסמת בלי לשלוח",
+   src == set() and ml._week_is_future() and ml._targets == [] and "תחזית" in ml.lbl_list_empty.text()
+   and not ml.lbl_list_empty.isHidden() and ml._worker is None and len(_sent) == 1, f"{sorted(src)} / {ml.lbl_list_empty.text()}")
 set_date(SUN)
 ok("D12 בשבוע הנוכחי התאריך = התאריך שבמסך", ml._dist_iso() == SUN.isoformat())
 

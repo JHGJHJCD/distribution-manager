@@ -583,6 +583,15 @@ def run_lints() -> bool:
     return all_ok
 
 
+@lint("M54", "הכנה קדימה (שלב 2, 18/10/2026) — מייל ל'רשימת החלוקה הנוכחית' נכשל סגור בתחזית: week_rows() ריק, _week_is_future() מוסבר ב-lbl_list_empty, ו-_send חוסם (לפני האימות) כשהמצב הוא רשימת החלוקה והמסך על שבוע עתידי")
+def _(c):
+    m = c["m"]
+    send = _func_body(m, "_send")
+    return ("def _week_is_future" in m and "self._week_is_future()" in send
+            and send.find("self._week_is_future()") < send.find("_validate_message")
+            and "MODE_CURRENT and self._week_is_future()" in m), ""
+
+
 def run_tests() -> bool:
     py = PY312 if os.path.exists(PY312) else sys.executable
     env = dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8")

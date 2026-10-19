@@ -9,7 +9,8 @@ Usage (run with ANY python; it re-dispatches build/test to the pinned 3.12):
     python release.py test                       # run the standalone test suite
     python release.py build                      # build EXE + ASCII copy (local verify)
     python release.py bump 2.79                  # rewrite APP_VERSION only
-    python release.py ship 2.79 -m "commit msg"  # bump -> test -> build -> commit/push -> gh release
+    python release.py ship 2.79 -m "commit msg"  # bump -> test -> commit/push -> tag; the EXE is built + released in the GitHub cloud
+    python release.py ship 2.79 -m "..." --local # old flow: build here + gh release create
 
 `ship` is the only outward-facing command (push + publish). Confirm the version and
 commit message with the user before running it, unless they already said "release it".
@@ -21,9 +22,14 @@ import subprocess
 import sys
 
 # --- Pinned locations (see CLAUDE.md / SKILL.md) --------------------------------
-REPO = r"C:\Users\יהודה\Desktop\מנהל_חלוקה"
-PY312 = r"C:\Users\יהודה\AppData\Local\Programs\Python\Python312\python.exe"
-GH = r"C:\Users\יהודה\AppData\Local\gh_cli\bin\gh.exe"
+# Resolved from this file's location / the running interpreter so the same script
+# also runs inside the GitHub Actions build (.github/workflows/build.yml); on this
+# machine the pinned paths win.
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+_PY312_LOCAL = r"C:\Users\יהודה\AppData\Local\Programs\Python\Python312\python.exe"
+PY312 = _PY312_LOCAL if os.path.exists(_PY312_LOCAL) else sys.executable
+_GH_LOCAL = r"C:\Users\יהודה\AppData\Local\gh_cli\bin\gh.exe"
+GH = _GH_LOCAL if os.path.exists(_GH_LOCAL) else "gh"
 SPEC = "מנהל_חלוקה.spec"
 EXE_SRC = os.path.join("dist", "מנהל_חלוקה.exe")
 EXE_ASCII = os.path.join("dist", "Manhal-Haluka.exe")
@@ -41,7 +47,7 @@ TESTS = [
     "test_card_print.py", "test_mode_reset.py", "test_status_simple.py",
     "test_merge_same_name.py", "test_products_limit.py", "test_settings_report.py", "test_group_report.py",
     "test_bonus_dist.py", "test_date_follow.py", "test_plan_selection.py",
-    "test_plans.py",
+    "test_plans.py", "test_plan_screen.py",
 ]
 
 
@@ -146,18 +152,48 @@ def gen_changelog(version=None, message=None):
     run(cmd, env=env)
 
 
-def ship(version, message):
+def ship(version, message, local=False):
+    """Default = cloud build: tests here, then commit + push + push the tag; the
+    GitHub Actions workflow (build.yml) builds the EXE and creates the Release.
+    `local=True` keeps the old flow (build on this machine + gh release create)."""
     bump(version)
     gen_changelog(version, message)   # before the build so the EXE carries it
     test()
-    build()
     tag = "v" + version
+    if local:
+        build()
     run(["git", "add", "-A"])
     run(["git", "commit", "-m", message])   # commit-msg hook strips any Claude credit
     run(["git", "push"])
-    run([GH, "release", "create", tag, EXE_ASCII, "--repo", GH_REPO,
-         "--latest", "--title", tag, "--notes", message])
-    log("released " + tag + " with asset " + EXE_ASCII)
+    if local:
+        run([GH, "release", "create", tag, EXE_ASCII, "--repo", GH_REPO,
+             "--latest", "--title", tag, "--notes", message])
+        log("released " + tag + " with asset " + EXE_ASCII)
+        return
+    run(["git", "tag", tag])
+    run(["git", "push", "origin", tag])
+    log("tag pushed; waiting for the cloud build (build.yml)")
+    watch_cloud_build(tag)
+
+
+def watch_cloud_build(tag):
+    """Follow the Actions run that the tag push started; fail if it fails."""
+    import time
+    run_id = None
+    for _ in range(12):
+        r = subprocess.run(
+            [GH, "run", "list", "--repo", GH_REPO, "--workflow", "build.yml",
+             "--branch", tag, "--limit", "1", "--json", "databaseId", "-q", ".[0].databaseId"],
+            cwd=REPO, capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip().isdigit():
+            run_id = r.stdout.strip()
+            break
+        time.sleep(5)
+    if not run_id:
+        die("cloud run not found — check https://github.com/" + GH_REPO + "/actions")
+    log("cloud run: https://github.com/" + GH_REPO + "/actions/runs/" + run_id)
+    run([GH, "run", "watch", run_id, "--repo", GH_REPO, "--exit-status", "--interval", "15"])
+    log("released " + tag + " (built in the cloud)")
 
 
 # --- CLI ------------------------------------------------------------------------
@@ -170,6 +206,8 @@ def main():
     s = sub.add_parser("ship")
     s.add_argument("version")
     s.add_argument("-m", "--message", required=True)
+    s.add_argument("--local", action="store_true",
+                   help="build on this machine instead of the GitHub cloud")
     args = p.parse_args()
 
     if args.cmd == "test":
@@ -179,7 +217,7 @@ def main():
     elif args.cmd == "bump":
         bump(args.version)
     elif args.cmd == "ship":
-        ship(args.version, args.message)
+        ship(args.version, args.message, local=args.local)
     log("done: " + args.cmd)
 
 
