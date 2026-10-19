@@ -7,6 +7,7 @@ import uuid
 import hashlib
 import secrets
 from datetime import date, datetime, timedelta
+import datetime as _dt
 
 
 def _utc_now() -> str:
@@ -2535,9 +2536,9 @@ def _plan_wed(week_wed) -> date:
     """A lock is keyed by a WEDNESDAY (date or ISO text). ValueError otherwise."""
     if isinstance(week_wed, str):
         week_wed = date.fromisoformat(week_wed.strip()[:10])
-    if isinstance(week_wed, datetime):
+    if isinstance(week_wed, _dt.datetime):
         week_wed = week_wed.date()
-    if not isinstance(week_wed, date) or week_wed.weekday() != 2:
+    if not isinstance(week_wed, _dt.date) or week_wed.weekday() != 2:   # (_dt: the real classes — tests fake `date`)
         raise ValueError("נעילה היא תמיד ליום רביעי")
     return week_wed
 
@@ -2705,6 +2706,76 @@ def plan_states(today=None) -> dict:
         plans = [(w, d) for w, d in _plan_rows(conn) if not d.get("deleted")]
         executed = _executed_weeks(conn, [w for w, _ in plans])
     return {w: selection.plan_state(w, today, w in executed) for w, _ in plans}
+
+
+def weeks_executed(weds) -> set:
+    """Public wrapper of _executed_weeks: which of these Wednesdays already had a REGULAR
+    round recorded (screens use it for the 'week before is not locked' warning)."""
+    weds = [_plan_wed(w) for w in weds]
+    with get_connection() as conn:
+        return _executed_weeks(conn, weds)
+
+
+def peer_app_versions() -> dict:
+    """{device id: (version, name)} the OTHER computers announced through the synced
+    `app_version_<device>` setting ('3.83|name'). Empty when sync is off — a lock then
+    has no second computer that could ignore it."""
+    try:
+        from utils import sync
+        if not sync.is_enabled():
+            return {}
+        me = sync._load_state().get("device_id") or ""
+    except Exception:
+        return {}
+    out = {}
+    with get_connection() as conn:
+        for r in conn.execute("SELECT key, value FROM settings WHERE key GLOB 'app_version_*'"):
+            dev = r["key"][len("app_version_"):]
+            if dev and dev != me:
+                ver, _, name = str(r["value"] or "").partition("|")
+                out[dev] = (ver.strip(), name.strip())
+    return out
+
+
+def plan_rows(plan: dict, on_date=None):
+    """The rows of a LOCKED list for the screen, in the saved order: (rows, info). Each row
+    is the live card plus `_reserve` / `_extra` (kind one|man) / `_plan_guid`, with the
+    need-score and waiting time computed for display only. A member whose card is gone is
+    skipped (info['missing']); one who was PAUSED since is skipped too (info['inactive'])
+    unless he was added by hand — nobody paused is mailed, called or printed. A guid of a
+    merged-away card follows `merged_guids` to the card that stayed."""
+    rows, info, seen = [], {"missing": 0, "inactive": 0}, set()
+    with get_connection() as conn:
+        for m in (plan or {}).get("members", []):
+            g = resolve_merged_guid(conn, str(m.get("g") or ""))
+            rec = conn.execute("SELECT * FROM recipients WHERE guid=?", (g,)).fetchone() if g else None
+            if rec is None:
+                info["missing"] += 1
+                continue
+            r = dict(rec)
+            if r["id"] in seen:
+                continue
+            kind = m.get("kind") or "reg"
+            r["_inactive"] = r.get("status") != "פעיל"
+            if r["_inactive"] and kind != "man":
+                info["inactive"] += 1
+                continue
+            seen.add(r["id"])
+            reserve = m.get("role") == selection.ROLE_RESERVE
+            r["_reserve"] = reserve
+            r["_role"] = selection.ROLE_RESERVE if reserve else selection.ROLE_MAIN
+            r["_extra"] = kind in ("one", "man")
+            r["_plan_kind"] = kind
+            r["_plan_guid"] = str(m.get("g") or "")
+            r["_plan_note"] = str(m.get("note") or "")
+            try:
+                r["last_dist_date"] = date.fromisoformat(r.get("last_distribution") or "")
+            except ValueError:
+                r["last_dist_date"] = date(2000, 1, 1)
+            r["days_since"] = recency_days(r, on_date)
+            rows.append(r)
+    scoring.annotate_need_scores(rows, get_need_weights())          # display only
+    return rows, info
 
 
 def _live_plan_index(conn, today=None, exclude_wed=None) -> dict:

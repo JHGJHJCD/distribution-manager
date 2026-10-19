@@ -27,6 +27,7 @@ from utils.ui import (busy_cursor, attach_empty_state, refresh_empty_state, ALIG
                       apply_header_icons, show_score_breakdown, show_filter_breakdown)
 from utils import email_utils
 from utils import hebdate
+from tabs.plan_lock import PlanLockMixin
 
 
 class _StageToggle(QWidget):
@@ -752,8 +753,9 @@ class OneTimePickerDialog(QDialog):
     _COLS = ["✔", "שם מלא", "עדיפות", "ניקוד", "אזור", "טלפון"]
 
     def __init__(self, parent=None, manual_regulars: int = 0, removed_regulars: int = 0,
-                 on_date=None):
+                 on_date=None, counts=None):
         super().__init__(parent)
+        self._counts = counts                       # (products, reserve) of a forecast week — None = the shared settings
         self._manual_regulars = manual_regulars   # task 13: regulars added by hand
         self._removed_regulars = removed_regulars  # #andd6: due regulars taken off the list
         self._on_date = on_date                    # forecast week (הכנה קדימה); None = the real upcoming one
@@ -780,7 +782,7 @@ class OneTimePickerDialog(QDialog):
         outer = QVBoxLayout(self)
         outer.setSpacing(8)
 
-        total, reserve_n = self._shared_counts()
+        total, reserve_n = self._counts if self._counts is not None else self._shared_counts()
         if total > 0:
             n, regs = db.compute_suggested_n(total, self._manual_regulars, on_date=self._on_date)
             gone = min(self._removed_regulars, regs)
@@ -1259,10 +1261,11 @@ SCOPE_WEEK = "חלוקת השבוע"
 SCOPE_ALL = "כל הקבועים"
 
 
-class GroupUpdateTab(QWidget):
+class GroupUpdateTab(PlanLockMixin, QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.main_win = parent
+        self._plan_init()                # הכנה קדימה, נעילה (tabs/plan_lock.py)
         self._rows_data = []             # full weekly + one-time list (unfiltered)
         # v2.60 two-stage flow: 'prep' = building the list (NO checkboxes at all;
         # the ambiguous ✔ column is hidden), 'record' = after the distribution,
@@ -1287,6 +1290,9 @@ class GroupUpdateTab(QWidget):
         self._update_mode_controls()
         self.refresh()
         self._setup_inbox_poller()
+
+    def _today(self):
+        return date.today()
 
     # ── Auto-import: watch the inbox for volunteer replies ─────────────────────
     def _setup_inbox_poller(self):
@@ -1389,7 +1395,7 @@ class GroupUpdateTab(QWidget):
                 g = rec.get("guid") or ""
                 out.append(g if g else str(rid))
             return ",".join(out)
-        if self.list_is_future():        # belt and braces: a forecast never writes the real picks
+        if self.list_is_future() or self._plan_mode():   # a forecast / a locked list never writes the real picks
             return
         db.set_setting("weekly_extra_ids", _guids(self._extra_ids))
         db.set_setting("weekly_reserve_ids", _guids(self._reserve_ids))
@@ -1410,6 +1416,10 @@ class GroupUpdateTab(QWidget):
 
     def add_one_time_picks(self, recs: list) -> int:
         """Called by the one-time tab. Records picks (persisted) and refreshes."""
+        if self._plan_mode():
+            self._plan_add_members(recs, "one")
+            self.refresh()
+            return len([r for r in recs if r.get("id") is not None])
         added = 0
         for rec in recs:
             rid = rec.get("id")
@@ -1476,6 +1486,7 @@ class GroupUpdateTab(QWidget):
         self.chip_mode.setStyleSheet(_CHIP_AMBER)
         self.chip_mode.setVisible(False)
         head.addWidget(self.chip_mode)
+        self._plan_make_chips(head)
         lay.addLayout(head)
 
         # Forecast note (הכנה קדימה, שלב 1) — visible only while the date on screen belongs
@@ -1491,6 +1502,7 @@ class GroupUpdateTab(QWidget):
             " padding:9px 14px; font-size:13px; font-weight:700;}")
         self.lbl_future_note.setVisible(False)
         lay.addWidget(self.lbl_future_note)
+        self._plan_make_banner(lay)       # הכנה קדימה, נעילה: באנר "רשימה נעולה"
 
         # ── Step ①: distribution details ──────────────────────────────────────
         card1, c1, _h1 = _step_card("1", "פרטי החלוקה", "שם, תאריך, כמות המוצרים והרזרבה")
@@ -1945,6 +1957,7 @@ class GroupUpdateTab(QWidget):
         btn_pdf.setToolTip("שמירת רשימת החלוקה כקובץ PDF בתיקיית ההורדות ופתיחתו")
         btn_pdf.clicked.connect(self._export_pdf)
         bar.addWidget(btn_pdf)
+        self._plan_make_button(bar)
 
         btn_reset = QPushButton("  ⟳ חלוקה חדשה")
         btn_reset.setObjectName("warning")
@@ -2059,11 +2072,17 @@ class GroupUpdateTab(QWidget):
         self.btn_pdf.setVisible(not record)
         self.stage_toggle.set_stage(self._stage)
         self._refresh_header_chips()
+        if hasattr(self, "btn_lock_plan"):
+            self._plan_refresh_ui()
 
     # ── data ───────────────────────────────────────────────────────────────────
     def _extra_recipients(self, base_ids: set) -> list:
         """Fetch the persisted one-time picks from the DB (so they survive
-        restart), excluding any already in the base list."""
+        restart), excluding any already in the base list. The picks belong to the REAL
+        week: a forecast (הכנה קדימה) never shows them, so a lock made on it holds only
+        what that week's own list holds."""
+        if self._list_date() is not None:
+            return []
         out = []
         for rid in self._extra_ids:
             if rid in base_ids:
@@ -2127,6 +2146,7 @@ class GroupUpdateTab(QWidget):
             "ואחריהם הרזרבה")
         self.lbl_leaders_hint.setVisible(mode in ("scored", "all") or by_wait)
         self.btn_edit_filter.setVisible(mode == "filter")
+        self.mode_combo.setEnabled(not self._plan_mode())      # a locked list was built in ONE mode
         self._refresh_header_chips()
 
     def _filter_balanced(self) -> bool:
@@ -2163,6 +2183,9 @@ class GroupUpdateTab(QWidget):
         return tuple(self._forecast_counts[key])
 
     def _store_count(self, idx: int, key: str, value: int):
+        if self._plan_mode():             # a locked list keeps its own counts
+            self._plan_set_count(idx, value)
+            return
         fk = self._forecast_key()
         if fk is None:
             db.set_setting(key, str(value))
@@ -2232,7 +2255,7 @@ class GroupUpdateTab(QWidget):
         # list is chosen a different way (by score / by criteria / not at all), so
         # the leftover hint + 'בחר חד-פעמיים' button are irrelevant there and were
         # showing a nonsensical "מספיק לקבועים בלבד (0)" (bug #6kms5) — hide them.
-        if self._current_mode() != "schedule":
+        if self._current_mode() != "schedule" or self._plan_mode():
             self.lbl_leftover.setText("")
             self.leftover_card.setVisible(False)
             return
@@ -2433,7 +2456,7 @@ class GroupUpdateTab(QWidget):
         that belongs to the real list and syncs to the other computer — made on a
         forecast they would land on this week's list. Until each week keeps its own picks
         (stage 2, the lock) they are refused here. Returns True when refused."""
-        if not self.list_is_future():
+        if not self.list_is_future() or self._plan_mode():     # a locked forecast IS editable
             return False
         QMessageBox.information(
             self, "רשימה לשבוע עתידי",
@@ -2445,14 +2468,15 @@ class GroupUpdateTab(QWidget):
     def _sync_future_note(self):
         """Show / hide the forecast note and add the forecast suffix to the count chip."""
         ld = self._list_date()
-        if ld is None:
+        if ld is None or self._plan_mode():
             self.lbl_future_note.setText("")
             self.lbl_future_note.setVisible(False)
             return
         wed = selection.upcoming_wednesday(ld)
         self.lbl_future_note.setText(
             f"תצוגה מקדימה לרביעי {wed:%d/%m/%Y} — לפי מה שנרשם עד היום. "
-            "אפשר להדפיס ולייצא; רישום חלוקה אפשרי רק בתאריך של החלוקה הקרובה.")
+            "אפשר להדפיס ולייצא; רישום חלוקה אפשרי רק בתאריך של החלוקה הקרובה."
+            + self._plan_prev_weeks_warning(wed))
         self.lbl_future_note.setVisible(True)
         self.lbl_regulars_count.setText(
             self.lbl_regulars_count.text() + f"  ·  תחזית לרביעי {wed:%d/%m}")
@@ -2471,7 +2495,11 @@ class GroupUpdateTab(QWidget):
     def refresh(self):
         # Re-read the one-time picks: they are a synced setting, so a pick made
         # on the other computer arrives through the sync refresh.
-        self._load_extras()
+        # (הכנה קדימה, נעילה: a week with a live lock shows the lock — _refresh_locked — and
+        # never reads or writes these shared picks.)
+        plan = self._sync_plan()
+        if plan is None:
+            self._load_extras()
         # The name/distributor suggestions are synced settings too — a name typed
         # on the other computer used to appear only after a save or a restart.
         self._reload_name_history()
@@ -2484,6 +2512,9 @@ class GroupUpdateTab(QWidget):
             self.mode_combo.setCurrentIndex(saved_idx)
             self.mode_combo.blockSignals(False)
             self._update_mode_controls()
+        if plan is not None:
+            self._refresh_locked(plan)
+            return
         mode = self._current_mode()
         ld = self._list_date()      # הכנה קדימה: the forecast week's date, None = the ordinary list
         f_products, f_reserve = self._screen_counts() if ld is not None else (None, None)
@@ -2602,6 +2633,7 @@ class GroupUpdateTab(QWidget):
         self._update_leftover_hint()
         self._update_mode_controls()     # the hint follows the filter's balance switch
         self._sync_future_note()
+        self._plan_refresh_ui()
         self._mark_dependents_stale()
 
     def _mark_dependents_stale(self):
@@ -2866,6 +2898,11 @@ class GroupUpdateTab(QWidget):
         rid = rec.get("id")
         if rid is None or self._block_picks_in_forecast():
             return
+        if self._plan_mode():              # a locked list: the removal is written to the lock at once
+            self._plan_remove_member(rec)
+            self._checked_ids.discard(rid)
+            self.refresh()
+            return
         self._removed_ids.add(rid)
         self._extra_ids.discard(rid)
         self._reserve_ids.discard(rid)
@@ -2898,6 +2935,8 @@ class GroupUpdateTab(QWidget):
                     self._row_notes[rid] = txt
                 else:
                     self._row_notes.pop(rid, None)
+                if self._plan_mode():
+                    self._plan_set_note(rid, txt)
             return
         self._update_counts()
 
@@ -3081,6 +3120,8 @@ class GroupUpdateTab(QWidget):
         """The round is in history (saved here or imported from the volunteer's
         file) — start a clean next cycle: drop the one-time picks so they are
         not recorded a second time, clear ticks/notes, back to the prep stage."""
+        if self._plan_mode():             # the lock is now an executed round — back to the draft state
+            self._plan_leave()
         self._extra_ids.clear()
         self._reserve_ids.clear()
         self._removed_ids.clear()
@@ -3572,6 +3613,13 @@ class GroupUpdateTab(QWidget):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
+        if self._plan_mode():             # a locked list: written to the lock at once
+            self._plan_add_members([{"id": i} for i in ids], "man")
+            self._checked_ids.update(ids)
+            self.refresh()
+            if self.main_win:
+                self.main_win.status_msg(f"נוספו {len(ids)} מקבלים ידנית לרשימה הנעולה")
+            return
         added = 0
         for rid in ids:
             if rid not in self._extra_ids:
@@ -3595,6 +3643,15 @@ class GroupUpdateTab(QWidget):
                 "זו תצוגה מקדימה לשבוע עתידי, ו\"חלוקה חדשה\" מאפסת את הרשימה של החלוקה הקרובה.\n"
                 "החזר את התאריך לחלוקה הקרובה כדי לאפס אותה.")
             return
+        if self._plan_mode():              # reset = a new distribution; a lock is cancelled only on purpose
+            if QMessageBox.question(
+                    self, "הרשימה נעולה",
+                    "הרשימה נעולה. לבטל את הנעילה ולאפס את המסך לחלוקה חדשה?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+                return
+            db.delete_plan(self._plan["week_wed"])
+            self._plan_leave()
         if QMessageBox.question(
                 self, "חלוקה חדשה",
                 "לאפס את המסך לחלוקה חדשה?\n\n"
