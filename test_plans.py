@@ -131,6 +131,8 @@ now = datetime.now(timezone.utc)
 ok("D2a updated_at = זמן הכתיבה (בטווח דקה מעכשיו), לא הרביעי של הנעילה",
    abs((now - stamp).total_seconds()) < 60 and far["updated_at"][:10] != far["week_wed"])
 first = db.get_plan(D("2026-11-25"))
+import time as _time
+_time.sleep(0.05)       # two saves in the same clock tick got the same stamp (flaky ~1 in 6 runs)
 second = db.save_plan(P(D("2026-11-25"), [M(g_mon), M(g_wk)]))
 ok("D2b עריכה מאוחרת: updated_at גדל ו-created_at נשמר", second["updated_at"] > first["updated_at"]
    and second["created_at"] == first["created_at"])
