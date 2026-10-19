@@ -1285,6 +1285,10 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         # them back rather than silently dropping someone).
         self._removed_ids: set = set()
         self._removed_due = 0            # how many due regulars of the base list are removed
+        # הכנה קדימה: each coming week keeps its OWN hand-picks in memory (extras / reserve /
+        # removed / notes); "" = the real week, whose extras live in the shared settings.
+        self._forecast_picks: dict = {}
+        self._pick_ctx = ""
         self._load_extras()
         self._build_ui()
         self._update_mode_controls()
@@ -1370,6 +1374,13 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         """The picks are stored as recipient GUIDs (stable across the two synced
         computers) and resolved to this machine's local ids. Plain numbers are
         legacy local ids written by older versions — honoured only here."""
+        fk = self._forecast_key() if hasattr(self, "date_edit") else None
+        if fk:                           # a forecast week: its own picks, memory only
+            slot = self._pick_slot(fk)
+            self._extra_ids = set(slot["extra"])
+            self._reserve_ids = set(slot["reserve"])
+            return
+
         def _parse(key):
             raw = db.get_setting(key) or ""
             ids = set()
@@ -1387,6 +1398,24 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         self._extra_ids = _parse("weekly_extra_ids")
         self._reserve_ids = _parse("weekly_reserve_ids")
 
+    def _pick_slot(self, key: str) -> dict:
+        return self._forecast_picks.setdefault(
+            key, {"extra": set(), "reserve": set(), "removed": set(), "notes": {}})
+
+    def _switch_pick_ctx(self):
+        """The date moved to another week: put this week's hand-picks aside and bring back the
+        ones of the week now on screen (the real week = "" — its removals / notes are memory,
+        its extras are re-read from the shared settings by _load_extras)."""
+        new = self._forecast_key() or ""
+        old = self._pick_ctx
+        if new == old:
+            return
+        slot = self._pick_slot(old)
+        slot["removed"], slot["notes"] = set(self._removed_ids), dict(self._row_notes)
+        self._pick_ctx = new
+        slot = self._pick_slot(new)
+        self._removed_ids, self._row_notes = set(slot["removed"]), dict(slot["notes"])
+
     def _persist_extras(self):
         def _guids(ids):
             out = []
@@ -1399,7 +1428,12 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
                 g = rec.get("guid") or ""
                 out.append(g if g else str(rid))
             return ",".join(out)
-        if self.list_is_future() or self._plan_mode() or self._fix_mode():   # a forecast / a lock / a correction never writes the real picks
+        if self._plan_mode() or self._fix_mode():   # a lock / a correction never writes the real picks
+            return
+        fk = self._forecast_key()        # (the week on screen — not the ctx, which lags behind while a lock is shown)
+        if fk:                           # a forecast keeps its picks in memory — never the real (synced) ones
+            slot = self._pick_slot(fk)
+            slot["extra"], slot["reserve"] = set(self._extra_ids), set(self._reserve_ids)
             return
         db.set_setting("weekly_extra_ids", _guids(self._extra_ids))
         db.set_setting("weekly_reserve_ids", _guids(self._reserve_ids))
@@ -2085,11 +2119,8 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
     # ── data ───────────────────────────────────────────────────────────────────
     def _extra_recipients(self, base_ids: set) -> list:
         """Fetch the persisted one-time picks from the DB (so they survive
-        restart), excluding any already in the base list. The picks belong to the REAL
-        week: a forecast (הכנה קדימה) never shows them, so a lock made on it holds only
-        what that week's own list holds."""
-        if self._list_date() is not None:
-            return []
+        restart), excluding any already in the base list. `_extra_ids` is the picks of the
+        week on screen: the real week's, or — on a forecast (הכנה קדימה) — that forecast's own."""
         out = []
         for rid in self._extra_ids:
             if rid in base_ids:
@@ -2414,8 +2445,8 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         if self._current_mode() != "schedule":
             return True
         if self.list_is_future():
-            # A forecast can be printed as it is: the hand-picks are refused on it
-            # (_block_picks_in_forecast), so the gate would never be satisfiable.
+            # A forecast can be printed as it is: its one-timers are chosen at lock time
+            # (or by hand), so the gate must not hold the printout back.
             return True
         n = self._one_time_remainder()
         if n <= 0 or self._main_pick_count() > 0:
@@ -2459,23 +2490,17 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         QMessageBox.warning(self, "רשימה לשבוע עתידי", self._FUTURE_BLOCK_MSG + extra)
 
     def _block_picks_in_forecast(self) -> bool:
-        """The hand-picks (one-time picks, manual adds, 🗑 removals) are ONE saved setting
-        that belongs to the real list and syncs to the other computer — made on a
-        forecast they would land on this week's list. Until each week keeps its own picks
-        (stage 2, the lock) they are refused here. Returns True when refused."""
+        """Hand-picks (one-time picks, manual adds, 🗑 removals) are allowed on a forecast
+        week too (יהודה 19/10/2026): they live in memory for THAT week (`_forecast_picks`),
+        never in the real week's synced settings, and become part of the list when it is
+        locked. Only a correction of an automatic registration (RULE 11) refuses them.
+        Returns True when refused."""
         if self._fix_mode():              # the list of a correction is fixed — only the ticks change
             QMessageBox.information(self, "תיקון רישום אוטומטי",
                                     "בזמן תיקון אפשר רק להוריד את הסימון ממי שלא הגיע. "
                                     "שמור את התיקון או בטל אותו, ואז שנה את הרשימה.")
             return True
-        if not self.list_is_future() or self._plan_mode():     # a locked forecast IS editable
-            return False
-        QMessageBox.information(
-            self, "רשימה לשבוע עתידי",
-            "זו תצוגה מקדימה לשבוע עתידי, ובחירות ידניות (חד-פעמיים, הוספה והסרה) עדיין "
-            "נשמרות רק לרשימה של החלוקה הקרובה, ולכן הן נחסמות כאן.\n"
-            "החזר את התאריך לחלוקה הקרובה כדי לשנות את הרשימה.")
-        return True
+        return False
 
     def _sync_future_note(self):
         """Show / hide the forecast note and add the forecast suffix to the count chip."""
@@ -2487,7 +2512,8 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         wed = selection.upcoming_wednesday(ld)
         self.lbl_future_note.setText(
             f"תצוגה מקדימה לרביעי {wed:%d/%m/%Y} — לפי מה שנרשם עד היום. "
-            "אפשר להדפיס ולייצא; רישום חלוקה אפשרי רק בתאריך של החלוקה הקרובה."
+            "אפשר להדפיס, לייצא ולשנות את הרשימה (חד-פעמיים, הוספה והסרה) — השינויים נשמרים "
+            "לשבוע הזה בלבד, ונשמרים לצמיתות רק אחרי \"נעל רשימה\". רישום חלוקה אפשרי רק בתאריך של החלוקה הקרובה."
             + self._plan_prev_weeks_warning(wed))
         self.lbl_future_note.setVisible(True)
         self.lbl_regulars_count.setText(
@@ -2514,6 +2540,7 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         # never reads or writes these shared picks.)
         plan = self._sync_plan()
         if plan is None:
+            self._switch_pick_ctx()
             self._load_extras()
         # The name/distributor suggestions are synced settings too — a name typed
         # on the other computer used to appear only after a save or a restart.

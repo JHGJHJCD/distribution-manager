@@ -283,6 +283,28 @@ picker = gu.OneTimePickerDialog(gt, on_date=W3, counts=(8, 0))
 offered = {r["id"] for r in picker._rows}
 ok("U12e תחזית של השבוע שאחריו לא מציעה את אותם חד-פעמיים (הפסקה 4 שבועות)",
    not (offered & {i for i in ONE if guid(i) in {m["g"] for m in ones}}) and offered, f"{sorted(offered)}")
+# ── U13 (19/10/2026) תחזית: בחירות ידניות נשמרות לשבוע הזה ונכנסות לנעילה ──────────────
+set_date(W3); gt.refresh()
+glob13 = settings()
+pick13 = ONE[-1]
+victim13 = next(r for r in gt._rows_data if r["id"] in WK)
+gt.add_one_time_picks([{"id": pick13}])
+gt._remove_from_list(victim13)
+rows13 = {r["id"] for r in gt._rows_data}
+ok("U13a בתחזית לא נעולה: הבחירה בתוך הרשימה וההסרה מחוץ לה", pick13 in rows13 and victim13["id"] not in rows13)
+ok("U13b ההגדרות הגלובליות לא נגעו", settings() == glob13, str(settings()))
+set_date(W2); gt.refresh(); set_date(W3); gt.refresh()
+ok("U13c יציאה וחזרה לאותו שבוע: הבחירות נשארו",
+   pick13 in {r["id"] for r in gt._rows_data} and victim13["id"] in gt._removed_ids)
+gt._lock_plan()                      # יש בחירה ידנית ← אין הצעה אוטומטית (הדיאלוג לא נפתח)
+p_w3 = db.get_plan(W3)
+mem13 = {m["g"]: m for m in p_w3["members"]}
+ok("U13d הנעילה מחזיקה את הבחירה הידנית ומשמיטה את מי שהוסר",
+   guid(pick13) in mem13 and mem13[guid(pick13)]["kind"] == "one" and guid(victim13["id"]) not in mem13
+   and guid(victim13["id"]) in p_w3["removed"], str(sorted(mem13)))
+ok("U13e ההגדרות הגלובליות עדיין לא נגעו", settings() == glob13, str(settings()))
+gt._unlock_plan()
+
 set_date(W2)
 shown.clear(); gt._on_stage_toggle("record")
 ok("U6a רישום בתחזית נעולה חסום", gt._stage == "prep" and shown, str(shown))

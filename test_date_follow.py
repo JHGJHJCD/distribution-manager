@@ -270,12 +270,11 @@ class _Spy:
 _orig_man, _orig_ot = gu._ManualAddDialog, gu.OneTimePickerDialog
 gu._ManualAddDialog = gu.OneTimePickerDialog = _Spy
 try:
-    # (18/10/2026) בתחזית שני הדיאלוגים נחסמים לגמרי — הבחירות הידניות הן הגדרה אחת של הרשימה
-    # האמיתית (ראו D14); ה-on_date של הדיאלוגים נשמר לשלב 2 (בחירות פר-שבוע)
+    # (19/10/2026) בתחזית שני הדיאלוגים נפתחים עם תאריך התחזית — הבחירות נשמרות לשבוע הזה בלבד (D14)
     set_date(W1); seen.clear(); gt._add_manual()
-    ok("D10 _add_manual בתחזית: נחסם — הדיאלוג לא נפתח", seen == {}, str(seen))
+    ok("D10 _add_manual בתחזית: הדיאלוג נפתח עם תאריך התחזית", seen.get("on_date") is not None, str(seen))
     seen.clear(); gt._open_one_time_picker()
-    ok("D10 בחירת חד-פעמיים בתחזית: נחסמת — הדיאלוג לא נפתח", seen == {}, str(seen))
+    ok("D10 בחירת חד-פעמיים בתחזית: הדיאלוג נפתח עם תאריך התחזית", seen.get("on_date") is not None, str(seen))
     set_date(SUN); seen.clear(); gt._add_manual()
     ok("D10 בשבוע הנוכחי on_date=None (בלי שינוי)", seen.get("on_date") is None and "on_date" in seen, str(seen))
 finally:
@@ -357,30 +356,42 @@ ok("D13b ... ובתחזית ל-4/11 גם הדו-שבועי (התור שלו הג
 set_date(FRI)
 ok("D13b חזרה ליום שישי: התחזית נעלמה והרשימה חזרה", gt.lbl_future_note.isHidden() and names(gt._rows_data) == cur)
 
-# ── 14. בחירות ידניות (חד-פעמיים / הוספה / הסרה 🗑) הן הגדרה אחת של הרשימה האמיתית ─────────
-# בתחזית הן נחסמות (אחרת יידלפו לרשימת השבוע ולמחשב השני — עד שבשלב 2 לכל שבוע יהיו בחירות משלו)
+# ── 14. בחירות ידניות (חד-פעמיים / הוספה / הסרה 🗑) בתחזית: נשמרות לשבוע התחזית בלבד ─────────
+# (19/10/2026, הכרעת יהודה — "בלי הגבלה") כל שבוע עתידי מחזיק בחירות משלו בזיכרון; הגדרות השבוע
+# האמיתי (שמסונכרנות למחשב השני) לא נוגעות בהן
 set_today(SUN)
-setup_week(SUN.isoformat()); set_date(SUN); gt.refresh()
+_ids14 = setup_week(SUN.isoformat()); set_date(SUN); gt.refresh()
 _dialogs = []
 _orig_exec = QDialog.exec
 QDialog.exec = lambda self, *a, **k: (_dialogs.append(type(self).__name__), QDialog.DialogCode.Rejected)[1]
 try:
     set_date(W1); gt.refresh()
     ok("D14 בתחזית: זו תחזית", gt.list_is_future())
-    _row = next(iter(gt._rows_data), None)
-    _before = set(gt._removed_ids)
-    if _row is not None:
-        gt._remove_from_list(_row)
-    ok("D14 בתחזית: הסרה (🗑) נחסמת — לא נרשמת", gt._removed_ids == _before, str(gt._removed_ids))
     gt._open_one_time_picker(); gt._add_manual()
-    ok("D14 בתחזית: 'בחר חד-פעמיים' ו'הוסף מקבל' לא פותחים דיאלוג", _dialogs == [], str(_dialogs))
+    ok("D14 בתחזית: 'בחר חד-פעמיים' ו'הוסף מקבל' נפתחים", _dialogs == ["OneTimePickerDialog", "_ManualAddDialog"], str(_dialogs))
+    _row = next((r for r in gt._rows_data if not r.get("_reserve")), None)
+    ok("D14 בתחזית: יש שורה להסרה", _row is not None)
+    gt._remove_from_list(_row)
+    ok("D14 בתחזית: הסרה (🗑) נרשמת", _row["id"] in gt._removed_ids and _row["id"] not in {r["id"] for r in gt._rows_data},
+       str(gt._removed_ids))
+    # הוספה ידנית ישירות (בלי דיאלוג): add_one_time_picks הוא הנתיב של הבחירות
+    _extra_rid = _ids14["ק-חודשי"]      # חודשי שתורו עוד לא הגיע ב-28/10 — לא ברשימה עד שמוסיפים ידנית
     db.set_setting("weekly_extra_ids", "keep-me")
-    gt._extra_ids = {ids["ק-שבועי"]}
-    gt._persist_extras()
-    ok("D14 בתחזית: _persist_extras לא כותבת את ההגדרה האמיתית", db.get_setting("weekly_extra_ids") == "keep-me",
+    if _extra_rid is not None:
+        gt.add_one_time_picks([{"id": _extra_rid}])
+        ok("D14 בתחזית: בחירה נכנסת לרשימת התחזית", _extra_rid in {r["id"] for r in gt._rows_data})
+    ok("D14 בתחזית: ההגדרה האמיתית של הבחירות לא נכתבת", db.get_setting("weekly_extra_ids") == "keep-me",
        db.get_setting("weekly_extra_ids"))
-    gt._extra_ids = set()
-    set_date(SUN); gt.refresh()                       # חזרה לשבוע האמיתי: הכל עובד
+    set_date(SUN); gt.refresh()                       # השבוע האמיתי: לא רואה כלום מהתחזית
+    ok("D14 השבוע האמיתי לא ירש את ההסרה", _row["id"] not in gt._removed_ids, str(gt._removed_ids))
+    ok("D14 השבוע האמיתי לא ירש את הבחירה", _extra_rid is None or _extra_rid not in gt._extra_ids, str(gt._extra_ids))
+    set_date(W2); gt.refresh()                        # תחזית אחרת: נקייה
+    ok("D14 תחזית של שבוע אחר נקייה", _row["id"] not in gt._removed_ids and _extra_rid not in gt._extra_ids)
+    set_date(W1); gt.refresh()                        # חזרה לתחזית הראשונה: הבחירות חזרו
+    ok("D14 חזרה לתחזית: ההסרה והבחירה חזרו", _row["id"] in gt._removed_ids
+       and (_extra_rid is None or _extra_rid in gt._extra_ids), f"{gt._removed_ids} {gt._extra_ids}")
+    set_date(SUN); gt.refresh()
+    _dialogs.clear()
     ok("D14 חזרה לשבוע האמיתי: הוספה ידנית פותחת דיאלוג", (gt._add_manual(), _dialogs)[1] == ["_ManualAddDialog"], str(_dialogs))
     _row2 = next(iter(gt._rows_data), None)
     if _row2 is not None:

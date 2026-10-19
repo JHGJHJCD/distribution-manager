@@ -432,7 +432,8 @@ class PlanLockMixin:
         wk = self._plan_week()
         ld = self._list_date()
         picks = []
-        if ld is not None and self._current_mode() == "schedule":
+        if ld is not None and self._current_mode() == "schedule" and self._main_pick_count() == 0:
+            # (a forecast whose one-timers were already picked by hand keeps exactly those)
             picks = self._plan_suggest_one_time(ld)
             if picks is None:
                 return
