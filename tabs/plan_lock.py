@@ -289,7 +289,7 @@ class PlanLockMixin:
             return "הקלד קודם כמה מוצרים זמינים"
         if not self._rows_data:
             return "אין מקבלים ברשימה לנעילה"
-        return self._plan_peer_block()
+        return ""
 
     def _plan_refresh_ui(self):
         states = db.plan_states(self._today())
@@ -422,6 +422,12 @@ class PlanLockMixin:
         reason = self._plan_lock_block_reason()
         if reason:
             QMessageBox.information(self, "נעילת רשימה", reason)
+            return
+        peer = self._plan_peer_block()
+        if peer and QMessageBox.question(
+                self, "נעילת רשימה", peer + "\n\nלנעול בכל זאת?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
             return
         wk = self._plan_week()
         ld = self._list_date()

@@ -186,7 +186,7 @@ unknown = PlanLockMixin._plan_peer_block(object())
 db.set_setting("app_version_otherdev", f"{PLAN_MIN_VERSION}|המחשב השני")
 sync.disable_sync() if hasattr(sync, "disable_sync") else None
 no_sync = PlanLockMixin._plan_peer_block(object())
-ok("Y12a גרסה ישנה במחשב השני ← הכפתור נעול עם הסבר", "3.80" in blocked and "לא יכבד" in blocked, blocked)
+ok("Y12a גרסה ישנה במחשב השני ← אזהרה עם הסבר (לא חסימה; נשאלים בלחיצה)", "3.80" in blocked and "לא יכבד" in blocked, blocked)
 ok("Y12b גרסה חדשה ← פתוח", open_ == "")
 ok("Y12c גרסה לא ידועה (ריקה) ← נעול (שמרני)", unknown != "")
 ok("Y12d בלי סנכרון אין מחשב שני ← פתוח", no_sync == "")
