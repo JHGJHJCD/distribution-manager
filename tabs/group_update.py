@@ -1290,6 +1290,7 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         self._update_mode_controls()
         self.refresh()
         self._setup_inbox_poller()
+        self._autoreg_setup()            # רישום אוטומטי של רשימה נעולה (כלל 11)
 
     def _today(self):
         return date.today()

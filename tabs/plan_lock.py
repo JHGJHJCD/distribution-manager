@@ -12,11 +12,11 @@
 ההסרות וההערות של "הטיוטה" (זיכרון בלבד) נשמרות בצד (`_plan_stash`) ומוחזרות ביציאה מהמצב.
 """
 import copy
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
-    QAbstractItemView, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
+    QAbstractItemView, QCheckBox, QDialog, QFrame, QHBoxLayout, QLabel, QMessageBox, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 import database as db
@@ -36,6 +36,7 @@ _BANNER = ("QFrame#plan_banner{background:#e6f4ee; border:1px solid #9bd3b7; bor
 _BTN_SMALL = ("QPushButton{background:#ffffff; color:#0f766e; border:1px solid #9bd3b7;"
               " border-radius:8px; padding:5px 12px; font-size:12.5px; font-weight:700;}"
               "QPushButton:hover{background:#f0faf5;} QPushButton:disabled{color:#94a3b8;}")
+_AUTO_BANNER = ("QFrame#autoreg_banner{background:#fff7e0; border:1px solid #f2c46d; border-radius:10px;}")
 _BTN_LOCK = ("QPushButton{background:#0f766e; color:#ffffff; border:none; border-radius:10px;"
              " padding:8px 18px; font-size:14px; font-weight:800;}"
              "QPushButton:hover{background:#0d6d65;} QPushButton:disabled{background:#cbd5e1; color:#64748b;}")
@@ -50,6 +51,13 @@ def _ver(s):
 
 def _fmt_wed(w) -> str:
     return w.strftime("%d/%m")
+
+
+def _local_hm(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).astimezone().strftime("%H:%M")
+    except (TypeError, ValueError):
+        return ""
 
 
 def _local_stamp(iso: str) -> str:
@@ -178,9 +186,12 @@ class PlanLockMixin:
         self.plan_banner_frame.setObjectName("plan_banner")
         self.plan_banner_frame.setStyleSheet(_BANNER)
         self.plan_banner_frame.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        row = QHBoxLayout(self.plan_banner_frame)
-        row.setContentsMargins(14, 8, 14, 8)
+        outer = QVBoxLayout(self.plan_banner_frame)
+        outer.setContentsMargins(14, 8, 14, 8)
+        outer.setSpacing(6)
+        row = QHBoxLayout()
         row.setSpacing(10)
+        outer.addLayout(row)
         self.lbl_plan_banner = QLabel("")
         self.lbl_plan_banner.setObjectName("lbl_plan_banner")
         self.lbl_plan_banner.setWordWrap(True)
@@ -195,8 +206,40 @@ class PlanLockMixin:
         self.btn_plan_refresh.setToolTip("משווה לנתונים החיים ומציע להוסיף / להסיר — לעולם לא משנה לבד")
         self.btn_plan_refresh.clicked.connect(self._plan_apply_compare)
         row.addWidget(self.btn_plan_refresh)
+        # RULE 11 — the per-lock switch of the automatic registration
+        self.chk_plan_autoreg = QCheckBox("")
+        self.chk_plan_autoreg.setObjectName("chk_plan_autoreg")
+        self.chk_plan_autoreg.setStyleSheet("color:#064e3b; font-size:12.5px; font-weight:700; " + _LBL)
+        self.chk_plan_autoreg.setToolTip("ביום החלוקה (חמישי בבוקר) הרשימה הנעולה נרשמת לבד כמי שקיבלו — "
+                                         "מי שלא הגיע מתקנים אחר כך. לחלוקה שבוטלה: להסיר את הסימון.")
+        self.chk_plan_autoreg.toggled.connect(self._on_plan_autoreg_toggled)
+        outer.addWidget(self.chk_plan_autoreg)
         self.plan_banner_frame.setVisible(False)
         lay.addWidget(self.plan_banner_frame)
+        # the notice that a list registered ITSELF (stays until confirmed / corrected / 21 days)
+        self.autoreg_banner_frame = QFrame()
+        self.autoreg_banner_frame.setObjectName("autoreg_banner")
+        self.autoreg_banner_frame.setStyleSheet(_AUTO_BANNER)
+        self.autoreg_banner_frame.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        arow = QHBoxLayout(self.autoreg_banner_frame)
+        arow.setContentsMargins(14, 8, 14, 8)
+        arow.setSpacing(10)
+        self.lbl_autoreg = QLabel("")
+        self.lbl_autoreg.setObjectName("lbl_autoreg")
+        self.lbl_autoreg.setWordWrap(True)
+        self.lbl_autoreg.setAlignment(_ALIGN_R)
+        self.lbl_autoreg.setStyleSheet("color:#7c4a03; font-size:13px; font-weight:700; " + _LBL)
+        arow.addWidget(self.lbl_autoreg, 1)
+        self.btn_autoreg_ok = QPushButton("הכול נכון ✓")
+        self.btn_autoreg_ok.setObjectName("btn_autoreg_ok")
+        self.btn_autoreg_ok.setStyleSheet(_BTN_SMALL)
+        self.btn_autoreg_ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_autoreg_ok.setToolTip("הרישום האוטומטי נכון (כולם הגיעו) — מסתיר את ההודעה")
+        self.btn_autoreg_ok.clicked.connect(self._autoreg_confirm)
+        arow.addWidget(self.btn_autoreg_ok)
+        self.autoreg_banner_frame.setVisible(False)
+        self._autoreg_pending = []
+        lay.addWidget(self.autoreg_banner_frame)
 
     def _plan_make_button(self, bar):
         self.btn_lock_plan = QPushButton("🔒 נעל רשימה")
@@ -251,6 +294,14 @@ class PlanLockMixin:
             self.lbl_plan_banner.setText(self._plan_banner_text())
             cmp_ = self._plan_cmp
             self.btn_plan_refresh.setVisible(bool(cmp_ and (cmp_["new"] or cmp_["gone"])))
+            wk_ = date.fromisoformat(self._plan["week_wed"])
+            self.chk_plan_autoreg.blockSignals(True)
+            self.chk_plan_autoreg.setText(
+                f"יירשם אוטומטית כמי שקיבלו ביום חמישי {_fmt_wed(wk_ + timedelta(days=1))} "
+                f"ב-{selection.AUTO_REGISTER_HOUR:02d}:00, אם לא יירשם קודם (מי שלא הגיע — מתקנים אחר כך)")
+            self.chk_plan_autoreg.setChecked(db.get_autoreg(self._plan)["enabled"])
+            self.chk_plan_autoreg.blockSignals(False)
+        self._autoreg_refresh_notice()
         # the button
         prep = self._stage == "prep"
         wk = self._plan_week()
@@ -393,6 +444,7 @@ class PlanLockMixin:
                 "name": "" if self._is_auto_name(name) else name,
                 "products": self.products_spin.value(), "reserve": self.reserve_spin.value(),
                 "mode": self._current_mode(), "note": self.note_input.text().strip(),
+                "distributor": self.dist_input.currentText().strip(),
                 "members": members, "removed": [g for g in removed if g]}
         try:
             db.save_plan(plan, expected_updated_at="")
@@ -561,6 +613,101 @@ class PlanLockMixin:
         if self._plan_update(mut):
             self._after_plan_change()
 
+    # ═══ רישום אוטומטי (כלל 11) ═════════════════════════════════════════════════════
+    AUTOREG_INTERVAL_MS = 5 * 60 * 1000
+    AUTOREG_FIRST_MS = 30 * 1000
+
+    def _autoreg_setup(self):
+        """The check runs on the UI thread (it touches the screen state afterwards): once shortly
+        after launch — the sync has had time to bring the other computer's rounds — then every
+        5 minutes. The database call itself decides whether anything is due."""
+        self._autoreg_busy = False
+        self._autoreg_timer = QTimer(self)
+        self._autoreg_timer.setInterval(self.AUTOREG_INTERVAL_MS)
+        self._autoreg_timer.timeout.connect(self.autoreg_tick)
+        self._autoreg_timer.start()
+        QTimer.singleShot(self.AUTOREG_FIRST_MS, self.autoreg_tick)
+
+    def autoreg_tick(self, now=None):
+        """Register the locks that are due (RULE 11). Never raises, never pops a dialog — the
+        program is open in front of the operator. Returns the registrations made."""
+        if getattr(self, "_autoreg_busy", False):
+            return []
+        self._autoreg_busy = True
+        try:
+            results = db.auto_register_due_plans(now)
+        except Exception:                                         # noqa: BLE001
+            results = []
+        finally:
+            self._autoreg_busy = False
+        if results:
+            self._after_auto_registration(results)
+        return results
+
+    def _after_auto_registration(self, results):
+        """The same wrap-up an ordinary registration gets (the round is over: draft removals,
+        notes and ticks go, the one-time picks of those who were registered were already dropped
+        by the database layer) — without touching anything typed for the next round."""
+        ids = {i for r in results for i in r.get("ids", ())}
+        if self._plan_mode():
+            self._plan_leave(reload=False)
+        self._removed_ids.clear()
+        self._row_notes.clear()
+        self._checked_ids -= ids
+        self._seen_ids -= ids
+        self._record_visited = False
+        self._set_stage("prep", clear=False)
+        self.refresh()
+        mw = getattr(self, "main_win", None)
+        total = sum(r.get("n", 0) for r in results)
+        if mw is not None:
+            if hasattr(mw, "refresh_all"):
+                try:
+                    mw.refresh_all()
+                except Exception:                                 # noqa: BLE001
+                    pass
+            week = " ו-".join(_fmt_wed(r["week_wed"]) for r in results)
+            mw.status_msg(f"הרשימה הנעולה של {week} נרשמה אוטומטית ({total} מקבלים) — מי שלא הגיע: לתקן במסך החלוקה")
+
+    def _on_plan_autoreg_toggled(self, checked):
+        if not self._plan_mode():
+            return
+        db.set_autoreg_enabled(self._plan, bool(checked))
+        if self.main_win:
+            self.main_win.status_msg("הרשימה תירשם אוטומטית ביום החלוקה" if checked
+                                     else "הרישום האוטומטי של הרשימה הזו כבוי")
+
+    def _autoreg_refresh_notice(self):
+        """Show the newest automatic registration that still waits for a look."""
+        if not hasattr(self, "autoreg_banner_frame"):
+            return
+        self._autoreg_pending = db.auto_registrations_to_review(self._today())
+        pend = self._autoreg_pending
+        self.autoreg_banner_frame.setVisible(bool(pend))
+        if not pend:
+            return
+        x = pend[0]
+        hm = _local_hm(x["at"])
+        txt = (f"✓ הרשימה הנעולה של רביעי {_fmt_wed(x['week_wed'])} נרשמה אוטומטית"
+               + (f" ב-{hm}" if hm else "") + f" — {x['n']} מקבלים סומנו כמי שקיבלו. "
+               "מי שלא הגיע חייב תיקון, אחרת ייחשב כמי שקיבל ותורו יזוז.")
+        extra = []
+        if x["inactive"]:
+            extra.append(f"{x['inactive']} מושהים לא נרשמו")
+        if x["missing"]:
+            extra.append(f"{x['missing']} לא נמצאו")
+        if extra:
+            txt += " (" + " · ".join(extra) + ")"
+        if len(pend) > 1:
+            txt += f"  ·  ועוד {len(pend) - 1} ממתינות"
+        self.lbl_autoreg.setText(txt)
+
+    def _autoreg_confirm(self):
+        if not self._autoreg_pending:
+            return
+        db.mark_autoreg_reviewed(self._autoreg_pending[0]["week_wed"])
+        self._autoreg_refresh_notice()
+
     # ═══ חלון התכנונים (S4d) ════════════════════════════════════════════════════
     def _open_plans_dialog(self):
         dlg = PlansDialog(self)
@@ -570,7 +717,7 @@ class PlanLockMixin:
 
 class PlansDialog(QDialog):
     """כל הנעילות: תאריך · שם · חברים/רזרבה · מצב · נערך ע״י/מתי; פתיחה, מחיקה והעתקה לנעילה חדשה."""
-    _COLS = ["רביעי", "שם", "מקבלים", "רזרבה", "מצב", "נערכה"]
+    _COLS = ["רביעי", "שם", "מקבלים", "רזרבה", "מצב", "רישום אוטומטי", "נערכה"]
     _STATE = {"current": "נעולה (השבוע)", "future": "נעולה (עתידית)", "executed": "בוצעה", "stale": "פגה"}
 
     def __init__(self, tab):
@@ -618,7 +765,7 @@ class PlansDialog(QDialog):
             n_res = sum(1 for m in p["members"] if m.get("role") == selection.ROLE_RESERVE)
             who = self._tab._plan_dev_label(p.get("updated_dev", ""))
             vals = [wed.strftime("%d/%m/%Y"), p.get("name", ""), str(len(p["members"]) - n_res), str(n_res),
-                    self._STATE.get(states.get(wed, ""), ""),
+                    self._STATE.get(states.get(wed, ""), ""), self._auto_text(p),
                     _local_stamp(p.get("updated_at", "")) + (f" · {who}" if who else "")]
             for c, v in enumerate(vals):
                 t.setItem(i, c, QTableWidgetItem(v))
@@ -629,6 +776,14 @@ class PlansDialog(QDialog):
             b.setEnabled(bool(plans))
         if plans:
             t.setCurrentCell(0, 0)
+
+    @staticmethod
+    def _auto_text(p) -> str:
+        st = db.get_autoreg(p)
+        if st["registered"]:
+            hm = _local_hm(st["registered"].get("at", ""))
+            return "נרשם אוטומטית" + (f" {hm}" if hm else "")
+        return "דלוק" if st["enabled"] else "כבוי"
 
     def _current(self):
         r = self.table.currentRow()
@@ -673,7 +828,8 @@ class PlansDialog(QDialog):
                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                 QMessageBox.StandardButton.Yes) != QMessageBox.StandardButton.Yes:
             return
-        new = {k: p.get(k) for k in ("name", "products", "reserve", "mode", "note", "members", "removed")}
+        new = {k: p.get(k) for k in ("name", "products", "reserve", "mode", "note", "members", "removed",
+                                     "distributor")}
         new["week_wed"] = target.isoformat()
         new["dist_date"] = tab.date_edit.get_iso()
         db.save_plan(new, expected_updated_at="")

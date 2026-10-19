@@ -50,6 +50,9 @@ class BatchDetailsDialog(QDialog):
                f"padding:1px 8px;font-size:12px;'>"
                f"{'🎁' if holidays.is_bonus_dist(batch) else '🎉'} {holidays.dist_label(batch.get('holiday'))}"
                f" · חלוקה נוספת — לא מזיזה את התור הקבוע</span>" if holidays.is_extra_dist(batch) else "")
+            + ("<br><span style='background:#fff7e0;color:#7c4a03;border-radius:8px;padding:1px 8px;"
+               "font-size:12px;'>🤖 נרשם אוטומטית מרשימה נעולה — כולם סומנו כמי שקיבלו, "
+               "מי שלא הגיע חייב תיקון</span>" if db.is_auto_batch(batch) else "")
             + f"<br>"
             f"<span style='color:#475569;'>{_fdate(batch.get('dist_date',''))} · "
             f"{batch.get('products') or ''} · מחלק: {batch.get('distributor') or '—'}</span></div>")
@@ -238,6 +241,8 @@ class DistributionsTab(QWidget):
                 str(b.get("souls_total", "") or 0),
                 (b.get("general_note", "") or "").replace("\n", " "),
             ]
+            if db.is_auto_batch(b):          # RULE 11: registered by itself — visible in the list
+                vals[1] = "🤖 " + vals[1]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(v or "")
                 item.setTextAlignment(ALIGN_RIGHT)
