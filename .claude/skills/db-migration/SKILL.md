@@ -116,6 +116,13 @@ a bad migration breaks.
   peer joining after a compaction never receives it; (c) every `*_add` applier must stay
   idempotent by guid — the head is replayed on peers that already have the data.
 
+- **An op the other computer does not know is SKIPPED and its offset advances (v3.83 lock design,
+  19/10/2026).** After that computer updates it does not get what it missed. So a new feature
+  that must work on an older peer should ride an op it already knows — e.g. a settings key
+  with a JSON value (`planned_dist:<Wednesday>`, accessed through ONE set of functions, LWW by
+  `setting` ts = write time) — instead of a new table + op. Gate the new UI on the peer's
+  announced `app_version_<device>` until it has updated.
+
 ## Done means
 
 `init_db()` migrates cleanly on an old DB, the new field syncs both directions,
