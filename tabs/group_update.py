@@ -499,6 +499,7 @@ class _ManualAddDialog(QDialog):
         # כל האנשים"). Inactive rows are tagged and stay inactive when added.
         roster = [r for r in db.get_all_recipients() if r.get("id") not in self._exclude]
         db.tag_round_served(roster, self._base_wed)      # RULE 9: "⚠ לא בתור" counts only regular rounds
+        db.tag_planned(roster, self._base_wed)           # RULE 10: held by a locked list of another week
         self._all = [r for r in roster if not self._hidden_regular(r)]
         # How many regulars this mode left out — shown in the count line, so
         # "503 מתוך 503" doesn't read as "the regulars are still there" (7/9/2026).
@@ -3521,6 +3522,7 @@ class GroupUpdateTab(QWidget):
         early = []
         recs = [dict(db.get_recipient(rid) or {}) for rid in ids]
         db.tag_round_served([r for r in recs if r], base_wed)   # RULE 9 (bonus/holiday rounds don't count)
+        db.tag_planned([r for r in recs if r], base_wed)        # RULE 10 (a locked list of another week)
         for rec in recs:
             reason = selection.not_due_reason(rec, base_wed, cooldown)
             if reason:

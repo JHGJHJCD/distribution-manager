@@ -249,6 +249,100 @@ ok("D9g חד-פעמי main: תפוס ב-W2 (הפסקה ברירת מחדל 4), �
 ok("D9h רזרבה לא תופסת", (db.save_plan(P(W1, [M(g_mon), M(g_res, role="reserve")])),
                          tagged_for(W2, r_res) is None)[1])
 
+# ═══ S3 — השער בחמש הרשימות ═══════════════════════════════════════════════════
+# הרשימות קוראות את השעון האמיתי (מצב נעילה נגזר מ"היום"), לכן כאן התאריכים יחסיים להיום.
+for p in db.list_plans():
+    db.delete_plan(p["week_wed"])
+real_today = date.today()
+Wa = selection.upcoming_wednesday(real_today)
+Wb = Wa + timedelta(days=7)
+Wc = Wa + timedelta(days=14)
+Wfar = Wb + timedelta(days=28)
+old = (real_today - timedelta(days=120)).isoformat()
+sm_id, sm_g = mk("ס-חודשי", "חודשי", last_distribution=old, souls=4, children_total=4)
+sb_id, sb_g = mk("ס-דו", "דו-שבועי", last_distribution=old, souls=4, children_total=4)
+sw_id, sw_g = mk("ס-שבועי", "שבועי", last_distribution=old, souls=4, children_total=4)
+so_id, so_g = mk("ס-חדפ", "חד-פעמי", souls=4, children_total=4)
+S_IDS = {sm_id, sb_id, sw_id, so_id}
+CRIT = {"balance_communities": False}
+
+def lists(wed):
+    """מי מבין S_IDS מופיע בכל אחת מהרשימות לשבוע wed."""
+    out = {
+        "weekly": db.get_weekly_list(on_date=wed),
+        "regulars_scored": db.get_regulars_scored(on_date=wed),
+        "scored_all": db.get_scored_all(on_date=wed),
+        "filtered": db.get_filtered_list(dict(CRIT), on_date=wed),
+        "one_time": [r for r in db.get_one_time_list(on_date=wed) if r.get("in_distribution")],
+    }
+    return {k: {r["id"] for r in v} & S_IDS for k, v in out.items()}, out
+
+base_sets, base_rows = lists(Wb)
+ok("D6a בלי נעילות: חודשי/דו/שבועי/חד-פעמי מופיעים בכל הרשימות הרלוונטיות",
+   base_sets["weekly"] == {sm_id, sb_id, sw_id} and base_sets["regulars_scored"] == {sm_id, sb_id, sw_id}
+   and base_sets["scored_all"] == S_IDS and S_IDS <= base_sets["filtered"] and base_sets["one_time"] == {so_id},
+   str(base_sets))
+ok("D6b בלי נעילות אף שורה לא מקבלת מפתח planned_elsewhere (הרשימות זהות לגרסה הקודמת)",
+   not any("planned_elsewhere" in r for v in base_rows.values() for r in v))
+# נעילות שלא אמורות להשפיע: נמחקה, רזרבה בלבד, פגה, בוצעה, ושל אותו שבוע עצמו
+db.save_plan(P(Wc, [M(sm_g)])); db.delete_plan(Wc)
+db.save_plan(P(Wc, [M(sm_g, role="reserve"), M(sb_g, role="reserve")]))
+db.save_plan(P(Wa - timedelta(days=35), [M(sm_g), M(sb_g), M(so_g)]))             # פגה
+weak_sets, weak_rows = lists(Wb)
+ok("D6c נעילה שנמחקה / רזרבה בלבד / פגה — הרשימות זהות בדיוק (שורות מלאות, לא רק מי נכנס)",
+   weak_sets == base_sets and all(
+       [(r["id"], r.get("need_score"), r.get("days_since")) for r in weak_rows[k]]
+       == [(r["id"], r.get("need_score"), r.get("days_since")) for r in base_rows[k]] for k in base_rows)
+   and not any("planned_elsewhere" in r for v in weak_rows.values() for r in v))
+for p in db.list_plans():
+    db.delete_plan(p["week_wed"])
+
+# נעילה חיה של Wb עם כולם כ-main
+db.save_plan(P(Wb, [M(sm_g), M(sb_g), M(sw_g), M(so_g, kind="one")]))
+a_sets, a_rows = lists(Wa)                   # שבוע לפני הנעילה (סימטרי)
+ok("D6d נעילה ב-Wb חוסמת את Wa בכל חמש הרשימות: רק השבועי נשאר",
+   a_sets["weekly"] == {sw_id} and a_sets["regulars_scored"] == {sw_id} and a_sets["scored_all"] == {sw_id}
+   and a_sets["filtered"] & S_IDS == {sw_id} and a_sets["one_time"] == set(), str(a_sets))
+b_sets, _ = lists(Wb)
+ok("D6e בשבוע של הנעילה עצמה אף אחד לא נחסם", b_sets == base_sets, str(b_sets))
+f_sets, _ = lists(Wfar)
+ok("D6f ארבעה שבועות אחרי הנעילה (Wfar): החודשי והחד-פעמי חופשיים, הדו-שבועי חופשי",
+   {sm_id, sb_id, sw_id} <= f_sets["weekly"], str(f_sets))
+ok("D6g חד-פעמי חסום מסומן _planned (לא _cooldown) ונשאר ברשימה אחרי המועמדים",
+   (lambda r: r is not None and r.get("_planned") and not r.get("_cooldown") and not r["in_distribution"])(
+       next((x for x in db.get_one_time_list(on_date=Wa) if x["id"] == so_id), None)))
+n_b, regs_b = db.compute_suggested_n(50, on_date=Wb)
+n_a, regs_a = db.compute_suggested_n(50, on_date=Wa)
+ok("D6h compute_suggested_n יורש את הסינון: ב-Wa חסרים הקבועים הנעולים (חודשי + דו-שבועי; לא השבועי)", regs_b - regs_a == 2,
+   f"{regs_b} -> {regs_a}")
+db.update_recipient(sm_id, {"holiday_support": 1})
+hol = db.get_filtered_list({"balance_communities": False, "holiday": "*"}, on_date=Wa)
+reg = db.get_filtered_list(dict(CRIT), on_date=Wa)
+ok("D6i חלוקת חג מדלגת על השער: החודשי הנעול נכנס לחג (נתמך חגים), אבל לא לחלוקה רגילה",
+   sm_id in {r["id"] for r in hol} and sm_id not in {r["id"] for r in reg}, str({r["id"] for r in hol}))
+rowm = dict(db.get_recipient(sm_id))
+db.tag_planned([rowm], Wa)
+ok("D6j not_due_reason (החלון 'מקבל שלא בתור') מסביר: 'נעול ברשימה של DD/MM'",
+   selection.not_due_reason(rowm, Wa, 4) == "נעול ברשימה של " + Wb.strftime("%d/%m"),
+   selection.not_due_reason(rowm, Wa, 4))
+
+# ── D8 — תחזית לשבוע לא-אמיתי לא כותבת next_distribution, גם כשיש נעילות ────────
+with db.get_connection() as c:
+    nd0 = {r["id"]: r["next_distribution"] for r in c.execute("SELECT id, next_distribution FROM recipients")}
+db.get_weekly_list(on_date=Wfar); db.get_weekly_list(on_date=Wb + timedelta(days=21))
+with db.get_connection() as c:
+    nd1 = {r["id"]: r["next_distribution"] for r in c.execute("SELECT id, next_distribution FROM recipients")}
+ok("D8 רשימה לשבוע לא-אמיתי (עם נעילות) לא כותבת next_distribution", nd0 == nd1)
+
+# ── D12 — אפס נתונים: הנעילות נשארות ונשארות יתומות (אין תפיסה) ────────────────
+ok("D12a לפני האיפוס יש נעילה חיה", db.get_plan(Wb) is not None and sm_g in db.live_plan_index())
+db.reset_all_data()
+ok("D12b אחרי reset_all_data הנעילה עדיין בהגדרות", db.get_plan(Wb) is not None)
+n_id, n_g = mk("חדש-חודשי", "חודשי", last_distribution=old)
+ok("D12c כרטיס חדש (guid חדש) לא נתפס על ידי נעילה יתומה, והרשימות עובדות",
+   n_id in {r["id"] for r in db.get_weekly_list(on_date=Wa)}
+   and not any("planned_elsewhere" in r for r in db.get_weekly_list(on_date=Wa)))
+
 # ── סיום ──────────────────────────────────────────────────────────────────────
 print()
 print("RESULT:", "ALL PLAN-DATA TESTS PASS ✓" if not fails else f"{len(fails)} FAILED: {fails}")

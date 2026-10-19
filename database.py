@@ -1727,6 +1727,7 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל", on_date=No
             "ORDER BY full_name"
         ).fetchall()
         rows = _mark_round_served(conn, [dict(r) for r in rows], base_wed)   # RULE 9 tags
+        rows = _tag_planned(conn, rows, base_wed)                            # RULE 10 tags
         result = []
         updates = []
         for r in rows:
@@ -1776,6 +1777,8 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל", on_date=No
             # outside the window and cannot hide anybody; a typo dated past the
             # upcoming Wednesday never reaches here (_recompute ignores it).
             if selection.received_this_round(r, base_wed):
+                continue
+            if r.get("planned_elsewhere"):       # RULE 10 — held by a locked list of another week
                 continue
             if nd <= cutoff:
                 result.append(r)
@@ -1864,8 +1867,8 @@ def get_one_time_list(area_filter: str = "הכל", on_date=None):
     result = []
     base_wed = selection.upcoming_wednesday(on_date)
     cooldown = get_one_time_cooldown_weeks()
+    rows = tag_planned([dict(r) for r in rows], base_wed)                  # RULE 10 tags
     for r in rows:
-        r = dict(r)
         if area_filter != "הכל" and r.get("area", "") != area_filter:
             continue
         ld_str = r.get("last_distribution") or ""
@@ -1880,7 +1883,10 @@ def get_one_time_list(area_filter: str = "הכל", on_date=None):
         # (listed after the candidates, like the other non-distribution rows).
         if r["in_distribution"] and not selection.is_due(r, base_wed, cooldown):
             r["in_distribution"] = False
-            r["_cooldown"] = True
+            if r.get("planned_elsewhere"):
+                r["_planned"] = True               # RULE 10 — held by a locked list, not a pause
+            else:
+                r["_cooldown"] = True
         result.append(r)
 
     in_dist = [r for r in result if r["in_distribution"]]
@@ -1912,6 +1918,7 @@ def get_regulars_scored(area_filter: str = "הכל", on_date=None):
     result = []
     base_wed = selection.upcoming_wednesday(on_date)
     rows = tag_round_served([dict(r) for r in rows], base_wed)          # RULE 9 tags
+    tag_planned(rows, base_wed)                                         # RULE 10 tags
     for r in rows:
         if area_filter != "הכל" and r.get("area", "") != area_filter:
             continue
@@ -1950,6 +1957,7 @@ def get_scored_all(area_filter: str = "הכל", on_date=None):
         rows = conn.execute("SELECT * FROM recipients WHERE status='פעיל'").fetchall()
     result = []
     rows = tag_round_served([dict(r) for r in rows], base_wed)          # RULE 9 tags
+    tag_planned(rows, base_wed)                                         # RULE 10 tags
     for r in rows:
         if area_filter != "הכל" and r.get("area", "") != area_filter:
             continue
@@ -2052,6 +2060,7 @@ def get_filtered_list(criteria: dict = None, area_filter: str = "הכל", on_dat
     # RULE 7 (v3.76): the same pass rotates the one-timers (cooldown weeks).
     _wed = selection.upcoming_wednesday(on_date)
     tag_round_served(rows, _wed)                                         # RULE 9 tags
+    tag_planned(rows, _wed)                                              # RULE 10 tags
     rows = selection.due_filter(rows, _wed,
                                 ignore=bool(selection.holiday_criterion(criteria)),
                                 cooldown_weeks=get_one_time_cooldown_weeks())
