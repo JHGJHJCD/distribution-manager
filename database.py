@@ -2181,11 +2181,23 @@ def compute_suggested_n(total_products: int, manual_regulars: int = 0, on_date=N
 
 # ─── Distributions (history) ─────────────────────────────────────────────────
 
+def _seeded_batch_guid(seed: str) -> str:
+    """The batch guid DERIVED from a seed (RULE 11): the same seed → the same guid on every computer."""
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"manhal-haluka/autoreg/batch/{seed}").hex
+
+
 def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
                            quantity, distributor: str,
                            dist_name: str = "", general_note: str = "",
-                           not_received: list[dict] = None, holiday: str = ""):
+                           not_received: list[dict] = None, holiday: str = "",
+                           guid_seed: str = ""):
     """Add many distributions at once and update recipients' last/next distribution.
+
+    `guid_seed` (RULE 11, automatic registration of a locked list): when given, the batch
+    guid and every row guid are DERIVED from it (uuid5) instead of random, so two computers
+    that register the same list at the same minute write the SAME batch and the idempotent
+    `sync._apply_batch_add` keeps one. A batch with that guid already present is not written
+    again (its id is returned). Ordinary registration leaves it empty (random guids).
 
     `holiday` (v3.75): '' = a regular round; '*' / a holiday name = a HOLIDAY
     distribution — remembered on the batch and on every row, shown in the
@@ -2214,8 +2226,21 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
         except (ValueError, TypeError):
             pass
     sync_rows = []
+    seed = (guid_seed or "").strip()
+
+    def _row_guid_for(rec):
+        """Random normally; derived from the seed + the person when the batch is seeded."""
+        if not seed:
+            return uuid.uuid4().hex
+        who = rec.get("guid") or f"id{rec.get('id')}"
+        return uuid.uuid5(uuid.NAMESPACE_URL, f"manhal-haluka/autoreg/row/{seed}/{who}").hex
+
     with get_connection() as conn:
-        batch_guid = uuid.uuid4().hex
+        batch_guid = _seeded_batch_guid(seed) if seed else uuid.uuid4().hex
+        if seed:
+            dup = conn.execute("SELECT id FROM dist_batches WHERE guid=?", (batch_guid,)).fetchone()
+            if dup:
+                return dup["id"]       # already written (this or the other computer): never twice
         cur = conn.execute(
             "INSERT INTO dist_batches "
             "(dist_name, dist_date, products, quantity, distributor, general_note, "
@@ -2233,7 +2258,7 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
             return (row["guid"] if row else "") or ""
 
         for rec in records:
-            row_guid = uuid.uuid4().hex
+            row_guid = _row_guid_for(rec)
             conn.execute(
                 "INSERT INTO distributions "
                 "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received, guid, holiday) "
@@ -2258,7 +2283,7 @@ def bulk_add_distributions(records: list[dict], dist_date: str, what_dist: str,
                               "frequency": rec.get("frequency", "")})
         # No-shows: record the fact (received=0) WITHOUT advancing their dates.
         for rec in not_received:
-            row_guid = uuid.uuid4().hex
+            row_guid = _row_guid_for(rec)
             conn.execute(
                 "INSERT INTO distributions "
                 "(recipient_id, recipient_name, dist_date, area, souls, what_dist, quantity, distributor, notes, batch_id, received, guid, holiday) "
@@ -2650,6 +2675,10 @@ def save_plan(plan: dict, expected_updated_at=None) -> dict:
     doc = {"v": PLAN_VERSION, "week_wed": wed.isoformat(),
            "dist_date": str(plan.get("dist_date") or wed.isoformat())[:10],
            "name": str(plan.get("name") or ""),
+           # who hands it out — used only by the automatic registration (RULE 11); an editor that
+           # does not know the field (a copy, an older screen) keeps what is stored
+           "distributor": str((plan["distributor"] or "") if "distributor" in plan
+                              else (live or {}).get("distributor") or ""),
            "products": _plan_int(plan.get("products")), "reserve": _plan_int(plan.get("reserve")),
            "mode": str(plan.get("mode") or "schedule"), "note": str(plan.get("note") or ""),
            "members": members,
@@ -2834,6 +2863,248 @@ def tag_planned(rows, base_wed=None, today=None):
     base_wed = base_wed or selection.upcoming_wednesday()
     with get_connection() as conn:
         return _tag_planned(conn, rows, base_wed, today)
+
+
+# ─── RULE 11 — a LOCKED list registers ITSELF (יהודה 19/10/2026, "רישום אוטומטי") ───────────
+# From Thursday AUTO_REGISTER_HOUR to Saturday after its Wednesday, a live lock that no regular
+# round was recorded for is written to history as "received" by every ACTIVE main member — one
+# batch, dated that Wednesday, written ONLY through bulk_add_distributions. A deliberate
+# exception to "everyone starts un-ticked, an un-ticked person is recorded as a no-show": whoever
+# did not come is fixed afterwards (the screen's correction mode replaces the automatic batch).
+# State lives in ONE separate settings key per lock, `planned_autoreg:<Wednesday>` — NOT inside
+# the lock: an older version re-saving the lock would wipe it (→ a second registration after a
+# correction), and writing it would move the lock's `updated_at` under an open editor
+# (PlanConflict). The key is tied to the lock's `created_at`, so a lock created again starts
+# clean. No new op: it rides the synced `setting`; the batch is an ordinary `batch_add` whose guids
+# are derived from the lock, so two computers running at the same minute write ONE batch.
+AUTOREG_PREFIX = "planned_autoreg:"
+AUTO_NOTE = "נרשם אוטומטית מרשימה נעולה"          # a batch's general note starts with this
+AUTO_DISTRIBUTOR = "רישום אוטומטי"                  # last-resort distributor name
+AUTOREG_REVIEW_DAYS = 21                            # how long the "registered by itself — fix?" notice stays
+
+
+def _autoreg_doc(wed) -> dict:
+    wed = _plan_wed(wed)
+    raw = get_setting(AUTOREG_PREFIX + wed.isoformat())
+    try:
+        doc = json.loads(raw) if raw else {}
+    except ValueError:
+        doc = {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _autoreg_write(wed, lock_created_at: str, **fields):
+    """Merge `fields` into the lock's automatic-registration key (a different lock instance
+    starts a fresh document)."""
+    wed = _plan_wed(wed)
+    doc = _autoreg_doc(wed)
+    if doc.get("lock") != (lock_created_at or ""):
+        doc = {}
+    doc.update(fields)
+    doc.update({"v": 1, "week_wed": wed.isoformat(), "lock": lock_created_at or "", "updated_at": _utc_now()})
+    set_setting(AUTOREG_PREFIX + wed.isoformat(), json.dumps(doc, ensure_ascii=False, separators=(",", ":")))
+
+
+def get_autoreg(plan: dict) -> dict:
+    """{'enabled': bool, 'registered': dict|None, 'reviewed_at': str} of THIS lock instance.
+    No key (or one that belongs to an older lock) = the defaults: enabled, not registered."""
+    doc = _autoreg_doc(plan["week_wed"])
+    if doc.get("lock") != (plan.get("created_at") or ""):
+        doc = {}
+    return {"enabled": doc.get("enabled", 1) not in (0, False, "0"),
+            "registered": doc.get("registered") or None,
+            "reviewed_at": doc.get("reviewed_at") or ""}
+
+
+def set_autoreg_enabled(plan: dict, enabled: bool):
+    """The per-lock switch ("יירשם אוטומטית ביום החלוקה"). Never touches the lock itself."""
+    _autoreg_write(plan["week_wed"], plan.get("created_at") or "", enabled=1 if enabled else 0)
+
+
+def mark_autoreg_reviewed(week_wed):
+    """The operator confirmed the automatic registration is right ("הכול נכון") — hides the notice."""
+    doc = _autoreg_doc(week_wed)
+    _autoreg_write(week_wed, doc.get("lock") or "", reviewed_at=_utc_now())
+
+
+def is_auto_batch(batch) -> bool:
+    return (str((batch or {}).get("general_note") or "")).startswith(AUTO_NOTE)
+
+
+def get_batch_by_guid(guid: str):
+    if not guid:
+        return None
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM dist_batches WHERE guid=?", (guid,)).fetchone()
+        return dict(row) if row else None
+
+
+def find_auto_batch(dist_date):
+    """The automatic batch (if it still exists) of the distribution WEEK `dist_date` belongs to
+    (selection.round_wednesday — Thu–Sat dates map to the Wednesday before). Used by the
+    volunteer's returning file, which REPLACES it instead of raising the duplicate warning."""
+    try:
+        wed = selection.round_wednesday(date.fromisoformat(str(dist_date)[:10]))
+    except ValueError:
+        return None
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM dist_batches WHERE dist_date=? AND general_note LIKE ? "
+            "AND COALESCE(holiday,'')='' ORDER BY id DESC",
+            (wed.isoformat(), AUTO_NOTE + "%")).fetchone()
+        return dict(row) if row else None
+
+
+def delete_auto_batch(batch_id: int) -> bool:
+    """Delete an AUTOMATIC batch (the correction replaces it). Refuses any other batch."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM dist_batches WHERE id=?", (batch_id,)).fetchone()
+    if not row or not is_auto_batch(dict(row)):
+        return False
+    delete_batch(batch_id)
+    return True
+
+
+def _autoreg_members(conn, plan: dict):
+    """(records, info): the MAIN members of the lock that can be registered, in lock order, as
+    card rows carrying the lock's row note; info counts the ones that cannot."""
+    out, seen = [], set()
+    info = {"missing": 0, "inactive": 0, "reserve": 0}
+    for m in plan.get("members", []):
+        if m.get("role") == selection.ROLE_RESERVE:
+            info["reserve"] += 1
+            continue
+        g = resolve_merged_guid(conn, str(m.get("g") or ""))
+        row = conn.execute("SELECT * FROM recipients WHERE guid=?", (g,)).fetchone() if g else None
+        if row is None:
+            info["missing"] += 1
+            continue
+        r = dict(row)
+        if r["id"] in seen:
+            continue
+        if r.get("status") != "פעיל":
+            info["inactive"] += 1
+            continue
+        seen.add(r["id"])
+        r["notes"] = str(m.get("note") or "")          # the round's note, never the card's
+        out.append(r)
+    return out, info
+
+
+def _autoreg_drop_picks(guids: set, ids: set):
+    """A registered person leaves this week's one-time picks (as an ordinary registration clears
+    them) — and nobody else does."""
+    raw = get_setting("weekly_extra_ids") or ""
+    toks = [t.strip() for t in raw.split(",") if t.strip()]
+    keep = [t for t in toks if t not in guids and not (t.isdigit() and int(t) in ids)]
+    if keep != toks:
+        set_setting("weekly_extra_ids", ",".join(keep))
+
+
+def _autoreg_name(plan: dict, wed: date) -> str:
+    name = str(plan.get("name") or "").strip()
+    if name:
+        return name
+    try:
+        from utils import hebdate
+        name = hebdate.auto_weekly_name(wed)
+    except Exception:                                   # noqa: BLE001
+        name = ""
+    return name or ("חלוקה שבועית " + wed.strftime("%d/%m/%Y"))
+
+
+def auto_register_plan(week_wed, now=None) -> dict:
+    """Register the lock of `week_wed` as received, if (and only if) RULE 11 allows it right
+    `now` (a naive local datetime). Returns {'status': 'registered' | 'healed' | 'skip', 'reason',
+    ...}. 'healed' = the derived batch already existed but its marker was missing — the marker is
+    rewritten and nothing is added. Nothing is written when anything is doubtful (fails OPEN)."""
+    now = now or datetime.now()
+    wed = _plan_wed(week_wed)
+    plan = get_plan(wed)
+    if plan is None:
+        return {"status": "skip", "reason": "no_plan"}
+    st = get_autoreg(plan)
+    if st["registered"]:
+        return {"status": "skip", "reason": "registered"}
+    seed = f"{wed.isoformat()}|{plan.get('created_at') or ''}"
+    guid = _seeded_batch_guid(seed)
+    existing = get_batch_by_guid(guid)
+    if existing:                                        # written, but the marker was lost → heal it
+        _autoreg_write(wed, plan.get("created_at") or "", registered={
+            "batch_guid": guid, "at": _utc_now(), "dev": _plan_dev(), "n": existing.get("recipient_count") or 0,
+            "missing": 0, "inactive": 0, "healed": 1})
+        return {"status": "healed", "batch_guid": guid}
+    if not st["enabled"]:
+        return {"status": "skip", "reason": "disabled"}
+    if not selection.auto_register_window_open(wed, now):
+        return {"status": "skip", "reason": "window"}
+    state = plan_states(now.date()).get(wed)
+    if state != "current":                              # 'executed': a real round won · 'stale'/gone: fail open
+        return {"status": "skip", "reason": f"state:{state}"}
+    with get_connection() as conn:
+        records, info = _autoreg_members(conn, plan)
+    if not records:
+        return {"status": "skip", "reason": "empty", **info}
+    try:
+        from utils.backup import auto_backup
+        backup = bool(auto_backup("safety"))
+    except Exception:                                   # noqa: BLE001 — the registration is additive and reversible
+        backup = False
+    distributor = (str(plan.get("distributor") or "").strip()
+                   or (get_setting("last_distributor") or "").strip() or AUTO_DISTRIBUTOR)
+    note = AUTO_NOTE + ((" — " + str(plan["note"]).strip()) if str(plan.get("note") or "").strip() else "")
+    batch_id = bulk_add_distributions(records, wed.isoformat(), "", 0, distributor,
+                                      dist_name=_autoreg_name(plan, wed), general_note=note,
+                                      not_received=[], holiday="", guid_seed=seed)
+    _autoreg_write(wed, plan.get("created_at") or "", registered={
+        "batch_guid": guid, "at": _utc_now(), "dev": _plan_dev(), "n": len(records),
+        "missing": info["missing"], "inactive": info["inactive"]})
+    _autoreg_drop_picks({r["guid"] for r in records if r.get("guid")}, {r["id"] for r in records})
+    return {"status": "registered", "week_wed": wed, "batch_id": batch_id, "batch_guid": guid,
+            "n": len(records), "backup": backup, "ids": [r["id"] for r in records],
+            "name": _autoreg_name(plan, wed), **info}
+
+
+def auto_register_due_plans(now=None) -> list:
+    """Register every live lock whose window is open and that nobody recorded. Returns the list of
+    'registered' results (the screen reports them). Safe to call as often as the timer fires."""
+    now = now or datetime.now()
+    out = []
+    for plan in list_plans():
+        try:
+            wed = date.fromisoformat(plan["week_wed"])
+        except ValueError:
+            continue
+        if not selection.auto_register_window_open(wed, now):
+            continue
+        res = auto_register_plan(wed, now)
+        if res["status"] == "registered":
+            out.append(res)
+    return out
+
+
+def auto_registrations_to_review(today=None) -> list:
+    """The automatic registrations still waiting for the operator's look: [{week_wed, batch, at, n,
+    missing, inactive}], newest first — the batch still exists, was not confirmed ("הכול נכון") and is
+    at most AUTOREG_REVIEW_DAYS old. Drives the notice on the distribution screen."""
+    today = today or date.today()
+    out = []
+    with get_connection() as conn:
+        rows = conn.execute("SELECT key, value FROM settings WHERE key GLOB ?", (AUTOREG_PREFIX + "*",)).fetchall()
+    for r in rows:
+        try:
+            wed = _plan_wed(r["key"][len(AUTOREG_PREFIX):])
+            doc = json.loads(r["value"] or "")
+        except (ValueError, TypeError):
+            continue
+        reg = doc.get("registered") if isinstance(doc, dict) else None
+        if not reg or doc.get("reviewed_at") or (today - wed).days > AUTOREG_REVIEW_DAYS:
+            continue
+        batch = get_batch_by_guid(reg.get("batch_guid") or "")
+        if batch:
+            out.append({"week_wed": wed, "batch": batch, "at": reg.get("at") or "", "n": reg.get("n") or 0,
+                        "missing": reg.get("missing") or 0, "inactive": reg.get("inactive") or 0})
+    return sorted(out, key=lambda x: x["week_wed"], reverse=True)
 
 
 def _history_last(conn, rec_id, regular_only: bool = False, max_date: str = "") -> str:

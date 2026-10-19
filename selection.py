@@ -79,7 +79,7 @@ def one_time_slots(total_products: int, due_regulars: int, manual_regulars: int 
 # with a not-yet-due regular. A holiday distribution (an EXTRA round, v3.75) is
 # the one caller that passes ignore=True.
 
-from datetime import date as _date, timedelta as _td
+from datetime import date as _date, timedelta as _td, datetime as _datetime
 
 FREQUENCY_INTERVAL_DAYS = {"שבועי": 7, "דו-שבועי": 14, "תלת-שבועי": 21, "חודשי": 28}
 SPACED_FREQUENCIES = frozenset({"דו-שבועי", "תלת-שבועי", "חודשי"})
@@ -254,6 +254,27 @@ def plan_state(week_wed: _date, today: _date, executed: bool) -> str:
     if today > week_wed + _td(days=PLAN_GRACE_DAYS):
         return "stale"
     return "current" if week_wed <= upcoming_wednesday(today) else "future"
+
+
+# RULE 11 — a LOCKED list registers ITSELF (יהודה 19/10/2026, "רישום אוטומטי"): once its
+# Wednesday has passed, from Thursday AUTO_REGISTER_HOUR (the computer's clock — an Israeli
+# machine) until the end of the registration window (Saturday), a live lock that nobody
+# recorded is written to history as "received" by everyone on it. Thursday morning and not
+# Wednesday evening, so that the operator (or the volunteer's file, which comes back and is
+# taken in by itself) gets there first — a REAL record always wins, the auto one only fills
+# the gap. A deliberate exception to "everyone starts un-ticked": see CLAUDE.md rule 11.
+AUTO_REGISTER_HOUR = 6
+
+
+def auto_register_window_open(week_wed: _date, now: _datetime) -> bool:
+    """RULE 11 — is `now` (a naive local datetime) inside the window in which the lock of
+    `week_wed` may register itself: from the Thursday after it, AUTO_REGISTER_HOUR:00, to the
+    end of the registration window (PLAN_GRACE_DAYS after the Wednesday = Saturday). Pure;
+    the caller passes the clock."""
+    now = now.replace(tzinfo=None)
+    opens =_datetime.combine(week_wed + _td(days=1), _datetime.min.time()).replace(
+        hour=AUTO_REGISTER_HOUR)
+    return opens <= now and now.date() <= week_wed + _td(days=PLAN_GRACE_DAYS)
 
 
 def is_due(rec: dict, base_wed: _date,
