@@ -556,7 +556,7 @@ def _(y, t, test, rel):
 def _(y, t, test, rel):
     gu = _read("tabs/group_update.py")
     wr = _func_body(gu, "week_rows")
-    okk = "if self.list_is_future():" in wr and "return []" in wr.split("self.refresh()")[0]
+    okk = "if self.list_is_future()" in wr and "return []" in wr.split("self.refresh()")[0]   # (19/10: or _fix_mode() — a correction list also fails closed)
     okk = okk and "_week_is_future()" in _func_body(t, "_distribution_rows")
     okk = okk and "week_rows() בתחזית ריק" in _read("test_plan_screen.py")
     return bool(okk), ""

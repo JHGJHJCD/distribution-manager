@@ -700,7 +700,7 @@ class PlanLockMixin:
             return
         self._autoreg_pending = db.auto_registrations_to_review(self._today())
         pend = self._autoreg_pending
-        self.autoreg_banner_frame.setVisible(bool(pend))
+        self.autoreg_banner_frame.setVisible(bool(pend) and not self._fix_mode())   # not while it is being fixed
         if not pend:
             return
         x = pend[0]
