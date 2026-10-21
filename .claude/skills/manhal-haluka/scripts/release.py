@@ -48,7 +48,7 @@ TESTS = [
     "test_merge_same_name.py", "test_products_limit.py", "test_settings_report.py", "test_group_report.py",
     "test_bonus_dist.py", "test_date_follow.py", "test_plan_selection.py",
     "test_plans.py", "test_plan_screen.py", "test_plan_sync.py", "test_autoreg.py", "test_autoreg_screen.py",
-    "test_reserve_always.py",
+    "test_reserve_always.py", "test_user_expectations.py",
 ]
 
 

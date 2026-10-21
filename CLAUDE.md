@@ -249,6 +249,7 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 
 ## בדיקות
 - סקריפטים עצמאיים (לא pytest), כל אחד `python test_X.py` עם Python 3.12 ו-`PYTHONUTF8=1`: `test_all`, `test_deep`, `test_selection`, `test_data_safety`, `test_scenarios`, `test_search`, `test_priority_import`, `test_volunteer_flow`, `test_updater`, `test_sync`, `test_score_scale`, `test_fixes`, `test_tzintuk`, `test_tts`, `test_mail`, `test_callback_server`, `test_refresh`.
+- **בדיקות קבלה בלשון יהודה (21/10/2026, אחרי באג הרזרבה):** `test_user_expectations.py` בודק מה שהמפעיל מצפה לראות דרך המסך עצמו ("הגדרתי רזרבה 10 — רואים 10"), לא מה שהקוד הוגדר לעשות. **כלל כלל חדש שיהודה מגדיר = ציפייה חדשה שם, בנוסח שלו** (בדיקה שנכשלת — קודם שואלים אם הציפייה עדיין נכונה, לא "מתקנים את הבדיקה"). בבאג הרזרבה בדיקה קיימת (S3) אכפה את ההתנהגות השגויה.
 - **הכל בפקודה אחת:** `python .claude/skills/manhal-haluka/scripts/release.py test` (רשימת `TESTS` שם — כל קובץ בדיקה חדש חייב להיכנס אליה; לינט M28 שומר). + הבודקים של `tzintuk-check`/`mail-check`.
 - צילומים: `dev/_shot_*.py` (assert-ים + PNG ב-`dev/_shots/`; לאמת דרך Gemini). ⚠ ידוע: `dev/_shot_settings_v301.py` קורס ב-teardown (QThread) ו-`dev/_shot_mails.py` נכשל על "no client id" כשיש `_secret.py` — לא קשור לשינויים. `dev/stress_test.py [rounds]` (offscreen, `PYTHONUTF8=1`).
 - כל הקבצים UTF-8 (טרמינל מציג mojibake אך הנתונים תקינים).
