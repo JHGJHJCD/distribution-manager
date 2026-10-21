@@ -140,6 +140,7 @@ ok("D2b עריכה מאוחרת: updated_at גדל ו-created_at נשמר", seco
 # ── D3 — אסימון התנגשות ────────────────────────────────────────────────────────
 base = db.save_plan(P(D("2026-12-02"), [M(g_mon)]), expected_updated_at="")       # חדשה: מצפה לשום נעילה
 ok("D3a יצירה עם אסימון '' מצליחה כשאין נעילה חיה", base["week_wed"] == "2026-12-02")
+_time.sleep(0.05)       # same clock-tick flake as D2b: on the Windows runner two saves got the same stamp
 step = db.save_plan(P(D("2026-12-02"), [M(g_mon), M(g_wk)]), expected_updated_at=base["updated_at"])
 ok("D3b שמירה עם האסימון הנוכחי מצליחה ומחליפה אסימון", step["updated_at"] != base["updated_at"])
 try:
