@@ -2654,6 +2654,18 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
             # yet — score them (on the settings' weights, like the other score
             # modes) so a click on a row can explain WHY.
             scoring.annotate_need_scores(self._rows_data, db.get_need_weights())
+        if products > 0 and reserve_n > 0:
+            # RULE 3 (יהודה 21/10/2026): the reserve shows EVERY time — when everyone
+            # already fits in the products the cuts above made none, so the missing
+            # ones come from the one-time queue (selection.top_up_reserve, any mode).
+            have_res = sum(1 for r in self._rows_data if r.get("_reserve"))
+            if have_res < reserve_n:
+                self._rows_data = selection.top_up_reserve(
+                    self._rows_data, reserve_n, products,
+                    db.get_reserve_candidates(on_date=ld), exclude_ids=self._removed_ids)
+                if mode in ("scored", "all"):
+                    # the score mode shows ONE scale: the queue's rows were scored on its own
+                    scoring.annotate_need_scores(self._rows_data, db.get_need_weights())
         if products <= 0:
             # #a0r4i (יהודה 7/10/2026): an EMPTY table until the products are set,
             # in every mode — no list is meaningful before we know how many get one.

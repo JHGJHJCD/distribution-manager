@@ -1904,6 +1904,14 @@ def get_one_time_list(area_filter: str = "הכל", on_date=None):
     return in_dist + others
 
 
+def get_reserve_candidates(on_date=None) -> list:
+    """The queue the reserve is topped up from (selection.top_up_reserve): the one-time
+    priority candidates whose turn has come (cooldown / a lock elsewhere already applied
+    by get_one_time_list), best first. A regular whose turn has not come is NEVER here
+    (RULE 6 — not even in the reserve)."""
+    return [r for r in get_one_time_list(on_date=on_date) if r.get("in_distribution")]
+
+
 def get_regulars_scored(area_filter: str = "הכל", on_date=None):
     """Regulars (frequency != חד-פעמי / not empty) ranked by need-score for the
     'קבועים לפי ניקוד' distribution mode: every active regular gets a need_score
