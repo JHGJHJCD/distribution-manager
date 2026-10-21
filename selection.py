@@ -466,6 +466,47 @@ def limit_due_regulars(regulars: list, weights: dict, portions, reserve_count: i
     return [r for r in ranked if r.get("_role") != ROLE_OUT]
 
 
+def top_up_reserve(rows: list, reserve_count, products, candidates: list,
+                   exclude_ids=()) -> list:
+    """RULE 3 — the reserve is ALWAYS shown (יהודה 21/10/2026: "אני רוצה שכל פעם
+    יופיעו הרזרבות"). The cuts (`limit_due_regulars` / `limit_to_products` /
+    `assign_roles`) only make reserve when there are MORE candidates than products;
+    with a small weekly group everyone fits and the reserve came out empty — in every
+    mode, and so in a lock too (which stores the screen's list).
+
+    `rows` is the list as shown. The reserve missing up to `reserve_count` (people
+    already flagged `_reserve`, explicit picks included, count) is taken from
+    `candidates` — the one-time queue, best first — AFTER the first `products − main`
+    of them: those are the products still waiting for one-time picks (the picker
+    marks exactly them as main), the reserve is whoever comes next. Anybody already
+    on the list or in `exclude_ids` (taken off with the 🗑) is skipped. When the queue is
+    too short for that (fewer than `skip + need` left) the skip shrinks, so a reserve
+    is shown whenever anybody is in the queue at all. Added rows
+    are flagged `_reserve`, `_topup` and come last. `products` <= 0, or nobody
+    in the list at all → unchanged (an empty table stays empty). Returns the NEW list; `rows` is not modified. Pure."""
+    if not reserve_count or reserve_count <= 0 or not products or products <= 0:
+        return list(rows)
+    have_res = sum(1 for r in rows if r.get("_role") == ROLE_RESERVE or r.get("_reserve"))
+    need = int(reserve_count) - have_res
+    if need <= 0:
+        return list(rows)
+    main = len(rows) - have_res
+    if main <= 0:
+        return list(rows)       # a waiting list of an empty list means nothing ('בלי קבועים' stays empty)
+    skip = max(0, int(products) - main)
+    taken = {r.get("id") for r in rows} | set(exclude_ids or ())
+    pool = [c for c in candidates if c.get("id") not in taken]
+    skip = min(skip, max(0, len(pool) - need))      # a short queue still yields a reserve
+    added = pool[skip:skip + need]
+    base = len(rows)
+    for i, rec in enumerate(added):
+        rec["_role"] = ROLE_RESERVE
+        rec["_reserve"] = True
+        rec["_topup"] = True
+        rec["_plan_reason"] = _reason_for(rec, ROLE_RESERVE, base + i)
+    return list(rows) + added
+
+
 def recorded_by_default(rec: dict) -> bool:
     """RULE 3: whether this row should be ticked-for-recording by default when a
     distribution is saved. Main picks yes; reserve (standby) no — a reserve is

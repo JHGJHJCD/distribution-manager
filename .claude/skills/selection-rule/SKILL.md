@@ -36,7 +36,9 @@ tab's UI code can't be tested, gets duplicated, and silently drifts.
    priority/frequency). The one-time picker gate is active **only in `schedule`**.
 3. **Reserve = waitlist** — `assign_roles` tags `_role` main/reserve/out. Reserve is
    **not recorded** by default but **is printed** as its own section. It's promoted
-   only when the operator swaps it in for a no-show.
+   only when the operator swaps it in for a no-show. **It must show EVERY time (21/10/2026):** the cuts make reserve only when
+   candidates outnumber products, so `top_up_reserve` fills the missing reserve from the
+   one-time queue in every mode / forecast / lock (`test_reserve_always.py`).
 4. **Missing data → bottom of the queue** — in `scoring.annotate_need_scores` a
    missing contributor scores **0 points** (not a neutral 0.5). Missing data only
    ever hurts, never helps.

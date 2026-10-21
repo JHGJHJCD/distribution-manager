@@ -160,7 +160,9 @@ ok("S9 manual pick appears in the scored list", pick is not None)
 ok("S9 manual pick scored on the shared scale (need_score + parts)",
    pick is not None and isinstance(pick.get("need_score"), (int, float))
    and isinstance(pick.get("_score_parts"), list))
-_scores = [r.get("need_score") or 0 for r in gt._rows_data]
+# (the reserve rows come last, topped up from the one-time queue — RULE 3, 21/10/2026 — so they
+#  are scored on the same scale but are not part of the by-need order of the main list)
+_scores = [r.get("need_score") or 0 for r in gt._rows_data if not r.get("_reserve")]
 ok("S9 whole scored list is monotonic — one scale, not two",
    _scores == sorted(_scores, reverse=True), str(_scores[:6]))
 gt.mode_combo.setCurrentIndex(gt.mode_combo.findData("schedule"))   # restore

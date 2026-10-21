@@ -86,7 +86,8 @@ ok("S2 reserve 0 → exactly the products", len(rows()) == 3 and not reserves(),
 gt.reserve_spin.setValue(2)
 
 gt.products_spin.setValue(8)
-ok("S3 enough products → all 8, nobody reserve", len(mains()) == 8 and not reserves(), str(rows()))
+ok("S3 enough products → all 8 main; the reserve (2) is topped up from the one-time queue,"
+   " never a regular", len(mains()) == 8 and len(reserves()) == 2 and set(reserves()) <= set(ONE), str(rows()))
 gt.products_spin.setValue(0)
 ok("S4 products not set (0) → EMPTY table (#a0r4i, 7/10/2026)", rows() == [], str(rows()))
 ok("S4b …with the short explanation", "הקלד כמה מוצרים זמינים" in gt.table._empty_label.text())
@@ -96,7 +97,8 @@ ok("S4c …other screens get an empty week list", gt.week_rows() == [])
 gt.products_spin.setValue(8)
 gt.add_one_time_picks([{"id": NOT_DUE, "_reserve": False}])
 ok("S5 manual regular in: 7 due + him = 8 main, the shortest wait → reserve",
-   len(mains()) == 8 and NOT_DUE in mains() and reserves() == [REG[0]], str(rows()))
+   len(mains()) == 8 and NOT_DUE in mains() and REG[0] in reserves() and len(reserves()) == 2
+   and set(reserves()) - {REG[0]} <= set(ONE), str(rows()))
 gt._extra_ids.clear(); gt._reserve_ids.clear(); gt._persist_extras()
 
 # one-timers picked, then the products drop: regulars are never pushed out

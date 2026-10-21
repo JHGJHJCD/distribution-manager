@@ -454,6 +454,8 @@ class PlanLockMixin:
             rid = r.get("id")
             if rid in self._extra_ids:
                 kind = "one" if (r.get("frequency") or "") == "חד-פעמי" else "man"
+            elif r.get("_topup"):
+                kind = "one"            # a one-timer from the queue, shown as the reserve (RULE 3)
             else:
                 kind = "reg"
             members.append(self._plan_member(r, kind, bool(r.get("_reserve") or rid in self._reserve_ids)))
@@ -462,6 +464,11 @@ class PlanLockMixin:
             if g and g not in seen:
                 seen.add(g)
                 members.append(self._plan_member(pk, "one", bool(pk.get("_reserve"))))
+            elif g and not pk.get("_reserve"):
+                # the suggestion made him a MAIN pick but the list showed him as the reserve
+                for m in members:
+                    if m["g"] == g and m["role"] == selection.ROLE_RESERVE and m["kind"] == "one":
+                        m["role"] = selection.ROLE_MAIN
         removed = [(db.get_recipient(rid) or {}).get("guid") or "" for rid in self._removed_ids]
         name = self.name_input.currentText().strip()
         plan = {"week_wed": wk.isoformat(), "dist_date": self.date_edit.get_iso(),
@@ -583,8 +590,24 @@ class PlanLockMixin:
             self.refresh()                # the edit was dropped (reloaded) — show what is stored
 
     def _plan_set_count(self, idx, value):
+        """The counts of a locked list. Raising the RESERVE also fills it (RULE 3: the reserve
+        shows every time): the missing ones join from the one-time queue. Lowering it, or
+        changing the products, never removes anybody — the lock is frozen, 🗑 removes."""
+        add = []
+        if idx == 1:
+            rows = list(self._rows_data or [])
+            products = int(self._plan.get("products") or 0)
+            for rec in selection.top_up_reserve(
+                    rows, int(value), products, db.get_reserve_candidates(on_date=self._list_date()),
+                    exclude_ids=self._removed_ids)[len(rows):]:
+                if (rec.get("guid") or "").strip():
+                    add.append({"g": rec["guid"].strip(), "role": selection.ROLE_RESERVE, "kind": "one",
+                                "note": "", "n": rec.get("full_name", "")})
+
         def mut(p):
             p["products" if idx == 0 else "reserve"] = int(value)
+            have = {m["g"] for m in p["members"]}
+            p["members"].extend(m for m in add if m["g"] not in have)
         self._plan_update(mut)
 
     # ═══ השוואה לנתונים החיים (4.5) ═════════════════════════════════════════════
