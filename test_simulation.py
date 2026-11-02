@@ -263,4 +263,4 @@ if __name__ == "__main__":
     except AssertionError as e:
         print("\n✗ הסימולציה מצאה הפרת כלל:\n", e)
         sys.exit(1)
-    print(f"Ran {n} simulated runs (up to 60 steps each) … OK")
+    print(f"Ran {n} simulated runs (up to {Sim.TestCase.settings.stateful_step_count} steps each) … OK")
