@@ -229,7 +229,7 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 | בקשת תכונה / שינוי התנהגות — **לפני הקוד** ("מה זה שובר, אילו כפתורים, מה חסר במסכים אחרים") | `feature-impact` |
 | כלל "מי מקבל"/ניקוד/רזרבה/סינון/קהילות | `selection-rule` |
 | עמודה/טבלה/שדה מסונכרן חדש | `db-migration` |
-| כל נגיעה ב-UI — צילום אמיתי (לאמת PNG דרך Gemini, לא Read) | `visual-check` |
+| כל נגיעה ב-UI — צילום אמיתי (לאמת PNG דרך Gemini, לא Read), או **עץ ווידג'טים כטקסט על התוכנה הרצה** דרך `qtpy-mcp` (שרת `qtpy` ב-`.mcp.json`, מופעל עם `QTPY_MCP_PROBE=1`; קריאה בלבד על נתונים אמיתיים) | `visual-check` |
 | צינתוקים (`tzintukim.py`/`yemot.py`/`tts.py`/`call_history.py`) | `tzintuk-check` · `/בדוק-צינתוקים [מיקוד]` |
 | מיילים (`mails.py`/`mailer.py`/`google_auth.py`/שליחה ב-`email_utils.py`) | `mail-check` · `/בדוק-מיילים [מיקוד]` |
 | שרת המענה / שלוחה 76 / שורש הקו | `tzintuk-callback-server` |

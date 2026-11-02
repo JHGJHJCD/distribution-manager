@@ -34,3 +34,6 @@ build.log
 .claude/skills/yemot-line-state/
 .claude/skills/yemot-line-howto/
 .claude/skills/yemot-line-knowledge/
+
+# qtpy-mcp (גשש Qt לקלוד) — נתיב מוחלט עם שם משתמש, פר-מחשב
+.mcp.json

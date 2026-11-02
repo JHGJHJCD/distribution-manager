@@ -113,3 +113,32 @@ of what now looks right. If something is off, fix the source and re-capture — 
 a UI change you haven't seen rendered.
 
 - **צילום עלה אחרי `navigate_to_tab` יוצא כמעט ריק (23/9/2026):** `_show_leaf` מריץ `effects.fade_in` (170ms) — לחכות `QTest.qWait(450)` לפני `grab()`. וגם: `tab.grab()` על עלה מחזיר שחור — לחתוך מ-`win.grab()` במקום.
+
+## Live inspection without screenshots — `qtpy-mcp` (2/11/2026)
+
+A second way to verify UI, **as text**, on the real running app — no PNG, no Gemini,
+no NetFree image risk. `qtpy-mcp` is installed in Python 3.12 and registered in the
+project-level `.mcp.json` (git-ignored: it holds an absolute path) as the MCP server
+`qtpy`; its tools (`qt_snapshot`, `qt_find_widget`, `qt_click`, `qt_type`, …) appear
+in a **new** Claude session opened in this folder.
+
+Launch the app with the probe (no code change — a `.pth` hook does it):
+
+```
+QTPY_MCP_PROBE=1 QT_PREFERRED_BINDING=PyQt6 QTPY_MCP_NAME=manhal PYTHONUTF8=1 python main.py
+```
+
+Then `qt_snapshot` gives the widget tree with refs (`- QSpinBox [ref=w16] "52"`),
+`qt_find_widget` finds by `text` / `class_name` / `object_name` / `root_ref`,
+`qt_click` / `qt_type` drive it. Login: type `1234` into the password field, click "כניסה".
+Verified 2/11/2026 on the real app: Hebrew text reads correctly in the tree.
+
+Without the MCP (same session, or from a script): talk to the probe directly —
+`qtpy_mcp.registry.list_instances()` → `ProbeClient(host, port, token)` →
+`await c.call("snapshot", {"max_depth": 6})`. RPC names are the probe's own
+(`snapshot`, `find_widget`, `click`, `type_text`, `widget_details`, `list_windows`),
+not the `qt_*` MCP names.
+
+⚠ The probe runs on whatever DB the app opened — with `python main.py` that is the
+**real** `%APPDATA%\ManhalHaluka` data. Read and navigate freely; **never** record,
+save or delete through it. For write scenarios use the throwaway-DB screenshot scripts.
