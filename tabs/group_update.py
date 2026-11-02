@@ -2355,9 +2355,12 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         the same add_one_time_picks() path the 'חד פעמי' tab uses."""
         if self._block_picks_in_forecast():
             return
+        # counts = the pair the screen works with: a forecast week's own in-memory
+        # products/reserve (never the real week's shared settings — a forecast with
+        # 20 products used to get picks suggested for the real week's 50).
         dlg = OneTimePickerDialog(self, manual_regulars=len(self._manual_regular_ids()),
                                   removed_regulars=self._removed_due,
-                                  on_date=self._list_date())
+                                  on_date=self._list_date(), counts=self._screen_counts())
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         picks = dlg.selected()

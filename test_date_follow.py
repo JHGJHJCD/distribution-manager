@@ -434,5 +434,32 @@ ok("D16 הרשימה האמיתית בלי החד-פעמי הישן", ot_real no
 try: os.remove(f16)
 except OSError: pass
 
+# ── 17. בחירת חד-פעמיים בתחזית: ההצעה לפי המוצרים של התחזית, לא של השבוע האמיתי (2/11/2026) ──
+set_today(SUN)
+ids = setup_week(SUN.isoformat()); db.set_setting("available_products", "50"); db.set_setting("dist_regulars_mode", "schedule")
+for i in range(3):
+    db.add_recipient({"full_name": f"חד-{i}", "status": "פעיל", "frequency": "חד-פעמי", "priority": 3,
+                      "souls": 2, "phone1": f"050222000{i}"})
+_opened = []
+class _PeekPicker(gu.OneTimePickerDialog):
+    def exec(self):
+        _opened.append([r for r in self.selected() if not r.get("_reserve")])
+        return QDialog.DialogCode.Rejected
+_orig_picker = gu.OneTimePickerDialog
+gu.OneTimePickerDialog = _PeekPicker
+try:
+    set_date(W1); gt.refresh()
+    gt.products_spin.setValue(2)                   # התחזית: 2 מוצרים (האמיתי נשאר 50)
+    ok("D17 המוצרים של התחזית בזיכרון בלבד", gt._screen_counts()[0] == 2 and db.get_setting("available_products") == "50")
+    gt._open_one_time_picker()
+    ok("D17 בתחזית עם 2 מוצרים ו-2 קבועים בתור: החלון לא מציע חד-פעמיים",
+       len(_opened) == 1 and len(_opened[0]) == 0, str([r.get("full_name") for r in _opened[0]] if _opened else _opened))
+    set_date(SUN); gt.refresh(); _opened.clear()
+    gt._open_one_time_picker()
+    ok("D17 בשבוע האמיתי (50 מוצרים): החלון מציע את כל החד-פעמיים", len(_opened) == 1 and len(_opened[0]) == 3,
+       str(len(_opened[0]) if _opened else _opened))
+finally:
+    gu.OneTimePickerDialog = _orig_picker
+
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL DATE-FOLLOW CHECKS PASS ✓")
 sys.exit(1 if fails else 0)
