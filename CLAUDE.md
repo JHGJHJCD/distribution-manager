@@ -191,7 +191,7 @@ python -m PyInstaller --noconfirm --clean מנהל_חלוקה.spec   # → dist/
 - ⚠ לבדיקות: חלון האישור הוא `QMessageBox.question` (הבדיקות מחליפות אותו); עמודת הפעולות בהיסטוריה = `_HIST_ACT` (6).
 
 ## זרימת המתנדבים (`utils/email_utils.py` + `utils/excel_utils.py`)
-- **שליחה:** `export_volunteer_checklist_to_excel` — אקסל מינימלי, עמודה מוסתרת `id` להתאמה, גיליון `meta` מוסתר, עמודת "הגיע?" עם DataValidation "כן,לא" וברירת מחדל "כן" (המתנדב רק מבטל מי שלא הגיע). `send_email` — multipart + לוגו inline (cid), STARTTLS.
+- **שליחה:** `export_volunteer_checklist_to_excel` — אקסל מינימלי, עמודה מוסתרת `id` להתאמה, גיליון `meta` מוסתר, עמודת "הגיע?" עם DataValidation "כן,לא" וברירת מחדל "כן" (המתנדב רק מבטל מי שלא הגיע). **הרזרבה בקובץ = שורות רגילות בלי סימון ועם "כן" (הכרעת יהודה 2/11/2026: להשאיר כך, לא להציע שוב).** `send_email` — multipart + לוגו inline (cid), STARTTLS.
 - **ייבוא:** `import_volunteer_checklist` מתאים לפי id המוסתר (fallback לשם), `received = not (ריק/"לא")` — ייבוא ישיר להיסטוריה.
 - SMTP דורש **App Password של Gmail** (myaccount.google.com/apppasswords, מצריך 2FA) שמזין המשתמש בהגדרות.
 - כל ייצואי האקסל → תיקיית **הורדות** (`_downloads_dir`). לניקוי תא בטסט: `ws.cell(r,c).value = None`.
