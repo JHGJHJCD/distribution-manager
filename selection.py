@@ -153,8 +153,12 @@ ONE_TIME_COOLDOWN_WEEKS_DEFAULT = 4     # יהודה 7/10/2026: 4 שבועות (
 
 
 def _one_time_turn(last: _date, cooldown_weeks: int) -> _date:
-    """The first Wednesday a one-timer served on `last` is eligible again."""
-    return cycle_wednesday(last) + _td(days=7 * max(0, int(cooldown_weeks)))
+    """The first Wednesday a one-timer served on `last` is eligible again.
+    Counted from the distribution Wednesday the round belongs to (RULE 9 snapping,
+    `round_wednesday`): a Sunday round belongs to the Wednesday AFTER it. Until
+    2/11/2026 this used `cycle_wednesday` (the Wednesday before), so a one-timer served
+    on Sun–Tue came back a week early — found by test_simulation.py."""
+    return round_wednesday(last) + _td(days=7 * max(0, int(cooldown_weeks)))
 
 
 # RULE 9 — one distribution WEEK, one portion (יהודה 18/10/2026). The fund's
