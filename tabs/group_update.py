@@ -3186,15 +3186,27 @@ class GroupUpdateTab(PlanLockMixin, QWidget):
         if self._fix_mode():              # a correction was saved: put the screen back as it was, touch nothing else
             self._fix_leave()
             return False
-        if self._plan_mode():             # the lock is now an executed round — back to the draft state
+        on_forecast = bool(self._forecast_key())
+        if self._plan_mode() and not on_forecast:   # the lock is now an executed round — back to the draft state
             self._plan_leave()
-        self._extra_ids.clear()
-        self._reserve_ids.clear()
-        self._removed_ids.clear()
-        self._persist_extras()
+        if on_forecast:
+            # The round recorded is the REAL week's (a forecast is never recorded — a
+            # volunteer file / auto-pull arrived while a coming week is on screen): clear
+            # the real week's shared picks + memory-only removals/notes, and leave the
+            # forecast's own hand-picks on screen untouched (they were never recorded).
+            db.set_setting("weekly_extra_ids", "")
+            db.set_setting("weekly_reserve_ids", "")
+            real = self._pick_slot("")
+            real["removed"].clear()
+            real["notes"].clear()
+        else:
+            self._extra_ids.clear()
+            self._reserve_ids.clear()
+            self._removed_ids.clear()
+            self._persist_extras()
+            self._row_notes.clear()
         self._checked_ids.clear()
         self._seen_ids.clear()
-        self._row_notes.clear()
         self.note_input.clear()
         self.chk_bonus.setChecked(False)     # a bonus mark belongs to the one round just recorded
         self._record_visited = False    # new cycle → record opens blank again (#13)

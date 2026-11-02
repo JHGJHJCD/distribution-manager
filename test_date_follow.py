@@ -412,5 +412,27 @@ set_date(W1); gt.refresh()
 ok("D15 תחזית: השער לא חוסם הדפסה", gt.list_is_future() and gt._one_time_gate_ok("הדפסה") is True)
 set_date(SUN); gt.refresh()
 
+# ── 16. סבב שנרשם בזמן שהמסך על תחזית: הניקוי פוגע בשבוע האמיתי, לא בתחזית (2/11/2026) ──
+set_today(SUN)
+ids = setup_week(SUN.isoformat()); db.set_setting("available_products", "50"); db.set_setting("dist_regulars_mode", "schedule")
+ot_real = db.add_recipient({"full_name": "חד-אמיתי", "status": "פעיל", "frequency": "חד-פעמי", "priority": 3, "souls": 2, "phone1": "0501110001"})
+ot_fut = db.add_recipient({"full_name": "חד-עתידי", "status": "פעיל", "frequency": "חד-פעמי", "priority": 3, "souls": 2, "phone1": "0501110002"})
+set_date(SUN); gt.refresh()
+gt.add_one_time_picks([db.get_recipient(ot_real)])
+set_date(W1); gt.refresh()
+gt.add_one_time_picks([db.get_recipient(ot_fut)])
+rec_a = db.get_recipient(ids["ק-שבועי"])
+f16 = vfile(W0.isoformat(), "קובץ השבוע 16")
+n16 = gt._apply_checklist_file(f16, confirm=True)[0]
+gt._after_round_recorded()
+ok("D16 הקובץ של השבוע האמיתי נרשם בזמן שהמסך על תחזית", n16 == 1)
+ok("D16 החד-פעמיים של השבוע האמיתי נוקו מההגדרות", (db.get_setting("weekly_extra_ids") or "") == "",
+   db.get_setting("weekly_extra_ids"))
+ok("D16 החד-פעמי של התחזית נשאר על המסך", ot_fut in gt._extra_ids, str(gt._extra_ids))
+set_date(SUN); gt.refresh()
+ok("D16 הרשימה האמיתית בלי החד-פעמי הישן", ot_real not in gt._extra_ids and "חד-אמיתי" not in names(gt._rows_data))
+try: os.remove(f16)
+except OSError: pass
+
 print("\nFAILED: " + ", ".join(fails) if fails else "\nALL DATE-FOLLOW CHECKS PASS ✓")
 sys.exit(1 if fails else 0)
