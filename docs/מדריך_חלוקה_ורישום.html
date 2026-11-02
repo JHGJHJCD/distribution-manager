@@ -1,0 +1,521 @@
+<title>חלוקה ורישום — המדריך לבדיקה</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800&display=swap">
+<style>
+/* Layout: one reading column, RTL; each section = short text + one picture + (where a decision lives) a review box. */
+:root{
+  --bg:#f4f8f6; --surface:#ffffff; --ink:#14231f; --muted:#5a6b66; --line:#d8e4df;
+  --accent:#0f766e; --accent-soft:#dff3ee; --warn:#b45309; --warn-soft:#fdf0d9;
+  --bad:#b42318; --bad-soft:#fde8e6; --good:#166534; --good-soft:#e1f4e6;
+  --blue:#1d4e89; --blue-soft:#e3edf8; --pur:#5e35b1; --pur-soft:#ede7f6; --grey-soft:#edf1ef;
+  --font:'Heebo','Segoe UI',Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#0f1917; --surface:#17241f; --ink:#e6f0ec; --muted:#9db3ac; --line:#2b3f38;
+  --accent:#4fd1b5; --accent-soft:#17382f; --warn:#f0b35a; --warn-soft:#3a2d12;
+  --bad:#ff8f84; --bad-soft:#40201d; --good:#7fd89a; --good-soft:#173a22;
+  --blue:#8ab8ee; --blue-soft:#182c45; --pur:#c3a8f5; --pur-soft:#2b2142; --grey-soft:#1f2e29; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#0f1917; --surface:#17241f; --ink:#e6f0ec; --muted:#9db3ac; --line:#2b3f38;
+  --accent:#4fd1b5; --accent-soft:#17382f; --warn:#f0b35a; --warn-soft:#3a2d12;
+  --bad:#ff8f84; --bad-soft:#40201d; --good:#7fd89a; --good-soft:#173a22;
+  --blue:#8ab8ee; --blue-soft:#182c45; --pur:#c3a8f5; --pur-soft:#2b2142; --grey-soft:#1f2e29; color-scheme:dark;}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);font-size:16px;line-height:1.7;
+  padding-block:24px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.page{max-width:860px;margin:0 auto}
+h1{font-size:2rem;line-height:1.25;margin:0 0 8px;font-weight:800;text-wrap:balance}
+h2{font-size:1.45rem;margin:0 0 6px;font-weight:800;text-wrap:balance}
+h3{font-size:1.05rem;margin:18px 0 6px;font-weight:700}
+p{margin:0 0 12px;max-width:68ch}
+.lead{font-size:1.1rem;color:var(--muted)}
+section{margin-top:44px;padding-top:8px;border-top:2px solid var(--line)}
+.tag{display:inline-block;font-size:.78rem;font-weight:700;letter-spacing:.04em;color:var(--accent);background:var(--accent-soft);padding:2px 10px;border-radius:99px;margin-bottom:6px}
+nav.toc{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 0}
+nav.toc a{font-size:.88rem;color:var(--ink);text-decoration:none;background:var(--surface);border:1px solid var(--line);padding:4px 12px;border-radius:99px}
+nav.toc a:hover,nav.toc a:focus-visible{border-color:var(--accent);outline:none;color:var(--accent)}
+.fig{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:18px;margin:16px 0}
+.fig .cap{font-size:.85rem;color:var(--muted);margin-top:10px}
+.scroll{overflow-x:auto}
+.scroll>*{min-width:560px}
+table{border-collapse:collapse;width:100%;font-size:.93rem}
+th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:right;vertical-align:top}
+th{font-weight:700;color:var(--muted);font-size:.82rem;letter-spacing:.03em}
+.num{font-variant-numeric:tabular-nums}
+
+/* funnel */
+.funnel{display:flex;flex-direction:column;gap:8px}
+.frow{display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:12px;align-items:center}
+.fbar{height:34px;border-radius:6px;background:var(--accent);color:#fff;display:flex;align-items:center;padding:0 12px;font-weight:700;font-size:.9rem;white-space:nowrap}
+.fbar.out{background:var(--grey-soft);color:var(--muted);border:1px dashed var(--line)}
+.flab{font-size:.85rem;color:var(--muted);line-height:1.35}
+@media (max-width:560px){.frow{grid-template-columns:1fr}}
+
+/* product split */
+.split{display:flex;height:46px;border-radius:8px;overflow:hidden;border:1px solid var(--line);font-weight:700;font-size:.85rem}
+.split>div{display:flex;align-items:center;justify-content:center;white-space:nowrap;min-width:0;padding:0 4px}
+.s-reg{background:var(--accent);color:#fff}.s-one{background:var(--blue);color:#fff}.s-res{background:var(--warn-soft);color:var(--warn);border-inline-start:1px solid var(--line)}.s-out{background:var(--grey-soft);color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.85rem;color:var(--muted);margin-top:8px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-inline-end:6px;vertical-align:baseline}
+
+/* week strip */
+.week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;text-align:center;font-size:.8rem}
+.day{padding:8px 2px;border-radius:6px;background:var(--grey-soft);color:var(--muted);line-height:1.35}
+.day b{display:block;font-size:.95rem;color:var(--ink)}
+.day.win{background:var(--accent-soft)}.day.wed{background:var(--accent);color:#fff}.day.wed b{color:#fff}
+.day.reg{background:var(--warn-soft);color:var(--warn)}.day.no{opacity:.55}
+.brace{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;margin-top:4px;font-size:.78rem;color:var(--muted);text-align:center}
+.brace span{border-top:3px solid var(--line);padding-top:3px}
+.brace .a{grid-column:1/5;border-color:var(--accent);color:var(--accent)}
+.brace .b{grid-column:5/8;border-color:var(--warn);color:var(--warn)}
+@media (max-width:480px){.day{font-size:.68rem}.day b{font-size:.82rem}}
+
+/* cards / mini rows */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}
+.card h3{margin:0 0 4px}
+.chip{display:inline-block;font-size:.78rem;font-weight:700;padding:1px 9px;border-radius:99px;margin-inline-end:4px}
+.c-g{background:var(--good-soft);color:var(--good)}.c-w{background:var(--warn-soft);color:var(--warn)}.c-b{background:var(--blue-soft);color:var(--blue)}.c-x{background:var(--bad-soft);color:var(--bad)}.c-n{background:var(--grey-soft);color:var(--muted)}
+
+/* screen mockup */
+.mock{border:1px solid var(--line);border-radius:12px;background:var(--bg);padding:12px;display:flex;flex-direction:column;gap:10px;font-size:.88rem}
+.mcard{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;position:relative}
+.mhead{display:flex;align-items:center;gap:8px;font-weight:800;margin-bottom:8px}
+.badge{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:.8rem;flex:none}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
+.fld{border:1px solid var(--line);border-radius:6px;padding:4px 8px;background:var(--bg)}
+.fld small{display:block;color:var(--muted);font-size:.72rem}
+.fld.big{border:2px solid var(--accent)}.fld.big b{font-size:1.4rem}
+.btn{display:inline-block;border:1px solid var(--line);border-radius:6px;padding:3px 10px;background:var(--surface);font-weight:600;font-size:.82rem}
+.btn.pri{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn.warn{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
+.toggle{display:inline-flex;border:1px solid var(--line);border-radius:99px;overflow:hidden;font-weight:700;font-size:.82rem}
+.toggle span{padding:3px 14px}.toggle .on{background:var(--accent);color:#fff}
+.mrow{display:grid;grid-template-columns:22px minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) 22px;gap:8px;padding:5px 8px;border-radius:6px;align-items:center;font-size:.82rem}
+.mrow.r-wk{background:var(--accent-soft)}.mrow.r-od{background:var(--bad-soft)}.mrow.r-td{background:var(--warn-soft)}.mrow.r-1t{background:var(--blue-soft)}.mrow.r-rs{background:var(--pur-soft);color:var(--pur)}
+.mrow.hd{font-weight:700;color:var(--muted);font-size:.74rem}
+.pin{position:absolute;inset-block-start:-9px;inset-inline-start:-9px;width:24px;height:24px;border-radius:50%;background:var(--warn);color:#fff;font-weight:800;font-size:.8rem;display:flex;align-items:center;justify-content:center;border:2px solid var(--surface)}
+.notes{margin:12px 0 0;padding:0;list-style:none;display:grid;gap:8px}
+.notes li{display:grid;grid-template-columns:26px 1fr;gap:10px;align-items:start}
+.notes .pin{position:static}
+
+/* flow steps */
+.flow{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch}
+.step{flex:1 1 150px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px;min-width:0;font-size:.9rem}
+.step b{display:block;margin-bottom:4px}
+.arrow{align-self:center;color:var(--muted);font-weight:800}
+@media (max-width:600px){.arrow{display:none}}
+
+/* review box */
+.rule{margin:16px 0;background:var(--surface);border:1px solid var(--line);border-inline-start:5px solid var(--accent);border-radius:10px;padding:14px 16px}
+.rule .rt{font-size:.78rem;font-weight:800;letter-spacing:.05em;color:var(--accent);margin-bottom:2px}
+.rule p{margin:0 0 8px}
+.rule .who{font-size:.82rem;color:var(--muted)}
+.vote{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.vote button{font:inherit;font-size:.88rem;font-weight:700;border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:5px 14px;border-radius:99px;cursor:pointer}
+.vote button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.vote button[aria-pressed="true"].ok{background:var(--good-soft);color:var(--good);border-color:var(--good)}
+.vote button[aria-pressed="true"].fix{background:var(--bad-soft);color:var(--bad);border-color:var(--bad)}
+.rule.is-fix{border-inline-start-color:var(--bad)}.rule.is-ok{border-inline-start-color:var(--good)}
+.q{background:var(--warn-soft);border:1px solid var(--warn);border-radius:10px;padding:12px 16px;margin:16px 0}
+.q b{color:var(--warn)}
+.summary{margin-top:40px}
+.sumbox{background:var(--surface);border:2px solid var(--accent);border-radius:12px;padding:16px}
+.sumbox textarea{width:100%;min-height:120px;font:inherit;font-size:.9rem;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;direction:rtl}
+.sumbox button{font:inherit;font-weight:700;background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 18px;cursor:pointer;margin-top:8px}
+.counter{font-weight:700}
+code{background:var(--grey-soft);padding:1px 6px;border-radius:4px;font-size:.88em}
+</style>
+
+<div class="page" dir="rtl" lang="he">
+
+<header>
+  <span class="tag">מסמך לבדיקה · לפי הקוד של גרסה 3.86 · 20/10/2026</span>
+  <h1>איך התוכנה מחליטה מי מקבל, ואיך עובד מסך "חלוקה ורישום"</h1>
+  <p class="lead">המסמך נכתב מתוך הקוד עצמו, לא מזיכרון. בכל נושא יש הסבר קצר, תמונה, ותיבת בדיקה עם שני כפתורים: <b>תואם</b> או <b>לתקן</b>. בסוף יש סיכום להעתקה, ואותו אפשר להדביק לי בצ'אט.</p>
+  <p class="who" style="color:var(--muted);font-size:.9rem">כל המספרים בדוגמאות הם להמחשה בלבד, לא נתונים אמיתיים. הציור של המסך הוא סכמה, לא צילום מסך.</p>
+  <nav class="toc" aria-label="תוכן עניינים">
+    <a href="#s1">שבוע חלוקה</a><a href="#s2">סוגי מקבלים</a><a href="#s3">המסננת</a><a href="#s4">כמה נכנסים</a>
+    <a href="#s5">חד-פעמיים</a><a href="#s6">ניקוד</a><a href="#s7">מצבי חלוקה</a><a href="#s8">המסך</a>
+    <a href="#s9">רישום</a><a href="#s10">התור הבא</a><a href="#s11">הכנה קדימה ונעילה</a><a href="#s12">חג ובונוס</a><a href="#s13">שאלות פתוחות</a>
+  </nav>
+</header>
+
+<!-- 1 -->
+<section id="s1">
+  <span class="tag">יסוד</span>
+  <h2>שבוע חלוקה אחד</h2>
+  <p>החלוקה קבועה ביום רביעי. התוכנה חושבת בשבועות: מיום ראשון עד רביעי מכינים וחולקים, ומיום חמישי עד שבת מסיימים לרשום. רישום שנעשה בחמישי–שבת נחשב לחלוקה של הרביעי שקדם לו.</p>
+  <div class="fig">
+    <div class="week">
+      <div class="day win"><b>א׳</b>הכנה</div><div class="day win"><b>ב׳</b>הכנה</div><div class="day win"><b>ג׳</b>הכנה</div>
+      <div class="day wed"><b>ד׳</b>חלוקה</div>
+      <div class="day reg"><b>ה׳</b>עוד רישום</div><div class="day reg"><b>ו׳</b>עוד רישום</div><div class="day reg"><b>ש׳</b>עוד רישום</div>
+    </div>
+    <div class="brace"><span class="a">"חלון השבוע": מי שקיבל כאן לא חוזר לאף רשימה של אותו שבוע</span><span class="b">רישום מאוחר שייך לרביעי שלפניו</span></div>
+    <div class="cap">היום (20/10) הוא יום שלישי, ולכן הרביעי הקרוב הוא 21/10.</div>
+  </div>
+</section>
+
+<!-- 2 -->
+<section id="s2">
+  <span class="tag">יסוד</span>
+  <h2>מי הם המקבלים</h2>
+  <p>לכל מקבל יש סטטוס, תדירות ועדיפות. אלה שלושת הדברים שקובעים אם הוא בכלל יכול להופיע ברשימה.</p>
+  <div class="cards">
+    <div class="card"><h3>קבועים</h3><p><span class="chip c-g">שבועי</span><span class="chip c-g">דו-שבועי</span><span class="chip c-g">תלת-שבועי</span><span class="chip c-g">חודשי</span></p><p>יש להם תור לפי התדירות. מי שמסומן "קבוע" בעדיפות ובלי תדירות נחשב קבוע שבועי.</p></div>
+    <div class="card"><h3>חד-פעמיים</h3><p><span class="chip c-b">עדיפות ראשונה</span><span class="chip c-b">עדיפות שנייה</span></p><p>נכנסים רק כשנשארו מוצרים אחרי הקבועים, ורק אם העדיפות שלהם ראשונה או שנייה.</p></div>
+    <div class="card"><h3>נתונים בלבד</h3><p><span class="chip c-n">עדיפות 1 / 0 / בירור / ריק</span></p><p>חד-פעמי בלי עדיפות אמיתית. נשמר במאגר, לא נכנס לבד לשום רשימה. אפשר להוסיף אותו ידנית.</p></div>
+    <div class="card"><h3>מושהה</h3><p><span class="chip c-x">לא מקבל</span></p><p>הפסקה זמנית. אין סטטוס אחר פרט ל"פעיל" ו"מושהה". רק "פעיל" מקבל, בכל שאילתה בתוכנה.</p></div>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="s3">
+  <span class="tag">הלב של הלוגיקה</span>
+  <h2>המסננת: מי נכנס לרשימה של קבועים</h2>
+  <p>לפני שמדברים על כמה מוצרים יש, כל קבוע עובר ארבע בדיקות לפי הסדר. מי שנופל באחת מהן לא ברשימה ולא ברזרבה, גם אם יש הרבה מוצרים.</p>
+  <div class="fig">
+    <div class="funnel" role="img" aria-label="משפך סינון: 70 פעילים, 6 נעולים בשבוע אחר, 4 כבר קיבלו השבוע, 20 תורם עוד לא הגיע, נשארים 40">
+      <div class="frow"><div class="fbar" style="width:100%">70 קבועים פעילים</div><div class="flab">סטטוס "פעיל", יש תדירות</div></div>
+      <div class="frow"><div class="fbar" style="width:91%">64 · לא נעולים בשבוע אחר</div><div class="flab">יצאו 6 שנעולים ברשימה של שבוע אחר</div></div>
+      <div class="frow"><div class="fbar" style="width:86%">60 · לא קיבלו השבוע</div><div class="flab">יצאו 4 שכבר קיבלו מראשון עד רביעי</div></div>
+      <div class="frow"><div class="fbar" style="width:57%">40 · תורם הגיע</div><div class="flab">יצאו 20 דו-שבועיים, תלת-שבועיים וחודשיים שתורם עוד לא הגיע</div></div>
+    </div>
+    <div class="cap">אחרי המסננת מגיעה בדיקת מספר המוצרים (הפרק הבא). שבועי לעולם לא נחסם בגלל תדירות.</div>
+  </div>
+
+  <div class="rule" id="r-freq" data-title="תדירות היא שער קשיח בכל מצב">
+    <div class="rt">כלל 1 · תדירות</div>
+    <p>דו-שבועי שקיבל שבוע שעבר לא נכנס, גם אם יש מוצרים בשפע. אותו דבר לתלת-שבועי (21 יום) ולחודשי (28 יום). הרשימה פשוט קצרה יותר. אף אחד לא נמשך קדימה כדי למלא מקום.</p>
+    <p class="who">הכרעת יהודה 28/9/2026 · חל על כל המצבים, חוץ מחלוקת חג.</p>
+    <div class="vote"></div>
+  </div>
+  <div class="rule" id="r-week" data-title="מי שקיבל השבוע לא חוזר לרשימה אחרת של אותו שבוע">
+    <div class="rt">כלל 2 · פעם אחת בשבוע</div>
+    <p>קבוע שנרשם שקיבל בין ראשון לרביעי, אפילו ברשימה שנייה, לא יופיע בשום רשימה נוספת של אותו שבוע. רישום בחמישי–שבת לא נספר לשבוע הבא אלא לרביעי שלפניו.</p>
+    <p class="who">הכרעת יהודה 18/10/2026, אחרי שרון הוציא שתי חלוקות ו-38 קבועים הופיעו בשתיהן.</p>
+    <div class="vote"></div>
+  </div>
+</section>
+
+<!-- 4 -->
+<section id="s4">
+  <span class="tag">מוצרים</span>
+  <h2>כמה נכנסים: מספר המוצרים קובע</h2>
+  <p>"מוצרים זמינים" הוא השדה הבולט במסך. בלי מספר, אין רשימה. עם מספר, המוצרים מתחלקים לפי סדר קבוע: קודם הקבועים שתורם הגיע, מה שנשאר הולך לחד-פעמיים, ואחרי כולם באה הרזרבה.</p>
+  <h3>מקרה א׳: יש מספיק מוצרים</h3>
+  <div class="fig">
+    <div class="split"><div class="s-reg" style="flex:40">40 קבועים</div><div class="s-one" style="flex:5">5</div><div class="s-res" style="flex:3">3</div></div>
+    <div class="legend"><span><i class="dot" style="background:var(--accent)"></i>קבועים שתורם הגיע</span><span><i class="dot" style="background:var(--blue)"></i>מקום לחד-פעמיים</span><span><i class="dot" style="background:var(--warn)"></i>רזרבה (מעבר למוצרים)</span></div>
+    <div class="cap">45 מוצרים, 40 קבועים בתור: נשארו 5 מקומות לחד-פעמיים. הרזרבה, 3 אנשים, נוספת אחרי.</div>
+  </div>
+  <h3>מקרה ב׳: מוצרים פחות מהקבועים</h3>
+  <div class="fig">
+    <div class="split"><div class="s-reg" style="flex:30">30 מי שמחכה הכי הרבה</div><div class="s-res" style="flex:3">3</div><div class="s-out" style="flex:10">10 מחוץ לרשימה</div></div>
+    <div class="cap">30 מוצרים, 40 קבועים: נכנסים 30 שחיכו הכי הרבה ימים מאז החלוקה האחרונה (שוויון: ניקוד גבוה יותר, אחר כך שם). עשרת האחרים לא ברשימה, לא נרשמים "לא הגיע", ושומרים על מקומם לשבוע הבא.</div>
+  </div>
+
+  <div class="rule" id="r-zero" data-title="מוצרים 0 = טבלה ריקה">
+    <div class="rt">כלל 3 · בלי מוצרים אין רשימה</div>
+    <p>כל עוד "מוצרים זמינים" הוא 0, הטבלה ריקה, בכל מצב, ומוצגת הודעה להקליד קודם כמה מוצרים יש. גם הדפסה, אקסל ורישום חסומים עד אז.</p>
+    <p class="who">הכרעת יהודה 7/10/2026.</p><div class="vote"></div>
+  </div>
+  <div class="rule" id="r-short" data-title="פחות מוצרים מקבועים: מי שמחכה הכי הרבה">
+    <div class="rt">כלל 4 · מחסור במוצרים</div>
+    <p>כשאין מספיק לכולם, מי שמחכה הכי הרבה נכנס ראשון. הניקוד לא מכריע כאן, הוא רק שובר שוויון. מופיעה שורה אדומה קצרה "אין מספיק לקבועים — חסרים N מוצרים", והפירוט בריחוף.</p>
+    <p class="who">הכרעת יהודה 7/10/2026. קבוע שנוסף ידנית תופס מוצר. חד-פעמי שנבחר לא דוחק קבוע.</p><div class="vote"></div>
+  </div>
+  <div class="rule" id="r-reserve" data-title="רזרבה = רשימת המתנה, לא נרשמת, ברירת מחדל 0">
+    <div class="rt">כלל 5 · רזרבה</div>
+    <p>הרזרבה היא אנשי המתנה שמודפסים בנפרד, אחרי הרשימה. הם לא נרשמים כמי שקיבלו, ו"בחר הכל" לא מסמן אותם. מסמנים אותם אחד-אחד רק כשהם מחליפים מי שלא הגיע. אין ברירת מחדל: הרזרבה מתחילה ב-0, וגם "חלוקה חדשה" מאפסת אותה.</p>
+    <p class="who">הכרעת יהודה 7/10/2026.</p><div class="vote"></div>
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="s5">
+  <span class="tag">חד-פעמיים</span>
+  <h2>איך נבחרים החד-פעמיים</h2>
+  <p>כפתור "בחר חד-פעמיים" נראה רק כשנשארו מוצרים אחרי הקבועים. הוא פותח חלון עם מועמדים מסודרים, ואפשר לאשר או להחליף.</p>
+  <div class="flow">
+    <div class="step"><b>1 · שער</b>רק עדיפות ראשונה או שנייה. אחרים לא מופיעים.</div><span class="arrow">←</span>
+    <div class="step"><b>2 · תחלופה</b>מי שקיבל בארבעת השבועות האחרונים לא מופיע. מי שנרשם שקיבל יוצא מיד, גם מרשימה שנייה.</div><span class="arrow">←</span>
+    <div class="step"><b>3 · סדר</b>עדיפות ראשונה לפני שנייה. בתוך כל דרגה לפי ניקוד.</div><span class="arrow">←</span>
+    <div class="step"><b>4 · כמות</b>עד כמה שנשאר: מוצרים פחות קבועים פחות מי שהוספת ידנית.</div>
+  </div>
+  <div class="fig scroll"><table>
+    <thead><tr><th>רכיב בניקוד החד-פעמי</th><th>משקל</th><th>הערה</th></tr></thead>
+    <tbody>
+    <tr><td>זמן המתנה (ימים מאז החלוקה האחרונה)</td><td class="num">50%</td><td>מי שלא קיבל מעולם נספר מיום ההרשמה</td></tr>
+    <tr><td>כסף פנוי לנפש</td><td class="num">25%</td><td>נמוך יותר = נזקק יותר</td></tr>
+    <tr><td>מספר נפשות</td><td class="num">25%</td><td>גבוה יותר = נזקק יותר</td></tr>
+    </tbody></table>
+    <div class="cap">הנוסחה קבועה בקוד. משקלי הניקוד שבהגדרות לא משפיעים עליה. בבדיקת סימולציה של שנה כולם קיבלו בין 9 ל-13 פעמים, בלי קבוצה תקועה.</div>
+  </div>
+  <div class="rule" id="r-onetime" data-title="חד-פעמי: שער עדיפות, נוסחה קבועה 50/25/25, הפסקה של 4 שבועות">
+    <div class="rt">כלל 6 · חד-פעמיים</div>
+    <p>עדיפות היא שער כניסה ובין הדרגות. נוסחת התור קבועה (50% המתנה, 25% פנוי לנפש, 25% נפשות). הפסקה של 4 שבועות בין קבלה לקבלה, ניתנת לשינוי בהגדרות, ו-0 מכבה אותה.</p>
+    <p class="who">הכרעות יהודה 28/9 ו-7/10/2026. הפסקה של 3 שבועות הוחלפה ב-4.</p><div class="vote"></div>
+  </div>
+</section>
+
+<!-- 6 -->
+<section id="s6">
+  <span class="tag">ניקוד</span>
+  <h2>איך מחושב ניקוד הצורך</h2>
+  <p>הניקוד (0 עד 100) לא מודד סכומים אלא <b>מקום בתור</b>. לכל גורם: מסדרים את הערכים הקיימים מהפחות נזקק לנזקק ביותר, והנזקק ביותר מקבל את מלוא המשקל של הגורם. כל מדרגה מתחתיו מקבלת חלק שווה. כך ערך קיצוני אחד לא משטח את כולם.</p>
+  <div class="fig scroll"><table>
+    <caption style="text-align:right;font-weight:700;padding-bottom:8px">דוגמה בנוסחת החד-פעמיים (50/25/25), חמש משפחות</caption>
+    <thead><tr><th>משפחה</th><th>ימי המתנה</th><th>פנוי לנפש</th><th>נפשות</th><th>ניקוד</th><th>מקום</th></tr></thead>
+    <tbody class="num">
+    <tr><td>א׳</td><td>120</td><td>300</td><td>8</td><td><b>82.5</b></td><td>1</td></tr>
+    <tr><td>ב׳</td><td>30</td><td>150</td><td>6</td><td><b>65.0</b></td><td>2</td></tr>
+    <tr><td>ה׳</td><td>10</td><td>200</td><td>10</td><td><b>56.2</b></td><td>3</td></tr>
+    <tr><td>ג׳</td><td>90</td><td>800</td><td>3</td><td><b>48.8</b></td><td>4</td></tr>
+    <tr><td>ד׳</td><td>90</td><td>0 (לא ידוע)</td><td>5</td><td><b>47.5</b></td><td>5</td></tr>
+    </tbody></table>
+    <div class="cap">הערכים חושבו בפועל בקוד של התוכנה. משפחה ד׳ עם פנוי לנפש 0 מקבלת 0 נקודות בגורם הזה, כי 0 נחשב "לא ידוע".</div>
+  </div>
+  <div class="rule" id="r-score" data-title="ניקוד: מקום בתור, חסר = 0, חוב = הכי נזקק">
+    <div class="rt">כלל 7 · פרטי הניקוד</div>
+    <p>נתון חסר שווה 0 נקודות, ולכן משפחות עם פרטים חסרים יורדות לתחתית התור. בגורמי כסף 0 נחשב "לא ידוע", ומינוס (חוב) הוא נתון אמיתי והנזקק ביותר. שוויון בניקוד נשבר לפי ותק (מי שחיכה יותר), ואחר כך שם. ששת הגורמים: פנוי לנפש, נפשות, ותק, הכנסות, דיור, רפואי. בברירת מחדל רק הראשונים שלושה פעילים (34/33/33).</p>
+    <p class="who">הכרעות יהודה 25/9 ו-7/10/2026. ילדים לא גורם נפרד כדי לא לספור את אותה משפחה פעמיים.</p><div class="vote"></div>
+  </div>
+</section>
+
+<!-- 7 -->
+<section id="s7">
+  <span class="tag">מצבים</span>
+  <h2>מצבי חלוקה</h2>
+  <p>המצב נבחר ב"מצבי חלוקה מתקדמים" (חלק מקופל בכרטיס הראשון). בכל הפעלה של התוכנה הוא חוזר ל"רגיל".</p>
+  <div class="fig scroll"><table>
+    <thead><tr><th>מצב</th><th>מי ברשימה</th><th>באיזה סדר</th></tr></thead>
+    <tbody>
+    <tr><td><b>רגיל</b> (ברירת מחדל)</td><td>הקבועים שתורם הגיע, ועוד חד-פעמיים שבוחרים ידנית עם הכפתור</td><td>לפי שם. אם חסרים מוצרים: מי שמחכה הכי הרבה</td></tr>
+    <tr><td><b>בלי קבועים</b></td><td>רק מי שמוסיפים ידנית</td><td>לפי ניקוד, להסבר בלבד</td></tr>
+    <tr><td><b>קבועים לפי ניקוד</b></td><td>הקבועים שתורם הגיע, חתוך למספר המוצרים ועוד רזרבה</td><td>לפי ניקוד בלבד, הנזקק ראשון</td></tr>
+    <tr><td><b>סינון מותאם</b></td><td>כל פעיל שעומד בספים: ילדים, הכנסה, פנוי לנפש (כולם יחד). חסר נתון בשדה מסונן = לא נכלל. אזור לא קריטריון</td><td>עם איזון קהילות: מכסה לפי גודל הקהילה, והשלמה לפי קרבה לסף. בלי איזון: מי שמחכה הכי הרבה</td></tr>
+    </tbody></table>
+  </div>
+  <div class="rule" id="r-mode" data-title="המצב חוזר ל'רגיל' בכל הפעלה, ופר-מחשב">
+    <div class="rt">כלל 8 · מצב חלוקה</div>
+    <p>מצב אחר נבחר לחלוקה הנוכחית בלבד, לא מסתנכרן בין המחשבים, וחוזר ל"רגיל" בהפעלה הבאה. כך שום מצב לא נשכח פעיל מהשבוע שעבר. הקריטריונים של הסינון נשמרים אבל פעילים רק במצב סינון.</p>
+    <p class="who">הכרעת יהודה 6/10/2026.</p><div class="vote"></div>
+  </div>
+</section>
+
+<!-- 8 -->
+<section id="s8">
+  <span class="tag">המסך</span>
+  <h2>מסך "חלוקה ורישום": מה רואים ומה כל דבר עושה</h2>
+  <p>המסך הוא לשונית הפתיחה. הוא בנוי משני כרטיסים ממוספרים ושורת פעולות, ויש לו שני שלבים: <b>הכנה</b> ו<b>רישום</b>.</p>
+
+  <div class="mock" aria-label="סכמה של המסך">
+    <div class="mcard"><span class="pin">1</span>
+      <div class="mhead"><span class="badge">1</span>פרטי החלוקה</div>
+      <div class="fields">
+        <div class="fld"><small>שם החלוקה</small>חלוקת פרשת לך לך — י׳ חשוון</div>
+        <div class="fld"><small>תאריך</small>21/10/2026 (רביעי)</div>
+        <div class="fld"><small>מחלק (חובה)</small>רון</div>
+        <div class="fld big"><small>מוצרים זמינים</small><b class="num">45</b></div>
+        <div class="fld"><small>רזרבה</small><b class="num">3</b></div>
+      </div>
+      <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <span class="btn warn">בחר חד-פעמיים</span><span class="chip c-b">נשאר לחד-פעמיים: 5 · נבחרו: 0</span><span class="btn">☐ חלוקת בונוס</span><span class="btn">מצבי חלוקה מתקדמים ▾</span>
+      </div>
+    </div>
+    <div class="mcard"><span class="pin">2</span>
+      <div class="mhead"><span class="badge">2</span>רשימת המקבלים
+        <span class="toggle" style="margin-inline-start:auto"><span class="on">הכנה</span><span>רישום</span></span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px"><span class="btn">＋ הוסף מקבל</span><span class="btn">ייצוא לאקסל</span><span class="btn">שלח למתנדב</span><span class="chip c-n">קבועים השבוע: 40</span></div>
+      <div class="mrow hd"><span></span><span>שם</span><span>תדירות</span><span>תור / ניקוד</span><span></span></div>
+      <div class="mrow r-od"><span></span><span>כהן משה</span><span>דו-שבועי</span><span>איחור</span><span>🗑</span></div>
+      <div class="mrow r-td"><span></span><span>לוי דוד</span><span>שבועי</span><span>21/10</span><span>🗑</span></div>
+      <div class="mrow r-wk"><span></span><span>ישראלי חיה</span><span>חודשי</span><span>21/10</span><span>🗑</span></div>
+      <div class="mrow r-1t"><span></span><span>פרידמן יוסף</span><span>חד-פעמי</span><span>ניקוד 83</span><span>🗑</span></div>
+      <div class="mrow r-rs"><span></span><span>גולד שרה</span><span>רזרבה · שבועי</span><span>ניקוד 41</span><span>🗑</span></div>
+    </div>
+    <div class="mcard"><span class="pin">3</span>
+      <div class="mhead">שורת פעולות</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px"><span class="btn pri">הדפסה לחלוקה</span><span class="btn">שמור PDF</span><span class="btn">⟳ חלוקה חדשה</span></div>
+      <div class="cap" style="color:var(--muted);font-size:.8rem;margin-top:6px">בשלב הרישום "שמור חלוקה" מחליף את ההדפסה וה-PDF.</div>
+    </div>
+  </div>
+
+  <ul class="notes">
+    <li><span class="pin">1</span><span><b>פרטי החלוקה.</b> השם נוצר לבד ("חלוקת פרשת … — תאריך עברי", ובחג שם החג). שם המחלק חובה לפני שמירה. הערה כללית נשמרת פעם אחת על כל החלוקה. "מוצרים זמינים" ו"רזרבה" קובעים כמה יהיו ברשימה. סימון "בונוס" גורם לחלוקה להירשם בלי להזיז את התור הקבוע.</span></li>
+    <li><span class="pin">2</span><span><b>הרשימה.</b> צבע השורה מראה דחיפות: אדום = איחור, כתום = היום או מחר, ירוק = השבוע, כחול = חד-פעמי, סגול = רזרבה. מהרשימה אפשר להסיר מישהו עם 🗑, או להוסיף כל מקבל עם "＋ הוסף מקבל". מי שנוסף ואינו בתור מסומן "⚠ לא בתור", ושואלים לפני שמוסיפים. מעל הרשימה שורת מחסור אדומה כשצריך.</span></li>
+    <li><span class="pin">3</span><span><b>פעולות.</b> הדפסה (A4, עם מקטע רזרבה נפרד), PDF לתיקיית ההורדות, ושליחה למתנדב במייל. "חלוקה חדשה" מאפס מוצרים, רזרבה, שם, בחירות והסרות.</span></li>
+  </ul>
+
+  <div class="rule" id="r-remove" data-title="הסרה עם 🗑 והוספה ידנית">
+    <div class="rt">כלל 9 · הסרה והוספה ידנית</div>
+    <p>🗑 מסיר מהרשימה הנוכחית בלבד: המקבל לא נמחק ולא נרשם "לא הגיע", והמקום עובר לבא אחריו. ההסרה נשמרת בזיכרון עד "חלוקה חדשה", רישום או הפעלה מחדש. הוספה ידנית לא תלויה בתור, אבל תופסת מוצר. חד-פעמי שנבחר ידנית לא דוחק קבוע שתורו הגיע, אלא מציג אזהרה אדומה.</p>
+    <p class="who">v3.81 · #fuzpd</p><div class="vote"></div>
+  </div>
+  <div class="rule" id="r-gate" data-title="הדפסה חסומה עד שבוחרים חד-פעמיים">
+    <div class="rt">כלל 10 · שער לפני הדפסה</div>
+    <p>במצב רגיל, אם נשארו מוצרים לחד-פעמיים ועוד לא נבחר אף אחד, הדפסה, PDF ואקסל פותחים את חלון הבחירה במקום להמשיך. מספיק לבחור אחד כדי להמשיך להדפיס.</p>
+    <p class="who">באג #9, ותיקון #y0rrd: במצבים אחרים אין שער.</p><div class="vote"></div>
+  </div>
+</section>
+
+<!-- 9 -->
+<section id="s9">
+  <span class="tag">רישום</span>
+  <h2>שלב הרישום: מי באמת קיבל</h2>
+  <div class="flow">
+    <div class="step"><b>הכנה</b>רשימה בלי תיבות סימון. מדפיסים, מייצאים, שולחים למתנדב.</div><span class="arrow">←</span>
+    <div class="step"><b>רישום</b>הרשימה נפתחת <u>ריקה</u>. מסמנים ✓ ליד מי שהגיע וקיבל.</div><span class="arrow">←</span>
+    <div class="step"><b>שמור חלוקה</b>חלון אישור עם מספר מקבלים ונפשות. אחרי אישור נכתב ההיסטוריה.</div><span class="arrow">←</span>
+    <div class="step"><b>אחרי</b>גיבוי אוטומטי, אקסל מלא בהורדות, והמסך חוזר לשלב הכנה נקי.</div>
+  </div>
+  <div class="fig scroll"><table>
+    <caption style="text-align:right;font-weight:700;padding-bottom:8px">מה נכתב לכל אחד בשמירה</caption>
+    <thead><tr><th>מצב בשורה</th><th>מה נרשם</th><th>השפעה על התור</th></tr></thead>
+    <tbody>
+    <tr><td><span class="chip c-g">מסומן ✓</span></td><td>קיבל</td><td>התור זז לפי התדירות</td></tr>
+    <tr><td><span class="chip c-x">לא מסומן</span></td><td>"לא הגיע" (מפורש)</td><td>נשאר בתור ולא מאבד ותק. סף רצוף של אי-הגעה (3 כברירת מחדל) מקפיץ התראה</td></tr>
+    <tr><td><span class="chip c-n">רזרבה לא מסומנת</span></td><td>כלום</td><td>לא נרשם, כי לא הוזמן</td></tr>
+    <tr><td><span class="chip c-b">רזרבה שסומנה ✓</span></td><td>קיבל</td><td>כמו כל מי שקיבל</td></tr>
+    </tbody></table></div>
+  <div class="rule" id="r-noshow" data-title="לא סומן = נרשם 'לא הגיע'">
+    <div class="rt">כלל 11 · אי-הגעה</div>
+    <p>מי שברשימה ולא סומן נרשם במפורש "לא הגיע" ולא נעלם בשקט. זה מזין את ההתראות. המקום שלו בתור נשמר. "בחר הכל" מסמן את כולם חוץ מהרזרבה, ולכן שמור ידנית רק אחרי בדיקה: החלון מזהיר אם סימנת יותר ממספר המוצרים.</p>
+    <p class="who">הכרעת יהודה v2.60 · #yjcny</p><div class="vote"></div>
+  </div>
+  <div class="rule" id="r-volunteer" data-title="קובץ מתנדב מחליף רישום">
+    <div class="rt">כלל 12 · מתנדבים</div>
+    <p>המתנדב מקבל אקסל עם עמודת "הגיע?" (ברירת מחדל "כן"), מבטל רק מי שלא הגיע ושולח חזרה במייל. התוצאה נקלטת אוטומטית כרישום מלא, בלי שהמנהל נוגע במסך.</p>
+    <div class="vote"></div>
+  </div>
+</section>
+
+<!-- 10 -->
+<section id="s10">
+  <span class="tag">תורות</span>
+  <h2>מה קורה לתור אחרי חלוקה</h2>
+  <p>"חלוקה אחרונה" ו"חלוקה הבאה" נגזרות מההיסטוריה בלבד ולא מוקלדות. התור הבא הוא תמיד יום רביעי.</p>
+  <div class="fig scroll"><table>
+    <caption style="text-align:right;font-weight:700;padding-bottom:8px">דוגמה: קיבל ביום רביעי 7/10/2026</caption>
+    <thead><tr><th>תדירות</th><th>חוזר</th><th>כלל</th></tr></thead>
+    <tbody class="num">
+    <tr><td>שבועי</td><td>14/10</td><td>+ 7 ימים</td></tr>
+    <tr><td>דו-שבועי</td><td>21/10</td><td>+ 14</td></tr>
+    <tr><td>תלת-שבועי</td><td>28/10</td><td>+ 21</td></tr>
+    <tr><td>חודשי</td><td>4/11</td><td>+ 28 (הכרעת יהודה 17/9/2026)</td></tr>
+    </tbody></table>
+    <div class="cap">אם נרשם ביום חמישי–שבת (10/10), זה נחשב לרביעי שלפניו (7/10), והתאריכים זהים. אם נרשם בראשון–שלישי (4/10), זה נחשב לרביעי שאחריו (7/10).</div>
+  </div>
+  <div class="rule" id="r-move" data-title="כל חלוקה רגילה מזיזה תור, רק בונוס או חג לא">
+    <div class="rt">כלל 13 · מה מזיז תור</div>
+    <p>כל חלוקה רגילה שנרשמה, בכל יום בשבוע, מזיזה את התור ומוציאה את המקבל מרשימות אחרות של אותו שבוע. רק חלוקה שסומנה במפורש "בונוס", או חלוקת חג, נחשבת "נוספת" ולא מזיזה. עד 18/10/2026 החלוקה בימי ראשון–שלישי נחשבה אוטומטית נוספת. הכלל הזה בוטל, והישנות נשארות כפי שהיו.</p>
+    <p class="who">הכרעת יהודה 18/10/2026. תאריך "חלוקה אחרונה" אחרי הרביעי הקרוב נחשב טעות ומתעלמים ממנו.</p><div class="vote"></div>
+  </div>
+</section>
+
+<!-- 11 -->
+<section id="s11">
+  <span class="tag">הכנה קדימה</span>
+  <h2>תחזית, נעילה ורישום אוטומטי</h2>
+  <p>אם משנים את התאריך לשבוע שאחרי הרביעי הקרוב, הרשימה הופכת <b>תחזית</b>: קריאה בלבד, אפשר להדפיס אבל אי אפשר לרשום. אפשר לבחור חד-פעמיים, להוסיף ולהסיר, והבחירות נשמרות לאותו שבוע בלבד ולא נוגעות בחלוקה הקרובה.</p>
+  <div class="flow">
+    <div class="step"><b>תחזית</b>שבוע עתידי. נעלם כשסוגרים את התוכנה אם לא ננעל.</div><span class="arrow">←</span>
+    <div class="step"><b>🔒 נעל רשימה</b>הרשימה נשמרת כ"חלוקה מתוכננת". החברים נחסמים בשבועות אחרים בטווח התדירות שלהם, לשני הכיוונים. שבועי אף פעם לא נחסם.</div><span class="arrow">←</span>
+    <div class="step"><b>רישום אוטומטי</b>מחמישי 06:00 עד סוף שבת, רשימה נעולה שאף אחד לא רשם נרשמת לבד כמי שקיבלו.</div>
+  </div>
+  <div class="fig">
+    <div class="week">
+      <div class="day"><b>א׳</b></div><div class="day"><b>ב׳</b></div><div class="day"><b>ג׳</b></div>
+      <div class="day wed"><b>ד׳</b>חלוקה</div>
+      <div class="day reg"><b>ה׳</b>06:00 נפתח</div><div class="day reg"><b>ו׳</b>חלון</div><div class="day reg"><b>ש׳</b>נסגר</div>
+    </div>
+    <div class="cap">חלון הרישום האוטומטי. רישום אמיתי של מנהל או מתנדב תמיד גובר, והאוטומטי ממלא רק פער.</div>
+  </div>
+  <div class="rule" id="r-lock" data-title="נעילה: חסימה בין שבועות">
+    <div class="rt">כלל 14 · נעילה</div>
+    <p>מי שנעול (לא רזרבה) בשבוע אחד לא יופיע בשבוע אחר בטווח התדירות שלו. חד-פעמי נחסם לפי ההפסקה. נעילה אפשרית רק לחלוקה רגילה, לא לחג ולא לבונוס. נעילה נחשבת "בוצעה" כשנרשמה חלוקה בשבוע שלה, ו"פגה" אחרי שבת.</p>
+    <p class="who">הכרעת יהודה 18/10/2026. אם במחשב השני גרסה ישנה, מופיעה אזהרה ושואלת "לנעול בכל זאת?".</p><div class="vote"></div>
+  </div>
+  <div class="rule" id="r-auto" data-title="רישום אוטומטי של רשימה נעולה (מי שלא הגיע ייחשב כקיבל עד תיקון)">
+    <div class="rt">כלל 15 · רישום אוטומטי</div>
+    <p>הרישום האוטומטי רושם את כל חברי הרשימה הנעולה (לא רזרבה, לא מושהים) כמי שקיבלו. מי שלא הגיע בפועל ייחשב כקיבל, תורו יזוז, והתראות אי-הגעה לא יראו אותו עד שמתקנים. התיקון נעשה בכפתור "תקן" בבאנר, שפותח את הרישום עם כולם מסומנים ומחליף את הרישום האוטומטי. יש מתג לכבות את הרישום האוטומטי לשבוע מסוים.</p>
+    <p class="who">חריגה מכוונת מ"כולם מתחילים לא מסומנים". יהודה הוזהר ואישר ב-19/10/2026.</p><div class="vote"></div>
+  </div>
+</section>
+
+<!-- 12 -->
+<section id="s12">
+  <span class="tag">חריגים</span>
+  <h2>חלוקת חג ובונוס</h2>
+  <div class="cards">
+    <div class="card"><h3>חלוקת חג</h3><p>במצב סינון מותאם בוחרים "חלוקת חג". נכנסים רק מקבלים שמסומנים "נתמך חגים" (כל החגים או החג הספציפי). הסינון הזה קשיח, לפני איזון הקהילות. השערים של תדירות ושל "פעם בשבוע" <b>לא</b> חלים. נרשמת כחלוקה נוספת: לא מזיזה תור. אחרי הרישום המסך חוזר לבד לחלוקה רגילה.</p></div>
+    <div class="card"><h3>בונוס</h3><p>סימון ידני "חלוקת בונוס" בכרטיס הראשון. נרשמת רגיל, אבל לא מזיזה את התור הקבוע, ולא מוציאה אף אחד מרשימות אחרות. הסימון מתאפס אחרי הרישום.</p></div>
+  </div>
+  <div class="rule" id="r-holiday" data-title="חג ובונוס לא מזיזים תור">
+    <div class="rt">כלל 16 · חג ובונוס</div>
+    <p>שני אלה הם הדרך היחידה לחלק "מעבר" לחלוקה הרגילה בלי לפגוע בתור.</p>
+    <div class="vote"></div>
+  </div>
+</section>
+
+<!-- 13 -->
+<section id="s13">
+  <span class="tag">לפני שמסיימים</span>
+  <h2>נקודות שכדאי לעצור עליהן</h2>
+  <p>אלה דברים שעלו בקריאת הקוד, ושווה לוודא שהם בדיוק מה שרוצים. אין כאן באג שמצאתי, אלא החלטות שנראות מפתיעות כשקוראים אותן בנפרד.</p>
+  <div class="q"><b>1. רישום אוטומטי מול אי-הגעה.</b> כל מי שברשימה הנעולה נרשם כמי שקיבל, כולל מי שלא הגיע. עד שמתקנים, ההיסטוריה אומרת "קיבל". האם רון באמת יזכור לתקן?</div>
+  <div class="q"><b>2. רישום ביום ראשון–שלישי.</b> מאז 18/10 הוא נחשב חלוקה רגילה: מוציא מהרשימה של אותו רביעי, ומזיז תור. אם מישהו מקבל מנה מוקדמת אבל לא רוצים להזיז לו תור, חייבים לסמן "בונוס".</div>
+  <div class="q"><b>3. הקבועים לא מדורגים לפי ניקוד במצב רגיל.</b> כשיש מספיק מוצרים, כל הקבועים שתורם הגיע נכנסים בלי קשר לניקוד. הניקוד קובע רק כשחסרים מוצרים, ואז הוא שובר שוויון אחרי זמן ההמתנה.</div>
+  <div class="q"><b>4. שבועי שקיבל השבוע.</b> גם הוא לא יחזור לרשימה שנייה באותו שבוע. אם לפעמים רוצים לתת פעמיים לאותה משפחה בשבוע, זה בבונוס.</div>
+  <div class="q"><b>5. אי-הגעה רצופה.</b> סף ההתראה הוא 3 כברירת מחדל ומוגדר בהגדרות. 0 מכבה אותה.</div>
+</section>
+
+<div class="summary">
+  <div class="sumbox" id="sumbox">
+    <div class="counter" id="counter" aria-live="polite">עוד לא סימנת כלום</div>
+    <p style="font-size:.88rem;color:var(--muted);margin:4px 0 6px">אחרי שעוברים על הכללים, העתק את הסיכום והדבק אותו בצ'אט. הסימונים נשמרים בדפדפן הזה.</p>
+    <textarea id="summary" readonly aria-label="סיכום הבדיקה"></textarea>
+    <button type="button" id="copy">העתק סיכום</button> <span id="copied" style="font-size:.85rem;color:var(--good)"></span>
+  </div>
+</div>
+
+</div>
+
+<script>
+(function(){
+  var KEY='manhal-guide-review-v1', state={};
+  try{ state=JSON.parse(localStorage.getItem(KEY)||'{}')||{}; }catch(e){ state={}; }
+  var rules=[].slice.call(document.querySelectorAll('.rule[id]'));
+  function save(){ try{ localStorage.setItem(KEY,JSON.stringify(state)); }catch(e){} }
+  function render(){
+    var ok=0,fix=0,lines=[];
+    rules.forEach(function(r){
+      var v=state[r.id];
+      r.classList.toggle('is-ok',v==='ok'); r.classList.toggle('is-fix',v==='fix');
+      r.querySelectorAll('.vote button').forEach(function(b){ b.setAttribute('aria-pressed', b.dataset.v===v?'true':'false'); });
+      if(v==='ok')ok++; if(v==='fix'){fix++; lines.push('• לתקן: '+r.dataset.title+(state[r.id+'_n']?' — '+state[r.id+'_n']:''));}
+    });
+    var total=rules.length, left=total-ok-fix;
+    document.getElementById('counter').textContent = (ok+fix===0)?('עוד לא סימנת כלום · '+total+' כללים לבדיקה'):(ok+' תואמים · '+fix+' לתיקון · '+left+' עוד לא נבדקו');
+    var t='סיכום בדיקת המדריך: '+ok+' תואמים, '+fix+' לתיקון, '+left+' לא נבדקו.\n'+(lines.length?lines.join('\n'):'אין כללים שסומנו לתיקון.');
+    document.getElementById('summary').value=t;
+  }
+  rules.forEach(function(r){
+    var box=r.querySelector('.vote');
+    box.innerHTML='<button type="button" class="ok" data-v="ok" aria-pressed="false">✓ תואם</button><button type="button" class="fix" data-v="fix" aria-pressed="false">✎ לתקן</button><input type="text" placeholder="מה לתקן (לא חובה)" aria-label="הערה" style="flex:1 1 180px;min-width:0;font:inherit;font-size:.88rem;padding:5px 10px;border:1px solid var(--line);border-radius:99px;background:var(--bg);color:var(--ink)">';
+    var inp=box.querySelector('input'); inp.value=state[r.id+'_n']||''; inp.id='note-'+r.id;
+    inp.addEventListener('input',function(){ state[r.id+'_n']=inp.value; save(); render(); });
+    box.querySelectorAll('button').forEach(function(b){
+      b.addEventListener('click',function(){ state[r.id]=(state[r.id]===b.dataset.v)?'':b.dataset.v; save(); render(); });
+    });
+  });
+  document.getElementById('copy').addEventListener('click',function(){
+    var ta=document.getElementById('summary'), msg=document.getElementById('copied');
+    function fallback(){ ta.removeAttribute('readonly'); ta.select(); try{ document.execCommand('copy'); msg.textContent='הועתק'; }catch(e){ msg.textContent='סמן והעתק ידנית'; } ta.setAttribute('readonly',''); }
+    if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(ta.value).then(function(){ msg.textContent='הועתק'; },fallback); } else fallback();
+  });
+  render();
+})();
+</script>
