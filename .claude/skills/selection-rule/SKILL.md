@@ -108,6 +108,13 @@ cases pass), no tab embeds the logic, and — if it changes what the operator se
 you captured a screenshot with the `visual-check` skill. Then give the user one
 plain-Hebrew line describing the new behavior.
 
+**Also run `python test_simulation.py` (Hypothesis, 2/11/2026).** It plays a random
+year of operator actions against the real DB and re-checks RULES 6/7/9 and the derived
+card dates after every step, against an *independent* model written from CLAUDE.md.
+A new rule = add it to that model too (or the simulation will "find" your rule as a
+bug). It found on day one that `_one_time_turn` counted the cooldown from the wrong
+Wednesday for Sun–Tue rounds. On failure Hypothesis prints the shrunk step sequence.
+
 ## עדכון 7/10/2026 (v3.81) — ניקוד לפי מקום בתור + נוסחה קבועה לחד-פעמיים
 - `scoring.annotate_need_scores` מנרמל **לפי מקום בתור** (`_rank_components`: ערכים שונים במדרגות שוות k/n, ערכים שווים = אותה מדרגה), לא לפי סכום. אל תחזיר נרמול ליניארי — חריג אחד שיטח את כולם (הכרעת יהודה).
 - התור הרגיל של החד-פעמיים (`rank_one_time_priority`, `get_one_time_list`) משתמש ב-`scoring.ONE_TIME_QUEUE_WEIGHTS` (50% המתנה / 25% פנוי לנפש / 25% נפשות) ו**מתעלם** מהמשקלים שמועברים אליו. משקלי ההגדרות חלים רק על `scored` / `filter` / `none`.

@@ -37,3 +37,6 @@ build.log
 
 # qtpy-mcp (גשש Qt לקלוד) — נתיב מוחלט עם שם משתמש, פר-מחשב
 .mcp.json
+
+# Hypothesis (test_simulation.py) — מסד דוגמאות מקומי
+.hypothesis/

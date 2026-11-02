@@ -13,5 +13,7 @@ edge-tts==7.2.8
 aiohttp==3.14.3
 truststore==0.10.4
 tzdata==2026.2
+hypothesis==6.170.14          # בדיקות בלבד: test_simulation.py (לא נכנס ל-EXE)
+sortedcontainers==2.4.0
 pyinstaller==6.19.0
 pyinstaller-hooks-contrib==2026.4
