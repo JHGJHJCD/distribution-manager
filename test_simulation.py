@@ -12,6 +12,10 @@
   I4  כלל 7 בשני הכיוונים: חד-פעמי מועמד ⇔ לא קיבל ב-4 השבועות האחרונים
   I5  last/next_distribution בכרטיס נגזרים נכון מההיסטוריה (next = רביעי, לפי התדירות,
       חג/בונוס לא מזיזים את התור)
+  I6  כלל 8: החיתוך למוצרים (selection.limit_due_regulars) — ראשיים = מספר המוצרים,
+      רזרבה = min(רזרבה שהוגדרה, תור−מוצרים), אף אחד חדש לא נכנס; פחות מוצרים מהתור בלבד חותך
+  I7  "N מוצע" (compute_suggested_n): regular_count = בדיוק הקבועים שבתור השבוע,
+      ומה שנשאר לחד-פעמיים = מוצרים − קבועים (לא פחות מ-0)
 
 המודל נכתב כאן מחדש מהתיעוד (לא קורא ל-selection) — כך שסתירה = באג בקוד או בתיעוד.
 כשנמצא כשל, Hypothesis מכווצת את הרצף למינימום ומדפיסה אותו (ומזכירה אותו ב-.hypothesis/).
@@ -85,6 +89,8 @@ class Sim(RuleBasedStateMachine):
         self.rounds = []        # (rec_id, date, extra: bool)   — received=1 בלבד
         self.n = 0
         self.weeks = 0
+        self.products = 0       # כלל 8: 0 = בלי חיתוך (הליבה מחזירה את כל התור)
+        self.reserve = 0
 
     # ── עזרים ──
     def _active(self, kind):
@@ -184,6 +190,24 @@ class Sim(RuleBasedStateMachine):
         self.people[rid]["freq"] = freq
         db.update_recipient(rid, {"frequency": freq})
 
+    @rule(products=st.integers(0, 12), reserve=st.integers(0, 3))
+    def set_products(self, products, reserve):
+        """רון מקליד כמה מוצרים זמינים השבוע (וכמה רזרבה) — מזין את החיתוך של כלל 8."""
+        self.products, self.reserve = products, reserve
+        db.set_setting("available_products", str(products))
+        db.set_setting("reserve_count", str(reserve))
+
+    @precondition(lambda self: self.people)
+    @rule(data=st.data())
+    def delete_recipient(self, data):
+        """מחיקת מקבל. למי שיש היסטוריה (כולל 'לא הגיע') המחיקה נדחית — משאירים כמות שהוא."""
+        rid = data.draw(st.sampled_from(sorted(self.people)))
+        try:
+            db.delete_recipient(rid)
+        except ValueError:
+            return                               # יש חלוקות בהיסטוריה — לא נמחק
+        self.people.pop(rid)
+
     # ── אינווריאנטים ──
     @invariant()
     def lists_are_sane(self):
@@ -250,6 +274,37 @@ class Sim(RuleBasedStateMachine):
                         f"I5 {p['name']}: טרם קיבל אבל next_distribution={nxt!r} אחרי {base}"
             else:
                 assert nxt == "", f"I5 {p['name']}: לחד-פעמי אין next_distribution, יש {nxt!r}"
+
+    @invariant()
+    def products_limit(self):
+        """I6 — כלל 8: החיתוך למוצרים הוא בדיוק מה שהתיעוד אומר."""
+        weekly = db.get_weekly_list()
+        wids = [r["id"] for r in weekly]
+        P, R = self.products, self.reserve
+        weights = db.get_need_weights()
+        capped = selection.limit_due_regulars([dict(r) for r in weekly], weights, P, R)
+        # 0 מוצרים, או מספיק מוצרים לכל התור → הרשימה נשארת כמות שהיא (בלי תפקידים, אותו סדר)
+        if not P or P <= 0 or len(weekly) <= P:
+            assert [r["id"] for r in capped] == wids, \
+                f"I6 כלל 8: {P} מוצרים, {len(weekly)} בתור — הרשימה השתנתה ({[r['id'] for r in capped]} ≠ {wids})"
+            return
+        main = [r for r in capped if r.get("_role") == selection.ROLE_MAIN]
+        res = [r for r in capped if r.get("_role") == selection.ROLE_RESERVE]
+        exp_res = min(R, len(weekly) - P)
+        assert len(main) == P, f"I6 כלל 8: {len(main)} ראשיים, צפוי {P} (תור {len(weekly)})"
+        assert len(res) == exp_res, f"I6 כלל 8: {len(res)} רזרבה, צפוי {exp_res} (תור {len(weekly)}, מוצרים {P}, רזרבה {R})"
+        assert len(capped) == P + exp_res, f"I6 כלל 8: אורך {len(capped)}, צפוי {P + exp_res}"
+        assert {r["id"] for r in capped} <= set(wids), "I6 כלל 8: החיתוך הכניס מישהו שלא היה בתור"
+        assert all(r.get("_role") != selection.ROLE_OUT for r in capped), "I6 כלל 8: ROLE_OUT נשאר ברשימה"
+
+    @invariant()
+    def suggested_n_schedule(self):
+        """I7 — compute_suggested_n מנכה בדיוק את הקבועים שבתור השבוע (במצב schedule)."""
+        P = self.products
+        n, reg = db.compute_suggested_n(P)
+        due = len(db.get_weekly_list())
+        assert reg == due, f"I7 'N מוצע': regular_count={reg} אבל {due} קבועים בתור"
+        assert n == max(0, P - due), f"I7 'N מוצע': n={n}, צפוי {max(0, P - due)} ({P} מוצרים − {due} קבועים)"
 
 
 if __name__ == "__main__":
