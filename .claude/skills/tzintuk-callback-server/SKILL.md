@@ -50,6 +50,9 @@ URL: `https://pai-dev-s-api-link.pai-ffff542b.workers.dev` (גם `callback_serve
 קוד ה-Worker: `dev/cloudflare/api_link_worker.js` (פרוס דרך "פיתוחים אישיים" בפתרונאי —
 עורך בדפדפן של המשתמש, לא בשליטת Claude; עדכון = הדבקה → "עדכן הפריסה", מכבה Observability).
 סוד `APP_SECRET` בזיכרון `project-tzintuk-cloudflare-callback` — **לא ל-git**.
+⚠ **כלי "שלוחת API משני הצדדים" החדש בפתרונאי (4/11/2026)** פורס Worker **וכותב `api_link` לשלוחה בעצמו** —
+⛔ לא להשתמש בו ל-/76 (היה עוקף את סדר 3 הצעדים למטה ואת כלל "לא כותבים לקו בלי אישור"). מותר: לשונית
+**"בדיקת API"** שלו לראות מה נשלח/חזר בין ימות ל-Worker, כעזר דיבוג. פירוט: `pitronai-panel-guide` § 5א.
 
 ## 3 הצעדים שנותרו להשלמה (בסדר הזה בלבד)
 
