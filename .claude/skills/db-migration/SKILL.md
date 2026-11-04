@@ -13,6 +13,8 @@ description: >-
 
 # DB Migration — change the schema without breaking anything
 
+> פירוט מנגנון הסנכרון בין 2 המחשבים (journal, ops, LWW, עמידות, מה מסונכרן ומה לא): `docs/sync.md` בשורש המאגר.
+
 The DB is shared across two computers via a Google-Drive journal (no server), and
 old databases must keep opening. So schema changes follow three non-negotiables:
 
