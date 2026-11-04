@@ -13,6 +13,8 @@ description: >-
 
 # Selection Rule — where "who gets it" logic belongs
 
+> **הנוסח המלא והמחייב של כללי 1–11, התאריכים והחגים (מ-CLAUDE.md, 4/11/2026): `references/rules.md` — לקרוא לפני כל שינוי.** אם משהו בקובץ זה סותר אותו (למשל מצב `all` שירד) — `rules.md` גובר.
+
 Every question of *who receives, in what order, and why* has **one home:
 `selection.py`** (a pure module — no DB, no Qt). Tabs and `database.py` only
 consume it. This matters because these rules are the heart of the app's fairness,
