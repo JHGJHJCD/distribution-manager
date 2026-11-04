@@ -14,6 +14,8 @@ description: >-
 
 # מנהל חלוקה — Work & Release Skill
 
+> פירוט אזורי התוכנה שהוצא מ-CLAUDE.md (לשוניות, מסך החלוקה, ריענון, היסטוריית כרטיס, נתונים וגיבויים, עדכון ושחרור, יציבות, עץ הפרויקט, טבלת הסקילים, בדיקות; 4/11/2026): `references/app-areas.md`.
+
 Guardrails and an end-to-end release script for the distribution-manager repo.
 The user is **not a programmer** — work and ship, don't narrate technical steps;
 end with one short plain-Hebrew release note. Verify by yourself (tests /
