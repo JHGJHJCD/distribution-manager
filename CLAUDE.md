@@ -58,7 +58,14 @@ tabs/  group_update (חלוקה ורישום) · recipients (כל המקבלים
 utils/ sync · yemot/tts/call_history/callback_server/netblock (ימות) · mailer/google_auth/richtext/email_utils
        excel_utils · print_view · backup · updater · feedback · ui · hebdate · wallpaper · _secret.py (.gitignore!)
 dev/ (צילומים, stress, cloudflare/) · docs/ (מפה ב-README) · .claude/skills · test_*.py בשורש
+web/   גרסת האתר (מ-25/11/2026): planner (חישוב קדימה, טהור) · store · service · app (FastAPI) · static · import_old · tests
 ```
+
+## גרסת האתר — `web/` (מ-25/11/2026; פירוט: `web/README.md`, הכרעות: `docs/plans/אתר_תכנון_מצב.md`)
+- התוכנה נבנית מחדש כאתר: קודם מקומי (`web\run_local.bat` ← 127.0.0.1:8787), אחר כך בשרת. **התוכנה הישנה ממשיכה לעבוד; לא נוגעים בה ולא בנתונים האמיתיים בגלל האתר.**
+- **העבר קבוע, העתיד מחושב תמיד מחדש:** באתר נשמרים רק כרטיסים, היסטוריה והגדרות; רשימה עתידית לא נשמרת. אין "שבוע קפוא", אין נעילה, אין רישום הגעה — שבוע שעבר (חמישי 06:00) נכתב להיסטוריה כמו שחושב.
+- **`web/` לא מייבא את `database.py`** (רק `selection`/`scoring`, בלי לשנות אותם). שינוי ב-`selection.py`/`scoring.py` ⇒ להריץ גם `python web/tests/run_all.py` (משווה את האתר לקוד הישן).
+- **`web/data/` = נתונים אישיים, מוחרג מגיט** (המאגר ציבורי). בבדיקות רק אנשים מומצאים.
 
 ## מה הפרויקט
 אפליקציית Windows בעברית (RTL מלא) לחלוקת מצרכים ל"קופה של צדקה הר יונה", ~500 מקבלים. מתנדבים מחלקים ולא נוגעים בתוכנה — מקבלים רשימה במייל והקובץ מיובא חזרה. **יהודה** = הבעלים (לא מתכנת); **רון** = מנהל הקופה, המפעיל בפועל. שני מחשבים על אותם נתונים (סנכרון). מציאות תפעולית — זיכרון `project-fund-operations-reality`.

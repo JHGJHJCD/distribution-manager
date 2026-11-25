@@ -40,3 +40,6 @@ build.log
 
 # Hypothesis (test_simulation.py) — מסד דוגמאות מקומי
 .hypothesis/
+
+# גרסת האתר (web/) — מאגר הנתונים והגיבויים שלו: נתונים אישיים, לעולם לא לגיט
+web/data/

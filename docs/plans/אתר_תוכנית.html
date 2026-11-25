@@ -1,0 +1,187 @@
+<meta charset="utf-8">
+<title>תוכנית האתר החדש</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800&display=swap">
+<style>
+/* Layout: single column plan. Top = what the user sees and decides; bottom = technical, short. Visual blocks over prose. */
+:root{
+  --bg:#f4f7f6; --surface:#fff; --fg:#17221e; --muted:#5b6a64; --line:#dbe3e0; --accent:#0f9d78; --soft:#e3f3ed;
+  --past:#8b9894; --pin:#c4791a; --one:#d14d72; --w2:#2f7fd1; --warnbg:#fff3d6; --warnfg:#7a4d00;
+  --font:"Heebo","Segoe UI",Arial,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#111816; --surface:#1a2320; --fg:#e5eeea; --muted:#9aaaa3; --line:#2b3732; --accent:#3cc9a0; --soft:#173a30;
+  --past:#6f7d78; --pin:#e6a24a; --one:#f07296; --w2:#5ea5f0; --warnbg:#3d3012; --warnfg:#ffd88a; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111816; --surface:#1a2320; --fg:#e5eeea; --muted:#9aaaa3; --line:#2b3732; --accent:#3cc9a0; --soft:#173a30;
+  --past:#6f7d78; --pin:#e6a24a; --one:#f07296; --w2:#5ea5f0; --warnbg:#3d3012; --warnfg:#ffd88a; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:16px;line-height:1.6;direction:rtl;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:24px 56px}
+.wrap{max-width:900px;margin:0 auto;display:flex;flex-direction:column;gap:26px}
+h1{margin:0;font-size:2rem;font-weight:800;text-wrap:balance}
+h2{margin:0;font-size:1.35rem}
+h3{margin:0;font-size:1.02rem}
+p{margin:0;max-width:66ch}
+.lead{color:var(--muted);margin-top:6px}
+.muted{color:var(--muted);font-size:.92rem}
+section{display:flex;flex-direction:column;gap:14px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+/* timeline */
+.tl{display:flex;gap:6px;align-items:stretch;overflow-x:auto;padding-bottom:4px}
+.wkb{flex:none;width:86px;border-radius:10px;padding:8px 6px;text-align:center;font-size:.85rem;border:1.5px solid var(--line);background:var(--surface)}
+.wkb b{display:block;font-variant-numeric:tabular-nums}
+.wkb.past{background:var(--bg);color:var(--muted);border-style:solid}
+.wkb.fut{border-color:var(--accent)}
+.wkb.fut.flash{animation:fl .9s ease}
+.wkb.more{border-style:dashed;display:grid;place-items:center;color:var(--muted)}
+.now{flex:none;width:4px;border-radius:2px;background:var(--one);position:relative;margin-inline:4px}
+.now::after{content:"היום";position:absolute;top:-2px;inset-inline-start:8px;font-size:.75rem;color:var(--one);font-weight:700;white-space:nowrap;background:var(--surface);padding:0 3px;border-radius:3px}
+@keyframes fl{0%{background:var(--accent);color:#fff}100%{background:var(--surface)}}
+@media (prefers-reduced-motion:reduce){.wkb.fut.flash{animation:none}}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn{font:inherit;font-weight:700;padding:8px 16px;border-radius:9px;border:1.5px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn:focus-visible{outline:3px solid var(--fg);outline-offset:1px}
+.say{background:var(--soft);border-radius:9px;padding:9px 13px;min-height:2.8em}
+.rules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.rule{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--surface);display:flex;flex-direction:column;gap:4px}
+.rule .ic{font-size:1.4rem}
+/* screens */
+.screens{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.scr{border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:14px;display:flex;flex-direction:column;gap:8px;min-width:0}
+.scr.main{grid-column:1/-1;border-color:var(--accent)}
+.mock{border:1px dashed var(--line);border-radius:8px;padding:8px;background:var(--bg);display:flex;flex-direction:column;gap:6px}
+.mrow{display:flex;gap:5px;flex-wrap:wrap}
+.mb{height:16px;border-radius:4px;background:var(--line)}
+.mb.g{background:var(--accent)} .mb.o{background:var(--one)} .mb.b{background:var(--w2)} .mb.p{background:var(--pin)}
+.tag{display:inline-block;font-size:.78rem;font-weight:700;border-radius:999px;padding:1px 9px;background:var(--soft);color:var(--accent)}
+/* data */
+.data{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.dbx{border-radius:10px;padding:12px;background:var(--soft);display:flex;flex-direction:column;gap:2px}
+.dbx.no{background:transparent;border:1.5px dashed var(--line);grid-column:1/-1}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:.85rem;border-radius:999px;padding:3px 11px;border:1px solid var(--line);background:var(--surface)}
+.chip.out{text-decoration:line-through;color:var(--muted)}
+.chip.keep{border-color:var(--pin);color:var(--pin)}
+/* stages */
+.stages{display:flex;flex-direction:column;gap:10px;counter-reset:st}
+.st{display:grid;grid-template-columns:44px 1fr;gap:12px;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:14px}
+.st::before{counter-increment:st;content:counter(st);width:40px;height:40px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:800;font-size:1.1rem}
+.st.later::before{content:"☁";background:var(--past)}
+.st>div{display:flex;flex-direction:column;gap:4px;min-width:0}
+.see{background:var(--soft);border-radius:8px;padding:6px 10px;font-size:.93rem}
+.eff{font-size:.82rem;font-weight:700;color:var(--pin)}
+.tech{font-size:.93rem;color:var(--muted)}
+.tech ul{margin:0;padding-inline-start:20px}
+.warn{background:var(--warnbg);color:var(--warnfg);border-radius:9px;padding:8px 12px;font-size:.92rem}
+@media (max-width:720px){.rules,.screens{grid-template-columns:1fr}.data{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>תוכנית האתר החדש של מנהל חלוקה</h1>
+    <p class="lead">למעלה נמצא מה שאתה ורון תראו, ומה שהכי כדאי לך לבדוק. למטה, בקצרה, הצד הטכני שעליי. אם משהו כאן לא מה שהתכוונת, עכשיו הכי זול לשנות.</p>
+  </header>
+
+  <section>
+    <h2>הרעיון המרכזי: העבר קבוע, העתיד תמיד מחושב מחדש</h2>
+    <div class="panel">
+      <div class="tl" id="tl"></div>
+      <div class="row">
+        <button type="button" class="btn" id="add">נסה: הוסף מקבל חדש</button>
+        <button type="button" class="btn ghost" id="more">עוד שבועות קדימה</button>
+      </div>
+      <div class="say" id="say" aria-live="polite">שבועות אפורים כבר עברו, והם לא משתנים. שבועות ירוקים עוד לא הגיעו, והם מחושבים מחדש בכל פעם שמשהו משתנה.</div>
+    </div>
+    <div class="rules">
+      <div class="rule"><span class="ic">↻</span><h3>כל שינוי מחשב הכל מחדש</h3><p class="muted">מקבל חדש, שינוי תדירות או השהיה, וכל התורים העתידיים מסתדרים מחדש לפי הנתונים של אותו רגע. זה שרשימה כבר הודפסה לא משנה.</p></div>
+      <div class="rule"><span class="ic">∞</span><h3>בלי הגבלה קדימה</h3><p class="muted">אפשר להתקדם כמה שבועות שרוצים, ולהדפיס כל טווח: שבוע אחד, חודשיים או חצי שנה.</p></div>
+      <div class="rule"><span class="ic">✋</span><h3>מה שרון קבע ביד נשאר</h3><p class="muted">אם רון העביר מישהו לרזרבה או הוסיף מישהו לשבוע מסוים, החישוב מסתדר סביב זה ולא מוחק את זה.</p></div>
+    </div>
+    <div class="warn">אם שבוע השתנה אחרי שהודפס, תופיע עליו הערה קטנה: "השתנה מאז ההדפסה: נוסף כהן, יצא לוי". זו רק תזכורת לרון, היא לא עוצרת שום דבר.</div>
+    <p class="muted">מי שהיה ברשימה של שבוע שעבר נחשב כמי שקיבל. אין מסך של "מי הגיע".</p>
+  </section>
+
+  <section>
+    <h2>המסכים</h2>
+    <div class="screens">
+      <div class="scr main">
+        <div class="row"><h3>שבועות</h3><span class="tag">המסך הראשי</span></div>
+        <p class="muted">הכיוון שבחרת. למעלה פס השבועות, למטה הרשימה של השבוע שנבחר: מקבלים, רזרבה, ומי שלא בשבוע הזה. לחיצה על שם מסבירה במשפט למה הוא שם. מכאן מדפיסים ומורידים אקסל, לשבוע אחד או לטווח.</p>
+        <div class="mock">
+          <div class="mrow"><span class="mb" style="width:54px"></span><span class="mb g" style="width:54px"></span><span class="mb" style="width:54px"></span><span class="mb" style="width:54px"></span><span class="mb" style="width:54px"></span><span class="mb" style="width:30px;opacity:.5"></span></div>
+          <div class="mrow"><span class="mb g" style="width:60px"></span><span class="mb g" style="width:48px"></span><span class="mb b" style="width:56px"></span><span class="mb b" style="width:50px"></span><span class="mb o" style="width:58px"></span><span class="mb g" style="width:46px"></span><span class="mb p" style="width:52px"></span></div>
+        </div>
+        <p class="muted">בכל שבוע אפשר: לשנות את מספר המנות (52 אם לא נגעו), להעביר לרזרבה, להסיר מהשבוע, ולהוסיף מישהו ביד.</p>
+      </div>
+      <div class="scr"><h3>מקבלים</h3><p class="muted">הרשימה המלאה עם חיפוש. כרטיס לכל אחד: שם, טלפונים, נפשות, תדירות, קבוע או חד־פעמי, פעיל או מושהה. הוספה, עריכה, והצעה למזג כפילויות.</p></div>
+      <div class="scr"><h3>חלוקת חג</h3><p class="muted">אירוע נפרד שרון יוצר: תאריך, מספר מנות וסינון. לא מזיז את התור הרגיל. מי שחסר לו נתון מסומן, כמו בהמחשה.</p></div>
+      <div class="scr"><h3>היסטוריה</h3><p class="muted">כל שבוע שעבר, מי היה בו, וחיפוש "מתי פלוני קיבל".</p></div>
+      <div class="scr"><h3>הגדרות</h3><p class="muted">משקלי הניקוד, מספר המנות הרגיל, זמן ההמתנה של חד־פעמיים, וגיבוי ושחזור.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>מה נשמר ומה לא</h2>
+    <div class="data">
+      <div class="dbx"><h3>מקבלים</h3><span class="muted">הכרטיסים</span></div>
+      <div class="dbx"><h3>היסטוריה</h3><span class="muted">שבועות שעברו</span></div>
+      <div class="dbx"><h3>קביעות ידניות</h3><span class="muted">מה שרון שינה בשבוע</span></div>
+      <div class="dbx"><h3>הגדרות</h3><span class="muted">משקלים, מנות</span></div>
+      <div class="dbx no"><h3>רשימות עתידיות לא נשמרות</h3><span class="muted">הן מחושבות בכל פעם מחדש מארבעת הדברים שלמעלה. לכן אין מה שיתיישן, ואין שני עותקים שיכולים לסתור זה את זה.</span></div>
+    </div>
+    <p class="muted">בזמן הבנייה אני עובד על עותק של העותק הנפרד של רון. הנתונים האמיתיים והתוכנה הישנה לא נפגעים, ורון ממשיך לעבוד כרגיל.</p>
+  </section>
+
+  <section>
+    <h2>מה בפנים ומה בחוץ</h2>
+    <div class="panel">
+      <h3>יוצא</h3>
+      <div class="chips"><span class="chip out">רישום מי הגיע</span><span class="chip out">ייבוא אקסל ממתנדבים</span><span class="chip out">סנכרון בין מחשבים</span><span class="chip out">עדכון קובץ התקנה</span><span class="chip out">בונוס כסוג נפרד</span><span class="chip out">שליחת מייל (בגרסה הראשונה)</span></div>
+      <h3>לא עכשיו, אבל נשאר לזה מקום מוכן</h3>
+      <div class="chips"><span class="chip keep">צינתוקים</span><span class="chip keep">סקר טלפוני</span><span class="chip keep">איזון קהילות</span><span class="chip keep">היסטוריית שינויים בכרטיס</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>שלבי הבנייה</h2>
+    <p class="muted">בסוף כל שלב יש משהו שאתה פותח בדפדפן ורואה. לא ממשיכים לשלב הבא לפני שהקודם עובד ונבדק.</p>
+    <div class="stages">
+      <div class="st"><div><h3>המנוע ומסך השבועות, לקריאה בלבד</h3><p class="muted">מחברים את מוח הכללים הקיים, מעתיקים את הנתונים של רון לעותק, ובונים את החישוב קדימה.</p><div class="see">אתה רואה: רשימות אמיתיות לשבועות הבאים, עם הסבר לכל שם.</div><span class="eff">החלק הכי עדין. מודל חזק, מאמץ הכי גבוה.</span></div></div>
+      <div class="st"><div><h3>שינויים ביד, הדפסה ואקסל</h3><p class="muted">רזרבה ידנית, הסרה והוספה לשבוע, מספר מנות לשבוע, הדפסת טווח, וההערה "השתנה מאז ההדפסה".</p><div class="see">אתה רואה: דף מודפס ואקסל לכמה שבועות קדימה.</div><span class="eff">מאמץ גבוה.</span></div></div>
+      <div class="st"><div><h3>מקבלים</h3><p class="muted">רשימה, כרטיס, הוספה ועריכה, השהיה, חיפוש וכפילויות.</p><div class="see">אתה רואה: מוסיף מקבל, וכל השבועות מתעדכנים מיד.</div><span class="eff">אפשר להוריד למאמץ בינוני.</span></div></div>
+      <div class="st"><div><h3>חג, ניקוד והיסטוריה</h3><p class="muted">אירוע חג עם סינון, מסך המשקלים, ומסך ההיסטוריה.</p><div class="see">אתה רואה: רשימת חג, וחיפוש "מתי פלוני קיבל".</div><span class="eff">מאמץ גבוה לחג, בינוני לשאר.</span></div></div>
+      <div class="st"><div><h3>גיבוי, ובדיקה מול התוכנה הישנה</h3><p class="muted">גיבוי ושחזור, ואז השוואה: אותם נתונים בשתי התוכנות, ובודקים שיוצאת אותה רשימה לשבוע הקרוב.</p><div class="see">אתה רואה: דוח קצר, איפה זהה ואיפה שונה ולמה.</div><span class="eff">מאמץ גבוה.</span></div></div>
+      <div class="st later"><div><h3>אחר כך: מעבר לשרת שלך</h3><p class="muted">סיסמה לך ולרון, חיבור מוצפן, וגיבוי אוטומטי שיוצא גם מחוץ לשרת. רק אחרי שהכל יציב במחשב, ורק אז נכנסים נתונים אמיתיים.</p></div></div>
+    </div>
+  </section>
+
+  <section class="tech">
+    <h2 style="color:var(--fg)">הצד הטכני, עליי</h2>
+    <ul>
+      <li>תיקייה חדשה בשם web בתוך הפרויקט. היא משתמשת בקבצי הכללים הקיימים בלי לשנות אותם, כך שהתוכנה הישנה ממשיכה לעבוד.</li>
+      <li>הכלים כבר מותקנים במחשב (פייתון עם FastAPI ומאגר SQLite). אין מה להוריד דרך נטפרי.</li>
+      <li>בדיקות המנוע הקיימות ממשיכות לרוץ, ונוספות בדיקות לחישוב קדימה ולקביעות הידניות.</li>
+      <li>שבוע נכתב להיסטוריה ביום חמישי בבוקר שאחריו, כמו הכלל שקיים היום.</li>
+      <li>הנתונים של העותק נשארים במחשב ולא עולים לגיטהאב.</li>
+    </ul>
+  </section>
+</div>
+
+<script>
+const tl=document.getElementById("tl"),say=document.getElementById("say");
+const base=new Date(2026,10,25);let fut=5,extra=0;
+const lab=i=>{const d=new Date(base);d.setDate(d.getDate()+7*i);return `${d.getDate()}/${d.getMonth()+1}`};
+function draw(flash){tl.innerHTML="";
+  for(let i=-3;i<0;i++){const b=document.createElement("div");b.className="wkb past";b.innerHTML=`<b>${lab(i)}</b>עבר 🔒`;tl.appendChild(b)}
+  const n=document.createElement("div");n.className="now";tl.appendChild(n);
+  for(let i=0;i<fut;i++){const b=document.createElement("div");b.className="wkb fut"+(flash?" flash":"");b.style.animationDelay=(i*70)+"ms";
+    b.innerHTML=`<b>${lab(i)}</b>${52+0} מקבלים`;tl.appendChild(b)}
+  const m=document.createElement("div");m.className="wkb more";m.textContent="ועוד, בלי סוף";tl.appendChild(m)}
+draw(false);
+document.getElementById("add").onclick=()=>{extra++;draw(true);
+  say.textContent=`נוסף מקבל חדש (${extra}). כל השבועות הירוקים חושבו מחדש ברגע זה. השבועות האפורים לא זזו.`};
+document.getElementById("more").onclick=()=>{fut+=4;draw(false);tl.scrollLeft=-tl.scrollWidth;
+  say.textContent=`עכשיו רואים ${fut} שבועות קדימה. אין מספר מקסימלי.`};
+</script>

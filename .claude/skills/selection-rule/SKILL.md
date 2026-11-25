@@ -117,6 +117,14 @@ A new rule = add it to that model too (or the simulation will "find" your rule a
 bug). It found on day one that `_one_time_turn` counted the cooldown from the wrong
 Wednesday for Sun–Tue rounds. On failure Hypothesis prints the shrunk step sequence.
 
+**Also run `python web/tests/run_all.py` (25/11/2026).** The website (`web/`) uses this
+same engine, unchanged, and `web/tests/test_vs_old.py` lays out weeks both ways — the
+desktop composition (`database.get_weekly_list` / `get_one_time_list`) and the site's
+`web/planner.py` — and requires identical lists. A rule that changes who receives must
+keep the two in step: if the change lives in `selection.py` both sides get it for free;
+if it lives in `database.py` (how a row is prepared: derived dates, `recency_days`, what
+counts as an extra round), mirror it in `web/planner.py` or the comparison fails.
+
 ## עדכון 7/10/2026 (v3.81) — ניקוד לפי מקום בתור + נוסחה קבועה לחד-פעמיים
 - `scoring.annotate_need_scores` מנרמל **לפי מקום בתור** (`_rank_components`: ערכים שונים במדרגות שוות k/n, ערכים שווים = אותה מדרגה), לא לפי סכום. אל תחזיר נרמול ליניארי — חריג אחד שיטח את כולם (הכרעת יהודה).
 - התור הרגיל של החד-פעמיים (`rank_one_time_priority`, `get_one_time_list`) משתמש ב-`scoring.ONE_TIME_QUEUE_WEIGHTS` (50% המתנה / 25% פנוי לנפש / 25% נפשות) ו**מתעלם** מהמשקלים שמועברים אליו. משקלי ההגדרות חלים רק על `scored` / `filter` / `none`.

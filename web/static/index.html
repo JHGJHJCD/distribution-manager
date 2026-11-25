@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מנהל חלוקה</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1>מנהל חלוקה</h1>
+      <p class="sub" id="today"></p>
+    </div>
+    <p class="test-copy">עותק לבדיקה · לא הנתונים שרון עובד עליהם</p>
+  </header>
+
+  <div id="notice" class="notice" role="status" hidden></div>
+
+  <section class="panel">
+    <div class="head">
+      <h2>השבועות הבאים</h2>
+      <div class="search">
+        <label class="sr" for="q">חיפוש שם</label>
+        <input id="q" type="search" placeholder="חיפוש שם: מתי התור שלו?" autocomplete="off" spellcheck="false">
+        <ul id="hits" class="hits" hidden></ul>
+      </div>
+    </div>
+    <div class="weeks" id="weeks" aria-label="השבועות הבאים"></div>
+    <div class="legend" aria-label="מקרא">
+      <span><i class="sw t-w1"></i>שבועי</span>
+      <span><i class="sw t-w2"></i>דו־שבועי</span>
+      <span><i class="sw t-w3"></i>תלת־שבועי</span>
+      <span><i class="sw t-w4"></i>חודשי</span>
+      <span><i class="sw t-one"></i>חד־פעמי</span>
+      <span class="legend-note" id="whoLegend" hidden><i class="dot"></i>השבועות שבהם מי שבחרת מקבל</span>
+    </div>
+  </section>
+
+  <section class="panel" id="weekPanel" hidden>
+    <div class="head">
+      <h2 id="weekTitle"></h2>
+      <p class="sub" id="weekNumbers"></p>
+    </div>
+    <div id="warnings"></div>
+    <div class="why" id="why" aria-live="polite"></div>
+    <div class="buckets">
+      <div class="bk bk-main">
+        <h3>מקבלים <b id="cMain"></b></h3>
+        <p class="sub">קודם הקבועים שתורם הגיע, ואחריהם חד־פעמיים במנות שנשארו.</p>
+        <div id="main"></div>
+      </div>
+      <div class="bk bk-res">
+        <h3>רזרבה <b id="cRes"></b></h3>
+        <p class="sub">הבאים בתור. נכנסים אם מישהו לא מגיע, ולא נחשבים כמי שקיבלו.</p>
+        <div id="res"></div>
+      </div>
+      <div class="bk bk-out">
+        <h3>לא בשבוע הזה <b id="cOut"></b></h3>
+        <p class="sub">לפי הסיבה. לחיצה על שם מסבירה.</p>
+        <div id="out"></div>
+      </div>
+    </div>
+  </section>
+
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

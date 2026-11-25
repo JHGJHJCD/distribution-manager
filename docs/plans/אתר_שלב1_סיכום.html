@@ -1,0 +1,332 @@
+<meta charset="utf-8">
+<title>סיכום שלב 1 באתר</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;800&display=swap">
+<style>
+/* Layout: one reading column. Status first, then what exists (a small live model of the screen),
+   then the proof (two lanes on one shared grid of weeks), then the open ends and what comes next. */
+:root{
+  --bg:#f4f7f6; --surface:#ffffff; --fg:#17221e; --muted:#5b6a64; --line:#dbe3e0;
+  --accent:#0f9d78; --soft:#e3f3ed; --ok:#0a6f55;
+  --reg:#0b7d5f; --one:#c23d63;
+  /* name chips keep white text in both themes, so their fills do not change with the theme */
+  --chip-reg:#0b7d5f; --chip-one:#c23d63; --on-chip:#ffffff;
+  --warn:#8a5200; --warn-bg:#fff3d6;
+  --font:"Heebo","Segoe UI",Arial,sans-serif; --mono:Consolas,"Courier New",monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#111816; --surface:#1a2320; --fg:#e5eeea; --muted:#9aaaa3; --line:#2b3732;
+  --accent:#3cc9a0; --soft:#173a30; --ok:#5fd4b0;
+  --reg:#2fa886; --one:#e0759a;
+  --warn:#ffd88a; --warn-bg:#3d3012; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111816; --surface:#1a2320; --fg:#e5eeea; --muted:#9aaaa3; --line:#2b3732;
+  --accent:#3cc9a0; --soft:#173a30; --ok:#5fd4b0;
+  --reg:#2fa886; --one:#e0759a;
+  --warn:#ffd88a; --warn-bg:#3d3012; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:16px;line-height:1.6;direction:rtl;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:26px 60px}
+.wrap{max-width:920px;margin:0 auto;display:flex;flex-direction:column;gap:34px}
+h1{margin:0;font-size:2.1rem;font-weight:800;line-height:1.2;text-wrap:balance}
+h2{margin:0;font-size:1.4rem;font-weight:800;text-wrap:balance}
+h3{margin:0;font-size:1.02rem;font-weight:700}
+p{margin:0;max-width:66ch}
+.muted{color:var(--muted);font-size:.93rem}
+section{display:flex;flex-direction:column;gap:14px;min-width:0}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible{outline:3px solid var(--fg);outline-offset:2px}
+
+/* status */
+.hero{display:flex;flex-direction:column;gap:14px}
+.pills{display:flex;flex-wrap:wrap;gap:8px;margin:0;padding:0;list-style:none}
+.pill{display:inline-flex;align-items:center;gap:7px;border-radius:999px;padding:5px 14px;font-weight:500;background:var(--soft);color:var(--ok)}
+.pill.open{background:var(--warn-bg);color:var(--warn)}
+.pill i{font-style:normal;font-weight:800}
+.track{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;margin:0;padding:0;list-style:none}
+.track li{border-top:5px solid var(--line);padding-top:8px;font-size:.86rem;color:var(--muted);min-width:0}
+.track li b{display:block;color:var(--fg);font-size:.95rem}
+.track li.done{border-color:var(--accent)} .track li.done b{color:var(--ok)}
+.track li.next{border-color:var(--one)}
+.track small{display:block}
+
+/* the small model of the screen */
+.screen{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.bar-top{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;justify-content:space-between}
+.bar-top b{font-size:1.1rem}
+.copy{background:var(--warn-bg);color:var(--warn);border-radius:999px;padding:2px 12px;font-size:.84rem}
+.weeks{display:flex;gap:7px;overflow-x:auto;padding:2px 2px 6px}
+.wk{flex:none;width:84px;border:1.5px solid var(--line);border-radius:10px;background:var(--surface);padding:7px 5px;text-align:center}
+.wk[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) inset}
+.wk .d{font-size:.8rem;color:var(--muted)}
+.stack{display:flex;height:9px;border-radius:5px;overflow:hidden;margin:7px 4px 5px}
+.stack i{display:block;height:100%}
+.r{background:var(--reg)} .o{background:var(--one)}
+.wk .n{font-size:.76rem;font-variant-numeric:tabular-nums;color:var(--muted)}
+.sum{font-weight:500}
+.cols{display:grid;grid-template-columns:2fr 1fr 1.6fr;gap:10px}
+.col{border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:7px;min-width:0}
+.col h3{display:flex;justify-content:space-between;gap:8px}
+.col h3 span{font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums}
+.chips{display:flex;flex-wrap:wrap;gap:5px}
+.chip{font-size:.8rem;border-radius:7px;padding:3px 8px;color:var(--on-chip)}
+.chip.r{background:var(--chip-reg)} .chip.o{background:var(--chip-one)}
+.chip.more{background:transparent;color:var(--muted);border:1px dashed var(--line)}
+.line{display:flex;justify-content:space-between;gap:8px;font-size:.88rem;color:var(--muted)}
+.line b{color:var(--fg);font-variant-numeric:tabular-nums}
+.says{display:flex;flex-direction:column;gap:6px;margin:0;padding:0;list-style:none}
+.says li{background:var(--bg);border-radius:9px;padding:8px 12px;font-size:.92rem}
+.says b{display:block}
+.can{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:0;padding:0;list-style:none}
+.can li{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:11px 13px}
+.can b{display:block}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.86rem;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:11px;height:11px;border-radius:3px;display:inline-block}
+
+/* the proof */
+.figs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.fig{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px}
+.fig b{display:block;font-size:2rem;font-weight:800;line-height:1.1;color:var(--ok);font-variant-numeric:tabular-nums}
+.fig span{color:var(--muted);font-size:.92rem}
+.lanes-wrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px}
+.lanes{display:grid;grid-template-columns:104px repeat(13,minmax(54px,1fr));gap:4px;align-items:center;min-width:820px;font-variant-numeric:tabular-nums}
+.lanes .lab{font-weight:700;font-size:.9rem}
+.lanes .dt{font-size:.76rem;color:var(--muted);text-align:center}
+.cell{border-radius:7px;background:var(--bg);text-align:center;padding:5px 2px;font-size:.84rem;line-height:1.25}
+.cell .a{color:var(--reg);font-weight:700} .cell .b{color:var(--one);font-weight:700}
+.eq{text-align:center;color:var(--ok);font-weight:800;font-size:.95rem}
+.breaks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:0;padding:0;list-style:none}
+.breaks li{display:flex;gap:9px;align-items:center;border:1px solid var(--line);border-radius:9px;background:var(--surface);padding:7px 11px;font-size:.92rem;transition:background .25s,border-color .25s}
+.breaks li .st{flex:none;font-weight:800;color:var(--ok);min-width:4.6em}
+.breaks li.broken{background:var(--warn-bg);border-color:var(--warn)}
+.breaks li.broken .st{color:var(--warn)}
+.btn{align-self:flex-start;font-weight:700;padding:7px 16px;border-radius:9px;border:1.5px solid var(--accent);background:transparent;color:var(--ok)}
+.reviews{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.rev{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px}
+.rev .verdict{color:var(--ok);font-weight:700}
+
+/* open ends, notes, next */
+.list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0;padding:0;list-style:none}
+.list li{border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.list.open li{background:var(--warn-bg);color:var(--warn)}
+.list.open li p{color:inherit}
+.list.note li{background:var(--surface);border:1px solid var(--line)}
+.next{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.next ul{margin:0;padding-inline-start:20px}
+.setting{display:flex;flex-wrap:wrap;gap:8px}
+.setting span{background:var(--soft);color:var(--ok);border-radius:8px;padding:4px 12px;font-weight:700}
+.result{direction:ltr;text-align:left;font-family:var(--mono);font-size:.84rem;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0;overflow-x:auto;white-space:pre}
+.terms{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:0}
+.terms div{border-top:3px solid var(--accent);padding-top:10px}
+.terms dt{font-weight:700}
+.terms dd{margin:4px 0 0;color:var(--muted);font-size:.93rem}
+
+@media (max-width:760px){
+  .track{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .cols,.figs,.reviews,.list,.terms{grid-template-columns:1fr}
+  .can,.breaks{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){.breaks li{transition:none}}
+</style>
+
+<div class="wrap">
+
+  <header class="hero">
+    <h1>שלב 1 בנוי, רץ ונבדק</h1>
+    <p>האתר של מנהל חלוקה רץ עכשיו במחשב שלך, על עותק של הנתונים של רון. בתוכנה הישנה ובנתונים האמיתיים לא נגעתי.</p>
+    <ul class="pills">
+      <li class="pill"><i>✓</i>רץ במחשב שלך</li>
+      <li class="pill"><i>✓</i>אותן רשימות כמו התוכנה הישנה</li>
+      <li class="pill"><i>✓</i>עבר שלוש ביקורות</li>
+      <li class="pill open"><i>!</i>עוד לא נשמר בגיט</li>
+    </ul>
+    <ol class="track" aria-label="שלבי הבנייה">
+      <li class="done"><b>1 · בוצע</b>המנוע ומסך השבועות</li>
+      <li class="next"><b>2 · הבא</b>שינויים ביד, הדפסה ואקסל</li>
+      <li><b>3</b>מקבלים</li>
+      <li><b>4</b>חג, ניקוד והיסטוריה</li>
+      <li><b>5</b>גיבוי ובדיקה מול הישנה</li>
+      <li><b>אחר כך</b>מעבר לשרת</li>
+    </ol>
+  </header>
+
+  <section>
+    <h2>מה יש עכשיו</h2>
+    <p>זה דגם קטן של המסך. המספרים אמיתיים, מהעותק. השמות כאן מומצאים; באתר עצמו מופיעים השמות האמיתיים. אפשר ללחוץ על השבועות.</p>
+    <div class="screen">
+      <div class="bar-top"><b>מנהל חלוקה</b><span class="copy">עותק לבדיקה</span></div>
+      <div class="weeks" id="weeks"></div>
+      <div class="legend"><span><i class="sw r"></i>קבועים שתורם הגיע</span><span><i class="sw o"></i>חד־פעמיים, במנות שנשארו</span></div>
+      <p class="sum" id="sum"></p>
+      <div class="cols">
+        <div class="col"><h3>מקבלים <span id="nMain"></span></h3>
+          <div class="chips"><span class="chip r">כהן משה</span><span class="chip r">לוי דוד</span><span class="chip r">מזרחי אברהם</span><span class="chip o">פרץ חיים</span><span class="chip o">ביטון יוסף</span><span class="chip more" id="moreMain"></span></div></div>
+        <div class="col"><h3>רזרבה <span>10</span></h3>
+          <div class="chips"><span class="chip o">רוזן יעקב</span><span class="chip o">גולד שמואל</span><span class="chip more">ועוד 8</span></div></div>
+        <div class="col"><h3>לא בשבוע הזה <span>103</span></h3>
+          <div class="line"><span>קבועים שתורם עוד לא הגיע</span><b id="nWait"></b></div>
+          <div class="line"><span>חד־פעמיים בהפסקה או בתור</span><b id="nPause"></b></div></div>
+      </div>
+      <ul class="says" aria-label="דוגמאות למשפטי ההסבר">
+        <li><b>כהן משה · רביעי 16/12: מקבל</b>חודשי · קיבל לאחרונה ב-18/11 · התור שלו הגיע</li>
+        <li><b>לוי דוד · רביעי 16/12: לא בשבוע הזה</b>דו־שבועי · קיבל ב-09/12 · התור הבא 23/12</li>
+        <li><b>פרץ חיים · רביעי 25/11: מקבל</b>חד־פעמי · עדיפות שנייה · מקום 4 מתוך 46 בתור</li>
+      </ul>
+    </div>
+    <ul class="can">
+      <li><b>פס של השבועות הבאים</b><span class="muted">כפתור "עוד שבועות" מוסיף שמונה בכל לחיצה, בלי הגבלה.</span></li>
+      <li><b>שלוש עמודות לכל שבוע</b><span class="muted">מקבלים, רזרבה, ולא בשבוע הזה. השלישית מחולקת לפי הסיבה.</span></li>
+      <li><b>לחיצה על שם</b><span class="muted">משפט אחד שמסביר למה הוא שם, וסימון השבועות שבהם הוא מקבל.</span></li>
+      <li><b>חיפוש שם</b><span class="muted">עונה על השאלה "מתי התור שלו", גם למי שלא משתתף ברשימות.</span></li>
+    </ul>
+    <p class="muted">האתר פתוח עכשיו בכתובת localhost:8787. בפעם הבאה: לחיצה כפולה על הקובץ run_local.bat שבתיקייה web.</p>
+  </section>
+
+  <section>
+    <h2>ההוכחה שהמנוע נכון</h2>
+    <p>הרצתי את החישוב החדש לצד הקוד של התוכנה הישנה, על אותם נתונים, ודרשתי שיצאו אותן רשימות בדיוק: אותם אנשים, אותו סדר, אותה רזרבה.</p>
+    <div class="figs">
+      <div class="fig"><b>269</b><span>שבועות על נתונים אקראיים, ב-40 אוכלוסיות. הכל זהה.</span></div>
+      <div class="fig"><b>13</b><span>שבועות על העותק של רון, מהיום ועד 17/2, עם 52 מנות. הכל זהה.</span></div>
+      <div class="fig"><b>790 / 790</b><span>כרטיסים שבהם "חלוקה אחרונה" שהאתר מחשב זהה למה שהתוכנה הישנה שמרה.</span></div>
+    </div>
+    <div class="lanes-wrap"><div class="lanes" id="lanes" role="img" aria-label="שלושה עשר שבועות, אותם מספרים בשתי התוכנות"></div></div>
+    <p class="muted">בכל משבצת: קבועים + חד־פעמיים. הסכום תמיד 52. השורה העליונה והתחתונה חושבו בנפרד, בשתי דרכים.</p>
+
+    <h3>שברתי את החישוב בכוונה</h3>
+    <p class="muted">בדיקה שלא נכשלת כששוברים את הקוד לא שווה כלום. קלקלתי את החישוב בשתים־עשרה דרכים, אחת בכל פעם, והבדיקות תפסו את כולן.</p>
+    <ul class="breaks" id="breaks"></ul>
+    <button type="button" class="btn" id="replay">הראה איך זה נתפס</button>
+
+    <h3>שלוש ביקורות</h3>
+    <div class="reviews">
+      <div class="rev"><h3>בודק עצמאי</h3><span class="verdict">לא מצא באג</span><p class="muted">עבר על הכל בעיניים נקיות: הריץ את הבדיקות, קרא את החישוב מול הכללים, ולחץ באתר עצמו.</p></div>
+      <div class="rev"><h3>ביקורת קוד</h3><span class="verdict">8 נקודות קטנות</span><p class="muted">אף אחת לא בחישוב עצמו. חמש תוקנו, ושלוש רשומות כהחלטות מודעות.</p></div>
+      <div class="rev"><h3>ביקורת אבטחה</h3><span class="verdict">לא נמצאה פרצה</span><p class="muted">הערה אחת: השרת שלח לדפדפן יותר ממה שהמסך צריך. צמצמתי לשם, סוג והסבר בלבד.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>מה לא נבדק</h2>
+    <ul class="list open">
+      <li><h3>סגירה אמיתית של שבוע</h3><p>מחר, חמישי בשש בבוקר, השבוע של היום אמור להיכנס להיסטוריה לבד, בפתיחה הראשונה של האתר אחרי השעה הזאת. עד עכשיו זה נבדק רק עם שעון מדומה.</p></li>
+      <li><h3>המסך, בעיניים שלי</h3><p>עוזר נפרד הסתכל על הצילום, ובחלון צר, כדי שנטפרי לא יחסום את השיחה בגלל תמונות.</p></li>
+      <li><h3>נתונים עדכניים ושרת</h3><p>האתר רץ רק על העותק הנוכחי ורק במחשב הזה.</p></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>שלושה דברים שכדאי שתדע</h2>
+    <ul class="list note">
+      <li><h3>העותק מיושן</h3><p class="muted">רון עבר בסוף אוקטובר לתיקייה אחרת בדרייב, והעותק עדיין מהישנה. לבדיקה זה בסדר. לפני שימוש אמיתי צריך ייבוא טרי.</p></li>
+      <li><h3>רזרבה של 10</h3><p class="muted">כך היה ברשימות שנשלחו לרון. אצל רון בהגדרות היה אפס. אם אתה רוצה מספר אחר, תגיד לי.</p></li>
+      <li><h3>הוספתי חיפוש</h3><p class="muted">הוא לא היה בתוכנית. הוא נותן את היתרון של טבלת התורים בלי מסך נוסף.</p></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>מה הלאה</h2>
+    <div class="next">
+      <h3>שלב 2: שינויים ביד, הדפסה ואקסל</h3>
+      <ul>
+        <li>להעביר מישהו לרזרבה, להסיר משבוע, להוסיף ביד.</li>
+        <li>לקבוע מספר מנות לשבוע מסוים.</li>
+        <li>להדפיס ולהוריד אקסל, לשבוע אחד או לטווח.</li>
+        <li>ההערה "השתנה מאז ההדפסה".</li>
+      </ul>
+      <div class="setting"><span>מודל: פייבל 5.2</span><span>מאמץ: High, אפשר להוריד מ-Max</span></div>
+      <p class="muted">מחכה לך: להסתכל על האתר, ולהחליט אם לשמור את שלב 1 כנקודת שחזור בגיט.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>שורות התוצאה, כפי שהודפסו</h2>
+    <pre class="result">RESULT: ALL 4 WEBSITE TEST FILES PASS ✓
+RESULT: the site and the desktop program give the SAME lists on this data ✓
+RESULT: ALL SELECTION SCENARIOS PASS ✓</pre>
+  </section>
+
+  <section>
+    <h2>שלושה מושגים</h2>
+    <dl class="terms">
+      <div><dt>בדיקת השוואה</dt><dd>נותנים לשני טבחים אותו מתכון ואותם מצרכים, ובודקים שיצא אותו תבשיל. כך וידאתי שהאתר מחשב כמו התוכנה הישנה.</dd></div>
+      <div><dt>בדיקת שבירה</dt><dd>מקלקלים משהו בכוונה, ובודקים שהאזעקה מצפצפת. כמו להדליק גפרור מתחת לגלאי עשן.</dd></div>
+      <div><dt>נקודת שחזור (קומיט)</dt><dd>צילום של כל הקבצים כמו שהם ברגע הזה, שאפשר לחזור אליו. כמו שמירה במשחק לפני שלב קשה.</dd></div>
+    </dl>
+  </section>
+
+</div>
+
+<script>
+// The copy of the data: 47 regulars and 118 one-timers take part; 52 portions, reserve 10.
+// Each week: [date, regulars whose turn came, one-timers who fill the rest] — as both programs computed it.
+var WEEKS = [["25/11",17,35],["2/12",32,20],["9/12",16,36],["16/12",39,13],["23/12",18,34],["30/12",30,22],
+             ["6/1",17,35],["13/1",40,12],["20/1",16,36],["27/1",31,21],["3/2",18,34],["10/2",38,14],["17/2",17,35]];
+var REGULARS = 47, ONE_TIMERS = 118, RESERVE = 10, PORTIONS = 52;
+var picked = 0;
+function $(id) { return document.getElementById(id); }
+function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
+
+function drawWeeks() {
+  var box = $("weeks"); box.textContent = "";
+  WEEKS.slice(0, 8).forEach(function (w, i) {
+    var b = el("button", "wk"); b.type = "button"; b.setAttribute("aria-pressed", i === picked ? "true" : "false");
+    b.appendChild(el("div", "d", (i === 0 ? "השבוע " : "רביעי ") + w[0]));
+    var stack = el("div", "stack");
+    var r = el("i", "r"); r.style.width = (w[1] / PORTIONS * 100) + "%";
+    var o = el("i", "o"); o.style.width = (w[2] / PORTIONS * 100) + "%";
+    stack.appendChild(r); stack.appendChild(o); b.appendChild(stack);
+    b.appendChild(el("div", "n", w[1] + " + " + w[2]));
+    b.addEventListener("click", function () { picked = i; drawWeeks(); });
+    box.appendChild(b);
+  });
+  var w = WEEKS[picked];
+  $("sum").textContent = "רביעי " + w[0] + ": " + (w[1] + w[2]) + " מקבלים מתוך " + PORTIONS + " מנות. " +
+    w[1] + " קבועים שתורם הגיע, ו־" + w[2] + " חד־פעמיים במנות שנשארו.";
+  $("nMain").textContent = (w[1] + w[2]) + " / " + PORTIONS;
+  $("moreMain").textContent = "ועוד " + (w[1] + w[2] - 5);
+  $("nWait").textContent = String(REGULARS - w[1]);
+  $("nPause").textContent = String(ONE_TIMERS - w[2] - RESERVE);
+}
+
+function drawLanes() {
+  var g = $("lanes");
+  g.appendChild(el("span", "lab", ""));
+  WEEKS.forEach(function (w) { g.appendChild(el("span", "dt", w[0])); });
+  function lane(title) {
+    g.appendChild(el("span", "lab", title));
+    WEEKS.forEach(function (w) {
+      var c = el("span", "cell");
+      c.appendChild(el("span", "a", String(w[1]))); c.appendChild(document.createTextNode(" + ")); c.appendChild(el("span", "b", String(w[2])));
+      g.appendChild(c);
+    });
+  }
+  lane("התוכנה הישנה");
+  g.appendChild(el("span", "lab", ""));
+  WEEKS.forEach(function () { g.appendChild(el("span", "eq", "=")); });
+  lane("האתר החדש");
+}
+
+var BREAKS = ["שבוע שתוכנן לא נרשם, והתור של אף אחד לא זז", "חלוקת חג או בונוס מזיזה את התור הרגיל", "תאריך עתידי שהוקלד בטעות נספר",
+  "מי שקיבל השבוע מופיע שוב באותו שבוע", "הרזרבה נרשמת כמי שקיבלה", "מתעלמים מכמה זמן כל אחד מחכה",
+  "מתעלמים מ\"חלוקה אחרונה\" שיובאה מהאקסל", "חג או בונוס מזיזים את התור, בהשוואה לתוכנה הישנה", "מי שלא הגיע נספר כמי שקיבל",
+  "חד־פעמי חוזר לרשימה שבוע מוקדם מדי", "ימי ההמתנה נספרים מהיום הלא נכון", "סדר השמות משתבש כשיש שוויון"];
+var timers = [];
+function drawBreaks(animate) {
+  timers.forEach(clearTimeout); timers = [];
+  var box = $("breaks"); box.textContent = "";
+  BREAKS.forEach(function (text, i) {
+    var li = el("li");
+    var st = el("span", "st", "✓ נתפס");
+    li.appendChild(st); li.appendChild(el("span", null, text));
+    box.appendChild(li);
+    if (animate) {
+      li.className = "broken"; st.textContent = "נשבר…";
+      timers.push(setTimeout(function () { li.className = ""; st.textContent = "✓ נתפס"; }, 350 + i * 260));
+    }
+  });
+}
+$("replay").addEventListener("click", function () { drawBreaks(true); });
+drawWeeks(); drawLanes(); drawBreaks(false);
+</script>

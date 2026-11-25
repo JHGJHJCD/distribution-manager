@@ -5,6 +5,12 @@
       "name": "מנהל חלוקה (Desktop App)",
       "runtimeExecutable": "python",
       "runtimeArgs": ["main.py"]
+    },
+    {
+      "name": "haluka-web",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "web\\run_local.bat", "noopen"],
+      "port": 8787
     }
   ]
 }

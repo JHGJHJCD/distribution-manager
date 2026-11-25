@@ -1,0 +1,99 @@
+/* מנהל חלוקה — האתר. RTL, בלי משאבים חיצוניים (עובד גם בלי אינטרנט).
+   צבע לכל סוג מקבל; ירוק-טורקיז הוא צבע המותג של התוכנה (‎#0f9d78‎). */
+:root {
+  --bg: #f4f7f6; --surface: #ffffff; --fg: #17221e; --muted: #5b6a64; --line: #dbe3e0;
+  --accent: #0f9d78; --soft: #e3f3ed;
+  /* a colour per kind of recipient; each one carries white text at a contrast of 4.5:1 or more */
+  --w1: #0b7d5f; --w2: #2a72bd; --w3: #8a5cd0; --w4: #a8620f; --one: #c23d63;
+  --warn-bg: #fff3d6; --warn-fg: #7a4d00; --test-bg: #fde8ef; --test-fg: #8c1d43;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111816; --surface: #1a2320; --fg: #e5eeea; --muted: #9aaaa3; --line: #2b3732;
+    --accent: #3cc9a0; --soft: #173a30;
+    --warn-bg: #3d3012; --warn-fg: #ffd88a; --test-bg: #3d1826; --test-fg: #ffb3cb;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: "Segoe UI", "Heebo", Arial, sans-serif; font-size: 16px; line-height: 1.55;
+  padding: 20px 16px 48px;
+}
+.wrap { max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+h1 { margin: 0; font-size: 1.7rem; font-weight: 700; }
+h2 { margin: 0; font-size: 1.2rem; }
+h3 { margin: 0; font-size: 1rem; }
+p { margin: 0; }
+.sub { color: var(--muted); font-size: .9rem; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 3px solid var(--fg); outline-offset: 1px; }
+
+.top { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; justify-content: space-between; }
+.test-copy { background: var(--test-bg); color: var(--test-fg); border-radius: 999px; padding: 4px 14px; font-size: .88rem; font-weight: 600; }
+.notice { background: var(--soft); border-radius: 10px; padding: 10px 14px; }
+.notice.error { background: var(--warn-bg); color: var(--warn-fg); }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+
+/* search */
+.search { position: relative; flex: 0 1 320px; min-width: 200px; }
+.search input { width: 100%; font: inherit; padding: 8px 12px; border: 1.5px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--fg); }
+.hits { position: absolute; z-index: 5; inset-inline: 0; top: calc(100% + 4px); margin: 0; padding: 4px; list-style: none;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 20px rgba(0, 0, 0, .15); max-height: 320px; overflow: auto; }
+.hits button { display: flex; width: 100%; gap: 8px; align-items: center; text-align: start; border: 0; background: none; padding: 7px 10px; border-radius: 7px; }
+.hits button:hover, .hits button:focus-visible { background: var(--soft); }
+.hits .none { padding: 7px 10px; color: var(--muted); }
+.hits small { color: var(--muted); margin-inline-start: auto; }
+
+/* the strip of weeks */
+.weeks { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; }
+.wk { flex: none; width: 92px; border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 6px; background: var(--surface); text-align: center; position: relative; }
+.wk[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
+.wk .d { font-size: .82rem; color: var(--muted); }
+.wk .d b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.wk .bar { display: flex; height: 36px; align-items: flex-end; gap: 2px; justify-content: center; margin: 6px 0 3px; }
+.wk .bar i { display: block; width: 11px; border-radius: 2px 2px 0 0; min-height: 2px; }
+.wk .n { font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wk .flag { position: absolute; top: 4px; inset-inline-start: 6px; font-size: .8rem; color: var(--warn-fg); }
+.wk .who { position: absolute; top: 6px; inset-inline-end: 7px; width: 10px; height: 10px; border-radius: 50%; background: var(--fg); }
+.wk .who.res { background: transparent; border: 2px solid var(--fg); }
+.wk.more { border-style: dashed; color: var(--accent); font-weight: 600; display: grid; place-items: center; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .86rem; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; flex: none; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--fg); display: inline-block; }
+.t-w1 { background: var(--w1); } .t-w2 { background: var(--w2); } .t-w3 { background: var(--w3); }
+.t-w4 { background: var(--w4); } .t-one { background: var(--one); }
+
+/* the selected week */
+.warn { background: var(--warn-bg); color: var(--warn-fg); border-radius: 9px; padding: 7px 12px; font-size: .92rem; margin-bottom: 6px; }
+.why { border-inline-start: 5px solid var(--accent); background: var(--bg); border-radius: 9px; padding: 10px 14px; min-height: 3.4em; }
+.why b { display: block; }
+.why .when { color: var(--muted); font-size: .9rem; margin-top: 2px; }
+/* the three lists one under the other, each across the full width */
+.buckets { display: flex; flex-direction: column; gap: 12px; }
+.bk { display: flex; flex-direction: column; gap: 8px; min-width: 0; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.bk h3 { display: flex; justify-content: space-between; gap: 8px; }
+.bk h3 b { font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bk-main { border-color: var(--accent); }
+.grp { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.grp + .grp { margin-top: 12px; }
+.grp h4 { margin: 0; font-size: .86rem; font-weight: 600; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+.grp h4 b { font-weight: 400; font-variant-numeric: tabular-nums; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: .84rem; border: 0; border-radius: 7px; padding: 4px 9px; color: #fff; line-height: 1.3; }
+.bk-out .chip { opacity: .78; }
+.chip.sel { outline: 3px solid var(--fg); outline-offset: 1px; opacity: 1; }
+.slot { width: 30px; height: 25px; border-radius: 7px; border: 1.5px dashed var(--line); }
+.empty { color: var(--muted); font-size: .9rem; }
+.others { color: var(--muted); font-size: .86rem; border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 10px; }
+
+@media (max-width: 800px) {
+  .search { flex-basis: 100%; }
+}
