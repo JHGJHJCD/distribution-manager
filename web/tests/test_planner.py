@@ -279,9 +279,9 @@ t.ok("P14 without anything set by hand: 3 regulars + 2 one-timers, one in reserv
      base[0]["main_regulars"] == 3 and base[0]["main_one_timers"] == 2 and len(base[0]["reserve_list"]) == 1
      and "g0004" in guids(base[0]["out"]))
 w = mplan({W0: {"g0004": "add"}})
-add = next(e for e in w[0]["main"] if e["guid"] == "g0004")
+add = next((e for e in w[0]["main"] if e["guid"] == "g0004"), {})
 t.ok("P14 add: a bi-weekly whose turn has not come is on the list, marked as set by hand",
-     add["manual"] == "add" and "נוסף ביד" in add["why"] and len(w[0]["main"]) == 5)
+     add.get("manual") == "add" and "נוסף ביד" in add.get("why", "") and len(w[0]["main"]) == 5)
 t.ok("P14 add: he takes a portion from the one-timers, never from a regular",
      w[0]["main_regulars"] == 4 and w[0]["main_one_timers"] == 1 and {"g0001", "g0002", "g0003"} <= set(guids(w[0]["main"])))
 t.ok("P14 add: he counts as having received — his next turn is two weeks from now",
@@ -293,13 +293,25 @@ t.ok("P14 reserve: first on the reserve, not on the list, and the reserve is not
 t.ok("P14 reserve: his portion goes to the next in the queue, and he is back next week",
      len(w[0]["main"]) == 5 and w[0]["main_one_timers"] == 3 and "g0001" in guids(w[1]["main"]))
 w = mplan({W0: {"g0001": "remove"}})
-rm = next(e for e in w[0]["out"] if e["guid"] == "g0001")
+rm = next((e for e in w[0]["out"] if e["guid"] == "g0001"), {})
 t.ok("P14 remove: on no list this week, shown first in 'not this week' with the reason",
-     rm["group"] == planner.OUT_REMOVED and w[0]["out"][0]["guid"] == "g0001"
+     rm.get("group") == planner.OUT_REMOVED and rm.get("manual") == "remove" and w[0]["out"][0]["guid"] == "g0001"
      and "g0001" not in guids(w[0]["main"]) + guids(w[0]["reserve_list"]))
 t.ok("P14 remove: he did not receive, so he is on next week's list", "g0001" in guids(w[1]["main"]) and len(w[0]["main"]) == 5)
 w = mplan({wk(1): {"g0001": "remove"}})
 t.ok("P14 a change set for one week leaves the weeks before it untouched", w[0] == base[0] and w[1] != base[1])
+# the bi-weekly is due on week 1 only: taken off it by hand he did NOT receive, so his turn stays
+w = mplan({wk(1): {"g0004": "remove"}})
+t.ok("P14 remove: a bi-weekly taken off his own week keeps his turn — he is on the very next list",
+     [("g0004" in guids(x["main"])) for x in w] == [False, False, True]
+     and [("g0004" in guids(x["main"])) for x in base] == [False, True, False])
+w = mplan({wk(1): {"g0004": "reserve"}})
+t.ok("P14 reserve: a bi-weekly moved to the reserve of his own week did not receive — he is on the very next list",
+     [("g0004" in guids(x["main"])) for x in w] == [False, False, True] and guids(w[1]["reserve_list"]) == ["g0004"])
+w = mplan({W0: {"g0004": "add"}, wk(1): {"g0004": "add"}}, weeks=4)
+t.ok("P14 the same person can be set by hand in two weeks, each week on its own",
+     [("g0004" in guids(x["main"])) for x in w] == [True, True, False, True]
+     and [x["main"][0].get("manual") for x in w[:2]] == ["add", "add"])
 w = mplan({W0: {"g0040": "add", "g0041": "add"}})
 t.ok("P14 a card that takes no part can be added by hand; a paused card cannot",
      "g0040" in guids(w[0]["main"]) and "g0041" not in guids(w[0]["main"]) + guids(w[0]["reserve_list"]) + guids(w[0]["out"]))

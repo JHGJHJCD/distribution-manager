@@ -32,9 +32,15 @@ app = FastAPI(title="מנהל חלוקה", docs_url=None, redoc_url=None, openap
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=config.allowed_hosts())
 
 
+def _from_this_site(request: Request) -> bool:
+    """Reading is open (to this computer); anything that writes must carry the header that
+    only this site's own pages send."""
+    return request.method in ("GET", "HEAD") or request.headers.get("x-haluka") == "1"
+
+
 @app.middleware("http")
 async def _guard_and_headers(request: Request, call_next):
-    if request.method not in ("GET", "HEAD") and request.headers.get("x-haluka") != "1":
+    if not _from_this_site(request):
         response = JSONResponse({"message": "הבקשה לא הגיעה מהאתר עצמו"}, status_code=403)
     else:
         response = await call_next(request)

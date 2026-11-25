@@ -53,15 +53,16 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--fg); outlin
 
 /* the strip of weeks */
 .weeks { display: flex; gap: 8px; overflow-x: auto; padding: 2px 2px 6px; }
-.wk { flex: none; width: 92px; border: 1.5px solid var(--line); border-radius: 10px; padding: 8px 6px; background: var(--surface); text-align: center; position: relative; }
+/* the top strip of a card is kept free for the marks (⚠ on one side, the chosen person's dot on the other) */
+.wk { flex: none; width: 92px; border: 1.5px solid var(--line); border-radius: 10px; padding: 19px 6px 8px; background: var(--surface); text-align: center; position: relative; }
 .wk[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
 .wk .d { font-size: .82rem; color: var(--muted); }
 .wk .d b { color: var(--fg); font-variant-numeric: tabular-nums; }
 .wk .bar { display: flex; height: 36px; align-items: flex-end; gap: 2px; justify-content: center; margin: 6px 0 3px; }
 .wk .bar i { display: block; width: 11px; border-radius: 2px 2px 0 0; min-height: 2px; }
 .wk .n { font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-.wk .flag { position: absolute; top: 4px; inset-inline-start: 6px; font-size: .8rem; color: var(--warn-fg); }
-.wk .who { position: absolute; top: 6px; inset-inline-end: 7px; width: 10px; height: 10px; border-radius: 50%; background: var(--fg); }
+.wk .flag { position: absolute; top: 4px; inset-inline-start: 6px; font-size: .8rem; line-height: 1; color: var(--warn-fg); }
+.wk .who { position: absolute; top: 5px; inset-inline-end: 7px; width: 10px; height: 10px; border-radius: 50%; background: var(--fg); }
 .wk .who.res { background: transparent; border: 2px solid var(--fg); }
 .wk.more { border-style: dashed; color: var(--accent); font-weight: 600; display: grid; place-items: center; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .86rem; color: var(--muted); }
@@ -81,10 +82,16 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--fg); outlin
 .btn { font-weight: 600; padding: 6px 14px; border-radius: 8px; border: 1.5px solid var(--accent); background: var(--surface); color: var(--fg); }
 .btn.main { background: var(--w1); border-color: var(--w1); color: #fff; }
 .btn.quiet { border-color: var(--line); font-weight: 400; }
+.btn.small { font-size: .9rem; padding: 4px 12px; }
 .btn:disabled { opacity: .5; cursor: default; }
+/* while a change is on its way to the server nothing else can be pressed */
+.busy .btn { opacity: .55; pointer-events: none; }
 .printed { color: var(--muted); font-size: .88rem; margin-bottom: 6px; }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .chip.manual::before { content: "✋ "; }
+.wk .n span { display: block; }
+/* in the bottom corner, beside the two short lines of numbers: clear of the date, the columns and the two top marks */
+.wk .hand { position: absolute; bottom: 7px; inset-inline-end: 4px; font-size: .74rem; line-height: 1; }
 
 /* the selected week */
 .warn { background: var(--warn-bg); color: var(--warn-fg); border-radius: 9px; padding: 7px 12px; font-size: .92rem; margin-bottom: 6px; }

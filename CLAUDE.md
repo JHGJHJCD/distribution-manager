@@ -58,13 +58,15 @@ tabs/  group_update (חלוקה ורישום) · recipients (כל המקבלים
 utils/ sync · yemot/tts/call_history/callback_server/netblock (ימות) · mailer/google_auth/richtext/email_utils
        excel_utils · print_view · backup · updater · feedback · ui · hebdate · wallpaper · _secret.py (.gitignore!)
 dev/ (צילומים, stress, cloudflare/) · docs/ (מפה ב-README) · .claude/skills · test_*.py בשורש
-web/   גרסת האתר (מ-25/11/2026): planner (חישוב קדימה, טהור) · store · service · app (FastAPI) · static · import_old · tests
+web/   גרסת האתר (מ-25/11/2026): planner (חישוב קדימה, טהור) · store · service · app (FastAPI) · static (מסך השבועות + דף ההדפסה) · import_old · tests
 ```
 
 ## גרסת האתר — `web/` (מ-25/11/2026; פירוט: `web/README.md`, הכרעות: `docs/plans/אתר_תכנון_מצב.md`)
 - התוכנה נבנית מחדש כאתר: קודם מקומי (`web\run_local.bat` ← 127.0.0.1:8787), אחר כך בשרת. **התוכנה הישנה ממשיכה לעבוד; לא נוגעים בה ולא בנתונים האמיתיים בגלל האתר.**
 - **העבר קבוע, העתיד מחושב תמיד מחדש:** באתר נשמרים רק כרטיסים, היסטוריה והגדרות; רשימה עתידית לא נשמרת. אין "שבוע קפוא", אין נעילה, אין רישום הגעה — שבוע שעבר (חמישי 06:00) נכתב להיסטוריה כמו שחושב.
-- **`web/` לא מייבא את `database.py`** (רק `selection`/`scoring`, בלי לשנות אותם). שינוי ב-`selection.py`/`scoring.py` ⇒ להריץ גם `python web/tests/run_all.py` (משווה את האתר לקוד הישן).
+- **שינוי ביד באתר** (הוספה / רזרבה / הסרה לשבוע, מספר מנות לשבוע) נשמר כקביעה לשבוע, לא כרשימה. **הוספה ביד = נחשב כמי שקיבל**; רזרבה / הסרה = לא קיבל. הדפסה ואקסל לא מקפיאים כלום (רק "השתנה מאז ההדפסה").
+- **כל כתיבה באתר = `POST` עם הכותרת `X-Haluka: 1`.** טלפונים יוצאים מהשרת רק ב-`/api/print` ובאקסל. בדפים: בלי משאבים חיצוניים, וטקסט מהנתונים רק ב-`textContent`.
+- **`web/` לא מייבא את `database.py`** (רק `selection`/`scoring`, בלי לשנות אותם). שינוי ב-`selection.py`/`scoring.py` ⇒ להריץ גם `python web/tests/run_all.py` (משווה את האתר לקוד הישן). שינוי בבדיקות האתר ⇒ גם `python web/tests/mutation_check.py`.
 - **`web/data/` = נתונים אישיים, מוחרג מגיט** (המאגר ציבורי). בבדיקות רק אנשים מומצאים.
 
 ## מה הפרויקט

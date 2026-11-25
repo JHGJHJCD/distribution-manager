@@ -293,6 +293,12 @@ def print_weeks(conn, now: datetime, start: date, weeks: int, db_path: str = Non
              "warnings": w["warnings"]} for w in plan]
 
 
+def _keep_as_text(cell, value) -> None:
+    """A name or a phone is text, never a formula — also when it starts with '=' or '+'."""
+    if isinstance(value, str) and value[:1] in "=+-@":
+        cell.data_type = "s"
+
+
 def export_xlsx(conn, now: datetime, start: date, weeks: int, db_path: str = None) -> bytes:
     """One workbook, a right-to-left sheet per week: the list, then the reserve."""
     from openpyxl import Workbook
@@ -301,8 +307,7 @@ def export_xlsx(conn, now: datetime, start: date, weeks: int, db_path: str = Non
 
     def put(ws, row, col, value, **style):
         cell = ws.cell(row=row, column=col, value=value)
-        if isinstance(value, str) and value[:1] in "=+-@":
-            cell.data_type = "s"            # a name or phone is text, never a formula
+        _keep_as_text(cell, value)
         for k, v in style.items():
             setattr(cell, k, v)
         return cell

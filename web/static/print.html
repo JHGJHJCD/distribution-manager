@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>רשימות חלוקה להדפסה</title>
+<link rel="stylesheet" href="/static/print.css">
+</head>
+<body>
+
+<header class="bar no-print">
+  <div>
+    <h1>רשימות להדפסה</h1>
+    <p class="sub" id="summary">טוען את הרשימות…</p>
+  </div>
+  <button type="button" class="btn" id="go" disabled>הדפס</button>
+</header>
+<div id="notice" class="notice no-print" role="status" hidden></div>
+
+<main id="pages"></main>
+
+<script src="/static/print.js"></script>
+</body>
+</html>

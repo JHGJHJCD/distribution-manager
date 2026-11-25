@@ -1,0 +1,59 @@
+/* מנהל חלוקה — דף ההדפסה. עמוד A4 עומד לכל שבוע; בלי משאבים חיצוניים.
+   על המסך רואים את העמודים כמו שייצאו מהמדפסת; בהדפסה נעלמים הסרגל והכפתור. */
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: #e9eeec; color: #111; font-family: "Segoe UI", "Heebo", Arial, sans-serif; font-size: 10pt; line-height: 1.25; }
+h1, h2, h3, p { margin: 0; }
+
+.bar { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; justify-content: space-between;
+  max-width: 210mm; margin: 0 auto; padding: 14px 4px 6px; }
+.bar h1 { font-size: 15pt; }
+.sub { color: #55625d; font-size: 10.5pt; }
+.btn { font: inherit; font-size: 12pt; font-weight: 600; cursor: pointer; padding: 7px 26px; border-radius: 8px;
+  border: 1.5px solid #0b7d5f; background: #0b7d5f; color: #fff; }
+.btn:disabled { opacity: .5; cursor: default; }
+.btn:focus-visible { outline: 3px solid #111; outline-offset: 2px; }
+.notice { max-width: 210mm; margin: 8px auto; background: #fff3d6; color: #7a4d00; border-radius: 9px; padding: 10px 14px; font-size: 11pt; }
+
+/* one week = one sheet of paper. Every size inside a sheet is relative to the sheet's own
+   font size, so a crowded week can be set a little smaller as a whole (print.js: fit). */
+.sheet { width: 210mm; min-height: 297mm; margin: 10px auto 18px; padding: 9mm 8mm; background: #fff;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, .18); font-size: 10pt; }
+.sheet.fit-1 { font-size: 9.4pt; }
+.sheet.fit-2 { font-size: 8.8pt; }
+.sheet.fit-3 { font-size: 8.2pt; }
+.sheet.fit-4 { font-size: 7.6pt; }
+.probe { position: absolute; visibility: hidden; width: 1px; height: 272mm; top: 0; }   /* what surely fits one A4 page (279mm inside the margins) */
+.sheet-head { display: flex; flex-wrap: wrap; gap: .2em 1.6em; align-items: baseline; justify-content: space-between;
+  border-bottom: .5mm solid #111; padding-bottom: .4em; margin-bottom: .8em; }
+.sheet-head h2 { font-size: 1.4em; }
+.numbers { font-size: .95em; color: #333; }
+.sheet h3 { font-size: 1.1em; margin: 1em 0 .4em; }
+.warn { background: #fff3d6; color: #7a4d00; border-radius: 2mm; padding: 1.5mm 3mm; margin-bottom: 2mm; }
+.none { color: #555; padding: 4mm 0; }
+
+/* two tables side by side: the first half of the names on the right, the second on the left */
+.cols { display: flex; gap: 4mm; align-items: flex-start; }
+.col { flex: 1 1 0; min-width: 0; }
+.list { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.list th, .list td { border: .25mm solid #666; padding: .2em .4em; text-align: start; vertical-align: middle; }
+.list th { background: #e3f3ed; font-size: .82em; font-weight: 700; text-align: center; white-space: nowrap; overflow: hidden; }
+.list tr { break-inside: avoid; page-break-inside: avoid; }
+/* fixed widths for the narrow columns; the phones' width is set per table (print.js); the name takes the rest */
+col.c-n { width: 2.4em; } col.c-souls { width: 3.3em; } col.c-box { width: 2.1em; }
+td.c-n, td.c-souls, td.c-box { text-align: center; font-variant-numeric: tabular-nums; }
+td.c-n { color: #333; font-size: .9em; padding-inline: 0; }
+td.c-name { overflow-wrap: break-word; }
+td.c-phone { font-size: .86em; font-variant-numeric: tabular-nums; word-spacing: .4em; }   /* air between two numbers */
+.ph { display: inline-block; white-space: nowrap; unicode-bidi: isolate; }
+.box { display: inline-block; width: 1em; height: 1em; border: .3mm solid #111; vertical-align: middle; }
+
+@page { size: A4 portrait; margin: 9mm 8mm; }
+@media print {
+  .no-print { display: none !important; }
+  body { background: #fff; }
+  .sheet { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; break-after: page; page-break-after: always; }
+  .sheet:last-child { break-after: auto; page-break-after: auto; }
+  .list th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
