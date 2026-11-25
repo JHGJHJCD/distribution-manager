@@ -71,6 +71,21 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--fg); outlin
 .t-w1 { background: var(--w1); } .t-w2 { background: var(--w2); } .t-w3 { background: var(--w3); }
 .t-w4 { background: var(--w4); } .t-one { background: var(--one); }
 
+/* the week's tools: numbers for this week, print and Excel */
+.tools { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: space-between; align-items: center;
+  background: var(--bg); border-radius: 10px; padding: 10px 12px; }
+.tool-group { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.tool-group label { color: var(--muted); font-size: .9rem; }
+.tool-group input { width: 72px; font: inherit; padding: 5px 8px; border: 1.5px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--fg); font-variant-numeric: tabular-nums; }
+.btn { font-weight: 600; padding: 6px 14px; border-radius: 8px; border: 1.5px solid var(--accent); background: var(--surface); color: var(--fg); }
+.btn.main { background: var(--w1); border-color: var(--w1); color: #fff; }
+.btn.quiet { border-color: var(--line); font-weight: 400; }
+.btn:disabled { opacity: .5; cursor: default; }
+.printed { color: var(--muted); font-size: .88rem; margin-bottom: 6px; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip.manual::before { content: "✋ "; }
+
 /* the selected week */
 .warn { background: var(--warn-bg); color: var(--warn-fg); border-radius: 9px; padding: 7px 12px; font-size: .92rem; margin-bottom: 6px; }
 .why { border-inline-start: 5px solid var(--accent); background: var(--bg); border-radius: 9px; padding: 10px 14px; min-height: 3.4em; }

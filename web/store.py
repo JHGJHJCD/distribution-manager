@@ -70,6 +70,20 @@ CREATE TABLE IF NOT EXISTS week_members (
     position INTEGER NOT NULL, kind TEXT NOT NULL, why TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (week_wed, recipient_guid)
 );
+-- stage 2: what the manager set by hand for a coming week (it survives every recompute)
+CREATE TABLE IF NOT EXISTS week_manual (
+    week_wed TEXT NOT NULL, recipient_guid TEXT NOT NULL, action TEXT NOT NULL, set_at TEXT NOT NULL,
+    PRIMARY KEY (week_wed, recipient_guid)
+);
+CREATE TABLE IF NOT EXISTS week_numbers (
+    week_wed TEXT PRIMARY KEY, portions INTEGER, reserve INTEGER, set_at TEXT NOT NULL
+);
+-- the list as it stood when it was last printed / exported: only for the note
+-- "changed since it was printed" — it never holds the list in place
+CREATE TABLE IF NOT EXISTS week_prints (
+    week_wed TEXT PRIMARY KEY, printed_at TEXT NOT NULL, how TEXT NOT NULL,
+    main TEXT NOT NULL, reserve TEXT NOT NULL
+);
 """
 
 
@@ -122,6 +136,87 @@ def create(path: str) -> None:
                          (str(SCHEMA_VERSION),))
     finally:
         conn.close()
+
+
+_ensured = set()
+
+
+def ensure_schema(path: str) -> None:
+    """Bring an existing database up to the current tables (additive only: new tables are
+    created, nothing is changed or dropped). Cheap, and done once per run for each file."""
+    if path in _ensured or not os.path.exists(path):
+        return
+    create(path)
+    _ensured.add(path)
+
+
+# ── what the manager set by hand ──────────────────────────────────────────────
+def load_manual(conn) -> dict:
+    """{Wednesday: {guid: action}}"""
+    out = {}
+    for r in conn.execute("SELECT week_wed, recipient_guid, action FROM week_manual"):
+        try:
+            out.setdefault(date.fromisoformat(r["week_wed"]), {})[r["recipient_guid"]] = r["action"]
+        except ValueError:
+            continue
+    return out
+
+
+def set_manual(conn, wed: date, guid: str, action, now: datetime) -> None:
+    """action None = back to automatic for this person in this week."""
+    if action is None:
+        conn.execute("DELETE FROM week_manual WHERE week_wed=? AND recipient_guid=?", (wed.isoformat(), guid))
+    else:
+        conn.execute(
+            "INSERT INTO week_manual (week_wed, recipient_guid, action, set_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(week_wed, recipient_guid) DO UPDATE SET action=excluded.action, set_at=excluded.set_at",
+            (wed.isoformat(), guid, action, now.strftime("%Y-%m-%d %H:%M:%S")))
+
+
+def load_numbers(conn) -> dict:
+    """{Wednesday: {"portions": n, "reserve": n}} — only the numbers that were set."""
+    out = {}
+    for r in conn.execute("SELECT week_wed, portions, reserve FROM week_numbers"):
+        try:
+            wed = date.fromisoformat(r["week_wed"])
+        except ValueError:
+            continue
+        out[wed] = {k: r[k] for k in ("portions", "reserve") if r[k] is not None}
+    return out
+
+
+def set_numbers(conn, wed: date, portions, reserve, now: datetime) -> None:
+    """None for both = back to the ordinary numbers for this week."""
+    if portions is None and reserve is None:
+        conn.execute("DELETE FROM week_numbers WHERE week_wed=?", (wed.isoformat(),))
+    else:
+        conn.execute(
+            "INSERT INTO week_numbers (week_wed, portions, reserve, set_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(week_wed) DO UPDATE SET portions=excluded.portions, reserve=excluded.reserve, "
+            "set_at=excluded.set_at", (wed.isoformat(), portions, reserve, now.strftime("%Y-%m-%d %H:%M:%S")))
+
+
+def load_prints(conn) -> dict:
+    """{Wednesday: {"printed_at", "how", "main": [guid], "reserve": [guid]}}"""
+    import json
+    out = {}
+    for r in conn.execute("SELECT * FROM week_prints"):
+        try:
+            out[date.fromisoformat(r["week_wed"])] = {
+                "printed_at": r["printed_at"], "how": r["how"],
+                "main": json.loads(r["main"]), "reserve": json.loads(r["reserve"])}
+        except ValueError:
+            continue
+    return out
+
+
+def set_print(conn, wed: date, how: str, main: list, reserve: list, now: datetime) -> None:
+    import json
+    conn.execute(
+        "INSERT INTO week_prints (week_wed, printed_at, how, main, reserve) VALUES (?,?,?,?,?) "
+        "ON CONFLICT(week_wed) DO UPDATE SET printed_at=excluded.printed_at, how=excluded.how, "
+        "main=excluded.main, reserve=excluded.reserve",
+        (wed.isoformat(), now.strftime("%Y-%m-%d %H:%M"), how, json.dumps(main), json.dumps(reserve)))
 
 
 # ── meta / settings ───────────────────────────────────────────────────────────

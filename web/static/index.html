@@ -35,6 +35,7 @@
       <span><i class="sw t-w3"></i>תלת־שבועי</span>
       <span><i class="sw t-w4"></i>חודשי</span>
       <span><i class="sw t-one"></i>חד־פעמי</span>
+      <span>✋ נקבע ביד</span>
       <span class="legend-note" id="whoLegend" hidden><i class="dot"></i>השבועות שבהם מי שבחרת מקבל</span>
     </div>
   </section>
@@ -44,6 +45,24 @@
       <h2 id="weekTitle"></h2>
       <p class="sub" id="weekNumbers"></p>
     </div>
+
+    <div class="tools">
+      <div class="tool-group">
+        <label for="nPortions">מנות</label>
+        <input id="nPortions" type="number" min="0" max="2000" inputmode="numeric">
+        <label for="nReserve">רזרבה</label>
+        <input id="nReserve" type="number" min="0" max="2000" inputmode="numeric">
+        <button type="button" class="btn" id="saveNumbers">עדכן לשבוע הזה</button>
+        <button type="button" class="btn quiet" id="resetNumbers" hidden>חזרה למספרים הרגילים</button>
+      </div>
+      <div class="tool-group">
+        <label for="nRange">מהשבוע הזה, כמה שבועות</label>
+        <input id="nRange" type="number" min="1" max="104" value="1" inputmode="numeric">
+        <button type="button" class="btn main" id="doPrint">הדפס</button>
+        <button type="button" class="btn" id="doExcel">אקסל</button>
+      </div>
+    </div>
+
     <div id="warnings"></div>
     <div class="why" id="why" aria-live="polite"></div>
     <div class="buckets">

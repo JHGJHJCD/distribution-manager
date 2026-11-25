@@ -263,4 +263,67 @@ for seed in range(60):
                     bad.append((seed, i, f"a regular whose turn came is waiting ({rec['frequency']}, gap {gap})"))
 t.ok("P13 sixty random populations x 10 weeks: portions, reserve, turns, pause, one column each", not bad, str(bad[:5]))
 
+# ── P14: what the manager sets by hand for one week ───────────────────────────
+recs = ([person(n, "שבועי") for n in (1, 2, 3)] + [person(4, "דו-שבועי")]
+        + [person(n, "חד-פעמי", 3, per_soul=str(n)) for n in (21, 22, 23, 24)] + [person(40, "", 1), person(41, "שבועי", status="מושהה")])
+hist = [got(f"g{n:04d}", wk(-1)) for n in (1, 2, 3, 4)]
+
+
+def mplan(manual, weeks=3, portions=5, reserve=1):
+    return planner.plan_weeks(recs, hist, start=W0, weeks=weeks, horizon=W0, weights=WEIGHTS, cooldown_weeks=4,
+                              portions=portions, reserve=reserve, manual=manual)
+
+
+base = mplan(None)
+t.ok("P14 without anything set by hand: 3 regulars + 2 one-timers, one in reserve",
+     base[0]["main_regulars"] == 3 and base[0]["main_one_timers"] == 2 and len(base[0]["reserve_list"]) == 1
+     and "g0004" in guids(base[0]["out"]))
+w = mplan({W0: {"g0004": "add"}})
+add = next(e for e in w[0]["main"] if e["guid"] == "g0004")
+t.ok("P14 add: a bi-weekly whose turn has not come is on the list, marked as set by hand",
+     add["manual"] == "add" and "נוסף ביד" in add["why"] and len(w[0]["main"]) == 5)
+t.ok("P14 add: he takes a portion from the one-timers, never from a regular",
+     w[0]["main_regulars"] == 4 and w[0]["main_one_timers"] == 1 and {"g0001", "g0002", "g0003"} <= set(guids(w[0]["main"])))
+t.ok("P14 add: he counts as having received — his next turn is two weeks from now",
+     [("g0004" in guids(x["main"])) for x in w] == [True, False, True]
+     and [("g0004" in guids(x["main"])) for x in base] == [False, True, False])
+w = mplan({W0: {"g0001": "reserve"}})
+t.ok("P14 reserve: first on the reserve, not on the list, and the reserve is not longer than set",
+     guids(w[0]["reserve_list"]) == ["g0001"] and "g0001" not in guids(w[0]["main"]) and w[0]["reserve_list"][0]["manual"] == "reserve")
+t.ok("P14 reserve: his portion goes to the next in the queue, and he is back next week",
+     len(w[0]["main"]) == 5 and w[0]["main_one_timers"] == 3 and "g0001" in guids(w[1]["main"]))
+w = mplan({W0: {"g0001": "remove"}})
+rm = next(e for e in w[0]["out"] if e["guid"] == "g0001")
+t.ok("P14 remove: on no list this week, shown first in 'not this week' with the reason",
+     rm["group"] == planner.OUT_REMOVED and w[0]["out"][0]["guid"] == "g0001"
+     and "g0001" not in guids(w[0]["main"]) + guids(w[0]["reserve_list"]))
+t.ok("P14 remove: he did not receive, so he is on next week's list", "g0001" in guids(w[1]["main"]) and len(w[0]["main"]) == 5)
+w = mplan({wk(1): {"g0001": "remove"}})
+t.ok("P14 a change set for one week leaves the weeks before it untouched", w[0] == base[0] and w[1] != base[1])
+w = mplan({W0: {"g0040": "add", "g0041": "add"}})
+t.ok("P14 a card that takes no part can be added by hand; a paused card cannot",
+     "g0040" in guids(w[0]["main"]) and "g0041" not in guids(w[0]["main"]) + guids(w[0]["reserve_list"]) + guids(w[0]["out"]))
+w = mplan({W0: {"g0021": "add"}}, portions=3, reserve=0)
+t.ok("P14 a one-timer added by hand never pushes a regular out: the list is one too long, with a warning",
+     len(w[0]["main"]) == 4 and w[0]["main_regulars"] == 3 and any("יותר מדי" in x for x in w[0]["warnings"]))
+w = mplan({W0: {"g0004": "add"}}, portions=3, reserve=1)
+t.ok("P14 a regular added by hand when the regulars alone exceed the portions: the one who waited least moves to the reserve",
+     len(w[0]["main"]) == 3 and "g0004" in guids(w[0]["main"]) and len(w[0]["reserve_list"]) == 1
+     and w[0]["reserve_list"][0]["kind"] == "regular" and w[0]["cut"])
+bad = []
+for seed in range(40):
+    rng = random.Random(500 + seed)
+    manual = {wk(i): {r["guid"]: rng.choice(planner.MANUAL_ACTIONS) for r in recs if rng.random() < 0.3} for i in range(3)}
+    for i, x in enumerate(mplan(manual, weeks=4, portions=rng.randint(0, 7), reserve=rng.randint(0, 3))):
+        cols = guids(x["main"]) + guids(x["reserve_list"]) + guids(x["out"])
+        if len(cols) != len(set(cols)):
+            bad.append((seed, i, "somebody is in two columns"))
+        for g, action in manual.get(x["date"], {}).items():
+            if g == "g0041" or x["portions"] == 0:
+                continue
+            where = "main" if g in guids(x["main"]) else "reserve" if g in guids(x["reserve_list"]) else "out"
+            if where != {"add": "main", "reserve": "reserve", "remove": "out"}[action]:
+                bad.append((seed, i, f"{action} landed in {where}"))
+t.ok("P14 forty random sets of hand changes: each lands where it was set, nobody twice", not bad, str(bad[:4]))
+
 t.done()

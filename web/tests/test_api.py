@@ -83,16 +83,17 @@ t.ok("A3 a date that is not a date", client.get("/api/week?date=2026-13-45").sta
 t.ok("A3 a date that is not a Wednesday", client.get("/api/week", params={"date": (W0 + timedelta(days=1)).isoformat()}).status_code == 400)
 t.ok("A3 a week that has passed", client.get("/api/week", params={"date": wk(-1).isoformat()}).status_code == 404)
 t.ok("A3 the site only answers questions (no writing routes)",
-     client.post("/api/plan").status_code == 405 and client.delete("/api/people").status_code == 405)
+     client.post("/api/plan").status_code == 403 and client.delete("/api/people").status_code == 403
+     and client.post("/api/plan", headers={"x-haluka": "1"}).status_code == 405)
 
 # ── A4: nothing private leaves, nothing foreign gets in ───────────────────────
 blob = client.get("/api/plan?weeks=8").text + client.get("/api/week", params={"date": W0.isoformat()}).text + client.get("/api/people").text
 t.ok("A4 phones, id numbers, addresses and notes never leave the server",
      not any(s in blob for s in (SECRET_PHONE, SECRET_ID, SECRET_NOTE, "רחוב סודי")))
-allowed = {"guid", "name", "kind", "freq", "role", "why", "group"}
+allowed = {"guid", "name", "kind", "freq", "role", "why", "group", "manual"}
 t.ok("A4 about a person the screen gets the name, the kind and the reason — no score, priority code or dates",
      all(set(e) <= allowed for e in detail["main"] + detail["reserve_list"] + detail["out"])
-     and all(set(p) <= {"guid", "name", "kind", "freq", "why"} for p in ppl["participants"] + ppl["others"])
+     and all(set(p) <= {"guid", "name", "kind", "freq", "why", "active"} for p in ppl["participants"] + ppl["others"])
      and '"score"' not in blob and '"priority"' not in blob and '"days_since"' not in blob)
 h = client.get("/api/plan").headers
 t.ok("A4 answers are never cached, and the browser is told to trust only this site",

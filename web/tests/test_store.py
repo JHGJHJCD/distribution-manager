@@ -144,7 +144,7 @@ t.ok("S7 the search list: who takes part and who does not, with a reason",
      {p["guid"] for p in ppl["participants"]} == {"g0001", "g0002", "g0021", "g0022"}
      and {p["guid"] for p in ppl["others"]} == {"g0030", "g0031", "g0032"} and all(p["why"] for p in ppl["others"]))
 t.ok("S7 only the name and the kind leave the store — no phone, no address",
-     all(set(p) <= {"guid", "name", "kind", "freq", "why"} for p in ppl["participants"] + ppl["others"]))
+     all(set(p) <= {"guid", "name", "kind", "freq", "why", "active"} for p in ppl["participants"] + ppl["others"]))
 conn.close()
 
 # ── S8: personal data may not land in a folder git would publish ──────────────

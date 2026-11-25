@@ -37,6 +37,10 @@ OUT_REG_CUT = "reg_cut"        # a regular whose turn came but the portions ran 
 OUT_ONE_PAUSE = "one_pause"    # a one-timer inside the pause after receiving (rule 7)
 OUT_ONE_QUEUE = "one_queue"    # a one-timer waiting in the queue, portions and reserve are full
 OUT_NO_PORTIONS = "no_portions"
+OUT_REMOVED = "removed"        # taken off this week's list by hand
+# What the manager can set by hand for one person in one week.
+MANUAL_ADD, MANUAL_RESERVE, MANUAL_REMOVE = "add", "reserve", "remove"
+MANUAL_ACTIONS = (MANUAL_ADD, MANUAL_RESERVE, MANUAL_REMOVE)
 
 PRIORITY_LABEL = {3: "עדיפות ראשונה", 2: "עדיפות שנייה"}
 
@@ -251,17 +255,42 @@ def _entry(row: dict, kind: str, role: str, why: str, **extra) -> dict:
 
 
 # ── one week ──────────────────────────────────────────────────────────────────
+def _kind(row: dict) -> str:
+    return KIND_REGULAR if selection.is_regular(row) else KIND_ONE_TIME
+
+
 def plan_week(wed: date, people: list, ledger: Ledger, *, portions: int, reserve: int,
-              weights: dict, cooldown_weeks: int) -> dict:
+              weights: dict, cooldown_weeks: int, manual: dict = None) -> dict:
     """The list of the Wednesday `wed`. `people`: active cards, ordered by name.
     Returns main / reserve_list / out (entries with a Hebrew 'why') and the week's numbers.
-    Nothing is recorded here — plan_weeks() does that between weeks."""
+    Nothing is recorded here — plan_weeks() does that between weeks.
+
+    `manual` = what the manager set by hand for THIS week, {guid: 'add' | 'reserve' |
+    'remove'} (decision 25/11/2026: it stays while everything around it is recomputed):
+      add     — on the MAIN list whatever his turn; he takes a portion and counts as having
+                received, so his turn is counted from this week.
+      reserve — on the reserve, first in line; did not receive, keeps his turn.
+      remove  — on no list this week; did not receive, keeps his turn.
+    A regular added by hand takes a portion from the one-timers first and pushes a regular
+    out only when the regulars alone exceed the portions; a one-timer added by hand never
+    pushes a regular out (the engine's rule 8) — the list is then longer, with a warning."""
     portions = max(0, int(portions or 0))
     reserve = max(0, int(reserve or 0))
-    regs = [week_row(p, wed, ledger) for p in people if selection.is_regular(p)]
-    ones = [week_row(p, wed, ledger) for p in people if selection.is_one_time_candidate(p)]
+    manual = manual or {}
+    by_hand = {MANUAL_ADD: [], MANUAL_RESERVE: [], MANUAL_REMOVE: []}
+    for p in people:
+        action = manual.get(p.get("guid"))
+        if action in by_hand:
+            by_hand[action].append(week_row(p, wed, ledger))
+    free = [p for p in people if manual.get(p.get("guid")) not in by_hand]
+    regs = [week_row(p, wed, ledger) for p in free if selection.is_regular(p)]
+    ones = [week_row(p, wed, ledger) for p in free if selection.is_one_time_candidate(p)]
 
     main, reserve_list, out, warnings = [], [], [], []
+    for r in by_hand[MANUAL_REMOVE]:
+        out.append(_entry(r, _kind(r), ROLE_OUT,
+                          "הוסר ביד מהשבוע הזה · לא נחשב כמי שקיבל, והתור שלו נשאר",
+                          group=OUT_REMOVED, manual=MANUAL_REMOVE, sort=("", r.get("full_name") or "")))
 
     # 1. Regulars whose turn has come (rules 6 + 9 — the engine's single gate).
     due = [r for r in regs if selection.is_due(r, wed, cooldown_weeks)]
@@ -291,6 +320,10 @@ def plan_week(wed: date, people: list, ledger: Ledger, *, portions: int, reserve
     if portions <= 0:
         # Rule 8: no portions -> an empty list (and nobody is recorded for this week).
         warnings.append("0 מנות: הרשימה של השבוע הזה ריקה")
+        for r in by_hand[MANUAL_ADD] + by_hand[MANUAL_RESERVE]:
+            out.append(_entry(r, _kind(r), ROLE_OUT, "סומן ביד לשבוע הזה, אבל אין בו מנות",
+                              group=OUT_NO_PORTIONS, manual=manual[r["guid"]],
+                              sort=(0, r.get("full_name") or "")))
         for r in due:
             out.append(_entry(r, KIND_REGULAR, ROLE_OUT,
                               f"{_freq_label(r)} · התור שלו הגיע, אבל אין מנות בשבוע הזה",
@@ -303,8 +336,21 @@ def plan_week(wed: date, people: list, ledger: Ledger, *, portions: int, reserve
         return _week(wed, portions, reserve, regs_due, 0, False, main, reserve_list, out,
                      warnings, len(queue))
 
+    # 3a. What the manager set by hand comes first.
+    for r in by_hand[MANUAL_ADD]:
+        main.append(_entry(r, _kind(r), ROLE_MAIN,
+                           "נוסף ביד לשבוע הזה · נחשב כמי שקיבל, והתור שלו נספר מכאן",
+                           manual=MANUAL_ADD))
+    for r in by_hand[MANUAL_RESERVE]:
+        reserve_list.append(_entry(r, _kind(r), ROLE_RESERVE,
+                                   "הועבר ביד לרזרבה · נכנס אם מישהו לא מגיע, ולא נחשב כמי שקיבל",
+                                   manual=MANUAL_RESERVE))
+    added_regs = sum(1 for r in by_hand[MANUAL_ADD] if selection.is_regular(r))
+    added_others = len(by_hand[MANUAL_ADD]) - added_regs
+    reserve_auto = max(0, reserve - len(by_hand[MANUAL_RESERVE]))
+
     # 3. Rule 8: fewer portions than regulars in turn -> whoever waited longest.
-    kept = selection.limit_due_regulars(due, weights, portions, reserve, 0)
+    kept = selection.limit_due_regulars(due, weights, portions, reserve_auto, added_regs)
     cut = len(kept) < regs_due or any(r.get("_reserve") for r in kept)
     if cut:
         warnings.append(f"{regs_due} קבועים בתור ורק {portions} מנות: נכנסו מי שחיכו הכי הרבה זמן")
@@ -337,8 +383,8 @@ def plan_week(wed: date, people: list, ledger: Ledger, *, portions: int, reserve
     # 4. The portions left go to the one-timers' queue; the reserve comes right after
     #    them. Rule 3 — the reserve is always shown: when regulars already hold part of it
     #    (the cut above), the queue tops it up (same result as selection.top_up_reserve).
-    slots = selection.one_time_slots(portions, regs_due, 0)
-    selection.assign_roles(queue, slots, max(0, reserve - reg_reserve))
+    slots = max(0, selection.one_time_slots(portions, regs_due, added_regs) - added_others)
+    selection.assign_roles(queue, slots, max(0, reserve_auto - reg_reserve))
     n_queue = len(queue)
     for i, r in enumerate(queue):
         tier = PRIORITY_LABEL.get(r.get("priority"), "")
@@ -355,11 +401,15 @@ def plan_week(wed: date, people: list, ledger: Ledger, *, portions: int, reserve
     empty = portions - len(main)
     if empty > 0:
         warnings.append(f"{empty} מנות נשארו בלי מקבל: אין מספיק חד-פעמיים פנויים בתור")
+    elif empty < 0:
+        warnings.append(f"ברשימה {len(main)} מקבלים ויש רק {portions} מנות: "
+                        f"{-empty} יותר מדי, בגלל הוספות ביד")
     return _week(wed, portions, reserve, regs_due, slots, cut, main, reserve_list, out,
                  warnings, n_queue)
 
 
-_OUT_ORDER = {OUT_REG_CUT: 0, OUT_NO_PORTIONS: 1, OUT_ONE_QUEUE: 2, OUT_REG_WAIT: 3, OUT_ONE_PAUSE: 4}
+_OUT_ORDER = {OUT_REMOVED: -1, OUT_REG_CUT: 0, OUT_NO_PORTIONS: 1, OUT_ONE_QUEUE: 2,
+              OUT_REG_WAIT: 3, OUT_ONE_PAUSE: 4}
 
 
 def _week(wed, portions, reserve, regs_due, slots, cut, main, reserve_list, out, warnings, n_queue):
@@ -389,13 +439,14 @@ def active_people(recipients) -> list:
 
 def plan_weeks(recipients, received, *, start: date, weeks: int, horizon: date,
                weights: dict, cooldown_weeks: int, portions: int = 52, reserve: int = 0,
-               per_week: dict = None) -> list:
+               per_week: dict = None, manual: dict = None) -> list:
     """Lay out `weeks` consecutive Wednesdays from `start`.
 
     recipients — every card (dicts); only active ones take part.
     received   — history rows (dicts: recipient_guid, dist_date, received, holiday).
     horizon    — the upcoming Wednesday as of today (history dated after it is ignored).
     per_week   — optional {Wednesday: {"portions": n, "reserve": n}} for single weeks.
+    manual     — optional {Wednesday: {guid: 'add' | 'reserve' | 'remove'}} (see plan_week).
     After each week its MAIN list counts as received; the reserve never does.
     The inputs are not modified; the same inputs always give the same lists."""
     if start.weekday() != 2:
@@ -409,7 +460,8 @@ def plan_weeks(recipients, received, *, start: date, weeks: int, horizon: date,
         week = plan_week(wed, people, ledger,
                          portions=over.get("portions", portions),
                          reserve=over.get("reserve", reserve),
-                         weights=weights, cooldown_weeks=cooldown_weeks)
+                         weights=weights, cooldown_weeks=cooldown_weeks,
+                         manual=(manual or {}).get(wed))
         out.append(week)
         for e in week["main"]:
             ledger.add_regular(e["guid"], wed)
