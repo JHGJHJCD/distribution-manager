@@ -17,12 +17,13 @@ from datetime import date
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import (auth, backup_service, card_service, config, event_service, history_service, offsite, service,
+from . import (auth, backup_service, card_service, config, event_service, google_login, history_service, offsite,
+               service,
                settings_service, store)
 
 STATIC_DIR = os.path.join(config.WEB_DIR, "static")
@@ -42,7 +43,8 @@ def _from_this_site(request: Request) -> bool:
 
 # What answers without a session when login is on: the login page with its style and script,
 # the login itself, and the "is the site alive" check. Nothing here carries data.
-OPEN_PATHS = frozenset({"/login", "/api/login", "/healthz", "/static/style.css", "/static/login.js"})
+OPEN_PATHS = frozenset({"/login", "/api/login", "/healthz", "/static/style.css", "/static/login.js",
+                        "/auth/google", google_login.CALLBACK})
 
 
 def _session_user(request: Request) -> str:
@@ -579,7 +581,47 @@ def healthz():
 def login_page(request: Request):
     if not config.login_required() or _session_user(request):
         return RedirectResponse("/", status_code=303)
-    return FileResponse(os.path.join(STATIC_DIR, "login.html"))
+    with open(os.path.join(STATIC_DIR, "login.html"), encoding="utf-8") as f:
+        page = f.read()
+    # which ways in this server offers (two fixed words; nothing of the request enters the page)
+    ways = " ".join(w for w, on in (("google", google_login.enabled()), ("password", bool(auth.users()))) if on)
+    return HTMLResponse(page.replace('data-ways=""', f'data-ways="{ways}"'))
+
+
+@app.get("/auth/google")
+def google_start():
+    """To Google, to ask who this is. The random state stays in a cookie for ten minutes."""
+    if not (config.login_required() and google_login.enabled()):
+        raise HTTPException(404)
+    url, cookie = google_login.start()
+    response = RedirectResponse(url, status_code=303)
+    # Lax, not Strict: the way back from Google is a link from another site
+    response.set_cookie(google_login.STATE_COOKIE, cookie, max_age=google_login.STATE_SECONDS, path="/",
+                        secure=True, httponly=True, samesite="lax")
+    return response
+
+
+_ENTERED = ('<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">'
+            '<meta http-equiv="refresh" content="0;url=/"><title>מנהל חלוקה</title></head>'
+            '<body><p><a href="/">המשך לאתר</a></p></body></html>')
+
+
+@app.get(google_login.CALLBACK)
+def google_callback(request: Request, code: str = Query("", max_length=2000), state: str = Query("", max_length=200)):
+    if not config.login_required():
+        raise HTTPException(404)
+    try:
+        token, _name = google_login.finish(code, state, request.cookies.get(google_login.STATE_COOKIE, ""), config.now())
+    except google_login.Refused as e:
+        response = RedirectResponse("/login#" + e.why, status_code=303)
+    else:
+        # a page, not a redirect: the browser sends the (SameSite=Strict) session cookie only
+        # on a move that starts inside the site, and this one does
+        response = HTMLResponse(_ENTERED)
+        response.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400, path="/",
+                            secure=True, httponly=True, samesite="strict")
+    response.delete_cookie(google_login.STATE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return response
 
 
 # ── pages ─────────────────────────────────────────────────────────────────────
