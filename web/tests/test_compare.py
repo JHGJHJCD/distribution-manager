@@ -213,6 +213,32 @@ t.ok("C5 a site that ignores the split between the communities differs in the sp
      and all(s["differ"] == 0 for s in flat["sections"] if s["key"] in ("ordinary", "short", "scored")), str(differing))
 t.ok("C5 ...and its report names no community (a community is called after a person)", private(real.render(flat)) == [])
 
+# ── C9: who is marked for the holidays is asked of both programs, and always reported ──
+t.ok("C9 both programs find the same people marked for the holidays, and the result says how many",
+     res["holiday_marked"]["same"] is True and res["holiday_marked"]["site"] == res["holiday_marked"]["desktop"] > 10)
+nobody = os.path.join(TMP, "nobody-marked", "data.db")
+os.makedirs(os.path.dirname(nobody))
+shutil.copy(SRC, nobody)
+c = sqlite3.connect(nobody)
+c.execute("UPDATE recipients SET holiday_support=0, holidays=''")
+c.commit()
+c.close()
+none = real.run(nobody, TMP, NOW, weeks=3, portions=20, reserve=5, say=lambda *a: None)
+none_page = real.render(none)
+t.ok("C9 data in which nobody is marked: no holiday list is laid out — and the report SAYS so (it does not just leave them out)",
+     none["identical"] is True and none["holiday_marked"] == {"site": 0, "desktop": 0, "same": True}
+     and not any(s["key"].startswith("holiday") for s in none["sections"])
+     and "אף כרטיס פעיל לא מסומן" in none_page and ">לא הושוו<" in none_page and ">לא הושוו<" not in page)
+planner.plan_event = lambda event, people, ledger, **kw: _event(event, [], ledger, **kw)
+blind = run()
+planner.plan_event = _event
+blind_page = real.render(blind)
+t.ok("C9 a site that sees nobody marked, while the desktop program does, is a DIFFERENCE — not 'nothing to compare'",
+     blind["identical"] is False and blind["differ"] == 0 and blind["holiday_marked"]["site"] == 0
+     and blind["holiday_marked"]["desktop"] == res["holiday_marked"]["desktop"] and blind["holiday_marked"]["same"] is False
+     and "לא אותם אנשים מסומנים לחג" in blind_page and "נותנים אותן רשימות" not in blind_page and private(blind_page) == [],
+     str(blind["holiday_marked"]))
+
 # ── C6: the command itself ────────────────────────────────────────────────────
 leftovers = {d for d in os.listdir(tempfile.gettempdir()) if d.startswith("haluka_real_check_")}
 out = os.path.join(TMP, "out", "report.html")

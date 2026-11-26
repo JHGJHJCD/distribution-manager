@@ -1051,6 +1051,9 @@ mutate(COMPARE, "what the desktop program wrote last (its -wal file) is left out
 mutate(COMPARE, "nobody checks that the sharing between computers is off for the copy", compare_tool, "assert_no_sync",
        lambda: None)
 
+mutate(COMPARE, "only the site is asked who is marked for the holidays (seeing nobody passes for 'there is nobody')",
+       compare_tool, "marks_agree", lambda site, desktop: True)
+
 breaks = len(results) - BASELINES
 if all(results):
     print(f"\nRESULT: ALL {breaks} BREAKS WERE CAUGHT — the website's tests bite ✓"
