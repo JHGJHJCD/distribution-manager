@@ -21,7 +21,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import card_service, config, event_service, history_service, service, settings_service, store
+from . import (backup_service, card_service, config, event_service, history_service, service,
+               settings_service, store)
 
 STATIC_DIR = os.path.join(config.WEB_DIR, "static")
 _NO_DATA = {"error": "no_data",
@@ -76,6 +77,7 @@ def _run(fn):
     if conn is None:
         return JSONResponse(_NO_DATA, status_code=503)
     try:
+        backup_service.daily(conn, config.now(), path)       # the day's first request backs the site up
         return fn(conn, path)
     except service.Refused as e:
         return JSONResponse({"message": str(e)}, status_code=409)
@@ -464,6 +466,37 @@ def api_settings_preview(body: PreviewSettings):
     """What the typed settings would change in the coming lists. It saves nothing."""
     data = body.model_dump()
     return _run(lambda conn, path: settings_service.preview(conn, config.now(), data, path))
+
+
+# ── stage 5: backup and restore ───────────────────────────────────────────────
+# A backup holds everything (phones included), so no route ever serves one: the screen gets
+# the list of files (when, why, how big) and, for one of them, how much it holds — numbers.
+_BACKUP_NAME = r"^haluka-[0-9]{8}-[0-9]{6}-[0-9A-Za-z_-]{1,60}\.db$"
+
+
+class BackupBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    name: str = Field(max_length=100, pattern=_BACKUP_NAME)
+
+
+@app.get("/api/backups")
+def api_backups():
+    return _run(lambda conn, path: backup_service.listing(conn, config.now(), path))
+
+
+@app.get("/api/backup")
+def api_backup(name: str = Query(..., max_length=100, pattern=_BACKUP_NAME)):
+    return _run(lambda conn, path: backup_service.inspect(conn, config.now(), name, path))
+
+
+@app.post("/api/backup/make")
+def api_backup_make():
+    return _run(lambda conn, path: backup_service.make(conn, config.now(), path))
+
+
+@app.post("/api/backup/restore")
+def api_backup_restore(body: BackupBody):
+    return _run(lambda conn, path: backup_service.restore(conn, config.now(), body.name, path))
 
 
 # ── pages ─────────────────────────────────────────────────────────────────────

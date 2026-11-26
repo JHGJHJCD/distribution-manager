@@ -569,6 +569,87 @@ t.ok("A21 an event whose split is not yes or no is refused (422)",
      post("/api/event/save", dict(EVENT, date="2026-12-06", balance="sometimes")).status_code == 422)
 post("/api/event/delete", {"event": EV3})
 
+# ── A22: backup and restore ───────────────────────────────────────────────────
+def backups():
+    return client.get("/api/backups").json()["backups"]
+
+
+def dailies():
+    return [b["name"] for b in backups() if b["reason"] == "daily"]
+
+
+bdir = config.backup_dir()
+ls = client.get("/api/backups")
+had = dailies()
+t.ok("A22 the site has been backing itself up while it was used, and says that today's backup was taken",
+     ls.status_code == 200 and ls.json()["auto_today"] is True and len(had) >= 1 and ls.json()["folder"] == bdir
+     and all(os.path.isfile(os.path.join(bdir, b["name"])) for b in ls.json()["backups"]))
+for u in ("/api/plan", "/api/settings", "/api/events", "/api/history"):
+    client.get(u)
+t.ok("A22 ...once a day: more requests on the same day take no further backup", dailies() == had)
+config.now = lambda: datetime(2026, 11, 27, 8, 0)                           # the next morning
+client.get("/api/people")
+grown = dailies()
+client.get("/api/plan")
+post("/api/week/numbers", {"date": wk(1).isoformat(), "portions": 7})
+t.ok("A22 the first request of the next day takes that day's backup, and only the first",
+     len(grown) == len(had) + 1 and set(grown) - set(had) == {"haluka-20261127-080000-daily.db"} and dailies() == grown)
+t.ok("A22 the list carries file names, times, reasons and sizes — nothing of what is inside",
+     all(set(b) == {"name", "taken_at", "reason", "reason_text", "size_kb"} for b in backups())
+     and SECRET_PHONE not in client.get("/api/backups").text and SECRET_ID not in client.get("/api/backups").text)
+count = len(backups())
+t.ok("A22 'back up now' writes only with the site's own header",
+     client.post("/api/backup/make").status_code == 403 and client.get("/api/backup/make").status_code == 405
+     and len(backups()) == count)
+r = post("/api/backup/make", {})
+MADE = r.json().get("name", "")
+t.ok("A22 ...and with it one more backup is there, marked as taken by hand",
+     r.status_code == 200 and len(backups()) == count + 1 and os.path.isfile(os.path.join(bdir, MADE))
+     and [b["reason_text"] for b in backups() if b["name"] == MADE] == ["גיבוי ביד"])
+r = client.get("/api/backup", params={"name": MADE})
+t.ok("A22 one backup can be looked at before it is restored: how much it holds beside how much the site holds, in numbers",
+     r.status_code == 200 and r.json()["backup"] == r.json()["now"] and r.json()["backup"]["cards"] >= len(recs)
+     and set(r.json()) == {"name", "taken_at", "reason_text", "backup", "now", "weeks_to_redo"}
+     and all(isinstance(v, (int, str)) for v in r.json()["backup"].values())
+     and SECRET_PHONE not in r.text and SECRET_ID not in r.text and SECRET_NOTE not in r.text and "בדיקה" not in r.text, r.text[:300])
+t.ok("A22 a name that is not a backup's own file name is refused before anything is opened (422); a missing backup is 409",
+     [client.get("/api/backup", params={"name": n}).status_code for n in
+      ("../haluka.db", "../../haluka.db", "haluka.db", "/etc/passwd", MADE + "/..", "x" * 300, "")] == [422] * 7
+     and client.get("/api/backup").status_code == 422
+     and client.get("/api/backup", params={"name": "haluka-20200101-000000-manual.db"}).status_code == 409
+     and "לא נמצא" in client.get("/api/backup", params={"name": "haluka-20200101-000000-manual.db"}).json()["message"])
+seen_numbers = client.get("/api/settings").json()["numbers"]
+post("/api/settings/numbers", {"portions": 9, "reserve": 1, "cooldown_weeks": 4})
+count = len(backups())
+t.ok("A22 a restore is refused without the site's own header, for a wrong name, and with anything extra in the request",
+     client.post("/api/backup/restore", json={"name": MADE}).status_code == 403
+     and client.get("/api/backup/restore", params={"name": MADE}).status_code == 405
+     and post("/api/backup/restore", {"name": "../haluka.db"}).status_code == 422
+     and post("/api/backup/restore", {"name": MADE, "force": True}).status_code == 422
+     and post("/api/backup/restore", {}).status_code == 422
+     and post("/api/backup/restore", {"name": "haluka-20200101-000000-manual.db"}).status_code == 409
+     and client.get("/api/settings").json()["numbers"]["portions"] == 9 and len(backups()) == count)
+r = post("/api/backup/restore", {"name": MADE})
+after = backups()
+t.ok("A22 a restore through the site brings the earlier state back, and keeps the state from before it as one more backup",
+     r.status_code == 200 and r.json()["restored"] == MADE and client.get("/api/settings").json()["numbers"] == seen_numbers
+     and len(after) == count + 1 and [b["reason_text"] for b in after if b["name"] == r.json()["safety"]] == ["לפני שחזור"]
+     and SECRET_PHONE not in r.text, r.text[:300])
+todays = [b["name"] for b in after if b["taken_at"].startswith("2026-11-27")]
+t.ok("A22 backups of the same minute are listed in the order they were taken, the latest first",
+     todays[0] == r.json()["safety"] and todays.index(MADE) < todays.index("haluka-20261127-080000-daily.db"), str(todays))
+t.ok("A22 ...and that one brings back what the restore took away",
+     post("/api/backup/restore", {"name": r.json()["safety"]}).status_code == 200
+     and client.get("/api/settings").json()["numbers"]["portions"] == 9)
+post("/api/settings/numbers", dict(seen_numbers))
+t.ok("A22 no address of the site serves a backup file (it holds the phones): the only way to one is the computer's own folder",
+     all(client.get(u).status_code in (404, 405) for u in
+         (f"/static/../data/backups/{MADE}", f"/data/backups/{MADE}", f"/backups/{MADE}", f"/api/backups/{MADE}",
+          f"/api/backup/download?name={MADE}", f"/static/{MADE}", f"/static/%2e%2e/data/backups/{MADE}",
+          "/static/../data/haluka.db", "/data/haluka.db"))
+     and b"SQLite format 3" not in client.get("/api/backup", params={"name": MADE}).content)
+config.now = lambda: datetime(2026, 11, 26, 7, 0)
+
 # ── A18: every screen of the site ─────────────────────────────────────────────
 SCREENS = {"/": "app.js", "/people": "people.js", "/holiday": "holiday.js", "/history": "history.js",
            "/settings": "settings.js"}
