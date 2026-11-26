@@ -298,6 +298,25 @@ google_login.fetch_token = real_fetch
 for _k in ("HALUKA_WEB_URL", "HALUKA_GOOGLE_CLIENT_ID", "HALUKA_GOOGLE_CLIENT_SECRET"):
     os.environ.pop(_k)
 
+# ── P: behind the fixed front address ─────────────────────────────────────────
+os.environ["HALUKA_PROXY_SECRET"] = "front-secret-invented"
+c = browser()
+t.ok("P1 with a front secret set, a request that did not come through the front gets nothing — not even the login page",
+     c.get("/login").status_code == 403 and c.get("/api/plan").status_code == 403
+     and c.get("/static/style.css").status_code == 403 and enter(c, "בודק א", "סיסמה-חדשה-לגמרי").status_code == 403)
+t.ok("P1 a wrong secret is the same", c.get("/login", headers={"X-Haluka-Proxy": "guess"}).status_code == 403)
+t.ok("P1 the server's own alive check still answers", c.get("/healthz").status_code == 200)
+front = TestClient(webapp.app, base_url="https://127.0.0.1", follow_redirects=False,
+                   headers={"X-Haluka-Proxy": "front-secret-invented"})
+t.ok("P1 through the front: the login page opens, a stranger is still a stranger, and the login works",
+     front.get("/login").status_code == 200 and front.get("/api/plan").status_code == 401
+     and enter(front, "בודק א", "סיסמה-חדשה-לגמרי").status_code == 200 and front.get("/api/me").status_code == 200)
+r = front.get("/people", cookies={})
+t.ok("P1 the site sends the browser on with a path only, never with its own inner address",
+     TestClient(webapp.app, base_url="https://127.0.0.1", follow_redirects=False,
+                headers={"X-Haluka-Proxy": "front-secret-invented"}).get("/people").headers["location"] == "/login")
+os.environ.pop("HALUKA_PROXY_SECRET")
+
 # ── L10: nobody was set up yet ────────────────────────────────────────────────
 os.remove(auth.users_path())
 t.ok("L10 with no users at all nobody enters (the site is closed, not open)",

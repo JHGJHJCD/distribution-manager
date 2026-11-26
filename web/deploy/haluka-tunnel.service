@@ -1,0 +1,16 @@
+[Unit]
+Description=Haluka website: the tunnel to the internet, registered at the fixed front address
+After=network-online.target haluka-web.service
+Wants=network-online.target
+
+[Service]
+User=haluka
+Group=haluka
+EnvironmentFile=/etc/haluka/tunnel.env
+ExecStart=/opt/haluka/app/web/deploy/haluka-tunnel.sh
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

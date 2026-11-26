@@ -60,6 +60,9 @@ def checks() -> list:
         add(not mode & 0o077, "the users file is closed to other users of the server",
             "other users of the server can read the users file (chmod 600)")
 
+    add(bool(config.proxy_secret()) or not any("trycloudflare" in h for h in config.allowed_hosts()),
+        "only the fixed front address reaches the site",
+        "a changing tunnel address is used without HALUKA_PROXY_SECRET: the tunnel's own address is open to anyone")
     kind = offsite.target()[0]
     add(bool(kind), "a backup leaves the server (" + (kind or "") + ")",
         "no backup leaves the server yet (HALUKA_OFFSITE_DIR or HALUKA_OFFSITE_CMD)", "WARN")

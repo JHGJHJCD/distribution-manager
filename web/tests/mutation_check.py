@@ -1100,6 +1100,10 @@ mutate(AUTH, "the server keeps the session itself, not its hash", auth, "_token_
 mutate(AUTH, "a name is matched as typed (capital letters and extra spaces lock a user out)", auth, "_key",
        lambda name: str(name or ""))
 
+mutate(AUTH, "the tunnel's own address serves the site without going through the front", webapp, "_through_the_front",
+       lambda request: True)
+
+
 class _Everyone(dict):
     def get(self, key, default=None):
         return {"name": "anyone"}
