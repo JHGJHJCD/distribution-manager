@@ -4,11 +4,19 @@
 Breaks the site in one way at a time and runs the test file that should notice against
 the broken version; every break must make that file FAIL. Run by hand after touching the
 tests:
-    <python 3.12> web/tests/mutation_check.py
+    <python 3.12> web/tests/mutation_check.py [only]
+
+`only` (optional) = a regular expression: only the breaks whose test file or description
+match it are run, e.g.  mutation_check.py "test_backup|backs itself up".
+
+A break counts as caught when the test file FAILS. Read what noticed it: "the test stopped"
+with an error that has nothing to do with the break is a false catch (see the lesson in
+web/implementation-notes.md) — the break must be noticed for its own reason.
 """
 import contextlib
 import io
 import os
+import re
 import runpy
 import sys
 from datetime import date, timedelta
@@ -17,19 +25,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import _util  # noqa: E402,F401  (puts the repository root on sys.path)
 
-from web import (app as webapp, card_service, cards, config, event_service, history_service, planner,  # noqa: E402
-                 service, settings_service, store)
+from web import (app as webapp, backup_service, card_service, cards, config, event_service, history_service,  # noqa: E402
+                 planner, service, settings_service, store)
 from web.engine import selection  # noqa: E402
 
 PLANNER, STORE, API, CARDS = "test_planner.py", "test_store.py", "test_api.py", "test_cards.py"
-HISTORY, SETTINGS = "test_history.py", "test_settings.py"
+HISTORY, SETTINGS, BACKUP = "test_history.py", "test_settings.py", "test_backup.py"
 
 
 def run(target: str):
     """Run one test file inside this process (so it sees the broken module).
     Returns (exit code, what noticed: the first failing check, or the crash)."""
     buf = io.StringIO()
-    keep_now, keep_env = config.now, dict(os.environ)      # the test files set these for themselves
+    keep_env = dict(os.environ)                            # the test files set these for themselves
+    # ...and what a test file swaps inside the site for a few of its checks: when a broken
+    # site stops the file in the middle, the swap must not leak into the next break
+    keep = [(obj, attr, getattr(obj, attr)) for obj, attr in _SWAPPED_BY_TESTS]
     code, crash = 0, ""
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
@@ -39,18 +50,23 @@ def run(target: str):
     except Exception as e:            # a broken site may crash the test script: also a catch
         code, crash = 1, f"the test stopped: {type(e).__name__}: {e}"
     finally:
-        config.now = keep_now
+        for obj, attr, value in keep:
+            setattr(obj, attr, value)
         os.environ.clear()
         os.environ.update(keep_env)
     failed = [ln[4:].strip() for ln in buf.getvalue().splitlines() if ln.startswith("FAIL")]
     return code, (failed[0][:110] + (f"  (+{len(failed) - 1} more)" if len(failed) > 1 else "")) if failed else crash
 
 
+_SWAPPED_BY_TESTS = [(config, "now"), (config, "backup_dir"), (store, "backup"), (store, "COPY_SECONDS")]
+ONLY = re.compile(sys.argv[1]) if len(sys.argv) > 1 else None
 results = []
 
 
 def mutate(target, name, obj, attr, broken):
     """Replace obj.attr with `broken`, run `target`, put the original back."""
+    if ONLY and not ONLY.search(f"{target} {name}"):
+        return
     original = getattr(obj, attr)
     setattr(obj, attr, broken)
     try:
@@ -64,7 +80,9 @@ def mutate(target, name, obj, attr, broken):
     results.append(caught)
 
 
-for target in (PLANNER, STORE, API, CARDS, HISTORY, SETTINGS):
+for target in (PLANNER, STORE, API, CARDS, HISTORY, SETTINGS, BACKUP):
+    if ONLY and not ONLY.search(target) and target != API:
+        continue
     code, noticed = run(target)
     print(f"  {'OK' if code == 0 else 'FAIL'}  {target:<16} passes on the unbroken site (exit {code}) {noticed}")
     results.append(code == 0)
@@ -777,9 +795,185 @@ mutate(API, "the shares of the communities are not sent to the screen", event_se
 mutate(API, "who came in to fill a community's share is not marked for the screen", service, "_ENTRY_FIELDS",
        tuple(f for f in service._ENTRY_FIELDS if f != "fill"))
 
+# ── stage 5: backup and restore ───────────────────────────────────────────────
+import sqlite3  # noqa: E402
+
+_bk_check, _bk_path, _bk_restore, _bk_all = (backup_service.check, backup_service._path, backup_service.restore,
+                                             backup_service._all)
+
+
+def _restore_with_no_way_back(conn, now, name, db_path):
+    path = _bk_path(name)
+    inside = _bk_check(path)
+    src, dst = backup_service._open_read_only(path), sqlite3.connect(db_path, timeout=1)
+    try:
+        store.copy_database(src, dst)
+    finally:
+        dst.close()
+        src.close()
+    store._ensured.discard(db_path)
+    store.ensure_schema(db_path)
+    return {"ok": True, "restored": name, "safety": "", "backup": inside}
+
+
+mutate(BACKUP, "a restore does not back up the state it is about to replace", backup_service, "restore", _restore_with_no_way_back)
+
+
+def _damaged_is_fine(path):
+    try:
+        return _bk_check(path)
+    except service.Refused as e:
+        if "פגום" not in str(e):
+            raise
+        return {}
+
+
+mutate(BACKUP, "a damaged file is not refused before a restore", backup_service, "check", _damaged_is_fine)
+
+
+def _other_database_is_fine(path):
+    try:
+        return _bk_check(path)
+    except service.Refused as e:
+        if "אינו גיבוי" not in str(e) and "גרסה אחרת" not in str(e):
+            raise
+        return {"cards": 0, "active": 0, "history_rows": 0, "rounds": 0, "last_week": "", "events_ahead": 0}
+
+
+mutate(BACKUP, "a database that is not this site's (or of a newer version) can be restored", backup_service, "check",
+       _other_database_is_fine)
+
+mutate(BACKUP, "a restore takes any path of the computer, not only a backup of the site's own folder", backup_service, "_path",
+       lambda name: name if isinstance(name, str) and os.path.isfile(name) else _bk_path(name))
+
+mutate(BACKUP, "a backup inside a sub-folder of the backup folder can be named", backup_service, "_path",
+       lambda name: os.path.join(config.backup_dir(), name)
+       if isinstance(name, str) and os.path.isfile(os.path.join(config.backup_dir(), name)) else _bk_path(name))
+
+mutate(BACKUP, "the list of backups is oldest first", backup_service, "_all", lambda folder: _bk_all(folder)[::-1])
+
+
+def _daily_every_time(conn, now, db_path):
+    made = store.backup(db_path, config.backup_dir(), backup_service.DAILY, now)
+    with store.tx(conn):
+        store.set_meta(conn, backup_service.DAY_KEY, now.date().isoformat())
+    return os.path.basename(made)
+
+
+mutate(BACKUP, "the site backs itself up on every request, not once a day", backup_service, "daily", _daily_every_time)
+mutate(API, "the site backs itself up on every request, not once a day (through the routes)", backup_service, "daily",
+       _daily_every_time)
+mutate(API, "the site never backs itself up", backup_service, "daily", lambda conn, now, db_path: "")
+
+
+def _daily_that_can_fail(conn, now, db_path):
+    today = now.date().isoformat()
+    if store.get_meta(conn, backup_service.DAY_KEY) == today:
+        return ""
+    with store.tx(conn):
+        made = store.backup(db_path, config.backup_dir(), backup_service.DAILY, now)
+        store.set_meta(conn, backup_service.DAY_KEY, today)
+    return os.path.basename(made)
+
+
+mutate(BACKUP, "a daily backup that cannot be written stops the site", backup_service, "daily", _daily_that_can_fail)
+
+
+def _daily_marked_first(conn, now, db_path):
+    today = now.date().isoformat()
+    if store.get_meta(conn, backup_service.DAY_KEY) == today:
+        return ""
+    with store.tx(conn):
+        store.set_meta(conn, backup_service.DAY_KEY, today)
+    try:
+        return os.path.basename(store.backup(db_path, config.backup_dir(), backup_service.DAILY, now))
+    except OSError:
+        return ""
+
+
+mutate(BACKUP, "a day whose backup failed is marked as backed up (and is never tried again)", backup_service, "daily",
+       _daily_marked_first)
+
+mutate(BACKUP, "a restored database is not brought up to the tables and columns the site needs", store, "ensure_schema",
+       lambda path: None)
+
+mutate(BACKUP, "'back up now' says it did and writes nothing", backup_service, "make",
+       lambda conn, now, db_path: {"ok": True, "name": f"haluka-{now.strftime('%Y%m%d-%H%M%S')}-manual.db"})
+
+_bk_inspect = backup_service.inspect
+
+
+def _sides_swapped(conn, now, name, db_path=None):
+    d = _bk_inspect(conn, now, name, db_path)
+    return dict(d, backup=d["now"], now=d["backup"])
+
+
+mutate(BACKUP, "the look at a backup shows the site's numbers as the backup's (and the other way)", backup_service, "inspect",
+       _sides_swapped)
+
+mutate(BACKUP, "the weeks that became history since a backup are never counted", backup_service, "_weeks_between",
+       lambda earlier, later: 0)
+
+_store_backup = store.backup
+
+
+def _keep_only_the_latest(path, backup_dir, reason, now=None):
+    made = _store_backup(path, backup_dir, reason, now)
+    olds = sorted(f for f in os.listdir(backup_dir) if backup_service.NAME.match(f) and os.path.isfile(os.path.join(backup_dir, f)))
+    for f in olds[:-6]:
+        os.remove(os.path.join(backup_dir, f))
+    return made
+
+
+mutate(BACKUP, "old backups are thrown out when a new one is taken", store, "backup", _keep_only_the_latest)
+
+
+def _restore_forgets_the_day(conn, now, name, db_path):
+    done = _bk_restore(conn, now, name, db_path)
+    with store.tx(conn):
+        store.set_meta(conn, backup_service.DAY_KEY, "")
+    return done
+
+
+mutate(BACKUP, "after a restore the restored state is backed up again as if it were this morning's", backup_service, "restore",
+       _restore_forgets_the_day)
+
+mutate(BACKUP, "a reason for a backup has no words on the screen", backup_service, "REASONS",
+       {k: v for k, v in backup_service.REASONS.items() if k != "before-merge-cards"})
+
+
+def _look_with_a_person(conn, now, name, db_path=None):
+    d = _bk_inspect(conn, now, name, db_path)
+    row = conn.execute("SELECT full_name, phone1 FROM recipients LIMIT 1").fetchone()
+    return dict(d, sample={"name": row[0], "phone": row[1]})
+
+
+mutate(API, "the look at a backup answers with a person out of it", backup_service, "inspect", _look_with_a_person)
+
+mutate(API, "a restore through the site restores nothing and says it did", backup_service, "restore",
+       lambda conn, now, name, db_path: {"ok": True, "restored": name, "safety": os.path.basename(
+           store.backup(db_path, config.backup_dir(), backup_service.BEFORE_RESTORE, now)), "backup": {}})
+
+_copy_database = store.copy_database
+mutate(BACKUP, "a copy waits much longer than it says for a database that is busy", store, "copy_database",
+       lambda src, dst, seconds=None: _copy_database(src, dst, 12))
+
+
+def _backup_leaves_a_stub(path, backup_dir, reason, now=None):
+    try:
+        return _store_backup(path, backup_dir, reason, now)
+    except sqlite3.OperationalError:
+        open(os.path.join(backup_dir, f"haluka-{now.strftime('%Y%m%d-%H%M%S')}-{reason}.db"), "wb").close()
+        raise
+
+
+mutate(BACKUP, "a backup that could not be finished leaves an empty file with a backup's name", store, "backup",
+       _backup_leaves_a_stub)
+
 breaks = len(results) - BASELINES
 if all(results):
-    print(f"\nRESULT: ALL {breaks} BREAKS WERE CAUGHT — the website's tests bite ✓")
+    print(f"\nRESULT: ALL {breaks} BREAKS WERE CAUGHT — the website's tests bite ✓"
+          + (f"   (only the ones that match {ONLY.pattern!r})" if ONLY else ""))
     sys.exit(0)
 print(f"\nRESULT: {results.count(False)} of {breaks} breaks were NOT caught — strengthen the tests")
 sys.exit(1)

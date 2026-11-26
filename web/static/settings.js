@@ -1,4 +1,4 @@
-/* מנהל חלוקה — מסך ההגדרות (שלב 4): המספרים הרגילים של שבוע ומשקלי הניקוד.
+/* מנהל חלוקה — מסך ההגדרות: המספרים הרגילים של שבוע, משקלי הניקוד, הקהילות, וגיבוי ושחזור (שלב 5).
    לפני שמירה הדף שואל את השרת "מה ישתנה?" ומציג את התשובה; שום דבר לא נשמר עד שלוחצים "שמור".
    הדף לא מחשב שום כלל בעצמו. כל טקסט שמגיע מהנתונים נכנס עם textContent בלבד. */
 (function () {
@@ -280,5 +280,136 @@
     weightsTyped();
   });
 
-  load();
+  // ── backup and restore (stage 5) ───────────────────────────────────────────
+  // The page shows the list of backups (when, why, how big). Before a restore it asks the
+  // server how much the backup holds beside how much the site holds now, shows the two side
+  // by side, and restores only after "yes". A backup's content never reaches the page.
+  var BK_SHOWN = 8;                     // how many backups the list shows before "show all"
+  var bk = { list: [], all: false, asked: null, fresh: "" };
+  var BK_ROWS = [["cards", "כרטיסים"], ["active", "מהם פעילים"], ["history_rows", "רישומים בהיסטוריה"],
+                 ["rounds", "חלוקות בהיסטוריה"], ["last_week", "ההיסטוריה מגיעה עד"], ["events_ahead", "חלוקות חג שלפנינו"]];
+
+  function when(text) {                 // "2026-11-26 08:12" -> "26/11/2026 בשעה 08:12"
+    var p = String(text || "").split(" ");
+    return /^\d{4}-\d{2}-\d{2}$/.test(p[0]) ? H.longDate(p[0]) + (p[1] ? " בשעה " + p[1] : "") : String(text || "");
+  }
+  function bkSay(text, isError) {
+    var n = $("bkSay");
+    n.textContent = text || "";
+    n.className = "notice" + (isError ? " error" : "");
+    n.hidden = !text;
+  }
+  function closeAsk() {
+    bk.asked = null;
+    $("bkAsk").hidden = true;
+  }
+
+  function showBackups(v) {
+    bk.list = v.backups;
+    var last = v.backups[0];
+    $("bkLast").textContent = last ? H.dm(last.taken_at.split(" ")[0]) + " · " + last.taken_at.split(" ")[1] : "אין";
+    $("bkLastWhy").textContent = last ? "הגיבוי האחרון · " + last.reason_text : "הגיבוי האחרון";
+    $("bkCount").textContent = String(v.total);
+    var mb = v.total_kb >= 1024;
+    $("bkSize").textContent = mb ? tidy(v.total_kb / 1024) : String(v.total_kb);
+    $("bkSizeUnit").textContent = mb ? "מ\"ב יחד" : "ק\"ב יחד";
+    $("bkMissing").hidden = v.auto_today;
+    $("bkFolder").textContent = v.folder;
+    $("bkWhere").hidden = !v.folder;
+    var rows = $("bkRows");
+    clear(rows);
+    var shown = bk.all ? v.backups : v.backups.slice(0, BK_SHOWN);
+    shown.forEach(function (b) {
+      var row = el("div", "bkrow" + (b.name === bk.fresh ? " fresh" : ""));
+      row.appendChild(el("span", "d", H.longDate(b.taken_at.split(" ")[0])));
+      row.appendChild(el("span", "t", b.taken_at.split(" ")[1]));
+      row.appendChild(el("span", "why-taken", b.reason_text));
+      row.appendChild(el("span", "size", b.size_kb >= 1024 ? tidy(b.size_kb / 1024) + " מ\"ב" : b.size_kb + " ק\"ב"));
+      var go = el("button", "btn small quiet go", "שחזר למצב הזה");
+      go.type = "button";
+      go.addEventListener("click", function () { askRestore(b); });
+      row.appendChild(go);
+      rows.appendChild(row);
+    });
+    $("bkNone").hidden = v.backups.length > 0;
+    var more = v.backups.length - BK_SHOWN;
+    $("bkMore").hidden = bk.all || more <= 0;
+    $("bkMore").textContent = "הצג את כל " + v.backups.length + " הגיבויים";
+  }
+  function loadBackups() {
+    return getJSON("/api/backups").then(showBackups).catch(function (e) {
+      if (e.status !== 503) { bkSay("לא הצלחתי לקבל את רשימת הגיבויים. " + (e.message || ""), true); }
+    });
+  }
+
+  // The backup beside the site as it is now, and what a restore would do — then "yes" or "cancel".
+  function askRestore(b) {
+    if (state.busy) { return; }
+    setBusy(true);
+    bkSay("");
+    getJSON("/api/backup?name=" + encodeURIComponent(b.name)).then(function (v) {
+      bk.asked = v;
+      $("bkAskTitle").textContent = "לשחזר את האתר למצב של " + when(v.taken_at) + "? (" + v.reason_text + ")";
+      var cmp = $("bkCmp");
+      clear(cmp);
+      cmp.appendChild(el("div", "cmp-head", ""));
+      cmp.appendChild(el("div", "cmp-head", "בגיבוי"));
+      cmp.appendChild(el("div", "cmp-head", "עכשיו"));
+      var same = true;
+      BK_ROWS.forEach(function (r) {
+        var a = v.backup[r[0]], n = v.now[r[0]];
+        var differs = a !== n;
+        if (differs) { same = false; }
+        var text = function (x) { return r[0] === "last_week" ? (x ? H.longDate(x) : "אין") : String(x); };
+        cmp.appendChild(el("div", "cmp-label", r[1]));
+        cmp.appendChild(el("div", "num" + (differs ? " cmp-diff" : ""), text(a)));
+        cmp.appendChild(el("div", "num" + (differs ? " cmp-diff" : ""), text(n)));
+      });
+      var notes = $("bkAskNotes");
+      clear(notes);
+      if (same) { notes.appendChild(el("p", null, "לפי המספרים האלה הגיבוי זהה למה שיש באתר עכשיו. ייתכן שיש הבדל בפרטים של כרטיסים, בהגדרות או במה שנקבע ביד.")); }
+      notes.appendChild(el("p", null, "כל מה שנעשה באתר אחרי הגיבוי הזה (כרטיסים, שינויים ביד, הגדרות) יחזור למצב שבגיבוי."));
+      if (v.weeks_to_redo > 0) {
+        notes.appendChild(el("p", null, (v.weeks_to_redo === 1 ? "מאז הגיבוי נכנס להיסטוריה שבוע אחד. אחרי השחזור האתר יכתוב אותו שוב"
+          : "מאז הגיבוי נכנסו להיסטוריה " + v.weeks_to_redo + " שבועות. אחרי השחזור האתר יכתוב אותם שוב") +
+          ", כפי שהוא מחשב ממה שיש בגיבוי."));
+      }
+      notes.appendChild(el("p", null, "לפני השחזור נשמר גיבוי של המצב של עכשיו, כך שאפשר להתחרט ולחזור אליו."));
+      $("bkAsk").hidden = false;
+      $("bkAsk").focus();
+      $("bkAsk").scrollIntoView({ block: "nearest" });
+    }).catch(function (e) { closeAsk(); bkSay("אי אפשר לשחזר מהגיבוי הזה. " + (e.message || ""), true); })
+      .then(function () { setBusy(false); });
+  }
+
+  $("bkNo").addEventListener("click", closeAsk);
+  $("bkYes").addEventListener("click", function () {
+    var v = bk.asked;
+    if (!v || state.busy) { return; }
+    setBusy(true);
+    postJSON("/api/backup/restore", { name: v.name }).then(function (done) {
+      closeAsk();
+      bk.fresh = done.safety;
+      bkSay("האתר חזר למצב של " + when(v.taken_at) + ". המצב שהיה לפני השחזור שמור בגיבוי \"לפני שחזור\" (מסומן ברשימה), ואפשר לחזור אליו.");
+      return load().then(loadBackups);
+    }).catch(function (e) { bkSay("לא שוחזר. " + (e.message || ""), true); return loadBackups(); })
+      .then(function () { setBusy(false); });
+  });
+  $("bkMake").addEventListener("click", function () {
+    if (state.busy) { return; }
+    setBusy(true);
+    closeAsk();
+    postJSON("/api/backup/make", {}).then(function (done) {
+      bk.fresh = done.name;
+      bkSay("נשמר גיבוי של המצב של עכשיו.");
+      return loadBackups();
+    }).catch(function (e) { bkSay("הגיבוי לא נשמר. " + (e.message || ""), true); })
+      .then(function () { setBusy(false); });
+  });
+  $("bkMore").addEventListener("click", function () {
+    bk.all = true;
+    loadBackups();
+  });
+
+  load().then(loadBackups);
 }());

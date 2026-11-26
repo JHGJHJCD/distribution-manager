@@ -79,6 +79,36 @@
     </div>
   </section>
 
+  <section class="panel" id="bkPanel">
+    <div class="head">
+      <h2>גיבוי ושחזור</h2>
+      <button type="button" class="btn main" id="bkMake">גבה עכשיו</button>
+    </div>
+    <p class="sub">גיבוי הוא עותק מלא של כל מה שיש באתר: הכרטיסים, ההיסטוריה, ההגדרות ומה שנקבע ביד. האתר שומר גיבוי לבד בכל יום שעובדים בו, ולפני כל פעולה גדולה. גיבויים לא נמחקים אף פעם.</p>
+    <div class="warn" id="bkMissing" hidden>הגיבוי האוטומטי של היום לא נשמר. כדאי ללחוץ "גבה עכשיו". אם גם זה לא מצליח, צריך לבדוק שיש מקום פנוי במחשב.</div>
+    <div class="stats three" aria-label="הגיבויים במספרים">
+      <div class="stat"><b class="when" id="bkLast">אין</b><span id="bkLastWhy">הגיבוי האחרון</span></div>
+      <div class="stat"><b id="bkCount">0</b><span>גיבויים שמורים</span></div>
+      <div class="stat"><b id="bkSize">0</b><span id="bkSizeUnit">ק"ב יחד</span></div>
+    </div>
+    <div class="notice" id="bkSay" role="status" hidden></div>
+
+    <div class="ask" id="bkAsk" tabindex="-1" hidden>
+      <h3 id="bkAskTitle"></h3>
+      <div class="cmp nums" id="bkCmp"></div>
+      <div class="notice lines" id="bkAskNotes"></div>
+      <div class="actions bar">
+        <button type="button" class="btn danger" id="bkYes">כן, שחזר למצב הזה</button>
+        <button type="button" class="btn quiet" id="bkNo">ביטול</button>
+      </div>
+    </div>
+
+    <div class="rows" id="bkRows"></div>
+    <p class="empty" id="bkNone" hidden>עוד אין גיבויים.</p>
+    <div class="actions bar"><button type="button" class="btn quiet small" id="bkMore" hidden></button></div>
+    <p class="sub" id="bkWhere" hidden>הקבצים נשמרים במחשב הזה, בתיקייה: <bdi class="path" dir="ltr" id="bkFolder"></bdi></p>
+  </section>
+
 </div>
 <script src="/static/common.js"></script>
 <script src="/static/settings.js"></script>

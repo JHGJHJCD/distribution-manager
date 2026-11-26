@@ -10,6 +10,7 @@ exist here at all: nothing can drift from the history because nothing is copied 
 """
 import os
 import sqlite3
+import time
 import uuid
 from contextlib import contextmanager
 from datetime import date, datetime
@@ -753,23 +754,54 @@ def close_week(conn, week: dict, now: datetime, source: str = "auto") -> bool:
 
 
 # ── backup ────────────────────────────────────────────────────────────────────
+COPY_SECONDS = 20                 # how long a copy waits for a database that is busy
+
+
+def copy_database(src: sqlite3.Connection, dst: sqlite3.Connection, seconds: float = None) -> None:
+    """Copy the whole of `src` into `dst` with SQLite's own backup: all of it or none of it.
+    When one of the two is busy the copy waits, but not for ever (Python's own loop would):
+    after `seconds` it gives up with sqlite3.OperationalError and `dst` is left as it was."""
+    deadline = time.monotonic() + (COPY_SECONDS if seconds is None else seconds)
+
+    def watch(status, remaining, total):
+        if status in (_SQLITE_BUSY, _SQLITE_LOCKED) and time.monotonic() > deadline:
+            raise sqlite3.OperationalError("the database is busy")
+    src.backup(dst, progress=watch)
+
+
+_SQLITE_BUSY, _SQLITE_LOCKED = 5, 6
+
+
 def backup(path: str, backup_dir: str, reason: str, now: datetime = None) -> str:
     """A full copy of the database (SQLite's own backup, safe while the site is running).
-    Returns the new file's path, or '' when there is no database yet. Never deletes."""
+    Returns the new file's path, or '' when there is no database yet. Never deletes a backup.
+    When the copy cannot be made it raises, and leaves no half-written file behind."""
     if not os.path.exists(path):
         return ""
     os.makedirs(backup_dir, exist_ok=True)
     stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
     safe = "".join(ch for ch in reason if ch.isalnum() or ch in "-_") or "backup"
-    dest = os.path.join(backup_dir, f"haluka-{stamp}-{safe}.db")
     n = 1
-    while os.path.exists(dest):
-        n += 1
-        dest = os.path.join(backup_dir, f"haluka-{stamp}-{safe}-{n}.db")
-    src = sqlite3.connect(path)
-    dst = sqlite3.connect(dest)
+    while True:
+        dest = os.path.join(backup_dir, f"haluka-{stamp}-{safe}{'' if n == 1 else f'-{n}'}.db")
+        try:
+            with open(dest, "xb"):
+                pass              # the name is taken for this copy alone: no other backup can write this file
+            break
+        except FileExistsError:
+            n += 1
+    src = sqlite3.connect(path, timeout=1)
+    dst = sqlite3.connect(dest, timeout=1)
     try:
-        src.backup(dst)
+        copy_database(src, dst)
+    except BaseException:
+        dst.close()
+        for leftover in (dest, dest + "-journal"):           # not a backup: the copy never finished
+            try:
+                os.remove(leftover)
+            except OSError:
+                pass
+        raise
     finally:
         dst.close()
         src.close()
