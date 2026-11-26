@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import config, service, store
+from . import cards, config, service, store
 
 STATIC_DIR = os.path.join(config.WEB_DIR, "static")
 _NO_DATA = {"error": "no_data",
@@ -79,6 +79,9 @@ def _run(fn):
         return fn(conn, path)
     except service.Refused as e:
         return JSONResponse({"message": str(e)}, status_code=409)
+    except cards.Refused as e:
+        return JSONResponse({"message": str(e), "code": e.code, "fields": e.fields, "duplicates": e.duplicates},
+                            status_code=404 if e.code == "missing" else 409)
     except ValueError:
         raise HTTPException(400, "התאריך אינו יום רביעי")
     except LookupError:
@@ -170,10 +173,54 @@ def api_printed(body: PrintedBody):
     return _run(do)
 
 
+# ── cards (stage 3) ───────────────────────────────────────────────────────────
+_GUID = r"^[0-9A-Za-z_-]{1,64}$"
+
+
+class CardBody(BaseModel):
+    guid: Optional[str] = Field(default=None, pattern=_GUID)      # None = a new card
+    updated_at: Optional[str] = Field(default=None, max_length=40)
+    confirmed: bool = False                                        # "these are two different people"
+    card: dict
+
+
+@app.get("/api/cards")
+def api_cards():
+    return _run(lambda conn, path: cards.card_list(conn))
+
+
+@app.get("/api/card")
+def api_card(guid: str = Query(..., pattern=_GUID)):
+    return _run(lambda conn, path: cards.get_card(conn, guid))
+
+
+@app.get("/api/duplicates")
+def api_duplicates():
+    return _run(lambda conn, path: {"groups": cards.duplicate_groups(conn)})
+
+
+@app.post("/api/card")
+def api_card_save(body: CardBody):
+    if len(body.card) > 60:
+        raise HTTPException(422, "יותר מדי שדות")
+
+    def do(conn, path):
+        service.roll_forward(conn, config.now(), path)             # weeks that passed close on the cards as they were
+        if body.guid is None:
+            return cards.add_card(conn, config.now(), body.card, body.confirmed)
+        return cards.save_card(conn, config.now(), body.guid, body.card, body.updated_at)
+    return _run(do)
+
+
 # ── pages ─────────────────────────────────────────────────────────────────────
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+@app.get("/cards")
+def cards_page():
+    return FileResponse(os.path.join(STATIC_DIR, "cards.html"))
 
 
 @app.get("/print")
