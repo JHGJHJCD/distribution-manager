@@ -119,3 +119,63 @@ button:focus-visible, input:focus-visible { outline: 3px solid var(--fg); outlin
 @media (max-width: 800px) {
   .search { flex-basis: 100%; }
 }
+
+/* ── the screens of the site ── */
+.nav { display: flex; gap: 6px; border-bottom: 2px solid var(--line); }
+.nav a { padding: 7px 18px; border-radius: 9px 9px 0 0; color: var(--muted); text-decoration: none; font-weight: 600; margin-bottom: -2px; border-bottom: 2px solid transparent; }
+.nav a[aria-current="page"] { color: var(--fg); border-bottom-color: var(--accent); background: var(--surface); }
+.nav a:focus-visible, .link:focus-visible, summary:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--fg); outline-offset: 1px; }
+
+/* ── stage 3: the recipients ── */
+.tool-group.grow { flex: 1 1 260px; }
+.tool-group input.wide { width: 100%; }
+select, textarea { font: inherit; color: var(--fg); background: var(--surface); border: 1.5px solid var(--line); border-radius: 8px; padding: 5px 8px; }
+.strip { display: block; width: 100%; text-align: start; border: 0; font-weight: 600; margin: 0; }
+.rows { display: flex; flex-direction: column; gap: 4px; }
+.row { display: grid; grid-template-columns: minmax(140px, 1.4fr) minmax(150px, 1.2fr) 80px minmax(130px, 1fr) 70px; gap: 6px 12px; align-items: center;
+  width: 100%; text-align: start; background: var(--surface); border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px; }
+button.row:hover { background: var(--soft); }
+.row.static { display: flex; flex-wrap: wrap; }
+.row.static .row-name { flex: 1 1 160px; }
+.row.paused .row-name { color: var(--muted); }
+.row-name { font-weight: 600; overflow-wrap: anywhere; }
+.row-num, .row-last { color: var(--muted); font-size: .88rem; font-variant-numeric: tabular-nums; }
+.row-status { font-size: .84rem; font-weight: 600; color: var(--w1); }
+.row-status.off { color: var(--warn-fg); background: var(--warn-bg); border-radius: 999px; padding: 1px 9px; justify-self: start; }
+.tag { justify-self: start; font-size: .82rem; color: #fff; border-radius: 7px; padding: 2px 9px; line-height: 1.4; }
+.tag.t-off { background: none; color: var(--muted); border: 1px dashed var(--line); }
+.fold { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; }
+.fold summary { cursor: pointer; font-weight: 600; }
+.fold[open] summary { margin-bottom: 10px; }
+
+.card-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(220px, 1fr); gap: 16px; align-items: start; }
+.form { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 14px; }
+.field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.field label { font-size: .88rem; color: var(--muted); }
+.field input, .field select, .field textarea { width: 100%; font: inherit; padding: 7px 10px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); }
+.field input.ltr { direction: ltr; text-align: right; }
+.field textarea { resize: vertical; }
+.side { display: flex; flex-direction: column; gap: 10px; }
+.why span { display: block; }
+.why.plain { border-inline-start-color: var(--line); }
+.link { color: var(--accent); font-weight: 600; }
+.btn.danger { border-color: var(--one); color: var(--one); }
+.btn.danger:disabled { border-color: var(--line); color: var(--muted); }
+.ask { border: 2px solid var(--accent); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--bg); }
+.bk.dup + .bk.dup { margin-top: 12px; }
+#groups { display: flex; flex-direction: column; }
+.cmp { display: grid; grid-template-columns: minmax(90px, auto) 1fr 1fr; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.cmp > div { padding: 6px 10px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; background: var(--surface); }
+.cmp .cmp-head { font-weight: 600; background: var(--soft); }
+.cmp .cmp-label { color: var(--muted); }
+.cmp .cmp-diff { background: var(--warn-bg); color: var(--warn-fg); }
+#undo { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+#undo[hidden] { display: none; }
+
+@media (max-width: 800px) {
+  .card-grid { grid-template-columns: 1fr; }
+  .row { grid-template-columns: 1fr auto; }
+  .row .row-num, .row .row-last { grid-column: 1 / -1; }
+}
+[hidden] { display: none !important; }
