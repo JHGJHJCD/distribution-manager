@@ -4,7 +4,8 @@
     <python 3.12> web/tests/run_all.py
 
 (The two "does the test bite" checks — mutation_check.py, mutation_vs_old.py — and the
-check on real data — local_check_real.py — are run by hand; see web/README.md.)
+comparison on real data — local_check_real.py, which test_compare.py tests on invented
+people — are run by hand; see web/README.md.)
 """
 import os
 import subprocess
@@ -12,7 +13,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TESTS = ["test_planner.py", "test_store.py", "test_api.py", "test_cards.py", "test_history.py", "test_settings.py",
-         "test_backup.py",
+         "test_backup.py", "test_compare.py",
          "test_vs_old.py"]
 
 failed = []

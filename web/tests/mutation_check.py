@@ -31,6 +31,7 @@ from web.engine import selection  # noqa: E402
 
 PLANNER, STORE, API, CARDS = "test_planner.py", "test_store.py", "test_api.py", "test_cards.py"
 HISTORY, SETTINGS, BACKUP = "test_history.py", "test_settings.py", "test_backup.py"
+COMPARE = "test_compare.py"       # the test of the comparison tool (web/tests/local_check_real.py)
 
 
 def run(target: str):
@@ -80,7 +81,7 @@ def mutate(target, name, obj, attr, broken):
     results.append(caught)
 
 
-for target in (PLANNER, STORE, API, CARDS, HISTORY, SETTINGS, BACKUP):
+for target in (PLANNER, STORE, API, CARDS, HISTORY, SETTINGS, BACKUP, COMPARE):
     if ONLY and not ONLY.search(target) and target != API:
         continue
     code, noticed = run(target)
@@ -969,6 +970,86 @@ def _backup_leaves_a_stub(path, backup_dir, reason, now=None):
 
 mutate(BACKUP, "a backup that could not be finished leaves an empty file with a backup's name", store, "backup",
        _backup_leaves_a_stub)
+
+# ── stage 5: the comparison tool (it is run by hand on real data, so its own test must bite) ──
+import local_check_real as compare_tool  # noqa: E402
+
+_render, _run_compare, _kind_of, _differences = (compare_tool.render, compare_tool.run, compare_tool.kind_of,
+                                                 compare_tool.differences)
+mutate(COMPARE, "the report says 'the same lists' whatever was found", compare_tool, "render",
+       lambda result: _render(dict(result, identical=True, differ=0)))
+
+mutate(COMPARE, "a difference names the person", compare_tool, "kind_of",
+       lambda entry, card: (card or {}).get("full_name") or _kind_of(entry, card))
+
+
+def _free_text_reasons(a, old_main, old_reserve, cards):
+    rows = _differences(a, old_main, old_reserve, cards)
+    why = {e["guid"]: e.get("why") or "" for key in ("main", "reserve_list", "out") for e in a[key]}
+    for row, g in zip(rows, [g for g in why]):
+        row["why"] = why[g]
+    return rows
+
+
+mutate(COMPARE, "a difference quotes the site's free-text reason (it can name a community)", compare_tool, "differences",
+       _free_text_reasons)
+
+
+def _expected_is_a_fault(*a, **k):
+    r = _run_compare(*a, **k)
+    r["differ"] += r["expected_differences"]
+    r["identical"] = r["differ"] == 0
+    return r
+
+
+mutate(COMPARE, "the difference the decision 'חג לא נספר' makes is counted as a fault", compare_tool, "run", _expected_is_a_fault)
+
+_compare_week = compare_tool.compare_week
+
+
+def _reserve_not_looked_at(a, b, reserve, cards):
+    row = _compare_week(a, b, reserve, cards)
+    row["same_reserve"] = True
+    row["same"] = row["same_order"] and row["same_in_turn"]
+    return row
+
+
+mutate(COMPARE, "the reserve is not compared", compare_tool, "compare_week", _reserve_not_looked_at)
+
+
+def _order_not_looked_at(a, b, reserve, cards):
+    row = _compare_week(a, b, reserve, cards)
+    row["same_order"] = row["same_people"]
+    row["same"] = row["same_people"] and row["same_reserve"] and row["same_in_turn"]
+    return row
+
+
+mutate(COMPARE, "the order of a list is not compared (only who is on it)", compare_tool, "compare_week", _order_not_looked_at)
+
+_snapshot = compare_tool.snapshot
+
+
+def _snapshot_through_sqlite(src, dest):
+    import pathlib
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    a = sqlite3.connect(pathlib.Path(src).resolve().as_uri() + "?mode=ro", uri=True)
+    b = sqlite3.connect(dest)
+    try:
+        a.backup(b)
+    finally:
+        b.close()
+        a.close()
+
+
+mutate(COMPARE, "the data file is opened with SQLite (which leaves working files beside it)", compare_tool, "snapshot",
+       _snapshot_through_sqlite)
+
+_read_pair = compare_tool._read_pair
+mutate(COMPARE, "what the desktop program wrote last (its -wal file) is left out of the copy", compare_tool, "_read_pair",
+       lambda src: (_read_pair(src)[0], b""))
+
+mutate(COMPARE, "nobody checks that the sharing between computers is off for the copy", compare_tool, "assert_no_sync",
+       lambda: None)
 
 breaks = len(results) - BASELINES
 if all(results):
