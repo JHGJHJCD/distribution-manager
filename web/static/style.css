@@ -332,3 +332,4 @@ table.split tbody tr:last-child th, table.split tbody tr:last-child td { border-
 .login-form input { font: inherit; padding: 8px 10px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg); }
 .login-form .btn { margin-top: 12px; padding: 9px 14px; }
 .nav .who { margin-inline-start: auto; display: inline-flex; align-items: center; gap: 10px; color: var(--muted, inherit); }
+.login-google { display: block; text-align: center; text-decoration: none; padding: 10px 14px; }

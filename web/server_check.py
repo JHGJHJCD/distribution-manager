@@ -49,9 +49,13 @@ def checks() -> list:
     add(config.login_required(), "the login is on", "the login is OFF: set HALUKA_WEB_HOSTS to the site's name")
     add(any(h not in config.LOCAL_HOSTS for h in config.allowed_hosts()), "the site's own name is set",
         "the site answers only to this computer's name (HALUKA_WEB_HOSTS)", "WARN")
-    count = len(auth.users())
-    add(count >= 1, f"{count} user(s) can enter", "nobody can enter yet (python -m web.auth set <name>)")
-    if count and os.name == "posix":
+    from . import google_login
+    by_google = len(auth.google_allowed()) if google_login.enabled() else 0
+    count = len(auth.users()) + by_google
+    add(count >= 1, f"{count} user(s) can enter", "nobody can enter yet (python -m web.auth allow <email> <name>)")
+    if auth.google_allowed() and not google_login.enabled():
+        add(False, "", "Google accounts were allowed, but the Google settings are missing or the address is not https")
+    if os.path.exists(auth.users_path()) and os.name == "posix":
         mode = stat.S_IMODE(os.stat(auth.users_path()).st_mode)
         add(not mode & 0o077, "the users file is closed to other users of the server",
             "other users of the server can read the users file (chmod 600)")

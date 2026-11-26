@@ -88,6 +88,19 @@
     <div class="warn" id="bkMissing" hidden>הגיבוי האוטומטי של היום לא נשמר. כדאי ללחוץ "גבה עכשיו". אם גם זה לא מצליח, צריך לבדוק שיש מקום פנוי במחשב.</div>
     <div class="warn" id="osLate" hidden></div>
     <p class="sub" id="osLine" hidden></p>
+    <div class="bk" id="drBox" hidden>
+      <h3>גיבוי ל-Google Drive</h3>
+      <p class="sub" id="drLine"></p>
+      <div class="warn" id="drKeyBox" hidden>
+        <p><b>מפתח השחזור.</b> להעתיק ולשמור במקום בטוח, מחוץ למחשב הזה. בלי המפתח אי אפשר לפתוח אף גיבוי, גם לא אנחנו וגם לא Google. הוא מוצג רק עכשיו.</p>
+        <p><bdi class="path" dir="ltr" id="drKey"></bdi></p>
+        <div class="actions bar"><button type="button" class="btn" id="drKept">שמרתי את המפתח</button></div>
+      </div>
+      <div class="actions bar">
+        <a class="btn main" id="drConnect" href="/auth/drive" hidden>חבר ל-Google Drive</a>
+        <button type="button" class="btn quiet small" id="drOff" hidden>נתק</button>
+      </div>
+    </div>
     <div class="stats three" aria-label="הגיבויים במספרים">
       <div class="stat"><b class="when" id="bkLast">אין</b><span id="bkLastWhy">הגיבוי האחרון</span></div>
       <div class="stat"><b id="bkCount">0</b><span>גיבויים שמורים</span></div>

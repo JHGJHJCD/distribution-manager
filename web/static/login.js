@@ -8,6 +8,18 @@
 
   function say(text) { note.textContent = text || ""; note.hidden = !text; }
 
+  // which ways in this server offers, and what the way back from Google said
+  var ways = (document.body.getAttribute("data-ways") || "").split(" ");
+  var google = ways.indexOf("google") >= 0, password = ways.indexOf("password") >= 0;
+  document.getElementById("loginGoogle").hidden = !google;
+  document.getElementById("loginHelp").hidden = !google;
+  form.hidden = !password;
+  document.getElementById("loginNone").hidden = google || password;
+  var WHY = { "not_allowed": "החשבון הזה לא מורשה להיכנס לאתר. אפשר לנסות עם חשבון Google אחר.",
+              "again": "הכניסה לא הושלמה. אפשר לנסות שוב.", "off": "כניסה עם Google לא מוגדרת באתר." };
+  var why = WHY[location.hash.slice(1)];
+  if (why) { say(why); history.replaceState(null, "", "/login"); }
+
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
     say("");

@@ -343,7 +343,7 @@
     line.hidden = true;
     if (!v.show) { return; }                              // on this computer: nothing to say
     if (!v.on) {
-      late.textContent = "עוד לא נקבע לאן יוצא גיבוי מחוץ לשרת. עד אז הגיבויים נמצאים רק בשרת עצמו.";
+      late.textContent = "עוד לא יוצא גיבוי מחוץ לשרת. עד שמחברים, הגיבויים נמצאים רק בשרת עצמו.";
       late.hidden = false;
     } else if (v.late) {
       late.textContent = (v.last_ok ? "הגיבוי האחרון שיצא מהשרת הוא מ־" + H.stamp(v.last_ok) + "." : "עוד לא יצא אף גיבוי מהשרת.") +
@@ -354,7 +354,40 @@
       line.hidden = false;
     }
   }
+  // Google Drive: connect, the recovery key (shown once), disconnect.
+  var DRIVE_SAID = { "drive-ok": "Google Drive חובר. מעכשיו יוצא אליו עותק מוצפן פעם ביום.",
+                     "drive-again": "החיבור ל-Google Drive לא הושלם. אפשר לנסות שוב.",
+                     "drive-no_permission": "החיבור לא הושלם: צריך לסמן אצל Google את האישור לשמור קבצים ב-Drive.",
+                     "drive-off": "חיבור ל-Google Drive לא מוגדר בשרת." };
+  function showDrive(v) {
+    $("drBox").hidden = !v.available;
+    if (!v.available) { return; }
+    $("drLine").textContent = v.connected
+      ? "מחובר מאז " + H.stamp(v.since) + ". כל עותק מוצפן לפני שהוא יוצא, והאתר רואה ב-Drive רק את הקבצים שהוא עצמו שם שם."
+      : "לא מחובר. אחרי החיבור יוצא ל-Drive עותק מוצפן של הנתונים פעם ביום. האתר יראה ב-Drive רק את הקבצים שהוא עצמו שם שם.";
+    $("drConnect").hidden = v.connected;
+    $("drOff").hidden = !v.connected;
+    $("drKeyBox").hidden = !v.key;
+    $("drKey").textContent = v.key || "";
+  }
+  function loadDrive() {
+    return getJSON("/api/drive").then(showDrive).catch(function () { /* the rest of the screen still works */ });
+  }
+  $("drKept").addEventListener("click", function () { postJSON("/api/drive/key-kept", {}).then(showDrive); });
+  $("drOff").addEventListener("click", function () {
+    postJSON("/api/drive/disconnect", {}).then(function (v) {
+      showDrive(v);
+      bkSay("Google Drive נותק. הגיבויים שכבר שם נשארים, והמפתח שלהם לא השתנה.");
+      getJSON("/api/offsite").then(showOffsite);
+    });
+  });
+  if (DRIVE_SAID[location.hash.slice(1)]) {
+    bkSay(DRIVE_SAID[location.hash.slice(1)], location.hash !== "#drive-ok");
+    history.replaceState(null, "", "/settings");
+    $("bkPanel").scrollIntoView();
+  }
   function loadBackups() {
+    loadDrive();
     getJSON("/api/offsite").then(showOffsite).catch(function () { /* the list below still loads */ });
     return getJSON("/api/backups").then(showBackups).catch(function (e) {
       if (e.status !== 503) { bkSay("לא הצלחתי לקבל את רשימת הגיבויים. " + (e.message || ""), true); }

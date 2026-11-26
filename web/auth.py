@@ -5,7 +5,9 @@ On this computer (127.0.0.1) there is no login and nothing here is used. On the 
 (`config.login_required()`) every page and every route answers only to someone who entered
 with a name and a password.
 
-- **Passwords** are kept only as a salted scrypt hash, in `users.json` in the data folder
+- **With Google** (web/google_login.py): only the e-mail addresses allowed on the server enter:
+      <python> -m web.auth allow <email> <name>   |   disallow <email>
+- **Passwords** (the other way in; used only if a password user was set) are kept only as a salted scrypt hash, in `users.json` in the data folder
   (never in git). They are set from the server's own terminal, never through the site:
       <python> -m web.auth set <name>        (asks for the password twice)
       <python> -m web.auth list | remove <name>
@@ -109,11 +111,52 @@ def users() -> dict:
         return {}
 
 
-def _write_users(found: dict) -> None:
+GOOGLE_PREFIX = "g:"                  # a session of someone who entered with Google: "g:<email>"
+
+
+def google_allowed() -> dict:
+    """{email (lower case): {"name": ...}} — who may enter with a Google account."""
+    try:
+        with open(users_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return {k: v for k, v in data.get("google", {}).items() if isinstance(v, dict) and v.get("name")}
+    except (OSError, ValueError):
+        return {}
+
+
+def _person(key: str):
+    """The user behind a session's key, or None when he is no longer allowed in."""
+    if key.startswith(GOOGLE_PREFIX):
+        return google_allowed().get(key[len(GOOGLE_PREFIX):])
+    return users().get(key)
+
+
+def allow_google(email: str, name: str) -> None:
+    email = str(email or "").strip().casefold()
+    name = " ".join(str(name or "").split())
+    if "@" not in email or " " in email or len(email) > 200 or not name or len(name) > MAX_NAME:
+        raise ValueError("כתובת או שם לא תקינים")
+    allowed = google_allowed()
+    allowed[email] = {"name": name}
+    _write_users(users(), allowed)
+
+
+def disallow_google(email: str) -> bool:
+    email = str(email or "").strip().casefold()
+    allowed = google_allowed()
+    if allowed.pop(email, None) is None:
+        return False
+    _write_users(users(), allowed)
+    end_sessions(GOOGLE_PREFIX + email)
+    return True
+
+
+def _write_users(found: dict, google: dict = None) -> None:
     os.makedirs(config.data_dir(), exist_ok=True)
     tmp = users_path() + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        json.dump({"users": found}, f, ensure_ascii=False, indent=1)
+        json.dump({"users": found, "google": google_allowed() if google is None else google},
+                  f, ensure_ascii=False, indent=1)
     _private(tmp)
     os.replace(tmp, users_path())
 
@@ -189,11 +232,20 @@ def login(name: str, password: str, now: datetime) -> tuple:
             conn.execute("INSERT INTO failures (user, at) VALUES (?, ?)", (key, _stamp(now)))
             raise Wrong(WRONG)
         conn.execute("DELETE FROM failures WHERE user = ?", (key,))
+    finally:
+        conn.close()
+    return start_session(key, now), user["name"]
+
+
+def start_session(key: str, now: datetime) -> str:
+    """A new session for `key` (a password user's key, or "g:<email>"); returns its token."""
+    conn = _db()
+    try:
         conn.execute("DELETE FROM sessions WHERE last_seen < ?", (_stamp(now - timedelta(days=SESSION_DAYS)),))
         token = secrets.token_urlsafe(32)
         conn.execute("INSERT INTO sessions (token_hash, user, created, last_seen) VALUES (?, ?, ?, ?)",
                      (_token_hash(token), key, _stamp(now), _stamp(now)))
-        return token, user["name"]
+        return token
     finally:
         conn.close()
 
@@ -210,7 +262,7 @@ def session_user(token: str, now: datetime) -> str:
         if not row:
             return ""
         key, seen = row[0], datetime.strptime(row[1], "%Y-%m-%d %H:%M:%S")
-        user = users().get(key)
+        user = _person(key)
         if user is None or now - seen > timedelta(days=SESSION_DAYS):
             conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_token_hash(token),))
             return ""
@@ -244,7 +296,19 @@ def _main(argv: list) -> int:
     import getpass
     if len(argv) == 1 and argv[0] == "list":
         found = users()
-        print("\n".join(u["name"] for u in found.values()) or "(no users yet)")
+        print("\n".join(u["name"] for u in found.values()) or "(no password users)")
+        print("\n".join(f"{v['name']}  <{k}>  (Google)" for k, v in google_allowed().items()) or "(no Google accounts)")
+        return 0
+    if len(argv) == 3 and argv[0] == "allow":
+        try:
+            allow_google(argv[1], argv[2])
+        except ValueError as e:
+            print(f"Nothing was changed: {e}")
+            return 1
+        print(f"Saved. {argv[2]} can enter with the Google account {argv[1]}.")
+        return 0
+    if len(argv) == 2 and argv[0] == "disallow":
+        print("removed, and signed out" if disallow_google(argv[1]) else "no such account")
         return 0
     if len(argv) == 2 and argv[0] == "remove":
         print("removed" if remove_user(argv[1]) else "no such user")
@@ -261,7 +325,7 @@ def _main(argv: list) -> int:
             return 1
         print(f"Saved. {argv[1]} can enter with the new password; older sessions of this user were ended.")
         return 0
-    print("usage: python -m web.auth set <name> | remove <name> | list")
+    print("usage: python -m web.auth allow <email> <name> | disallow <email> | set <name> | remove <name> | list")
     return 2
 
 

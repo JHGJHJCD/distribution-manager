@@ -25,7 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import _util  # noqa: E402,F401  (puts the repository root on sys.path)
 
-from web import (app as webapp, auth, offsite, server_check, backup_service, card_service, cards, config, event_service, history_service,  # noqa: E402
+from web import (app as webapp, auth, drive, google_login, offsite, server_check, backup_service, card_service, cards, config, event_service, history_service,  # noqa: E402
                  planner, service, settings_service, store)
 from web.engine import selection  # noqa: E402
 
@@ -62,7 +62,7 @@ def run(target: str):
 
 
 _SWAPPED_BY_TESTS = [(config, "now"), (config, "backup_dir"), (store, "backup"), (store, "COPY_SECONDS"),
-                     (offsite.shutil, "copyfile")]
+                     (offsite.shutil, "copyfile"), (google_login, "fetch_token"), (drive, "_http")]
 ONLY = re.compile(sys.argv[1]) if len(sys.argv) > 1 else None
 results = []
 
@@ -1100,6 +1100,40 @@ mutate(AUTH, "the server keeps the session itself, not its hash", auth, "_token_
 mutate(AUTH, "a name is matched as typed (capital letters and extra spaces lock a user out)", auth, "_key",
        lambda name: str(name or ""))
 
+class _Everyone(dict):
+    def get(self, key, default=None):
+        return {"name": "anyone"}
+
+
+mutate(AUTH, "any Google account enters, allowed or not", auth, "google_allowed", lambda: _Everyone())
+
+mutate(AUTH, "the way back from Google is not tied to the visit that started it (state, nonce)", google_login, "_same",
+       lambda got, want: True)
+
+
+class _AnyIssuer(tuple):
+    def __contains__(self, item):
+        return True
+
+
+mutate(AUTH, "an answer that is not from Google is accepted", google_login, "ISSUERS", _AnyIssuer())
+
+_claims = google_login._claims
+mutate(AUTH, "an address Google did not verify is accepted", google_login, "_claims",
+       lambda token: dict(_claims(token), email_verified=True))
+
+mutate(AUTH, "an answer meant for another site is accepted", google_login, "_claims",
+       lambda token: dict(_claims(token), aud="client-invented.apps.example"))
+
+_settings = google_login.settings
+mutate(AUTH, "the Google way works on an address that is not https", google_login, "settings",
+       lambda: _settings() or ({"base": "x", "client_id": "c", "client_secret": "s", "redirect": "x"}
+                               if os.environ.get("HALUKA_WEB_URL") else {}))
+
+_person = auth._person
+mutate(AUTH, "an account taken off the list keeps its open session", auth, "_person",
+       lambda key: _person(key) or ({"name": "gone"} if key.startswith("g:") else None))
+
 # ── the backup that leaves the server, and the readiness check ───────────────
 mutate(SERVER, "the copy that arrived is never compared with the one that was sent", offsite, "_sha", lambda path: "same")
 
@@ -1131,6 +1165,29 @@ mutate(SERVER, "the readiness check lets a server with the login off pass", serv
        lambda: [("OK" if "login is OFF" in text else level, text) for level, text in _checks()])
 
 mutate(SERVER, "the readiness check does not look at who can read the files", server_check.stat, "S_IMODE", lambda mode: 0)
+
+# ── the copy that goes to Google Drive ────────────────────────────────────────
+mutate(SERVER, "the copy goes to Google Drive as it is, not encrypted", drive, "encrypt", lambda plain, key: plain)
+
+mutate(SERVER, "nobody checks what arrived at Google Drive", drive, "_arrived", lambda done, sealed: True)
+
+mutate(SERVER, "the recovery key stays on the screen for ever", drive, "key_kept", lambda: drive.view())
+
+mutate(SERVER, "the way back from Google connects a Drive without the cookie of the visit", google_login, "_same",
+       lambda got, want: True)
+
+
+def _forgets_the_key():
+    drive._write({})
+    return drive.view()
+
+
+mutate(SERVER, "disconnecting throws the key away (the copies on the Drive can never be opened)", drive, "disconnect",
+       _forgets_the_key)
+
+_target = offsite.target
+mutate(SERVER, "a connected Drive is not used by the daily copy", offsite, "target",
+       lambda: ("", "") if _target()[0] == "drive" else _target())
 
 breaks = len(results) - BASELINES
 if all(results):

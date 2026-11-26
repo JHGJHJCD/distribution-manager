@@ -125,3 +125,5 @@ python -m web.import_old --from <עותק של data.db> [--sent-history <sent_hi
 - **התקנה:** `deploy/צעדים_לשרת.md` (צעדים), `deploy/*.service`, `deploy/web.env.example`. בדיקת מוכנות: `python -m web.server_check`.
 - **גיבוי שיוצא מהשרת** (`offsite.py`): `python -m web.offsite`, פעם ביום דרך `deploy/haluka-offsite.timer`. היעד: `HALUKA_OFFSITE_DIR` (תיקייה שאינה בדיסק של השרת) או `HALUKA_OFFSITE_CMD` (פקודה עם `{file}`). מסך ההגדרות מציג מתי יצא העותק האחרון.
 - בדיקות: `tests/test_auth.py`, `tests/test_server.py`.
+- **כניסה עם Google** (`google_login.py`, הכרעת יהודה 26/11): `HALUKA_WEB_URL`, `HALUKA_GOOGLE_CLIENT_ID`, `HALUKA_GOOGLE_CLIENT_SECRET`; מאשרים כתובת עם `python -m web.auth allow <מייל> <שם>`.
+- **גיבוי מוצפן ל-Google Drive** (`drive.py`): מחברים ממסך ההגדרות; פתיחת גיבוי: `python -m web.drive open <קובץ.enc> <חדש.db>`. דורש את הספרייה `cryptography` (רק בשרת).

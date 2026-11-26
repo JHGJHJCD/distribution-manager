@@ -17,12 +17,13 @@ from datetime import date
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import (auth, backup_service, card_service, config, event_service, history_service, offsite, service,
+from . import (auth, backup_service, card_service, config, drive, event_service, google_login, history_service, offsite,
+               service,
                settings_service, store)
 
 STATIC_DIR = os.path.join(config.WEB_DIR, "static")
@@ -42,7 +43,12 @@ def _from_this_site(request: Request) -> bool:
 
 # What answers without a session when login is on: the login page with its style and script,
 # the login itself, and the "is the site alive" check. Nothing here carries data.
-OPEN_PATHS = frozenset({"/login", "/api/login", "/healthz", "/static/style.css", "/static/login.js"})
+OPEN_PATHS = frozenset({"/login", "/api/login", "/healthz", "/static/style.css", "/static/login.js",
+                        "/auth/google", google_login.CALLBACK,
+                        # the way back from Google after "connect the Drive": the session cookie is
+                        # not sent on it (it comes from another site), so the state cookie that
+                        # only a logged-in user was given is what lets it in
+                        drive.CALLBACK})
 
 
 def _session_user(request: Request) -> str:
@@ -532,6 +538,47 @@ def api_offsite():
     return offsite.status(config.now())
 
 
+# ── the copy that leaves the server: Google Drive ────────────────────────────
+@app.get("/api/drive")
+def api_drive():
+    return drive.view()
+
+
+@app.post("/api/drive/key-kept")
+def api_drive_key_kept():
+    return drive.key_kept()
+
+
+@app.post("/api/drive/disconnect")
+def api_drive_disconnect():
+    return drive.disconnect()
+
+
+@app.get("/auth/drive")
+def drive_start():
+    if not (config.login_required() and drive.available()):
+        raise HTTPException(404)
+    url, state = drive.start()
+    response = RedirectResponse(url, status_code=303)
+    response.set_cookie(drive.STATE_COOKIE, state, max_age=google_login.STATE_SECONDS, path="/",
+                        secure=True, httponly=True, samesite="lax")
+    return response
+
+
+@app.get(drive.CALLBACK)
+def drive_callback(request: Request, code: str = Query("", max_length=2000), state: str = Query("", max_length=200)):
+    if not config.login_required():
+        raise HTTPException(404)
+    try:
+        drive.finish(code, state, request.cookies.get(drive.STATE_COOKIE, ""), config.now())
+        where = "/settings#drive-ok"
+    except drive.Refused as e:
+        where = "/settings#drive-" + str(e)
+    response = HTMLResponse(_ENTERED.replace("url=/", "url=" + where).replace('href="/"', f'href="{where}"'))
+    response.delete_cookie(drive.STATE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return response
+
+
 # ── the move to the server: entering and leaving ─────────────────────────────
 class LoginBody(BaseModel):
     model_config = {"extra": "forbid"}
@@ -579,7 +626,47 @@ def healthz():
 def login_page(request: Request):
     if not config.login_required() or _session_user(request):
         return RedirectResponse("/", status_code=303)
-    return FileResponse(os.path.join(STATIC_DIR, "login.html"))
+    with open(os.path.join(STATIC_DIR, "login.html"), encoding="utf-8") as f:
+        page = f.read()
+    # which ways in this server offers (two fixed words; nothing of the request enters the page)
+    ways = " ".join(w for w, on in (("google", google_login.enabled()), ("password", bool(auth.users()))) if on)
+    return HTMLResponse(page.replace('data-ways=""', f'data-ways="{ways}"'))
+
+
+@app.get("/auth/google")
+def google_start():
+    """To Google, to ask who this is. The random state stays in a cookie for ten minutes."""
+    if not (config.login_required() and google_login.enabled()):
+        raise HTTPException(404)
+    url, cookie = google_login.start()
+    response = RedirectResponse(url, status_code=303)
+    # Lax, not Strict: the way back from Google is a link from another site
+    response.set_cookie(google_login.STATE_COOKIE, cookie, max_age=google_login.STATE_SECONDS, path="/",
+                        secure=True, httponly=True, samesite="lax")
+    return response
+
+
+_ENTERED = ('<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">'
+            '<meta http-equiv="refresh" content="0;url=/"><title>מנהל חלוקה</title></head>'
+            '<body><p><a href="/">המשך לאתר</a></p></body></html>')
+
+
+@app.get(google_login.CALLBACK)
+def google_callback(request: Request, code: str = Query("", max_length=2000), state: str = Query("", max_length=200)):
+    if not config.login_required():
+        raise HTTPException(404)
+    try:
+        token, _name = google_login.finish(code, state, request.cookies.get(google_login.STATE_COOKIE, ""), config.now())
+    except google_login.Refused as e:
+        response = RedirectResponse("/login#" + e.why, status_code=303)
+    else:
+        # a page, not a redirect: the browser sends the (SameSite=Strict) session cookie only
+        # on a move that starts inside the site, and this one does
+        response = HTMLResponse(_ENTERED)
+        response.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400, path="/",
+                            secure=True, httponly=True, samesite="strict")
+    response.delete_cookie(google_login.STATE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return response
 
 
 # ── pages ─────────────────────────────────────────────────────────────────────

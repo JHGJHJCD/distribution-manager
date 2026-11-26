@@ -6,7 +6,7 @@
 <title>כניסה · מנהל חלוקה</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body data-ways="">
 <div class="wrap login">
 
   <section class="panel">
@@ -14,15 +14,17 @@
       <h1>מנהל חלוקה</h1>
       <p class="sub">קופה של צדקה הר יונה · כניסה למורשים בלבד</p>
     </div>
-    <form id="loginForm" class="login-form" autocomplete="on">
+    <div id="notice" class="notice error" role="alert" hidden></div>
+    <a class="btn main login-google" id="loginGoogle" href="/auth/google" hidden>כניסה עם Google</a>
+    <form id="loginForm" class="login-form" autocomplete="on" hidden>
       <label for="loginName">שם</label>
-      <input id="loginName" name="username" type="text" maxlength="40" autocomplete="username" required autofocus>
+      <input id="loginName" name="username" type="text" maxlength="40" autocomplete="username" required>
       <label for="loginPass">סיסמה</label>
       <input id="loginPass" name="password" type="password" maxlength="200" autocomplete="current-password" required>
-      <div id="notice" class="notice error" role="alert" hidden></div>
       <button type="submit" class="btn main" id="loginGo">כניסה</button>
     </form>
-    <p class="sub">שכחת את הסיסמה? יהודה יכול לקבוע סיסמה חדשה.</p>
+    <p class="sub" id="loginNone" hidden>עוד לא הוגדר מי יכול להיכנס לאתר. צריך לומר ליהודה.</p>
+    <p class="sub" id="loginHelp" hidden>נכנסים עם חשבון ה-Google שיהודה אישר. האתר מקבל מ-Google רק את כתובת המייל.</p>
   </section>
 
 </div>

@@ -13,12 +13,13 @@ from _util import Checker, W0, person
 
 TMP = tempfile.mkdtemp(prefix="haluka_server_")
 os.environ["HALUKA_WEB_DATA"] = os.path.join(TMP, "data")       # BEFORE the app is imported
-for key in ("HALUKA_WEB_HOSTS", "HALUKA_WEB_LOGIN", "HALUKA_OFFSITE_DIR", "HALUKA_OFFSITE_CMD"):
+for key in ("HALUKA_WEB_HOSTS", "HALUKA_WEB_LOGIN", "HALUKA_OFFSITE_DIR", "HALUKA_OFFSITE_CMD", "HALUKA_WEB_URL",
+            "HALUKA_GOOGLE_CLIENT_ID", "HALUKA_GOOGLE_CLIENT_SECRET"):
     os.environ.pop(key, None)
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from web import app as webapp, auth, config, offsite, server_check, store  # noqa: E402
+from web import app as webapp, auth, config, drive, google_login, offsite, server_check, store  # noqa: E402
 
 t = Checker("web server kit")
 NOW = datetime(W0.year, W0.month, W0.day, 3, 10)
@@ -176,9 +177,147 @@ t.ok("S5 the check prints no name, no address and no folder", "בודק" not in 
 os.environ["HALUKA_WEB_DATA"] = os.path.join(TMP, "nowhere")
 t.ok("S5 no data folder: stops the opening", level_of("missing or cannot be written") == ["FAIL"])
 
+# ── D: Google Drive, encrypted ────────────────────────────────────────────────
+import hashlib  # noqa: E402
+import json  # noqa: E402
+from urllib.parse import parse_qs, urlparse  # noqa: E402
+
+os.environ.pop("HALUKA_OFFSITE_DIR")
+os.environ["HALUKA_WEB_DATA"] = os.path.join(TMP, "data")
+os.environ.pop("HALUKA_WEB_HOSTS")
+os.environ["HALUKA_WEB_LOGIN"] = "1"
+H = {"X-Haluka": "1"}
+site = TestClient(webapp.app, base_url="https://127.0.0.1", follow_redirects=False)
+site.post("/api/login", json={"name": "בודק", "password": "סיסמה-מומצאת-17"}, headers=H)
+t.ok("D1 with no Google settings the screen is told there is no Drive to connect",
+     site.get("/api/drive").json() == {"available": False, "connected": False, "since": "", "key": ""}
+     and site.get("/auth/drive").status_code == 404)
+os.environ.update(HALUKA_WEB_URL="https://haluka.example", HALUKA_GOOGLE_CLIENT_ID="client-invented",
+                  HALUKA_GOOGLE_CLIENT_SECRET="secret-invented")
+stranger = TestClient(webapp.app, base_url="https://127.0.0.1", follow_redirects=False)
+t.ok("D1 a stranger cannot start a connection, nor see or change anything of it",
+     stranger.get("/auth/drive").status_code == 303 and stranger.get("/auth/drive").headers["location"] == "/login"
+     and stranger.get("/api/drive").status_code == 401
+     and stranger.post("/api/drive/disconnect", json={}, headers=H).status_code == 401)
+went = site.get("/auth/drive")
+q = parse_qs(urlparse(went.headers["location"]).query)
+t.ok("D1 the way to Google asks for the narrowest permission (only files the site itself puts there), for the long run",
+     q["scope"] == ["https://www.googleapis.com/auth/drive.file"] and q["access_type"] == ["offline"]
+     and q["redirect_uri"] == ["https://haluka.example/auth/drive/callback"])
+
+
+class FakeGoogle:
+    """Google's token service and Drive, as much of them as the site uses."""
+    def __init__(self):
+        self.files, self.folders, self.calls, self.grant, self.damage = {}, {}, [], dict(
+            refresh_token="refresh-invented", scope="https://www.googleapis.com/auth/drive.file"), False
+
+    def token(self, code, cfg):
+        self.calls.append(("code", code, cfg["redirect"]))
+        return dict(self.grant)
+
+    def http(self, method, url, headers, body=None):
+        self.calls.append((method, url.split("?")[0]))
+        if url == google_login.TOKEN_URL:
+            ok = b"refresh_token=refresh-invented" in body and b"client_secret=secret-invented" in body
+            return (200, b'{"access_token": "access-1"}') if ok else (400, b"{}")
+        if headers.get("Authorization") != "Bearer access-1":
+            return 401, b"{}"
+        if url.startswith(drive.API):
+            meta = json.loads(body.decode("utf-8"))
+            self.folders["folder-%d" % (len(self.folders) + 1)] = meta
+            return 200, json.dumps({"id": "folder-%d" % len(self.folders)}).encode()
+        edge = headers["Content-Type"].split("boundary=")[1].encode()
+        parts = body.split(b"--" + edge)
+        meta = json.loads(parts[1].split(b"\r\n\r\n", 1)[1].decode("utf-8"))
+        content = parts[2].split(b"\r\n\r\n", 1)[1][:-2]
+        if self.damage:
+            content = content[:-9]
+        self.files[meta["name"]] = (meta, content)
+        return 200, json.dumps({"id": "f", "size": str(len(content)), "md5Checksum": hashlib.md5(content).hexdigest()}).encode()
+
+
+g = FakeGoogle()
+google_login.fetch_token, drive._http = g.token, g.http
+r = stranger.get("/auth/drive/callback", params={"code": "c", "state": q["state"][0]})
+t.ok("D2 the way back without the cookie of the visit connects nothing", "drive-again" in r.text and not drive.connected())
+r = site.get("/auth/drive/callback", params={"code": "c", "state": "made-up"})
+t.ok("D2 the way back with another state connects nothing", "drive-again" in r.text and not drive.connected())
+g.grant["scope"] = "openid"
+went = site.get("/auth/drive")
+q = parse_qs(urlparse(went.headers["location"]).query)
+r = site.get("/auth/drive/callback", params={"code": "c", "state": q["state"][0]})
+t.ok("D2 Google without the permission to save files: not connected, and the screen is told why",
+     "drive-no_permission" in r.text and not drive.connected())
+g.grant["scope"] = "https://www.googleapis.com/auth/drive.file"
+q = parse_qs(urlparse(site.get("/auth/drive").headers["location"]).query)
+r = site.get("/auth/drive/callback", params={"code": "code-7", "state": q["state"][0]})
+v = site.get("/api/drive").json()
+KEY = v["key"]
+t.ok("D2 connected: back to the settings screen, and the recovery key is shown",
+     "url=/settings#drive-ok" in r.text and v["connected"] and v["available"] and len(KEY) == 44
+     and ("code", "code-7", "https://haluka.example/auth/drive/callback") in g.calls, str(v))
+t.ok("D2 the answers about the Drive hold no token and no secret",
+     "refresh-invented" not in site.get("/api/drive").text and "secret-invented" not in site.get("/api/drive").text)
+t.ok("D2 now the daily copy goes to the Drive (nothing else was set)", offsite.target() == ("drive", ""))
+
+res = offsite.run(NOW)
+name, (meta, sealed) = next(iter(g.files.items()))
+t.ok("D3 the copy arrived, in the site's own folder, under its day's name", not res["failed"] and res["days"] == 0
+     and len(g.files) == 1 and name.startswith("haluka-") and name.endswith(".db.enc")
+     and meta["parents"] == ["folder-1"] and g.folders["folder-1"]["name"] == drive.FOLDER_NAME, str(res))
+t.ok("D3 what is on the Drive is unreadable: no database header, no phone",
+     b"SQLite format" not in sealed and SECRET_PHONE.encode() not in sealed)
+plain = drive.decrypt(sealed, KEY)
+out = os.path.join(TMP, "opened.db")
+with open(out, "wb") as f:
+    f.write(plain)
+c = sqlite3.connect(out)
+t.ok("D3 with the key it opens to the whole database", plain.startswith(b"SQLite format 3")
+     and c.execute("SELECT COUNT(*) FROM recipients").fetchone()[0] == 7)
+c.close()
+try:
+    drive.decrypt(sealed, "A" * 43 + "=")
+    opened = True
+except Exception:
+    opened = False
+t.ok("D3 with another key it does not open", not opened)
+offsite.run(NOW)
+t.ok("D3 the next copy goes to the same folder (one folder, nothing replaced)", len(g.folders) == 1 and len(g.files) >= 1)
+g.damage = True
+before = len(g.files)
+NOW = NOW + timedelta(days=1)
+res = offsite.run(NOW)
+g.damage = False
+t.ok("D3 a copy that arrived damaged at the Drive is a failure, not a success", res["failed"] and res["days"] == 1)
+
+t.ok("D4 the key is shown until the owner says he kept it, and never again",
+     site.get("/api/drive").json()["key"] == KEY
+     and site.post("/api/drive/key-kept", json={}, headers=H).json()["key"] == ""
+     and site.get("/api/drive").json()["key"] == "" and site.get("/api/drive").json()["connected"])
+r = site.post("/api/drive/disconnect", json={}, headers=H).json()
+t.ok("D4 disconnecting stops the sending, and keeps the key for the copies already there",
+     r["connected"] is False and offsite.target() == ("", "") and drive._read().get("key") == KEY and offsite.run(NOW)["failed"])
+q = parse_qs(urlparse(site.get("/auth/drive").headers["location"]).query)
+site.get("/auth/drive/callback", params={"code": "c2", "state": q["state"][0]})
+t.ok("D4 connecting again keeps the same key (the old copies stay openable) and does not show it again",
+     drive.connected() and drive._read().get("key") == KEY and site.get("/api/drive").json()["key"] == "")
+g.grant["refresh_token"] = "revoked"
+q = parse_qs(urlparse(site.get("/auth/drive").headers["location"]).query)
+site.get("/auth/drive/callback", params={"code": "c3", "state": q["state"][0]})
+res = offsite.run(NOW)
+t.ok("D4 a connection that Google no longer accepts is a failure the screen will show", res["failed"])
+os.environ["HALUKA_OFFSITE_DIR"] = AWAY
+t.ok("D4 a destination set on the server itself comes before the Drive", offsite.target()[0] == "dir")
+os.environ.pop("HALUKA_OFFSITE_DIR")
+for key in ("HALUKA_WEB_URL", "HALUKA_GOOGLE_CLIENT_ID", "HALUKA_GOOGLE_CLIENT_SECRET", "HALUKA_WEB_LOGIN"):
+    os.environ.pop(key)
+os.remove(drive.state_path())
+os.environ["HALUKA_WEB_HOSTS"] = "haluka.example"
+
 # ── S6: on the server the screen always speaks of it ──────────────────────────
 os.environ["HALUKA_WEB_DATA"] = os.path.join(TMP, "data")
-os.environ.pop("HALUKA_OFFSITE_DIR")
+os.environ.pop("HALUKA_OFFSITE_DIR", None)
 t.ok("S6 on the server with no destination: the screen is told to say so", offsite.status(NOW)["show"] is True
      and offsite.status(NOW)["on"] is False)
 t.ok("S6 ...and a stranger gets nothing of it", TestClient(webapp.app, base_url="https://haluka.example")
