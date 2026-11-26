@@ -36,6 +36,16 @@ def allowed_hosts() -> list:
     return [h.strip() for h in raw.split(",") if h.strip()]
 
 
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
+
+
+def login_required() -> bool:
+    """On this computer only: no login. Login is on when it is asked for (HALUKA_WEB_LOGIN=1)
+    and ALWAYS when the site answers to any name other than this computer's own — a site
+    that can be reached from outside can never be left open by forgetting a setting."""
+    return os.environ.get("HALUKA_WEB_LOGIN") == "1" or any(h not in LOCAL_HOSTS for h in allowed_hosts())
+
+
 def now() -> datetime:
     """The current time in Israel, as a plain (naive) datetime."""
     try:

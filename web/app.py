@@ -4,8 +4,9 @@
 Run locally:   <python 3.12> -m uvicorn web.app:app --host 127.0.0.1 --port 8787
 (or web/run_local.bat).
 
-Local stage = no login, and the server answers only to this computer (host check below).
-Login, encryption and off-site backup come with the move to the server.
+On this computer = no login, and the server answers only to this computer (host check
+below). On the server (`config.login_required()`) nothing answers without a session — see
+web/auth.py; the only open addresses are the login page, its script and style, and /healthz.
 
 Writing routes (stage 2) are POST only and need the header `X-Haluka: 1`, which a page of
 another website cannot send to this server — so no other site open in the browser can
@@ -16,12 +17,12 @@ from datetime import date
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import (backup_service, card_service, config, event_service, history_service, service,
+from . import (auth, backup_service, card_service, config, event_service, history_service, offsite, service,
                settings_service, store)
 
 STATIC_DIR = os.path.join(config.WEB_DIR, "static")
@@ -39,12 +40,35 @@ def _from_this_site(request: Request) -> bool:
     return request.method in ("GET", "HEAD") or request.headers.get("x-haluka") == "1"
 
 
+# What answers without a session when login is on: the login page with its style and script,
+# the login itself, and the "is the site alive" check. Nothing here carries data.
+OPEN_PATHS = frozenset({"/login", "/api/login", "/healthz", "/static/style.css", "/static/login.js"})
+
+
+def _session_user(request: Request) -> str:
+    return auth.session_user(request.cookies.get(auth.COOKIE, ""), config.now())
+
+
+def _refuse_stranger(request: Request):
+    """None when the request may go on; otherwise the answer to someone who has not entered."""
+    path = request.url.path
+    request.state.user = ""
+    if not config.login_required() or path in OPEN_PATHS:
+        return None
+    request.state.user = _session_user(request)
+    if request.state.user:
+        return None
+    if path.startswith("/api/") or path.startswith("/static/") or request.method not in ("GET", "HEAD"):
+        return JSONResponse({"message": "צריך להיכנס לאתר", "login": True}, status_code=401)
+    return RedirectResponse("/login", status_code=303)
+
+
 @app.middleware("http")
 async def _guard_and_headers(request: Request, call_next):
     if not _from_this_site(request):
         response = JSONResponse({"message": "הבקשה לא הגיעה מהאתר עצמו"}, status_code=403)
     else:
-        response = await call_next(request)
+        response = _refuse_stranger(request) or await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Frame-Options"] = "DENY"
@@ -53,6 +77,8 @@ async def _guard_and_headers(request: Request, call_next):
         "base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
     # names of real families: never kept by the browser or a proxy
     response.headers["Cache-Control"] = "no-store"
+    if config.login_required():
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
 
 
@@ -497,6 +523,63 @@ def api_backup_make():
 @app.post("/api/backup/restore")
 def api_backup_restore(body: BackupBody):
     return _run(lambda conn, path: backup_service.restore(conn, config.now(), body.name, path))
+
+
+@app.get("/api/offsite")
+def api_offsite():
+    """Does a copy of the backup leave the server, and when did the last one leave.
+    (No path and no command; on this computer the screen shows nothing of it.)"""
+    return offsite.status(config.now())
+
+
+# ── the move to the server: entering and leaving ─────────────────────────────
+class LoginBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    name: str = Field(min_length=1, max_length=auth.MAX_NAME)
+    password: str = Field(min_length=1, max_length=auth.MAX_PASSWORD)
+
+
+@app.post("/api/login")
+def api_login(body: LoginBody):
+    if not config.login_required():
+        return {"ok": True, "login": False}
+    try:
+        token, name = auth.login(body.name, body.password, config.now())
+    except auth.Locked as e:
+        return JSONResponse({"message": str(e)}, status_code=429)
+    except auth.Wrong as e:
+        return JSONResponse({"message": str(e)}, status_code=401)
+    response = JSONResponse({"ok": True, "login": True, "name": name})
+    response.set_cookie(auth.COOKIE, token, max_age=auth.SESSION_DAYS * 86400, path="/",
+                        secure=True, httponly=True, samesite="strict")
+    return response
+
+
+@app.post("/api/logout")
+def api_logout(request: Request):
+    auth.logout(request.cookies.get(auth.COOKIE, ""))
+    response = JSONResponse({"ok": True})
+    response.delete_cookie(auth.COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+    return response
+
+
+@app.get("/api/me")
+def api_me(request: Request):
+    """Whether this site asks for a login, and who entered (the pages show "יציאה")."""
+    return {"login": config.login_required(), "name": request.state.user}
+
+
+@app.get("/healthz")
+def healthz():
+    """Is the site alive — for the server's own watchdog. Says nothing about the data."""
+    return {"ok": True}
+
+
+@app.get("/login")
+def login_page(request: Request):
+    if not config.login_required() or _session_user(request):
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(os.path.join(STATIC_DIR, "login.html"))
 
 
 # ── pages ─────────────────────────────────────────────────────────────────────

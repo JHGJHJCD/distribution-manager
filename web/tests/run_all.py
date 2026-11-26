@@ -13,7 +13,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TESTS = ["test_planner.py", "test_store.py", "test_api.py", "test_cards.py", "test_history.py", "test_settings.py",
-         "test_backup.py", "test_compare.py",
+         "test_backup.py", "test_compare.py", "test_auth.py", "test_server.py",
          "test_vs_old.py"]
 
 failed = []

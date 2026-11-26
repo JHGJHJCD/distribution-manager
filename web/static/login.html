@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>כניסה · מנהל חלוקה</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap login">
+
+  <section class="panel">
+    <div>
+      <h1>מנהל חלוקה</h1>
+      <p class="sub">קופה של צדקה הר יונה · כניסה למורשים בלבד</p>
+    </div>
+    <form id="loginForm" class="login-form" autocomplete="on">
+      <label for="loginName">שם</label>
+      <input id="loginName" name="username" type="text" maxlength="40" autocomplete="username" required autofocus>
+      <label for="loginPass">סיסמה</label>
+      <input id="loginPass" name="password" type="password" maxlength="200" autocomplete="current-password" required>
+      <div id="notice" class="notice error" role="alert" hidden></div>
+      <button type="submit" class="btn main" id="loginGo">כניסה</button>
+    </form>
+    <p class="sub">שכחת את הסיסמה? יהודה יכול לקבוע סיסמה חדשה.</p>
+  </section>
+
+</div>
+<script src="/static/login.js"></script>
+</body>
+</html>
