@@ -57,7 +57,10 @@ def build(folder: str, now: datetime = None) -> str:
                 freq, prio = KINDS[n % len(KINDS)]
                 rec = person(n, freq, prio, full_name=f"{fam} {giv}", last_name=fam, first_name=giv,
                              phone1=f"050-{5550000 + n}", souls=2 + n % 7,
-                             status="מושהה" if n % 23 == 0 else "פעיל", **stage4_fields(n))
+                             status="מושהה" if n % 23 == 0 else "פעיל",
+                             # not everybody joined on the same day: who waits longest is not always who needs most
+                             start_date=(now - timedelta(days=30 + (n * 37) % 300)).date().isoformat(),
+                             **stage4_fields(n))
                 rec.pop("id")
                 guid = rec.pop("guid")
                 store.insert_recipient(conn, {k: v for k, v in rec.items() if k in store.RECIPIENT_COLUMNS

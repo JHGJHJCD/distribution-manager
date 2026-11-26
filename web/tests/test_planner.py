@@ -606,4 +606,168 @@ portions_small = line(recs, hist, events, weeks=7, portions=6, reserve=2, cooldo
 t.ok("P23 ...also when the weeks are short of portions",
      portions_small["weeks"] == line(recs, hist, [], weeks=7, portions=6, reserve=2, cooldown=cooldown)["weeks"])
 
+# ══ after stage 4: a week by need score, and a holiday list split between the communities ══
+MONEY = dict.fromkeys(WEIGHTS, 0.0)
+MONEY["money"] = 100.0                       # the score is the money alone: who has less is first
+
+
+def sweeks(recs, hist, modes, weeks=1, portions=3, reserve=1, manual=None, weights=MONEY):
+    return planner.plan_weeks(recs, hist, start=W0, weeks=weeks, horizon=W0, weights=weights, cooldown_weeks=4,
+                              portions=portions, reserve=reserve, manual=manual, modes=modes)
+
+
+# ── P24: a week that is marked "by score" ─────────────────────────────────────
+# five weekly regulars who received last week, and a bi-weekly who waited longest and has the most money
+srecs = ([person(n, "שבועי", per_soul=str(money)) for n, money in ((1, 350), (2, 900), (3, 200), (4, 1200), (5, 600))]
+         + [person(6, "דו-שבועי", per_soul="5000"), person(7, "דו-שבועי", per_soul="1"),
+            person(21, "חד-פעמי", 3, per_soul="10"), person(22, "חד-פעמי", 3, per_soul="20")])
+shist = [got(f"g000{n}", wk(-1)) for n in (1, 2, 3, 4, 5, 7)] + [got("g0006", wk(-2))]
+SCORED = {W0: planner.MODE_SCORED}
+plain = sweeks(srecs, shist, None)[0]
+scored = sweeks(srecs, shist, SCORED)[0]
+t.ok("P24 the ordinary way, three portions for six regulars: who waited longest is in first, then by score",
+     guids(plain["main"]) == ["g0006", "g0003", "g0001"] and plain["by_score"] is False, str(guids(plain["main"])))
+t.ok("P24 by score: the three with the highest need are in, in that order — also ahead of who waited longest",
+     guids(scored["main"]) == ["g0003", "g0001", "g0005"] and scored["by_score"] is True and scored["cut"] is True,
+     str(guids(scored["main"])))
+t.ok("P24 the reserve is the next by score, and the rest are off the list",
+     guids(scored["reserve_list"]) == ["g0002"]
+     and [e["guid"] for e in scored["out"] if e["group"] == planner.OUT_REG_CUT] == ["g0004", "g0006"])
+t.ok("P24 the turn is still a hard gate: a bi-weekly who received last week is out, however great his need",
+     next(e for e in scored["out"] if e["guid"] == "g0007")["group"] == planner.OUT_REG_WAIT and scored["regulars_due"] == 6)
+whys = {e["guid"]: e["why"] for e in scored["main"] + scored["reserve_list"] + scored["out"]}
+t.ok("P24 the reasons say the place by score, and the week says that it was cut by score",
+     "מקום 1 מתוך 6" in whys["g0003"] and "מקום 4 מתוך 6" in whys["g0002"] and "נמוך יותר" in whys["g0006"]
+     and any("לפי ניקוד" in x for x in scored["warnings"]), str(whys["g0003"]))
+t.ok("P24 a reason never quotes the score or the money of the card",
+     not any(money in why for why in whys.values() for money in ("350", "900", "200", "1200", "600", "5000")))
+enough_plain = sweeks(srecs, shist, None, portions=8, reserve=1)[0]
+enough = sweeks(srecs, shist, SCORED, portions=8, reserve=1)[0]
+t.ok("P24 with a portion for every regular in turn the mark changes nobody: the same people, the same one-timers, the same reserve",
+     set(guids(enough["main"])) == set(guids(enough_plain["main"])) and enough["cut"] is False and enough["warnings"] == enough_plain["warnings"]
+     and [e["guid"] for e in enough["main"] if e["kind"] == "onetime"] == [e["guid"] for e in enough_plain["main"] if e["kind"] == "onetime"]
+     and guids(enough["reserve_list"]) == guids(enough_plain["reserve_list"]) and enough["main_regulars"] == 6)
+two = sweeks(srecs, shist, SCORED, weeks=2)
+t.ok("P24 only the week that was marked is cut by score; the week after it goes the ordinary way",
+     two[0]["by_score"] is True and two[1]["by_score"] is False and two[0] == scored)
+t.ok("P24 who was left out by score is first in the ordinary week after it (he waits longest)",
+     guids(two[1]["main"])[0] == "g0006", str(guids(two[1]["main"])))
+hand = sweeks(srecs, shist, SCORED, manual={W0: {"g0021": "add"}})[0]
+hand_plain = sweeks(srecs, shist, None, manual={W0: {"g0021": "add"}})[0]
+t.ok("P24 by score, whoever is added by hand takes the place of the lowest: two regulars are left of the three",
+     guids(hand["main"]) == ["g0021", "g0003", "g0001"] and guids(hand["reserve_list"]) == ["g0005"], str(guids(hand["main"])))
+t.ok("P24 ...in the ordinary way a one-timer added by hand never pushes a regular out (the list is longer, with a warning)",
+     len(hand_plain["main"]) == 4 and hand_plain["main_regulars"] == 3 and any("יותר מדי" in x for x in hand_plain["warnings"]))
+t.ok("P24 by score and no portions: an empty list", sweeks(srecs, shist, SCORED, portions=0)[0]["main"] == [])
+keep = (copy.deepcopy(srecs), copy.deepcopy(shist))
+again = sweeks(srecs, shist, SCORED)[0]
+t.ok("P24 pure: the inputs are untouched and the same question gives the same answer", (srecs, shist) == keep and again == scored)
+t.ok("P24 a mark that is not a known way is the ordinary way",
+     sweeks(srecs, shist, {W0: "something"})[0] == plain and sweeks(srecs, shist, {W0: planner.MODE_WAIT})[0] == plain)
+
+# ── P25: a holiday list that is split between the communities ─────────────────
+# community A: six marked (five pass the filter); community B: three marked (one passes);
+# one member of B is not marked at all. The filter: income up to 3,000.
+A, B = "קהילה א", "קהילה ב"
+brecs = ([person(n, "שבועי", holiday_support=1, representative=A, income="2000", per_soul=str(100 * n)) for n in (1, 2, 3, 4, 5)]
+         + [person(6, "שבועי", holiday_support=1, representative=A, income="5000", per_soul="50"),
+            person(11, "שבועי", holiday_support=1, representative=B, income="2000", per_soul="700"),
+            person(12, "שבועי", holiday_support=1, representative=B, income="3100", per_soul="800"),
+            person(13, "שבועי", holiday_support=1, representative=B, income="9000", per_soul="10"),
+            person(14, "שבועי", representative=B, income="100", per_soul="1")])
+bhist = [got(r["guid"], wk(-1)) for r in brecs]
+CRIT = {"income": {"min": None, "max": 3000}}
+
+
+def bev(balance=True, portions=6, reserve=0, criteria=CRIT, manual=None, pinned=None):
+    return planner.plan_timeline(brecs, bhist, start=W0, weeks=0, horizon=W0, weights=MONEY, cooldown_weeks=4,
+                                 events=[ev(SUN, "*", portions, reserve, criteria, manual, balance=balance)],
+                                 pinned=pinned)["events"][0]
+
+
+flat, e = bev(False), bev()
+t.ok("P25 without the split: the six who pass the filter take the six portions",
+     set(guids(flat["main"])) == {"g0001", "g0002", "g0003", "g0004", "g0005", "g0011"} and flat["communities"] == []
+     and flat["balance"] is False)
+comm = {c["name"]: c for c in e["communities"]}
+t.ok("P25 with the split, each community gets a share by the number of its marked members: 4 and 2 of the 6",
+     (comm[A]["size"], comm[A]["quota"], comm[B]["size"], comm[B]["quota"]) == (6, 4, 3, 2) and e["balance"] is True,
+     str(e["communities"]))
+t.ok("P25 inside a community the ones who pass the filter come first, by need score: the four with the least money",
+     [g for g in guids(e["main"]) if g < "g0010"] == ["g0001", "g0002", "g0003", "g0004"], str(guids(e["main"])))
+fills = [x["guid"] for x in e["main"] if x.get("fill")]
+t.ok("P25 a share the passing ones cannot fill is topped up from the SAME community — the nearest to the filter, not the neediest",
+     fills == ["g0012"] and {"g0011", "g0012"} <= set(guids(e["main"])) and "g0013" not in guids(e["main"])
+     and (comm[B]["passing"], comm[B]["main"], comm[B]["filled"]) == (1, 2, 1), str(fills))
+w_ = where(e)
+left = next(x for x in e["out"] if x["guid"] == "g0005")
+t.ok("P25 so somebody who passes the filter can be left without a place while another community is topped up — and the reason says why",
+     w_["g0005"] == planner.OUT_EV_CUT and A in left["why"] and "4 מנות" in left["why"] and e["cut"] is True)
+fill = next(x for x in e["main"] if x["guid"] == "g0012")
+t.ok("P25 the topped-up one says so: outside which threshold, and for which community — never the card's own number",
+     "להשלים" in fill["why"] and B in fill["why"] and "3,000" in fill["why"] and "3100" not in fill["why"]
+     and fill["community"] == B, fill["why"])
+t.ok("P25 the event warns that somebody came in without passing the filter",
+     any("בלי לעבור את הסינון" in x for x in e["warnings"]) and any("בין הקהילות" in x for x in e["warnings"]))
+t.ok("P25 the mark stays a hard gate: a member who is not marked for the holidays never fills a share",
+     "g0014" not in w_ and e["unmarked"] == 1 and e["marked"] == 9)
+t.ok("P25 what the screen shows for the communities adds up to the list",
+     sum(c["main"] for c in e["communities"]) == len(e["main"]) == 6 and all(c["main"] <= c["quota"] for c in e["communities"]))
+r = bev(reserve=2)
+t.ok("P25 the reserve is the next in line of ALL the communities together: first who passes the filter, then the nearest to it",
+     guids(r["reserve_list"]) == ["g0005", "g0006"] and guids(r["main"]) == guids(e["main"]), str(guids(r["reserve_list"])))
+pin = bev(pinned={B: 50.0})
+pc = {c["name"]: c for c in pin["communities"]}
+t.ok("P25 a percentage fixed for a community replaces its share by size: half of the six portions",
+     (pc[B]["quota"], pc[A]["quota"], pc[B]["pinned"], pc[A]["pinned"]) == (3, 3, True, False)
+     and {"g0011", "g0012", "g0013"} <= set(guids(pin["main"])) and pc[B]["filled"] == 2
+     and [g for g in guids(pin["main"]) if g < "g0010"] == ["g0001", "g0002", "g0003"], str(pin["communities"]))
+hand = bev(manual={"g0014": "add"})
+hc = {c["name"]: c for c in hand["communities"]}
+t.ok("P25 who is added by hand takes a portion before the split: five are left to share",
+     hand["main"][0]["guid"] == "g0014" and len(hand["main"]) == 6 and hc[A]["quota"] + hc[B]["quota"] == 5)
+nof = bev(criteria={})
+t.ok("P25 with no filter everybody marked passes: the shares are filled by need score, and nobody is a top-up",
+     not any(x.get("fill") for x in nof["main"]) and [c["quota"] for c in nof["communities"]] == [4, 2]
+     and [g for g in guids(nof["main"]) if g < "g0010"] == ["g0006", "g0001", "g0002", "g0003"], str(guids(nof["main"])))
+t.ok("P25 no portions: an empty list, with the split or without it", bev(portions=0)["main"] == [] and bev(portions=0)["communities"] == [])
+allhand = bev(portions=1, reserve=1, manual={"g0014": "add"})
+t.ok("P25 when every portion was given by hand, nobody else is on the list — only the reserve is left",
+     guids(allhand["main"]) == ["g0014"] and guids(allhand["reserve_list"]) == ["g0001"])
+t.ok("P25 every entry of a split list carries a reason, and who is on it carries his community",
+     all(x["why"].strip() for x in e["main"] + e["out"]) and all(x.get("community") for x in e["main"]))
+keep = (copy.deepcopy(brecs), copy.deepcopy(bhist))
+t.ok("P25 pure: the inputs are untouched and the same question gives the same answer", bev() == e and (brecs, bhist) == keep)
+
+# ── P26: random populations — the split always adds up, and never lets the unmarked in ──
+bad = []
+for seed in range(40):
+    rng = random.Random(7700 + seed)
+    recs = [person(n, rng.choice(["שבועי", "חודשי", "חד-פעמי", ""]), rng.choice([4, 3, 2, None]),
+                   holiday_support=rng.choice([0, 1, 1]), representative=rng.choice([A, A, B, "קהילה ג", ""]),
+                   income=rng.choice(["", "0", str(rng.randint(500, 9000))]), per_soul=str(rng.randint(-200, 2000)),
+                   children_total=rng.randint(0, 8)) for n in range(1, rng.randint(8, 45))]
+    hist = [got(r["guid"], wk(-rng.randint(1, 6))) for r in recs if rng.random() < 0.7]
+    crit = rng.choice([{}, {"income": {"min": None, "max": 4000}}, {"children_total": {"min": 3, "max": None}}])
+    portions, reserve = rng.choice([1, 4, 10, 30]), rng.choice([0, 3])
+    pinned = rng.choice([None, {A: 60.0}, {B: 100.0}])
+    e = planner.plan_timeline(recs, hist, start=W0, weeks=0, horizon=W0, weights=WEIGHTS, cooldown_weeks=4, pinned=pinned,
+                              events=[ev(SUN, "*", portions, reserve, crit, balance=True)])["events"][0]
+    marked = {r["guid"] for r in recs if r["holiday_support"]}
+    on = guids(e["main"]) + guids(e["reserve_list"])
+    if not set(on) <= marked:
+        bad.append((seed, "somebody who is not marked is on a split list"))
+    if len(on) != len(set(on)) or set(on) & set(guids(e["out"])):
+        bad.append((seed, "somebody is listed twice"))
+    if len(e["main"]) != min(portions, len(marked)) or len(e["main"]) > portions:
+        bad.append((seed, f"the list is {len(e['main'])} for {portions} portions and {len(marked)} marked"))
+    if sum(c["main"] for c in e["communities"]) != len(e["main"]) or any(c["main"] > c["quota"] or c["quota"] > c["size"] for c in e["communities"]):
+        bad.append((seed, "the split does not add up"))
+    if sum(c["size"] for c in e["communities"]) != len(marked) or sum(c["quota"] for c in e["communities"]) != len(e["main"]):
+        bad.append((seed, "the shares do not cover the portions"))
+    if any(x.get("fill") and x["guid"] not in marked for x in e["main"]):
+        bad.append((seed, "a top-up from outside the marked"))
+t.ok("P26 forty random populations: a split list is exactly the portions (or everybody marked), from the marked only, "
+     "and the shares of the communities add up to it", not bad, str(bad[:4]))
+
 t.done()

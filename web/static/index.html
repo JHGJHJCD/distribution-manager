@@ -44,6 +44,7 @@
       <span><i class="sw t-w4"></i>חודשי</span>
       <span><i class="sw t-one"></i>חד־פעמי</span>
       <span>✋ נקבע ביד</span>
+      <span><i class="mode-mark">ניקוד</i>שבוע שמחולק לפי ניקוד</span>
       <span class="legend-note" id="whoLegend" hidden><i class="dot"></i>השבועות שבהם מי שבחרת מקבל</span>
     </div>
   </section>
@@ -64,6 +65,9 @@
         <button type="button" class="btn quiet" id="resetNumbers" hidden>חזרה למספרים הרגילים</button>
       </div>
       <div class="tool-group">
+        <label class="tick" for="byScore"><input type="checkbox" id="byScore"> לפי ניקוד בשבוע הזה</label>
+      </div>
+      <div class="tool-group">
         <label for="nRange">מהשבוע הזה, כמה שבועות</label>
         <input id="nRange" type="number" min="1" max="104" value="1" inputmode="numeric">
         <button type="button" class="btn main" id="doPrint">הדפס</button>
@@ -71,6 +75,7 @@
       </div>
     </div>
 
+    <p class="sub mode-note" id="scoreNote" hidden></p>
     <div id="warnings"></div>
     <div class="why" id="why" aria-live="polite"></div>
     <div class="buckets">

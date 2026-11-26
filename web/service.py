@@ -49,6 +49,8 @@ def _context(conn, now: datetime) -> dict:
         "horizon": selection.upcoming_wednesday(now.date()),
         "manual": store.load_manual(conn),
         "numbers": store.load_numbers(conn),
+        "modes": store.load_modes(conn),                # the weeks that are cut by need score
+        "pinned": store.community_pcts(settings),       # the percentage fixed for a community
         "prints": store.load_prints(conn),
         "events": store.load_events(conn),              # holiday events that are still ahead
         "event_prints": store.load_event_prints(conn),
@@ -61,7 +63,8 @@ def _timeline(ctx: dict, start: date, weeks: int) -> dict:
         ctx["recipients"], ctx["received"], start=start, weeks=weeks, horizon=ctx["horizon"],
         weights=ctx["weights"], cooldown_weeks=ctx["cooldown"],
         portions=ctx["portions"], reserve=ctx["reserve"],
-        per_week=ctx["numbers"], manual=ctx["manual"], events=ctx["events"])
+        per_week=ctx["numbers"], manual=ctx["manual"], events=ctx["events"],
+        modes=ctx["modes"], pinned=ctx["pinned"])
 
 
 def _plan(ctx: dict, start: date, weeks: int) -> list:
@@ -176,7 +179,7 @@ def _week_summary(w: dict, ctx: dict) -> dict:
         "date": w["date"].isoformat(), "portions": w["portions"], "reserve": w["reserve"],
         "regulars_due": w["regulars_due"], "main_regulars": w["main_regulars"],
         "main_one_timers": w["main_one_timers"], "empty_portions": w["empty_portions"],
-        "cut": w["cut"], "counts": w["counts"], "warnings": w["warnings"],
+        "cut": w["cut"], "counts": w["counts"], "warnings": w["warnings"], "by_score": w["by_score"],
         "main": [e["guid"] for e in w["main"]],
         "reserve_list": [e["guid"] for e in w["reserve_list"]],
         "numbers_set": w["date"] in ctx["numbers"],
@@ -188,7 +191,7 @@ def _week_summary(w: dict, ctx: dict) -> dict:
 # What the screen needs about a person on a week's list — and nothing more. The planner's
 # working numbers (need score, priority code, waiting days, last date) stay on the server;
 # what matters of them is already said in words in `why`.
-_ENTRY_FIELDS = ("guid", "name", "kind", "freq", "role", "why", "group", "manual")
+_ENTRY_FIELDS = ("guid", "name", "kind", "freq", "role", "why", "group", "manual", "community", "fill")
 
 
 def _public(entries: list) -> list:
@@ -291,6 +294,20 @@ def set_numbers(conn, now: datetime, wed: date, portions, reserve, db_path: str 
             raise Refused(f"צריך מספר שלם בין 0 ל-{MAX_PORTIONS}")
     with store.tx(conn):
         store.set_numbers(conn, wed, portions, reserve, now)
+
+
+def set_mode(conn, now: datetime, wed: date, mode: str, db_path: str = None) -> None:
+    """How one coming week picks among the regulars in turn when its portions are short:
+    'scored' = by need score, 'wait' = the ordinary way (whoever waited longest)."""
+    roll_forward(conn, now, db_path)
+    try:
+        _open_index(conn, now, wed)
+    except (ValueError, LookupError):
+        raise Refused("אפשר לשנות רק שבוע שעוד לא עבר")
+    if mode not in planner.WEEK_MODES:
+        raise Refused("דרך חלוקה לא מוכרת")
+    with store.tx(conn):
+        store.set_mode(conn, wed, None if mode == planner.MODE_WAIT else mode, now)
 
 
 def _range(conn, now: datetime, start: date, weeks: int, db_path: str = None):

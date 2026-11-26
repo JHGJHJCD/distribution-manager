@@ -39,7 +39,7 @@ def _summary(p: dict, ctx: dict) -> dict:
     return {
         "guid": p["guid"], "date": p["date"].isoformat(), "day": service.day_name(p["date"]),
         "holiday": p["holiday"], "name": holidays.dist_label(p["holiday"]),
-        "portions": p["portions"], "reserve": p["reserve"], "criteria": p["criteria"],
+        "portions": p["portions"], "reserve": p["reserve"], "criteria": p["criteria"], "balance": p["balance"],
         "marked": p["marked"], "eligible": p["eligible"], "missing": p["missing"], "unmarked": p["unmarked"],
         "main_count": len(p["main"]), "reserve_count": len(p["reserve_list"]),
         "left_out": sum(1 for e in p["out"] if e.get("group") in (planner.OUT_EV_CUT, planner.OUT_NO_PORTIONS)),
@@ -95,7 +95,7 @@ def detail(conn, now: datetime, guid: str, db_path: str = None) -> dict:
         raise Refused(_NOT_FOUND)
     d = _summary(plan, ctx)
     names = {r["guid"]: r.get("full_name") or "" for r in ctx["recipients"]}
-    d.update(closed=False, main=service._public(plan["main"]),
+    d.update(closed=False, communities=plan["communities"], main=service._public(plan["main"]),
              reserve_list=service._public(plan["reserve_list"]), out=service._public(plan["out"]),
              print=service.since_print(ctx["event_prints"].get(guid), [e["guid"] for e in plan["main"]], names),
              holidays=holiday_choices(), filter=filter_fields(), first_day=service.open_day(now).isoformat(),
@@ -118,7 +118,7 @@ def _closed(conn, event: dict) -> dict:
     return {"closed": True, "guid": event["guid"], "date": event["date"].isoformat(),
             "day": service.day_name(event["date"]), "holiday": event["holiday"],
             "name": holidays.dist_label(event["holiday"]), "portions": event["portions"],
-            "reserve": event["reserve"], "criteria": event["criteria"],
+            "reserve": event["reserve"], "criteria": event["criteria"], "balance": event["balance"],
             "main": lists["main"], "reserve_list": lists["reserve"], "out": [],
             "main_count": len(lists["main"]), "reserve_count": len(lists["reserve"]),
             "batch": event["batch_guid"] or "", "warnings": []}
@@ -185,10 +185,13 @@ def save(conn, now: datetime, data: dict, db_path: str = None) -> dict:
     portions = _whole(data.get("portions"), "מנות")
     reserve = _whole(data.get("reserve", 0), "רזרבה")
     criteria = clean_criteria(data.get("criteria"))
+    balance = data.get("balance", False)
+    if not isinstance(balance, bool):
+        raise Refused("איזון הקהילות: צריך כן או לא")
     with store.tx(conn):
         if guid and _known(conn, guid)["closed_at"]:
             raise Refused(_PASSED)
-        guid = store.save_event(conn, guid, day, code, portions, reserve, criteria, now)
+        guid = store.save_event(conn, guid, day, code, portions, reserve, criteria, now, balance)
     return {"ok": True, "guid": guid}
 
 

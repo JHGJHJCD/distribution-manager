@@ -149,6 +149,11 @@
         hand.title = "יש בשבוע הזה שינויים ביד";
         b.appendChild(hand);
       }
+      if (w.by_score) {
+        var mode = el("span", "mode", "ניקוד");
+        mode.title = "השבוע הזה מחולק לפי ניקוד";
+        b.appendChild(mode);
+      }
       var bar = el("div", "bar");
       [["שבועי", "w1"], ["דו-שבועי", "w2"], ["תלת-שבועי", "w3"], ["חודשי", "w4"], ["חד-פעמי", "one"]].forEach(function (t) {
         var n = w.counts[t[0]] || 0;
@@ -205,6 +210,12 @@
       $("nReserve").value = week.reserve;
     }
     $("resetNumbers").hidden = !week.numbers_set;
+    $("byScore").checked = !!week.by_score;
+    var note = $("scoreNote");
+    note.hidden = !week.by_score;
+    note.textContent = !week.by_score ? ""
+      : week.cut ? "השבוע הזה מחולק לפי ניקוד: אין מנה לכל קבוע שתורו הגיע, ולכן נכנסו בעלי הניקוד הגבוה ביותר, ולא מי שמחכה הכי הרבה זמן."
+                 : "השבוע הזה מסומן \"לפי ניקוד\", אבל יש מנה לכל קבוע שתורו הגיע, ולכן הסימון לא משנה כרגע את הרשימה.";
   }
 
   function renderWeek() {
@@ -216,6 +227,7 @@
       week.regulars_due + " קבועים שתורם הגיע · " + week.main_one_timers + " חד־פעמיים · " +
       week.reserve_list.length + " ברזרבה" +
       (week.numbers_set ? " · המספרים נקבעו ביד לשבוע הזה" : "") +
+      (week.by_score ? " · מחולק לפי ניקוד" : "") +
       (week.manual_count === 1 ? " · שינוי אחד ביד" : week.manual_count > 1 ? " · " + week.manual_count + " שינויים ביד" : "");
     renderTools(week);
     var warn = $("warnings");
@@ -407,6 +419,14 @@
     }).then(function () { setBusy(false); });
   }
 
+  // "by score" for this week only: it decides who is cut when the portions are short
+  $("byScore").addEventListener("change", function () {
+    var week = currentWeek(), box = $("byScore");
+    if (!week) { return; }
+    change("/api/week/mode", { date: week.date, mode: box.checked ? "scored" : "wait" }).then(function (ok) {
+      if (!ok) { box.checked = !!currentWeek().by_score; }
+    });
+  });
   $("saveNumbers").addEventListener("click", saveNumbers);
   $("resetNumbers").addEventListener("click", resetNumbers);
   ["nPortions", "nReserve"].forEach(function (id) {

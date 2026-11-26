@@ -51,6 +51,24 @@
     });
     return { weights: out, sum: Math.round(sum * 10) / 10, bad: bad };
   }
+  // {percents, sum, bad, all}: bad = a box that is not a number between 0 and 100 with one decimal at most;
+  // all = every community has a percentage of its own
+  function readCommunities() {
+    var out = {}, sum = 0, bad = false, fixed = 0;
+    state.view.communities.forEach(function (c, i) {
+      var s = $("c_" + i).value.trim();
+      if (s === "") { s = "0"; }
+      if (!/^\d{1,3}(\.\d)?$/.test(s) || Number(s) > 100) { bad = true; return; }
+      out[c.name] = Number(s);
+      sum += Number(s);
+      if (Number(s) > 0) { fixed += 1; }
+    });
+    return { percents: out, sum: Math.round(sum * 10) / 10, bad: bad,
+             all: state.view.communities.length > 0 && fixed === state.view.communities.length };
+  }
+  function sameCommunities(p) {
+    return state.view.communities.every(function (c) { return p[c.name] === c.percent; });
+  }
   function sameNumbers(n) {
     return !!n && state.view.number_fields.every(function (f) { return n[f.name] === state.view.numbers[f.name]; });
   }
@@ -122,12 +140,34 @@
     ask("w", right && changed ? { weights: r.weights } : null);
   }
 
+  function communitiesTyped() {
+    var r = readCommunities();
+    var sum = $("cSum");
+    var over = r.sum > 100, short = r.all && r.sum !== 100;
+    var right = !r.bad && !over && !short;
+    sum.hidden = !state.view.communities.length;
+    sum.className = "sum " + (right ? "ok" : "bad");
+    sum.textContent = r.bad ? "בכל תיבה צריך מספר בין 0 ל־100 (עד ספרה אחת אחרי הנקודה)"
+      : over ? "סך הכול " + tidy(r.sum) + "% · " + tidy(r.sum - 100) + " יותר מדי"
+      : short ? "לכל הקהילות נקבע אחוז, ולכן הסכום צריך להיות 100 בדיוק (עכשיו " + tidy(r.sum) + ")"
+      : r.sum === 0 ? "לא נקבע אחוז לאף קהילה: כולן מתחלקות לפי הגודל שלהן"
+      : r.sum === 100 ? "סך הכול 100% ✓"
+                      : "סך הכול " + tidy(r.sum) + "% · השאר מתחלק בין שאר הקהילות לפי הגודל שלהן";
+    var changed = r.bad || !sameCommunities(r.percents);
+    $("cSave").disabled = !right || !changed;
+    $("cSave").title = right ? "" : "אי אפשר לשמור: האחוזים לא מסתדרים";
+    $("cUndo").hidden = !changed;
+    ask("c", right && changed ? { communities: r.percents } : null);
+  }
+
   function fill() {
     var v = state.view;
     v.number_fields.forEach(function (f) { $("n_" + f.name).value = v.numbers[f.name]; });
     v.weights.forEach(function (w) { $("w_" + w.key).value = w.value; });
+    v.communities.forEach(function (c, i) { $("c_" + i).value = c.percent; });
     numbersTyped();
     weightsTyped();
+    communitiesTyped();
   }
 
   function build() {
@@ -160,6 +200,28 @@
       row.appendChild(pct);
       rows.appendChild(row);
     });
+    rows = $("cRows");
+    clear(rows);
+    v.communities.forEach(function (c, i) {
+      var row = el("div", "wrow");
+      var label = el("label", null, c.name + " ");
+      label.htmlFor = "c_" + i;
+      label.appendChild(el("small", null, c.size === 1 ? "מקבל פעיל אחד" : c.size + " מקבלים פעילים"));
+      row.appendChild(label);
+      var pct = el("span", "pct");
+      var input = numberInput("c_" + i, 100, "0.1");
+      input.addEventListener("input", communitiesTyped);
+      pct.appendChild(input);
+      pct.appendChild(document.createTextNode("%"));
+      row.appendChild(pct);
+      rows.appendChild(row);
+    });
+    $("cNone").hidden = v.communities.length > 0;
+    $("cSave").hidden = !v.communities.length;
+    $("cNoCommunity").hidden = !v.no_community;
+    $("cNoCommunity").textContent = v.no_community === 1
+      ? "יש מקבל פעיל אחד בלי קהילה. הוא מקבל חלק כמו קהילה קטנה (\"" + v.no_community_label + "\")."
+      : "יש " + v.no_community + " מקבלים פעילים בלי קהילה. יחד הם מקבלים חלק לפי מספרם, כמו קהילה (\"" + v.no_community_label + "\").";
     $("wDefaults").textContent = "חזרה לברירת המחדל (" + v.weights.filter(function (w) { return w["default"] > 0; })
       .map(function (w) { return w["default"]; }).join(", ") + ")";
     $("queueNote").textContent = "התור של החד־פעמיים לא מושפע מהמשקלים. יש לו נוסחה קבועה: " +
@@ -169,8 +231,11 @@
   function load() {
     return getJSON("/api/settings").then(function (v) {
       var first = !state.view;
+      // the list of communities itself may have changed (a card was edited in another tab): build it again
+      var same = !first && JSON.stringify(state.view.communities.map(function (c) { return c.name; })) ===
+                           JSON.stringify(v.communities.map(function (c) { return c.name; }));
       state.view = v;
-      if (first) { build(); }
+      if (first || !same) { build(); }
       fill();
     }).catch(function (e) {
       notice(e.status === 503 ? e.message : "לא הצלחתי לקבל את ההגדרות מהשרת. " + (e.message || ""), true);
@@ -201,6 +266,14 @@
   $("wUndo").addEventListener("click", function () {
     state.view.weights.forEach(function (w) { $("w_" + w.key).value = w.value; });
     weightsTyped();
+  });
+  $("cSave").addEventListener("click", function () {
+    var r = readCommunities();
+    if (!r.bad && r.sum <= 100 && !(r.all && r.sum !== 100)) { save("/api/settings/communities", { percents: r.percents }); }
+  });
+  $("cUndo").addEventListener("click", function () {
+    state.view.communities.forEach(function (c, i) { $("c_" + i).value = c.percent; });
+    communitiesTyped();
   });
   $("wDefaults").addEventListener("click", function () {
     state.view.weights.forEach(function (w) { $("w_" + w.key).value = w["default"]; });

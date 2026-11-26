@@ -259,6 +259,20 @@ span.chip { display: inline-block; }
 .explain h3 { font-size: 1.05rem; }
 @media (max-width: 900px) { .weights { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px) { .weights { grid-template-columns: minmax(0, 1fr); } }
+/* a week that is cut by need score, and a holiday list that is split between the communities */
+.wk .mode, .mode-mark { font-size: .66rem; font-style: normal; font-weight: 700; line-height: 1.5; border-radius: 5px; padding: 0 5px;
+  background: var(--soft); color: var(--ok); }
+.wk .mode { position: absolute; top: 2px; inset-inline: 0; margin-inline: auto; width: max-content; }
+.mode-note { border-inline-start: 4px solid var(--accent); padding-inline-start: 10px; color: var(--fg); }
+.table-scroll { overflow-x: auto; }
+table.split { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+table.split th, table.split td { text-align: start; padding: 5px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.split thead th { color: var(--muted); font-size: .86rem; font-weight: 600; }
+table.split tbody th { font-weight: 600; white-space: normal; }
+table.split tbody tr:last-child th, table.split tbody tr:last-child td { border-bottom: 0; }
+.chip.fill { outline: 2px dashed var(--fg); outline-offset: -2px; }
+.chip.fill.sel { outline: 3px solid var(--fg); outline-offset: 1px; }
+.sw.fill-mark { background: var(--w1); outline: 2px dashed var(--fg); outline-offset: -2px; }
 /* a holiday event among the weeks of the strip */
 .wk.ev { width: 74px; border-style: dashed; text-decoration: none; color: var(--fg); display: flex; flex-direction: column;
   justify-content: center; gap: 4px; padding: 8px 6px; }

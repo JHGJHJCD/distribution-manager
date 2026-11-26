@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Stage 4 — the settings screen: the ordinary numbers of a week (portions, reserve, how
-long a one-timer waits after receiving) and the weights of the need score. Plain functions
-over a connection and the current time (no web framework), like web/service.py.
+long a one-timer waits after receiving), the weights of the need score, and the percentage
+that is fixed for a community (for a holiday list that is split between the communities).
+Plain functions over a connection and the current time (no web framework), like web/service.py.
 
 Nothing here touches the past. A setting only changes how the COMING lists are computed —
 and they are computed anew on every request anyway, so a change takes effect at once and
@@ -35,6 +36,18 @@ WEIGHT_LABELS = {
 WEIGHT_KEYS = [f["key"] for f in scoring.NEED_FACTORS]
 
 
+def community_sizes(conn) -> tuple:
+    """({community: how many active cards}, how many active cards have no community).
+    A community is everybody whose card names the same "נציג" (selection.community_key)."""
+    sizes = {}
+    for r in store.load_recipients(conn):
+        if planner.is_active(r):
+            key = selection.community_key(r)
+            sizes[key] = sizes.get(key, 0) + 1
+    none = sizes.pop(selection.NO_COMMUNITY, 0)
+    return sizes, none
+
+
 def _numbers(ctx: dict) -> dict:
     return {"portions": ctx["portions"], "reserve": ctx["reserve"], "cooldown_weeks": ctx["cooldown"]}
 
@@ -45,7 +58,14 @@ def view(conn, now: datetime, db_path: str = None) -> dict:
     service.roll_forward(conn, now, db_path)
     ctx = service._context(conn, now)
     weights = ctx["weights"]
+    sizes, none = community_sizes(conn)
+    pinned = ctx["pinned"]
     return {
+        # largest first; a community whose percentage is 0 gets its share by its size
+        "communities": [{"name": c, "size": n, "percent": _tidy(pinned.get(c, 0.0))}
+                        for c, n in sorted(sizes.items(), key=lambda x: (-x[1], x[0]))],
+        "communities_sum": _tidy(sum(pinned.get(c, 0.0) for c in sizes)),
+        "no_community": none, "no_community_label": selection.NO_COMMUNITY_LABEL,
         "numbers": _numbers(ctx),
         "number_fields": [{"name": name, "label": label, "max": top} for name, _key, label, top in NUMBERS],
         "number_defaults": {"portions": config.DEFAULT_PORTIONS, "reserve": config.DEFAULT_RESERVE,
@@ -99,6 +119,32 @@ def clean_weights(data) -> dict:
     return out
 
 
+def clean_communities(data, sizes: dict) -> dict:
+    """The percentages fixed for communities, {community: percent} — only the ones above 0.
+    The desktop program's rule: together they may not pass 100, and when EVERY community
+    has one they must add up to exactly 100 (there is nobody left to take the rest)."""
+    if not isinstance(data, dict):
+        raise Refused("חסרים האחוזים של הקהילות")
+    unknown = sorted(str(k) for k in set(data) - set(sizes))
+    if unknown:
+        raise Refused(f"קהילה שאין לה מקבלים פעילים: {unknown[0]}")
+    out = {}
+    for name in sizes:
+        v = data.get(name, 0)
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v or not 0 <= v <= 100:
+            raise Refused(f"{name}: צריך מספר בין 0 ל-100")
+        if round(v, 1) != round(v, 6):
+            raise Refused(f"{name}: עד ספרה אחת אחרי הנקודה")
+        if v > 0:
+            out[name] = round(float(v), 1)
+    total = round(sum(out.values()), 1)
+    if total > 100.0:
+        raise Refused(f"האחוזים של הקהילות עוברים את 100 (עכשיו: {_tidy(total)})")
+    if sizes and len(out) == len(sizes) and total != 100.0:
+        raise Refused(f"כשלכל הקהילות נקבע אחוז, הסכום צריך להיות 100 בדיוק (עכשיו: {_tidy(total)})")
+    return out
+
+
 # ── saving ────────────────────────────────────────────────────────────────────
 def save_numbers(conn, now: datetime, data, db_path: str = None) -> dict:
     """The ordinary numbers of a week. A week that was given numbers of its own keeps them."""
@@ -119,9 +165,20 @@ def save_weights(conn, now: datetime, data, db_path: str = None) -> dict:
     return {"ok": True}
 
 
+def save_communities(conn, now: datetime, data, db_path: str = None) -> dict:
+    """The percentage fixed for each community (0 / missing = by its size)."""
+    service.roll_forward(conn, now, db_path)
+    pcts = clean_communities(data, community_sizes(conn)[0])
+    with store.tx(conn):
+        store.set_community_pcts(conn, pcts)
+    return {"ok": True}
+
+
 # ── "what would change?" ──────────────────────────────────────────────────────
-def _changed_context(ctx: dict, data: dict) -> dict:
+def _changed_context(conn, ctx: dict, data: dict) -> dict:
     new = dict(ctx)
+    if data.get("communities") is not None:
+        new["pinned"] = clean_communities(data["communities"], community_sizes(conn)[0])
     if data.get("numbers") is not None:
         n = clean_numbers(data["numbers"])
         new.update(portions=n["portions"], reserve=n["reserve"], cooldown=n["cooldown_weeks"])
@@ -131,14 +188,14 @@ def _changed_context(ctx: dict, data: dict) -> dict:
 
 
 def preview(conn, now: datetime, data, db_path: str = None) -> dict:
-    """What the settings in `data` ({numbers} and / or {weights}) would change in the lists
-    of the coming weeks and of the holiday events ahead — without saving anything. For each
-    list that would differ: how many names come in and how many go out."""
+    """What the settings in `data` ({numbers} / {weights} / {communities}) would change in
+    the lists of the coming weeks and of the holiday events ahead — without saving anything.
+    For each list that would differ: how many names come in and how many go out."""
     service.roll_forward(conn, now, db_path)
-    if not isinstance(data, dict) or (data.get("numbers") is None and data.get("weights") is None):
+    if not isinstance(data, dict) or all(data.get(k) is None for k in ("numbers", "weights", "communities")):
         raise Refused("אין מה לבדוק")
     ctx = service._context(conn, now)
-    new = _changed_context(ctx, data)
+    new = _changed_context(conn, ctx, data)
     start = service.first_open_week(conn, now)
     weeks = max([PREVIEW_WEEKS] + [planner.weeks_through(start, e["date"]) for e in ctx["events"]])
     weeks = min(weeks, config.MAX_WEEKS)

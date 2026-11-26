@@ -172,6 +172,8 @@ def import_old(src: str, dest: str, *, sent_history: str = None, replace: bool =
             for k, v in old_settings.items():
                 if (k.startswith("need_w_") or k == "onetime_cooldown_weeks") and v is not None:
                     store.set_setting(conn, k, v)
+            # the percentages the manager fixed for communities (read back through the site's own reader)
+            store.set_community_pcts(conn, store.community_pcts(old_settings))
             store.set_setting(conn, "default_portions", config.DEFAULT_PORTIONS)
             store.set_setting(conn, "default_reserve", config.DEFAULT_RESERVE)
 
