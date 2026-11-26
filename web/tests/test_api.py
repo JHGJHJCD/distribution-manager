@@ -487,8 +487,41 @@ t.ok("A19 the history cannot be written through the site: there is no writing ro
      and [post(u, {}, headers={}).status_code for u in ("/api/history", "/api/history/person")] == [403] * 2
      and [tuple(r) for r in store.connect(path).execute("SELECT * FROM history ORDER BY id")] == rows_before)
 
+# ── A20: the settings ─────────────────────────────────────────────────────────
+WEIGHTS = {"money": 50, "souls": 50, "recency": 0, "income": 0, "housing": 0, "medical": 0}
+NUMBERS = {"portions": 7, "reserve": 1, "cooldown_weeks": 3}
+seen = client.get("/api/settings").json()
+t.ok("A20 the settings screen gets the numbers and the six weights as they are",
+     set(seen["numbers"]) == {"portions", "reserve", "cooldown_weeks"} and len(seen["weights"]) == 6 and seen["weights_sum"] == 100)
+writes = [("/api/settings/numbers", NUMBERS), ("/api/settings/weights", {"weights": WEIGHTS}),
+          ("/api/settings/preview", {"weights": WEIGHTS})]
+t.ok("A20 no setting can be written without the site's own header (403), and nothing was written",
+     [post(u, b, headers={}).status_code for u, b in writes] == [403] * 3 and client.get("/api/settings").json() == seen)
+t.ok("A20 the writing routes cannot be reached with GET", [client.get(u).status_code for u, _ in writes] == [405] * 3)
+look = post("/api/settings/preview", {"numbers": NUMBERS})
+t.ok("A20 'what would change' answers, and saves nothing",
+     look.status_code == 200 and look.json()["same"] is False and client.get("/api/settings").json() == seen)
+t.ok("A20 saving the numbers and the weights: the screen and the coming weeks follow at once",
+     post("/api/settings/numbers", NUMBERS).status_code == 200 and post("/api/settings/weights", {"weights": WEIGHTS}).status_code == 200
+     and client.get("/api/settings").json()["numbers"] == NUMBERS
+     and {w["key"]: w["value"] for w in client.get("/api/settings").json()["weights"]} == WEIGHTS
+     and plan_now(1)["defaults"]["portions"] == 7 and post("/api/settings/preview", {"numbers": NUMBERS}).json()["same"] is True)
+t.ok("A20 weights that do not add up to 100 are refused in words (409); a broken request is refused (422)",
+     post("/api/settings/weights", {"weights": dict(WEIGHTS, money=40)}).status_code == 409
+     and "100" in post("/api/settings/weights", {"weights": dict(WEIGHTS, money=40)}).json()["message"]
+     and [post("/api/settings/numbers", dict(NUMBERS, portions=-1)).status_code,
+          post("/api/settings/numbers", dict(NUMBERS, portions=5000)).status_code,
+          post("/api/settings/numbers", dict(NUMBERS, extra=1)).status_code,
+          post("/api/settings/numbers", {"portions": 5}).status_code,
+          post("/api/settings/weights", {"weights": "all"}).status_code,
+          post("/api/settings/weights", {}).status_code] == [422] * 6
+     and client.get("/api/settings").json()["numbers"] == NUMBERS)
+t.ok("A20 the settings carry no name and no detail of anybody", SECRET_PHONE not in client.get("/api/settings").text
+     and "בדיקה" not in client.get("/api/settings").text and "בדיקה" not in look.text)
+
 # ── A18: every screen of the site ─────────────────────────────────────────────
-SCREENS = {"/": "app.js", "/people": "people.js", "/holiday": "holiday.js", "/history": "history.js"}
+SCREENS = {"/": "app.js", "/people": "people.js", "/holiday": "holiday.js", "/history": "history.js",
+           "/settings": "settings.js"}
 NAV = ['href="/"', 'href="/people"', 'href="/holiday"', 'href="/history"', 'href="/settings"']
 pages = {u: client.get(u) for u in SCREENS}
 t.ok("A18 every screen is served, right-to-left, with the whole strip of screens on it",

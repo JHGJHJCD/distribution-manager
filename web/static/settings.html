@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>הגדרות · מנהל חלוקה</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1>הגדרות</h1>
+      <p class="sub">מה שנקבע כאן משפיע רק על הרשימות הבאות. מה שעבר לא משתנה.</p>
+    </div>
+    <p class="test-copy">עותק לבדיקה · לא הנתונים שרון עובד עליהם</p>
+  </header>
+
+  <nav class="nav" aria-label="מסכים">
+    <a href="/">שבועות</a>
+    <a href="/people">מקבלים</a>
+    <a href="/holiday">חלוקת חג</a>
+    <a href="/history">היסטוריה</a>
+    <a href="/settings" aria-current="page">הגדרות</a>
+  </nav>
+
+  <div id="notice" class="notice" role="status" hidden></div>
+
+  <section class="panel">
+    <div class="head"><h2>מספרים רגילים</h2></div>
+    <div class="weights" id="numRows"></div>
+    <div class="effect" id="numEffect" role="status" hidden></div>
+    <div class="actions bar">
+      <button type="button" class="btn main" id="numSave" disabled>שמור</button>
+      <button type="button" class="btn quiet" id="numUndo" hidden>בטל את מה שהקלדתי</button>
+    </div>
+    <p class="sub">שינוי כאן מחשב מחדש את כל השבועות הבאים. שבוע שקבעו לו מספר משלו נשאר עם המספר שלו.</p>
+  </section>
+
+  <section class="panel">
+    <div class="head"><h2>משקלי הניקוד</h2></div>
+    <div class="weights" id="wRows"></div>
+    <p class="sum ok" id="wSum" role="status"></p>
+    <div class="effect" id="wEffect" role="status" hidden></div>
+    <div class="actions bar">
+      <button type="button" class="btn main" id="wSave" disabled>שמור</button>
+      <button type="button" class="btn quiet" id="wUndo" hidden>בטל את מה שהקלדתי</button>
+      <button type="button" class="btn quiet" id="wDefaults">חזרה לברירת המחדל</button>
+    </div>
+
+    <div class="explain">
+      <h3>מה המשקלים משנים?</h3>
+      <p>כשיש מנה לכל מי שתורו הגיע, המשקלים לא משנים כלום.</p>
+      <p>כשאין מספיק מנות, נכנסים קודם מי שמחכים הכי הרבה זמן. רק בין אנשים שמחכים בדיוק אותו זמן, הניקוד קובע מי נכנס.</p>
+      <p id="queueNote"></p>
+    </div>
+  </section>
+
+</div>
+<script src="/static/common.js"></script>
+<script src="/static/settings.js"></script>
+</body>
+</html>

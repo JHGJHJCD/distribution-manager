@@ -18,11 +18,11 @@ sys.path.insert(0, HERE)
 import _util  # noqa: E402,F401  (puts the repository root on sys.path)
 
 from web import (app as webapp, card_service, cards, config, event_service, history_service, planner,  # noqa: E402
-                 service, store)
+                 service, settings_service, store)
 from web.engine import selection  # noqa: E402
 
 PLANNER, STORE, API, CARDS = "test_planner.py", "test_store.py", "test_api.py", "test_cards.py"
-HISTORY = "test_history.py"
+HISTORY, SETTINGS = "test_history.py", "test_settings.py"
 
 
 def run(target: str):
@@ -64,7 +64,7 @@ def mutate(target, name, obj, attr, broken):
     results.append(caught)
 
 
-for target in (PLANNER, STORE, API, CARDS, HISTORY):
+for target in (PLANNER, STORE, API, CARDS, HISTORY, SETTINGS):
     code, noticed = run(target)
     print(f"  {'OK' if code == 0 else 'FAIL'}  {target:<16} passes on the unbroken site (exit {code}) {noticed}")
     results.append(code == 0)
@@ -613,6 +613,63 @@ mutate(API, "one person's history answers with the card's note and phone", histo
 
 mutate(API, "the history's routes answer whatever is asked (a missing round is not refused)",
        history_service, "round_detail", lambda conn, now, batch, db_path=None: {"people": [], "absent_people": [], "reserve": []})
+
+# ── stage 4: the settings screen ──────────────────────────────────────────────
+_clean_weights = settings_service.clean_weights
+
+
+def _any_sum(data):
+    try:
+        return _clean_weights(data)
+    except service.Refused as e:
+        if "להסתכם" not in str(e):
+            raise
+        return {k: float(data[k]) for k in settings_service.WEIGHT_KEYS}
+
+
+mutate(SETTINGS, "weights that do not add up to 100 can be saved", settings_service, "clean_weights", _any_sum)
+
+mutate(SETTINGS, "a weight may be negative, as long as the sum is 100", settings_service, "clean_weights",
+       lambda data: {k: float(data[k]) for k in settings_service.WEIGHT_KEYS}
+       if isinstance(data, dict) and set(data) == set(settings_service.WEIGHT_KEYS)
+       and all(isinstance(v, (int, float)) and not isinstance(v, bool) and v == v for v in data.values())
+       and round(sum(data.values()), 1) == 100.0 else _clean_weights(data))
+
+_clean_numbers = settings_service.clean_numbers
+mutate(SETTINGS, "a number of portions above the ceiling can be saved", settings_service, "NUMBERS",
+       tuple((n, k, label, 10 ** 9) for n, k, label, _top in settings_service.NUMBERS))
+
+mutate(SETTINGS, "saving the numbers forgets the pause of the one-timers", settings_service, "NUMBERS",
+       settings_service.NUMBERS[:2])
+
+_save_weights = settings_service.save_weights
+mutate(SETTINGS, "saving the weights saves nothing", settings_service, "save_weights",
+       lambda conn, now, data, db_path=None: (_clean_weights(data), {"ok": True})[1])
+
+
+def _preview_that_saves(conn, now, data, db_path=None):
+    if data and data.get("weights") is not None:
+        settings_service.save_weights(conn, now, data["weights"], db_path)
+    if data and data.get("numbers") is not None:
+        settings_service.save_numbers(conn, now, data["numbers"], db_path)
+    return {"weeks": settings_service.PREVIEW_WEEKS, "changed": [], "same": True}
+
+
+mutate(SETTINGS, "'what would change' saves what it was asked about", settings_service, "preview", _preview_that_saves)
+
+_preview = settings_service.preview
+mutate(SETTINGS, "'what would change' always answers that nothing changes", settings_service, "preview",
+       lambda conn, now, data, db_path=None: dict(_preview(conn, now, data, db_path), changed=[], same=True))
+
+mutate(SETTINGS, "'what would change' does not look as far as a holiday event that is ahead",
+       settings_service.planner, "weeks_through", lambda start, day: 0)
+
+mutate(SETTINGS, "the weights of the settings also reorder the one-timers' queue",
+       settings_service.scoring, "ONE_TIME_QUEUE_WEIGHTS", {"money": 100.0, "souls": 0.0, "recency": 0.0,
+                                                           "income": 0.0, "housing": 0.0, "medical": 0.0})
+
+mutate(API, "the settings can be saved without checking them again on the server's side",
+       settings_service, "clean_weights", lambda data: {k: float((data or {}).get(k) or 0) for k in settings_service.WEIGHT_KEYS})
 
 breaks = len(results) - BASELINES
 if all(results):

@@ -240,6 +240,25 @@ button.hrow:hover, a.hrow:hover { background: var(--soft); }
 span.chip { display: inline-block; }
 .actions.links { gap: 6px 18px; margin-top: 0; }
 .btn.danger { border-color: var(--danger); color: var(--danger); }
+/* the settings */
+:root { --ok: #0b7d5f; }
+@media (prefers-color-scheme: dark) { :root { --ok: #3cc9a0; } }
+.weights { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 14px; }
+.wrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--bg); border-radius: 9px; padding: 7px 12px; min-width: 0; }
+.wrow label { min-width: 0; line-height: 1.35; }
+.wrow label small { display: block; color: var(--muted); font-size: .84rem; }
+.wrow input { flex: none; width: 76px; font: inherit; padding: 5px 8px; border: 1.5px solid var(--line); border-radius: 8px;
+  background: var(--surface); color: var(--fg); font-variant-numeric: tabular-nums; }
+.wrow .pct { display: inline-flex; align-items: center; gap: 5px; flex: none; color: var(--muted); }
+.sum { font-weight: 700; font-variant-numeric: tabular-nums; align-self: flex-start; border-radius: 9px; padding: 4px 12px; }
+.sum.ok { color: var(--ok); background: var(--soft); }
+.sum.bad { color: var(--warn-fg); background: var(--warn-bg); }
+.effect { border-inline-start: 4px solid var(--accent); padding-inline-start: 12px; display: flex; flex-direction: column; gap: 2px;
+  font-size: .92rem; font-variant-numeric: tabular-nums; }
+.explain { background: var(--soft); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.explain h3 { font-size: 1.05rem; }
+@media (max-width: 900px) { .weights { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .weights { grid-template-columns: minmax(0, 1fr); } }
 /* a holiday event among the weeks of the strip */
 .wk.ev { width: 74px; border-style: dashed; text-decoration: none; color: var(--fg); display: flex; flex-direction: column;
   justify-content: center; gap: 4px; padding: 8px 6px; }

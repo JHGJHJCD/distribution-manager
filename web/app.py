@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import card_service, config, event_service, history_service, service, store
+from . import card_service, config, event_service, history_service, service, settings_service, store
 
 STATIC_DIR = os.path.join(config.WEB_DIR, "static")
 _NO_DATA = {"error": "no_data",
@@ -397,6 +397,48 @@ def api_history_person(guid: str = _id()):
     return _run(lambda conn, path: history_service.person(conn, config.now(), guid, path))
 
 
+# ── stage 4: the settings ─────────────────────────────────────────────────────
+class NumbersSettings(BaseModel):
+    """The ordinary numbers of a week; every value is checked again in settings_service."""
+    model_config = {"extra": "forbid"}
+    portions: int = Field(ge=0, le=service.MAX_PORTIONS)
+    reserve: int = Field(ge=0, le=service.MAX_PORTIONS)
+    cooldown_weeks: int = Field(ge=0, le=settings_service.MAX_COOLDOWN_WEEKS)
+
+
+class WeightsSettings(BaseModel):
+    model_config = {"extra": "forbid"}
+    weights: dict[str, float]
+
+
+class PreviewSettings(BaseModel):
+    model_config = {"extra": "forbid"}
+    numbers: Optional[NumbersSettings] = None
+    weights: Optional[dict[str, float]] = None
+
+
+@app.get("/api/settings")
+def api_settings():
+    return _run(lambda conn, path: settings_service.view(conn, config.now(), path))
+
+
+@app.post("/api/settings/numbers")
+def api_settings_numbers(body: NumbersSettings):
+    return _run(lambda conn, path: settings_service.save_numbers(conn, config.now(), body.model_dump(), path))
+
+
+@app.post("/api/settings/weights")
+def api_settings_weights(body: WeightsSettings):
+    return _run(lambda conn, path: settings_service.save_weights(conn, config.now(), body.weights, path))
+
+
+@app.post("/api/settings/preview")
+def api_settings_preview(body: PreviewSettings):
+    """What the typed settings would change in the coming lists. It saves nothing."""
+    data = body.model_dump()
+    return _run(lambda conn, path: settings_service.preview(conn, config.now(), data, path))
+
+
 # ── pages ─────────────────────────────────────────────────────────────────────
 @app.get("/")
 def index():
@@ -416,6 +458,11 @@ def holiday_page():
 @app.get("/history")
 def history_page():
     return FileResponse(os.path.join(STATIC_DIR, "history.html"))
+
+
+@app.get("/settings")
+def settings_page():
+    return FileResponse(os.path.join(STATIC_DIR, "settings.html"))
 
 
 @app.get("/print")
