@@ -127,6 +127,18 @@ def snapshot(src: str, dest: str) -> None:
         raise RuntimeError("the copy of the data file is not a sound database")
 
 
+def assert_no_sync() -> None:
+    """The desktop program shares its data with a second computer through a folder. Its code
+    must never write there on behalf of a COPY: what is recorded on a copy are simulated
+    weeks, not real ones. The switch lives in a file beside the data file (sync_state.json),
+    and that file is never copied — so for a copy the sharing is off. This makes sure of it
+    before the desktop code writes a single row."""
+    from utils import sync                       # the desktop program's own module (after oracle_old.load)
+    if sync.is_enabled():
+        raise RuntimeError("the desktop program's sharing between computers is switched on for the copy - "
+                           "nothing was written, and the comparison stops here")
+
+
 class Both:
     """The site and the desktop program, each working on copies of one snapshot."""
 
@@ -163,6 +175,7 @@ class Both:
         path = os.path.join(self.root, f"{self.tag}-{self.runs}", "ManhalHaluka", "data.db")
         old.copy_db(self.snap, path)
         old.use_db(path)
+        assert_no_sync()
         with old.clock() as clk:
             clk._today = self.now.date()
             self.db.init_db()

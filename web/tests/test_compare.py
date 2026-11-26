@@ -13,6 +13,7 @@ Run:  <python 3.12> web/tests/test_compare.py
 import gc
 import hashlib
 import io
+import json
 import os
 import shutil
 import sqlite3
@@ -92,6 +93,12 @@ with old.clock() as sim:
     sim._today = W0
     db.init_db()                                            # a program start: everything re-derived
 gc.collect()                                                # the desktop code lets go of the file (and folds its -wal in)
+# as on the fund's computer: beside the data file sits the switch of the sharing with the
+# second computer, switched ON, and it points at the folder the two computers share
+SHARED = os.path.join(TMP, "shared-with-the-other-computer")
+os.makedirs(SHARED)
+with open(os.path.join(os.path.dirname(SRC), "sync_state.json"), "w", encoding="utf-8") as f:
+    json.dump({"enabled": True, "folder": SHARED, "device_id": "realdevice01", "seq": 4970}, f)
 before = folder_state(SRC)
 
 
@@ -240,7 +247,9 @@ t.ok("C6 the copies it worked on are gone when it ends",
 
 # ── C7: the source was only read ──────────────────────────────────────────────
 t.ok("C7 after everything, the data file is byte for byte what it was — and nothing was added beside it",
-     folder_state(SRC) == before and list(before) == ["data.db"], str(sorted(folder_state(SRC))))
+     folder_state(SRC) == before and sorted(before) == ["data.db", "sync_state.json"], str(sorted(folder_state(SRC))))
+t.ok("C7 not one of the simulated weeks reached the folder the two computers share, though the sharing is switched on there",
+     os.listdir(SHARED) == [])
 # a data file the desktop program is working on right now: what it wrote last is still in its -wal file
 busy = os.path.join(TMP, "busy", "data.db")
 os.makedirs(os.path.dirname(busy))
@@ -280,6 +289,25 @@ with open(os.path.join(TMP, "broken.db"), "wb") as f:
 with redirect_stdout(io.StringIO()):
     code = real.main(["--from", os.path.join(TMP, "broken.db")])
 t.ok("C7 a file that is not a database is not compared either (2)", code == 2)
+
+# ── C8: a copy that would carry the sharing switch with it is stopped before anything is written ──
+_copy_db = old.copy_db
+
+
+def copy_with_the_switch(src, dest):
+    _copy_db(src, dest)
+    shutil.copy(os.path.join(os.path.dirname(SRC), "sync_state.json"), os.path.join(os.path.dirname(dest), "sync_state.json"))
+
+
+old.copy_db = copy_with_the_switch
+try:
+    run()
+    stopped = ""
+except RuntimeError as e:
+    stopped = str(e)
+old.copy_db = _copy_db
+t.ok("C8 if the copy ever came with the sharing switched on, the comparison stops at once — and nothing reaches the shared folder",
+     "sharing between computers" in stopped and os.listdir(SHARED) == [], f"{stopped!r} {os.listdir(SHARED)}")
 
 keep_in = os.environ.get("HALUKA_KEEP_REPORTS")           # to look at the pages the tool writes (invented people)
 if keep_in:

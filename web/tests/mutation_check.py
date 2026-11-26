@@ -1048,6 +1048,9 @@ _read_pair = compare_tool._read_pair
 mutate(COMPARE, "what the desktop program wrote last (its -wal file) is left out of the copy", compare_tool, "_read_pair",
        lambda src: (_read_pair(src)[0], b""))
 
+mutate(COMPARE, "nobody checks that the sharing between computers is off for the copy", compare_tool, "assert_no_sync",
+       lambda: None)
+
 breaks = len(results) - BASELINES
 if all(results):
     print(f"\nRESULT: ALL {breaks} BREAKS WERE CAUGHT — the website's tests bite ✓"
