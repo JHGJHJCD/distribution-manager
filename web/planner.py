@@ -19,12 +19,13 @@ web/tests/test_vs_old.py runs this side by side with the desktop program's own c
 random data and requires the same lists, week after week.
 
 Stage 4 — a HOLIDAY EVENT is one more round on the same time line (plan_timeline). It is
-an EXTRA round, exactly as in the desktop program: everybody marked "נתמך חגים" for that
-holiday who passes the event's filter, whatever his kind and whatever his turn (the turn
-gates are skipped); short of portions -> whoever waited longest. It never moves a
-regular's turn, but it does count as "received" — so a one-timer who got a holiday portion
-starts his pause, and everybody's waiting days start again. That is why the weeks after an
-event depend on it, and why events are laid out in date order together with the weeks.
+an EXTRA round: everybody marked "נתמך חגים" for that holiday who passes the event's
+filter, whatever his kind and whatever his turn (the turn gates are skipped); short of
+portions -> whoever waited longest since he last received ANYTHING. An event sees the
+rounds before it (weeks and other events), which is why it is laid out in date order
+together with the weeks. The weeks do NOT see events (decision 26/11/2026, "חג לא נספר"):
+a holiday portion moves no regular turn, starts no pause for a one-timer and costs nobody
+his place in a week that is short of portions.
 """
 import re
 from bisect import bisect_left
@@ -192,8 +193,8 @@ class Ledger:
 
     def add_extra(self, guid: str, day: date):
         """A laid-out HOLIDAY event: `guid` is on its MAIN list and counts as received on
-        `day` — in an extra round. It is his last distribution from now on (waiting days,
-        a one-timer's pause), but never a regular round: a regular's turn does not move."""
+        `day` — in an extra round. A later holiday list sees it (he waited less); the
+        regular lists never do."""
         if guid not in self._any or day > self._any[guid]:
             self._any[guid] = day
 
@@ -237,8 +238,13 @@ def week_row(rec: dict, wed: date, ledger: Ledger) -> dict:
     round_served (rule 9) and days_since. The card itself is never modified."""
     row = dict(rec)
     guid = rec.get("guid")
-    last_any, last_reg, base = _last_dates(rec, ledger)
-    row["last_distribution"] = last_any.isoformat() if last_any else ""
+    _last_any, last_reg, base = _last_dates(rec, ledger)
+    # Decision 26/11/2026 ("חג לא נספר"): a holiday / bonus portion is an EXTRA, and the
+    # regular lists do not see it at all. For a week, "received last" is therefore the last
+    # REGULAR round: a one-timer's pause and his place in the queue, and a regular's waiting
+    # days when the portions are short, are all counted from it. (The desktop program counts
+    # any round here; web/tests/oracle_old.py prepares its yardstick accordingly.)
+    row["last_distribution"] = last_reg.isoformat() if last_reg else ""
     row["next_distribution"] = ""
     row.pop("round_served", None)
     row.pop("planned_elsewhere", None)        # the site has no locked lists (decision 25/11/2026)

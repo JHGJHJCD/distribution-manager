@@ -359,6 +359,11 @@ def api_event_delete(body: EventGuidBody):
     return _run(lambda conn, path: event_service.remove(conn, config.now(), body.event, path))
 
 
+@app.post("/api/event/restore")
+def api_event_restore(body: EventGuidBody):
+    return _run(lambda conn, path: event_service.restore(conn, config.now(), body.event, path))
+
+
 @app.post("/api/event/manual")
 def api_event_manual(body: EventManualBody):
     return _run(lambda conn, path: event_service.set_manual(conn, config.now(), body.event, body.guid, body.action, path))
@@ -373,6 +378,11 @@ def index():
 @app.get("/people")
 def people_page():
     return FileResponse(os.path.join(STATIC_DIR, "people.html"))
+
+
+@app.get("/holiday")
+def holiday_page():
+    return FileResponse(os.path.join(STATIC_DIR, "holiday.html"))
 
 
 @app.get("/print")

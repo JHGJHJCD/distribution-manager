@@ -338,8 +338,22 @@ mutate(PLANNER, "the holiday mark is no gate: everybody active is on a holiday l
 mutate(PLANNER, "a card with no value in a filtered field passes the event's filter",
        selection, "filter_value", lambda rec, field: selection.to_number(rec.get(field)) or 0)
 
-mutate(PLANNER, "a holiday portion is not counted as received (a one-timer is not paused after it)",
+mutate(PLANNER, "a holiday portion is forgotten: a later holiday list does not see it",
        planner.Ledger, "add_extra", lambda self, guid, day: None)
+
+_week_row = planner.week_row
+
+
+def _week_sees_extras(rec, wed, ledger):
+    """Before the decision of 26/11/2026: a week counts a holiday / bonus portion as 'received last'."""
+    row = _week_row(rec, wed, ledger)
+    last_any = planner._last_dates(rec, ledger)[0]
+    row["last_distribution"] = last_any.isoformat() if last_any else ""
+    row["days_since"] = planner.recency_days(row, wed)
+    return row
+
+
+mutate(PLANNER, "the regular lists count a holiday portion (a one-timer is paused after it)", planner, "week_row", _week_sees_extras)
 
 mutate(PLANNER, "a holiday round counts as a regular round (it moves a regular's turn)",
        planner.Ledger, "add_extra", planner.Ledger.add_regular)
@@ -476,6 +490,43 @@ mutate(API, "the paper sheet of an event carries the id numbers too",
 
 _event_remove = event_service.remove
 mutate(API, "deleting an event does nothing", event_service, "remove", lambda conn, now, guid, db_path=None: {"ok": True})
+
+mutate(API, "bringing an event back does nothing", event_service, "restore",
+       lambda conn, now, guid, db_path=None: {"ok": True, "guid": guid})
+
+
+def _erase_event(conn, guid, now):
+    for table in ("event_manual", "event_prints"):
+        conn.execute(f"DELETE FROM {table} WHERE event_guid=?", (guid,))
+    conn.execute("DELETE FROM events WHERE guid=?", (guid,))
+
+
+mutate(STORE, "taking an event away erases it for good", store, "delete_event", _erase_event)
+
+
+def _restore_on_any_day(conn, now, guid, db_path=None):
+    with store.tx(conn):
+        store.restore_event(conn, guid)
+    return {"ok": True, "guid": guid}
+
+
+mutate(STORE, "an event can be brought back after its day has passed", event_service, "restore", _restore_on_any_day)
+
+
+def _passed_event_also_when_away(conn, before):
+    r = conn.execute("SELECT guid FROM events WHERE closed_at IS NULL AND event_date < ? "
+                     "ORDER BY event_date, created_at, guid LIMIT 1", (before.isoformat(),)).fetchone()
+    return store.get_event(conn, r["guid"]) if r else None
+
+
+mutate(STORE, "an event that was taken away is still written to the history when its day passes",
+       store, "first_passed_event", _passed_event_also_when_away)
+
+_deleted_events = store.deleted_events
+mutate(STORE, "an event that can no longer be brought back is still offered", event_service, "overview",
+       (lambda real: lambda conn, now, db_path=None: dict(real(conn, now, db_path), deleted=[
+           {"guid": e["guid"], "date": e["date"].isoformat(), "day": "", "name": "", "portions": e["portions"]}
+           for e in _deleted_events(conn)]))(event_service.overview))
 
 # ── stage 4: the holiday mark on the card ─────────────────────────────────────
 mutate(CARDS, "a holiday that does not exist can be written on a card",

@@ -146,8 +146,12 @@ seq0 = [next((e["guid"] for e in w["main"] if e["kind"] == "onetime"), None) for
 t.ok("P7 pause 0 = no forced pause: no empty week, the queue itself still takes turns (waiting is half the score)",
      all(seq0) and len(set(seq0[:3])) == 3 and seq0[3:] == seq0[:3], str(seq0))
 recs = [person(21, "חד-פעמי", 3), person(22, "חד-פעמי", 2)]
-w = plan(recs, [got("g0021", wk(-1), holiday="פסח")], portions=5)[0]
-t.ok("P7 a one-timer who received a holiday round is paused too (as in the desktop program)", guids(w["main"]) == ["g0022"])
+w = plan(recs, [got("g0021", wk(-1), holiday="פסח"), got("g0022", wk(-1), holiday="בונוס")], portions=5)[0]
+t.ok("P7 a holiday or bonus portion is an extra: it starts no pause (decision 26/11/2026, 'חג לא נספר')",
+     guids(w["main"]) == ["g0021", "g0022"])
+w = plan(recs, [got("g0021", wk(-1), holiday="פסח"), got("g0021", wk(-2))], portions=5)[0]
+t.ok("P7 ...the pause is counted from his last REGULAR round, whatever extra he got since",
+     guids(w["main"]) == ["g0022"] and wk(2).strftime("%d/%m") in next(e["why"] for e in w["out"] if e["guid"] == "g0021"))
 
 # ── P8: rule 1 — priority first in the one-timers' queue ──────────────────────
 recs = ([person(n, "חד-פעמי", 2, per_soul="10", souls=9) for n in range(1, 5)]
@@ -462,24 +466,15 @@ tl = line(recs, hist, [ev(wk(1) - timedelta(days=2), "*")], weeks=3)
 t.ok("P18 a holiday portion on Monday does not take a weekly regular off that Wednesday (rule 9 counts regular rounds)",
      "g0001" in guids(tl["weeks"][1]["main"]))
 
-# ── P19: ...but a one-timer who received a holiday portion starts his pause (rule 7) ──
+# ── P19: ...and a one-timer's either: "חג לא נספר" (decision 26/11/2026) ──────
 recs = [person(1, "שבועי"), person(21, "חד-פעמי", 3, holiday_support=1), person(22, "חד-פעמי", 3)]
-tl = line(recs, [], [ev(SUN, "*")], weeks=6, portions=3)
-t.ok("P19 he received on Sunday: off the regular lists for 4 weeks, counted from that week's Wednesday",
-     [("g0021" in guids(w["main"])) for w in tl["weeks"]] == [False, False, False, False, True, False],
-     str([("g0021" in guids(w["main"])) for w in tl["weeks"]]))
-pause = next(x for x in tl["weeks"][0]["out"] if x["guid"] == "g0021")
-t.ok("P19 the week says why, and when he is back",
-     pause["group"] == planner.OUT_ONE_PAUSE and SUN.strftime("%d/%m") in pause["why"] and wk(4).strftime("%d/%m") in pause["why"],
-     pause["why"])
-t.ok("P19 the one-timer who is not marked is untouched by the event",
-     [("g0022" in guids(w["main"])) for w in tl["weeks"]] == [True, False, False, False, True, False])
-tl = line(recs, [], [ev(W0 + timedelta(days=1), "*")], weeks=6, portions=3)
-t.ok("P19 an event on Thursday comes after that week's list, and belongs to its Wednesday for the pause",
-     [("g0021" in guids(w["main"])) for w in tl["weeks"]] == [True, False, False, False, True, False])
-tl = line(recs, [], [ev(SUN, "*")], weeks=3, portions=3, cooldown=0)
-t.ok("P19 with the pause switched off (0 weeks) a holiday portion holds nobody back",
-     all("g0021" in guids(w["main"]) for w in tl["weeks"]))
+plain = plan(recs, [], weeks=6, portions=3)
+for label, day in (("on the Sunday before", SUN), ("on a Thursday", W0 + timedelta(days=1)), ("on a Wednesday", wk(2))):
+    tl = line(recs, [], [ev(day, "*")], weeks=6, portions=3)
+    t.ok(f"P19 a one-timer received a holiday portion {label}: every week is exactly as without the event — no pause, the same place in the queue",
+         guids(tl["events"][0]["main"]) == ["g0021"] and tl["weeks"] == plain)
+t.ok("P19 the pause itself still works: after a REGULAR portion both one-timers wait 4 weeks",
+     [("g0021" in guids(w["main"])) for w in plain] == [True, False, False, False, True, False])
 
 # ── P20: the order of the rounds on the time line ─────────────────────────────
 recs = [person(n, "שבועי", holiday_support=1) for n in (1, 2, 3, 4)]
@@ -487,8 +482,9 @@ hist = [got(f"g000{n}", wk(-n)) for n in (1, 2, 3, 4)]                     # g00
 tl = line(recs, hist, [ev(SUN, "*", portions=2)], weeks=1, portions=2)
 t.ok("P20 an event BEFORE the Wednesday is laid out first: it takes the two who waited longest",
      guids(tl["events"][0]["main"]) == ["g0004", "g0003"])
-t.ok("P20 ...and that Wednesday sees it: in a week short of portions the two who just received wait behind the others",
-     guids(tl["weeks"][0]["main"]) == ["g0002", "g0001"], str(guids(tl["weeks"][0]["main"])))
+t.ok("P20 ...and that Wednesday does not see it: also in a week short of portions a holiday portion costs nobody his place",
+     guids(tl["weeks"][0]["main"]) == guids(plan(recs, hist, portions=2)[0]["main"]) == ["g0004", "g0003"],
+     str(guids(tl["weeks"][0]["main"])))
 tl = line(recs, hist, [ev(W0, "*", portions=2)], weeks=1, portions=2)
 t.ok("P20 an event ON the Wednesday is the extra round of that day: the regular list is laid out first, as if there were no event",
      guids(tl["weeks"][0]["main"]) == guids(plan(recs, hist, portions=2)[0]["main"]) == ["g0004", "g0003"])
@@ -519,9 +515,12 @@ t.ok("P21 reserve: first on the reserve; remove: on no list, shown first with th
      guids(e["reserve_list"]) == ["g0002"] and e["reserve_list"][0]["manual"] == "reserve"
      and e["out"][0]["guid"] == "g0001" and e["out"][0]["group"] == planner.OUT_REMOVED)
 t.ok("P21 a paused card cannot be put on an event's list", "g0040" not in where(e))
-t.ok("P21 added by hand = received: the one-timer starts his pause; the one-timer who was not touched does not",
-     [("g0021" in guids(w["main"])) for w in tl["weeks"]] == [False, False, False, False, True, False]
-     and "g0021" in guids(line(recs, [], [ev(SUN, "*", portions=3)], weeks=1, portions=5)["weeks"][0]["main"]))
+t.ok("P21 whatever is set by hand for an event, the weeks are exactly as without it (a holiday portion is not counted in them)",
+     tl["weeks"] == plan(recs, [], weeks=6, portions=5))
+two = line(recs, [], [ev(SUN, "*", portions=3, manual={"g0021": "add"}), ev(SUN + timedelta(days=1), "*", portions=1, guid="e2",
+                                                                            manual={"g0021": "reserve"})], weeks=0)["events"]
+t.ok("P21 added by hand = received in that event: a later holiday list sees it (he waited less than who did not receive)",
+     "g0021" in guids(two[0]["main"]) and guids(two[1]["reserve_list"]) == ["g0021"] and len(two[1]["main"]) == 1)
 e = line(recs, [], [ev(SUN, "*", portions=1, manual={"g0003": "add", "g0021": "add"})])["events"][0]
 t.ok("P21 more added by hand than portions: the list is longer, with a warning, and nobody else gets in",
      guids(e["main"]) == ["g0003", "g0021"] and any("יותר מדי" in x for x in e["warnings"])
@@ -599,17 +598,12 @@ for seed in range(50):
            (e["reserve_list"] and cut_out and min(days(e["reserve_list"])) < max(days(cut_out))) or \
            (e["main"] and cut_out and min(days(e["main"])) < max(days(cut_out))):
             bad.append((seed, "somebody who waited less is ahead of somebody who waited more"))
-    for i, (w, w0) in enumerate(zip(tl["weeks"], no_events)):
-        regs = [x["guid"] for x in w["main"] if x["kind"] == "regular"]
-        if regs != [x["guid"] for x in w0["main"] if x["kind"] == "regular"]:
-            bad.append((seed, f"week {i}: an event changed which regulars receive"))
-        for e in tl["events"]:
-            rw = selection.round_wednesday(e["date"])
-            if cooldown and e["date"] < w["date"] < rw + timedelta(days=7 * cooldown):
-                back = {x["guid"] for x in e["main"] if x["kind"] != "regular"} & set(guids(w["main"]))
-                if back:
-                    bad.append((seed, f"week {i}: a one-timer is back inside the pause after a holiday portion"))
-t.ok("P23 fifty random populations with holiday events: the gate, the filter, the order, the numbers; regulars untouched, one-timers paused",
+    if tl["weeks"] != no_events:
+        bad.append((seed, "an event changed a regular week"))
+t.ok("P23 fifty random populations with holiday events: the gate, the filter, the order, the numbers — and every week exactly as without the events",
      not bad, str(bad[:4]))
+portions_small = line(recs, hist, events, weeks=7, portions=6, reserve=2, cooldown=cooldown)
+t.ok("P23 ...also when the weeks are short of portions",
+     portions_small["weeks"] == line(recs, hist, [], weeks=7, portions=6, reserve=2, cooldown=cooldown)["weeks"])
 
 t.done()

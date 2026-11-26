@@ -322,14 +322,15 @@ HDAY = (wk(1) - timedelta(days=3)).isoformat()                             # Sun
 EVENT = {"date": HDAY, "holiday": "*", "portions": 10, "reserve": 2, "criteria": {}}
 
 # ── A13: the event routes write only with the site's own header ───────────────
-writes = [("/api/event/save", EVENT), ("/api/event/delete", {"event": "x"}),
+writes = [("/api/event/save", EVENT), ("/api/event/delete", {"event": "x"}), ("/api/event/restore", {"event": "x"}),
           ("/api/event/manual", {"event": "x", "guid": "g0001", "action": "add"})]
 t.ok("A13 an event cannot be set up, changed or deleted without the site's own header (403)",
-     [post(u, b, headers={}).status_code for u, b in writes] == [403, 403, 403]
+     [post(u, b, headers={}).status_code for u, b in writes] == [403] * 4
      and client.get("/api/events").json()["open"] == [])
-t.ok("A13 the writing routes of an event cannot be reached with GET", [client.get(u).status_code for u, _ in writes] == [405] * 3)
+t.ok("A13 the writing routes of an event cannot be reached with GET", [client.get(u).status_code for u, _ in writes] == [405] * 4)
 
 # ── A14: setting an event up, reading it ──────────────────────────────────────
+weeks_before = [w["main"] for w in plan_now(3)["weeks"]]
 r = post("/api/event/save", EVENT)
 EV = r.json().get("guid", "")
 t.ok("A14 a new event: an answer with its own id", r.status_code == 200 and r.json()["ok"] is True and len(EV) >= 8)
@@ -349,9 +350,9 @@ t.ok("A14 a filter: who passes receives; missing data and outside-the-filter are
      r.status_code == 200 and {e["guid"] for e in ed["main"]} == {"g0001", "g0021", "g0040"}
      and groups == {"g0022": "ev_missing", "g0003": "ev_filter"} and ed["criteria"] == {"income": {"min": None, "max": 5000.0}})
 plan3 = plan_now(3)
-t.ok("A14 the weeks screen is told about the event, and the marked one-timer is paused in the weeks after it",
+t.ok("A14 the weeks screen is told about the event — and the weeks themselves are exactly as before it ('חג לא נספר')",
      [e["guid"] for e in plan3["events"]] == [EV] and "g0021" in plan3["events"][0]["main"]
-     and "g0021" not in plan3["weeks"][0]["main"] and "g0021" not in plan3["weeks"][1]["main"])
+     and [w["main"] for w in plan3["weeks"]] == weeks_before)
 bad_shape = [dict(EVENT, date="next week"), dict(EVENT, portions=-1), dict(EVENT, portions=2001), dict(EVENT, portions=2.5),
              dict(EVENT, portions="הרבה"), {k: v for k, v in EVENT.items() if k != "holiday"}, dict(EVENT, colour="red"),
              dict(EVENT, criteria={"income": {"max": "הרבה"}}), dict(EVENT, criteria={"income": {"most": 5}}),
@@ -443,7 +444,34 @@ r = post("/api/event/delete", {"event": EV2})
 t.ok("A17 an event that is still ahead can be deleted",
      r.status_code == 200 and client.get("/api/events").json()["open"] == []
      and client.get("/api/event", params={"guid": EV2}).status_code == 409)
+t.ok("A17 ...it is offered for bringing back, and a request without the site's header does not bring it back",
+     [e["guid"] for e in client.get("/api/events").json()["deleted"]] == [EV2]
+     and client.post("/api/event/restore", json={"event": EV2}).status_code == 403
+     and client.get("/api/events").json()["open"] == [])
+r = post("/api/event/restore", {"event": EV2})
+back = client.get("/api/events").json()
+t.ok("A17 bringing it back returns it to the events ahead, as it was",
+     r.status_code == 200 and [(e["guid"], e["name"], e["portions"]) for e in back["open"]] == [(EV2, "חלוקת חנוכה", 4)]
+     and back["deleted"] == [] and post("/api/event/restore", {"event": EV2}).status_code == 409)
 config.now = lambda: datetime(2026, 11, 26, 7, 0)
+
+# ── A18: every screen of the site ─────────────────────────────────────────────
+SCREENS = {"/": "app.js", "/people": "people.js", "/holiday": "holiday.js"}
+NAV = ['href="/"', 'href="/people"', 'href="/holiday"', 'href="/history"', 'href="/settings"']
+pages = {u: client.get(u) for u in SCREENS}
+t.ok("A18 every screen is served, right-to-left, with the whole strip of screens on it",
+     all(r.status_code == 200 and 'dir="rtl"' in r.text and all(link in r.text for link in NAV) for r in pages.values()),
+     str({u: r.status_code for u, r in pages.items()}))
+t.ok("A18 each screen marks itself — and only itself — as the current one",
+     all(r.text.count('aria-current="page"') == 1 and f'href="{u}" aria-current="page"' in r.text for u, r in pages.items()))
+t.ok("A18 no screen carries code or style of its own inside the page (the browser is told to refuse it)",
+     all("<script>" not in r.text and "style=" not in r.text and "onclick" not in r.text and "<style" not in r.text
+         for r in pages.values()))
+code = "".join(pages[u].text + client.get(f"/static/{js}").text for u, js in SCREENS.items()) + client.get("/static/common.js").text
+t.ok("A18 no screen loads anything from another site, and data never enters a page as markup",
+     "http://" not in code and "https://" not in code and "innerHTML" not in code and "outerHTML" not in code
+     and "insertAdjacentHTML" not in code and "eval(" not in code and "document.write" not in code)
+t.ok("A18 every screen's own script is served", all(client.get(f"/static/{js}").status_code == 200 for js in SCREENS.values()))
 
 client.close()
 shutil.rmtree(TMP, ignore_errors=True)

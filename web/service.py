@@ -125,8 +125,9 @@ def _roll(conn, now: datetime, db_path: str = None) -> tuple:
                 if plan is None:                       # cannot happen; never loop on it
                     raise RuntimeError("a passed holiday event was not laid out")
                 name = event_name(plan["holiday"], plan["date"])
-                if store.close_event(conn, plan, name, now):
-                    events.append({"guid": plan["guid"], "date": plan["date"], "name": name})
+                if not store.close_event(conn, plan, name, now):   # cannot happen; never loop on it
+                    raise RuntimeError("a passed holiday event could not be closed")
+                events.append({"guid": plan["guid"], "date": plan["date"], "name": name})
     return weeks, events
 
 

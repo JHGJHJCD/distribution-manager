@@ -55,7 +55,16 @@ MUTATIONS = [
      "_ap = planner.active_people\n"
      "planner.active_people = lambda recs: sorted(_ap(recs), key=lambda r: r.get('guid') or '')"),
     # ── stage 4: the holiday rounds ──
-    ("a holiday portion is not counted as received (no pause for a one-timer, the waiting days go on)",
+    ("the regular lists count a holiday / bonus portion as 'received last' (a one-timer is paused after it)",
+     "_wr3 = planner.week_row\n"
+     "def week_row(rec, wed, ledger):\n"
+     "    row = _wr3(rec, wed, ledger)\n"
+     "    a = planner._last_dates(rec, ledger)[0]\n"
+     "    row['last_distribution'] = a.isoformat() if a else ''\n"
+     "    row['days_since'] = planner.recency_days(row, wed)\n"
+     "    return row\n"
+     "planner.week_row = week_row"),
+    ("a holiday portion is forgotten: a later holiday list does not see it",
      "planner.Ledger.add_extra = lambda self, guid, day: None"),
     ("a holiday round counts as a regular round (it moves the regular turn)",
      "planner.Ledger.add_extra = planner.Ledger.add_regular"),

@@ -1,5 +1,6 @@
-/* מנהל חלוקה — דף ההדפסה: עמוד A4 לכל שבוע בטווח שנבחר.
-   הכתובת: /print?from=YYYY-MM-DD&weeks=N. הדף רק מציג את מה שהשרת מחזיר ב־/api/print;
+/* מנהל חלוקה — דף ההדפסה: עמוד A4 לכל שבוע בטווח שנבחר, או לחלוקת חג אחת.
+   הכתובת: /print?from=YYYY-MM-DD&weeks=N, או /print?event=<מזהה של חלוקת חג>.
+   הדף רק מציג את מה שהשרת מחזיר ב־/api/print;
    כל טקסט שמגיע מהנתונים נכנס עם textContent בלבד. */
 (function () {
   "use strict";
@@ -89,11 +90,14 @@
     return cols;
   }
 
+  // the server names every sheet ("חלוקת רביעי 02/12/2026", "חלוקת פסח · יום ראשון 18/04/2027")
+  function titleOf(week) { return week.title || "חלוקת רביעי " + full(week.date); }
+
   function sheet(week, made) {
     var outer = el("section", "sheet");
     var s = outer.appendChild(el("div", "sheet-in"));
     var head = el("header", "sheet-head");
-    head.appendChild(el("h2", null, FUND + " · חלוקת רביעי " + full(week.date)));
+    head.appendChild(el("h2", null, FUND + " · " + titleOf(week)));
     head.appendChild(el("p", "numbers", week.main.length + " מקבלים · " + week.reserve_list.length +
                         " ברזרבה · " + week.portions + " מנות · הופק ב־" + made));
     s.appendChild(head);
@@ -104,7 +108,7 @@
     if (week.main.length) {
       s.appendChild(halves(week.main, widths));
     } else {
-      s.appendChild(el("p", "none", "אין מקבלים בשבוע הזה."));
+      s.appendChild(el("p", "none", holiday ? "אין מקבלים בחלוקה הזו." : "אין מקבלים בשבוע הזה."));
     }
     if (week.reserve_list.length) {
       s.appendChild(el("h3", null, "רזרבה · לפי הסדר, נכנסים רק אם מישהו לא מגיע"));
@@ -150,9 +154,14 @@
     weeks.forEach(function (w) { pages.appendChild(sheet(w, made)); });
     fit(pages);
     var first = full(weeks[0].date), last = full(weeks[weeks.length - 1].date);
-    $("summary").textContent = weeks.length === 1 ? "רביעי " + first + " · עמוד לשבוע"
-      : weeks.length + " שבועות, מ־" + first + " עד " + last + " · עמוד לכל שבוע";
-    document.title = "חלוקת רביעי " + first.replace(/\//g, "-") + (weeks.length > 1 ? " עד " + last.replace(/\//g, "-") : "");
+    if (holiday) {
+      $("summary").textContent = titleOf(weeks[0]);
+      document.title = titleOf(weeks[0]).replace(/\//g, "-").replace(/ · /g, " ");
+    } else {
+      $("summary").textContent = weeks.length === 1 ? "רביעי " + first + " · עמוד לשבוע"
+        : weeks.length + " שבועות, מ־" + first + " עד " + last + " · עמוד לכל שבוע";
+      document.title = "חלוקת רביעי " + first.replace(/\//g, "-") + (weeks.length > 1 ? " עד " + last.replace(/\//g, "-") : "");
+    }
     $("go").disabled = false;
   }
 
@@ -166,11 +175,13 @@
   var params = new URLSearchParams(window.location.search);
   var from = params.get("from") || "";
   var count = parseInt(params.get("weeks") || "1", 10);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !(count >= 1)) {
-    fail("חסר בכתובת מאיזה שבוע להדפיס. חזרו למסך השבועות ולחצו שם על \"הדפס\".");
+  var holiday = /^[0-9A-Za-z_-]{1,64}$/.test(params.get("event") || "") ? params.get("event") : "";
+  if (!holiday && (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !(count >= 1))) {
+    fail("חסר בכתובת מה להדפיס. חזרו למסך השבועות או למסך חלוקת החג ולחצו שם על \"הדפס\".");
     return;
   }
-  fetch("/api/print?from=" + encodeURIComponent(from) + "&weeks=" + count, { headers: { "Accept": "application/json" } })
+  var query = holiday ? "event=" + encodeURIComponent(holiday) : "from=" + encodeURIComponent(from) + "&weeks=" + count;
+  fetch("/api/print?" + query, { headers: { "Accept": "application/json" } })
     .then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (body) {
         if (!r.ok) {
@@ -180,7 +191,7 @@
       });
     })
     .then(function (body) {
-      if (!body.weeks || !body.weeks.length) { fail("אין שבועות בטווח הזה."); return; }
+      if (!body.weeks || !body.weeks.length) { fail(holiday ? "אין רשימה לחלוקה הזו." : "אין שבועות בטווח הזה."); return; }
       show(body.weeks);
     })
     .catch(function (e) { fail("לא הצלחתי לקבל את הרשימות. " + (e.message || "")); });

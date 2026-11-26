@@ -6,11 +6,9 @@
 
   var STEP = 8;                         // כמה שבועות נוספים בכל לחיצה על "עוד שבועות"
   var MAX_NUMBER = 2000;                // התקרה של מנות / רזרבה (כמו בשרת)
-  var NAMES_SHOWN = 6;                  // כמה שמות לכל היותר בהערה "השתנה מאז ההדפסה"
   var state = { weeks: STEP, plan: null, people: null, index: 0, who: null, details: {}, token: 0,
                 busy: false, toolsFor: null };
 
-  var TYPE = { "שבועי": "w1", "דו-שבועי": "w2", "תלת-שבועי": "w3", "חודשי": "w4" };
   var ROLE_TEXT = { main: "מקבל", reserve: "ברזרבה", out: "לא בשבוע הזה" };
   var OUT_GROUPS = [
     ["removed", "הוסרו ביד מהשבוע הזה"],
@@ -29,7 +27,7 @@
 
   var H = window.Haluka;                // web/static/common.js
   var $ = H.$, el = H.el, clear = H.clear, dm = H.dm, getJSON = H.getJSON, postJSON = H.postJSON, notice = H.notice;
-  function typeOf(kind, freq) { return kind === "onetime" ? "one" : (TYPE[freq] || "w1"); }
+  var typeOf = H.typeOf, printNote = H.printNote;
   function currentWeek() { return state.plan ? state.plan.weeks[state.index] : null; }
 
   function setBusy(on) {
@@ -55,10 +53,14 @@
         state.index = index;
         state.details = {};
         if (detail) { state.details[date] = detail; }
+        var passed = [];
         if (plan.closed_now && plan.closed_now.length) {
-          notice("השבוע של " + plan.closed_now.map(dm).join(", ") +
-                 " עבר, והרשימה שלו נכנסה להיסטוריה כמו שהייתה.");
+          passed.push("השבוע של " + plan.closed_now.map(dm).join(", ") + " עבר, והרשימה שלו נכנסה להיסטוריה כמו שהייתה.");
         }
+        if (plan.closed_events_now && plan.closed_events_now.length) {
+          passed.push(plan.closed_events_now.join(", ") + ": היום עבר, והרשימה נכנסה להיסטוריה כמו שהייתה.");
+        }
+        if (passed.length) { notice(passed.join(" ")); }
         render();
         return loadDetail();
       });
@@ -118,7 +120,24 @@
     var box = $("weeks");
     var keepScroll = box.scrollLeft;
     clear(box);
+    // a holiday distribution sits among the weeks where it falls: before its week's
+    // Wednesday, or right after it when it is on the Wednesday itself
+    var events = (plan.events || []).slice();
+    function eventCard(ev) {
+      var a = el("a", "wk ev");
+      a.href = "/holiday?event=" + encodeURIComponent(ev.guid) + (state.who ? "&who=" + encodeURIComponent(state.who) : "");
+      a.title = ev.name + " · " + H.longDate(ev.date) + " · לחיצה פותחת את החלוקה";
+      a.appendChild(el("div", "d", dm(ev.date)));
+      a.appendChild(el("b", null, ev.name));
+      a.appendChild(el("div", "n", ev.main.length + " מקבלים"));
+      if (state.who) {
+        if (ev.main.indexOf(state.who) >= 0) { a.appendChild(el("span", "who")); }
+        else if (ev.reserve_list.indexOf(state.who) >= 0) { a.appendChild(el("span", "who res")); }
+      }
+      return a;
+    }
     plan.weeks.forEach(function (w, i) {
+      while (events.length && events[0].date < w.date) { box.appendChild(eventCard(events.shift())); }
       var b = el("button", "wk");
       b.type = "button";
       b.setAttribute("aria-pressed", i === state.index ? "true" : "false");
@@ -155,7 +174,9 @@
       }
       b.addEventListener("click", function () { state.index = i; render(); loadDetail(); });
       box.appendChild(b);
+      while (events.length && events[0].date === w.date) { box.appendChild(eventCard(events.shift())); }
     });
+    events.forEach(function (ev) { box.appendChild(eventCard(ev)); });
     var more = el("button", "wk more", "עוד שבועות");
     more.type = "button";
     more.addEventListener("click", function () {
@@ -172,49 +193,9 @@
 
   // ── the selected week ──────────────────────────────────────────────────────
   function chip(entry) {
-    var b = el("button", "chip t-" + typeOf(entry.kind, entry.freq) + (entry.manual ? " manual" : "") +
-               (entry.guid === state.who ? " sel" : ""), entry.name);
-    b.type = "button";
-    if (entry.manual) { b.title = "נקבע ביד"; }
-    b.addEventListener("click", function () { state.who = entry.guid; render(); renderWeek(); });
-    return b;
+    return H.chip(entry, entry.guid === state.who, function () { state.who = entry.guid; render(); renderWeek(); });
   }
-  function group(title, entries) {
-    var g = el("div", "grp");
-    var h = el("h4", null, title + " ");
-    h.appendChild(el("b", null, String(entries.length)));
-    g.appendChild(h);
-    var chips = el("div", "chips");
-    entries.forEach(function (e) { chips.appendChild(chip(e)); });
-    g.appendChild(chips);
-    return g;
-  }
-
-  // "2026-11-25 20:30" -> "25/11 בשעה 20:30"
-  function stamp(text) {
-    var parts = String(text || "").split(" ");
-    return /^\d{4}-\d{2}-\d{2}$/.test(parts[0]) ? dm(parts[0]) + (parts[1] ? " בשעה " + parts[1] : "") : String(text || "");
-  }
-  function nameList(names, count) {
-    if (!names) { return String(count); }                // the strip knows only how many
-    var shown = names.slice(0, NAMES_SHOWN).join(", ");
-    return names.length > NAMES_SHOWN ? shown + " ועוד " + (names.length - NAMES_SHOWN) : shown;
-  }
-  // The reminder "changed since it was printed" (it never holds anything in place), or a
-  // quiet line when the list is still the one on the paper.
-  function printNote(p) {
-    if (!p) { return null; }
-    var excel = p.how === "excel";
-    if (!p.changed) {
-      return el("div", "printed", (excel ? "הורד לאקסל ב־" : "הודפס ב־") + stamp(p.printed_at) +
-                " · הרשימה לא השתנתה מאז");
-    }
-    var parts = [];
-    if (p.added) { parts.push((p.added === 1 ? "נוסף " : "נוספו ") + nameList(p.added_names, p.added)); }
-    if (p.removed) { parts.push((p.removed === 1 ? "יצא " : "יצאו ") + nameList(p.removed_names, p.removed)); }
-    return el("div", "warn", (excel ? "השתנה מאז ההורדה לאקסל ב־" : "השתנה מאז ההדפסה ב־") +
-              stamp(p.printed_at) + ": " + parts.join(" · "));
-  }
+  function group(title, entries) { return H.group(title, entries, chip); }
 
   function renderTools(week) {
     var key = week.date + "|" + week.portions + "|" + week.reserve;
@@ -352,6 +333,9 @@
     var when = gets.length ? "ב־" + n + " השבועות שמוצגים הוא מקבל ב: " + gets.join(", ") + "."
                            : "ב־" + n + " השבועות שמוצגים הוא לא מקבל.";
     if (waits.length) { when += " ברזרבה ב: " + waits.join(", ") + "."; }
+    var feasts = (state.plan.events || []).filter(function (ev) { return ev.main.indexOf(state.who) >= 0; })
+      .map(function (ev) { return ev.name + " (" + dm(ev.date) + ")"; });
+    if (feasts.length) { when += " ומקבל גם ב: " + feasts.join(", ") + "."; }
     box.appendChild(el("div", "when", when));
     if (entry) {
       actionButtons(box, entry.guid, (ACTIONS[entry.role] || []).concat(entry.manual ? [["בטל את השינוי ביד", "clear"]] : []));
@@ -432,7 +416,7 @@
   $("doExcel").addEventListener("click", function () { produce("excel"); });
 
   // ── search ─────────────────────────────────────────────────────────────────
-  function norm(s) { return String(s || "").replace(/["'׳״\-־]/g, "").replace(/\s+/g, " ").trim().toLowerCase(); }
+  var norm = H.norm;
 
   function showHits() {
     var q = norm($("q").value);

@@ -71,8 +71,13 @@ def overview(conn, now: datetime, db_path: str = None) -> dict:
              "batch": e["batch_guid"] or ""}
             for e in store.load_events(conn, open_only=False) if e["closed_at"]]
     past.sort(key=lambda e: e["date"], reverse=True)
-    return {"first_day": service.open_day(now).isoformat(),
-            "open": [_summary(p, ctx) for p in plans], "past": past,
+    first = service.open_day(now)
+    # taken away, and its day has not passed: it can still be brought back
+    deleted = [{"guid": e["guid"], "date": e["date"].isoformat(), "day": service.day_name(e["date"]),
+                "name": holidays.dist_label(e["holiday"]), "portions": e["portions"]}
+               for e in store.deleted_events(conn) if e["date"] >= first]
+    return {"first_day": first.isoformat(),
+            "open": [_summary(p, ctx) for p in plans], "past": past, "deleted": deleted,
             "holidays": holiday_choices(), "filter": filter_fields(),
             "defaults": {"reserve": ctx["reserve"], "cooldown_weeks": ctx["cooldown"]}}
 
@@ -81,9 +86,7 @@ def detail(conn, now: datetime, guid: str, db_path: str = None) -> dict:
     """One event in full: who receives, the reserve, and who is outside it — each with the
     reason in a sentence. An event that has passed is shown as it was written."""
     service.roll_forward(conn, now, db_path)
-    event = store.get_event(conn, guid)
-    if event is None:
-        raise Refused(_NOT_FOUND)
+    event = _known(conn, guid)
     if event["closed_at"]:
         return _closed(conn, event)
     plans, ctx = _laid_out(conn, now, only=guid)
@@ -119,6 +122,14 @@ def _closed(conn, event: dict) -> dict:
             "main": lists["main"], "reserve_list": lists["reserve"], "out": [],
             "main_count": len(lists["main"]), "reserve_count": len(lists["reserve"]),
             "batch": event["batch_guid"] or "", "warnings": []}
+
+
+def _known(conn, guid: str) -> dict:
+    """The event, or a refusal: one that was taken away is not there until it is brought back."""
+    event = store.get_event(conn, guid)
+    if event is None or event["deleted_at"]:
+        raise Refused(_NOT_FOUND)
+    return event
 
 
 # ── setting an event up, changing it, taking it away ──────────────────────────
@@ -175,40 +186,46 @@ def save(conn, now: datetime, data: dict, db_path: str = None) -> dict:
     reserve = _whole(data.get("reserve", 0), "רזרבה")
     criteria = clean_criteria(data.get("criteria"))
     with store.tx(conn):
-        if guid:
-            event = store.get_event(conn, guid)
-            if event is None:
-                raise Refused(_NOT_FOUND)
-            if event["closed_at"]:
-                raise Refused(_PASSED)
+        if guid and _known(conn, guid)["closed_at"]:
+            raise Refused(_PASSED)
         guid = store.save_event(conn, guid, day, code, portions, reserve, criteria, now)
     return {"ok": True, "guid": guid}
 
 
 def remove(conn, now: datetime, guid: str, db_path: str = None) -> dict:
-    """Take away an event that has not happened yet (with what was set by hand for it).
-    An event that passed is history and stays."""
+    """Take away an event that has not happened yet. Nothing is erased — it can be brought
+    back (restore) as long as its day has not passed. An event that passed is history and stays."""
     service.roll_forward(conn, now, db_path)
-    event = store.get_event(conn, guid)
-    if event is None:
-        raise Refused(_NOT_FOUND)
-    if event["closed_at"]:
+    if _known(conn, guid)["closed_at"]:
         raise Refused("החלוקה הזו כבר עברה ונמצאת בהיסטוריה, ואי אפשר למחוק אותה")
-    if db_path:
-        store.backup(db_path, config.backup_dir(), "before-delete-event", now)
     try:
         with store.tx(conn):
-            store.delete_event(conn, guid)
+            store.delete_event(conn, guid, now)
     except LookupError:
         raise Refused(_NOT_FOUND)
     return {"ok": True}
 
 
-def _open_event(conn, now: datetime, guid: str, db_path: str = None) -> dict:
+def restore(conn, now: datetime, guid: str, db_path: str = None) -> dict:
+    """Bring back an event that was taken away, with everything that was set for it. Only
+    while its day has not passed: the past is fixed, an event cannot be added to it."""
     service.roll_forward(conn, now, db_path)
     event = store.get_event(conn, guid)
-    if event is None:
-        raise Refused(_NOT_FOUND)
+    if event is None or not event["deleted_at"] or event["closed_at"]:
+        raise Refused("אין חלוקה כזו לשחזר")
+    if event["date"] < service.open_day(now):
+        raise Refused("התאריך של החלוקה הזו כבר עבר, ואי אפשר לשחזר אותה")
+    try:
+        with store.tx(conn):
+            store.restore_event(conn, guid)
+    except LookupError:
+        raise Refused("אין חלוקה כזו לשחזר")
+    return {"ok": True, "guid": guid}
+
+
+def _open_event(conn, now: datetime, guid: str, db_path: str = None) -> dict:
+    service.roll_forward(conn, now, db_path)
+    event = _known(conn, guid)
     if event["closed_at"]:
         raise Refused(_PASSED)
     return event

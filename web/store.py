@@ -104,7 +104,8 @@ CREATE TABLE IF NOT EXISTS events (
     portions INTEGER NOT NULL, reserve INTEGER NOT NULL DEFAULT 0,
     criteria TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-    closed_at TEXT, main_count INTEGER, batch_guid TEXT
+    closed_at TEXT, main_count INTEGER, batch_guid TEXT,
+    deleted_at TEXT                     -- taken away by the manager; can be brought back
 );
 CREATE TABLE IF NOT EXISTS event_manual (
     event_guid TEXT NOT NULL, recipient_guid TEXT NOT NULL, action TEXT NOT NULL, set_at TEXT NOT NULL,
@@ -166,11 +167,25 @@ def create(path: str) -> None:
     conn = connect(path)
     try:
         conn.executescript(_SCHEMA % {"recipient_columns": _recipient_ddl()})
+        _add_missing_columns(conn)
         with tx(conn):
             conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
                          (str(SCHEMA_VERSION),))
     finally:
         conn.close()
+
+
+# Columns that were added to a table after it first shipped: {table: {column: its DDL}}.
+# Additive only — a column is added when it is missing, nothing is ever changed or dropped.
+_LATER_COLUMNS = {"events": {"deleted_at": "TEXT"}}
+
+
+def _add_missing_columns(conn) -> None:
+    for table, columns in _LATER_COLUMNS.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for column, ddl in columns.items():
+            if column not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 _ensured = set()
@@ -265,18 +280,20 @@ def _event(r, manual: dict = None) -> dict:
             "portions": r["portions"], "reserve": r["reserve"],
             "criteria": criteria if isinstance(criteria, dict) else {},
             "created_at": r["created_at"], "updated_at": r["updated_at"], "closed_at": r["closed_at"],
+            "deleted_at": r["deleted_at"],
             "main_count": r["main_count"], "batch_guid": r["batch_guid"], "manual": manual or {}}
 
 
 def load_events(conn, open_only: bool = True) -> list:
     """Holiday events in date order (two on one day: in the order they were created).
     open_only: the ones that are still ahead — not history yet — each with what the
-    manager set by hand for it."""
+    manager set by hand for it. An event that was taken away is never among them."""
     manual = {}
     for r in conn.execute("SELECT event_guid, recipient_guid, action FROM event_manual"):
         manual.setdefault(r["event_guid"], {})[r["recipient_guid"]] = r["action"]
     out = []
-    for r in conn.execute("SELECT * FROM events" + (" WHERE closed_at IS NULL" if open_only else "")
+    for r in conn.execute("SELECT * FROM events WHERE deleted_at IS NULL"
+                          + (" AND closed_at IS NULL" if open_only else "")
                           + " ORDER BY event_date, created_at, guid"):
         try:
             out.append(_event(r, manual.get(r["guid"])))
@@ -299,7 +316,7 @@ def get_event(conn, guid: str):
 
 def first_passed_event(conn, before: date):
     """The earliest event that is still open although its day is before `before`."""
-    r = conn.execute("SELECT guid FROM events WHERE closed_at IS NULL AND event_date < ? "
+    r = conn.execute("SELECT guid FROM events WHERE closed_at IS NULL AND deleted_at IS NULL AND event_date < ? "
                      "ORDER BY event_date, created_at, guid LIMIT 1", (before.isoformat(),)).fetchone()
     return get_event(conn, r["guid"]) if r else None
 
@@ -317,19 +334,40 @@ def save_event(conn, guid, day: date, holiday: str, portions: int, reserve: int,
                      (guid, day.isoformat(), holiday, portions, reserve, crit, _stamp(now), _stamp(now)))
     else:
         conn.execute("UPDATE events SET event_date=?, holiday=?, portions=?, reserve=?, criteria=?, "
-                     "updated_at=? WHERE guid=? AND closed_at IS NULL",
+                     "updated_at=? WHERE guid=? AND closed_at IS NULL AND deleted_at IS NULL",
                      (day.isoformat(), holiday, portions, reserve, crit, _stamp(now), guid))
     return guid
 
 
-def delete_event(conn, guid: str) -> None:
-    """Take away an event that has NOT happened yet (a plan, never history), with what was
-    set by hand for it. An event that is already history is never deleted here."""
-    if conn.execute("SELECT 1 FROM events WHERE guid=? AND closed_at IS NULL", (guid,)).fetchone() is None:
+def delete_event(conn, guid: str, now: datetime) -> None:
+    """Take away an event that has NOT happened yet (a plan, never history). Nothing is
+    erased: the event is only marked, with everything that was set for it, so that it can be
+    brought back (restore_event). An event that is already history is never taken away."""
+    done = conn.execute("UPDATE events SET deleted_at=? WHERE guid=? AND closed_at IS NULL AND deleted_at IS NULL",
+                        (_stamp(now), guid)).rowcount
+    if not done:
         raise LookupError(guid)
-    for table in ("event_manual", "event_prints"):
-        conn.execute(f"DELETE FROM {table} WHERE event_guid=?", (guid,))
-    conn.execute("DELETE FROM events WHERE guid=?", (guid,))
+
+
+def restore_event(conn, guid: str) -> None:
+    """Bring back an event that was taken away, as it was (the caller has checked that its
+    day has not passed)."""
+    done = conn.execute("UPDATE events SET deleted_at=NULL WHERE guid=? AND closed_at IS NULL "
+                        "AND deleted_at IS NOT NULL", (guid,)).rowcount
+    if not done:
+        raise LookupError(guid)
+
+
+def deleted_events(conn) -> list:
+    """The events that were taken away, the latest first."""
+    out = []
+    for r in conn.execute("SELECT * FROM events WHERE deleted_at IS NOT NULL AND closed_at IS NULL "
+                          "ORDER BY deleted_at DESC, guid"):
+        try:
+            out.append(_event(r))
+        except ValueError:
+            continue
+    return out
 
 
 def set_event_manual(conn, guid: str, recipient_guid: str, action, now: datetime) -> None:
@@ -375,8 +413,8 @@ def close_event(conn, plan: dict, name: str, now: datetime) -> bool:
     only. An event that is already closed is left alone (returns False), so two requests
     can never write it twice. The caller holds the transaction."""
     guid = plan["guid"]
-    row = conn.execute("SELECT closed_at FROM events WHERE guid=?", (guid,)).fetchone()
-    if row is None or row["closed_at"]:
+    row = conn.execute("SELECT closed_at, deleted_at FROM events WHERE guid=?", (guid,)).fetchone()
+    if row is None or row["closed_at"] or row["deleted_at"]:
         return False
     iso, stamp, batch, code = plan["date"].isoformat(), _stamp(now), event_batch_guid(guid), plan["holiday"]
     main = plan["main"]
