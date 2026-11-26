@@ -324,3 +324,11 @@ table.split tbody tr:last-child th, table.split tbody tr:last-child td { border-
 @media (max-width: 380px) { .nav a { padding: 10px 5px; font-size: .875rem; } }
 @media (max-width: 340px) { .nav a { padding: 10px 4px; font-size: .8125rem; } }
 [hidden] { display: none !important; }
+
+/* ── the move to the server: the login page, and who entered ─────────────────── */
+.wrap.login { max-width: 400px; margin-top: 12vh; }
+.login-form { display: flex; flex-direction: column; gap: 6px; }
+.login-form label { font-weight: 600; margin-top: 6px; }
+.login-form input { font: inherit; padding: 8px 10px; border: 1.5px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--fg); }
+.login-form .btn { margin-top: 12px; padding: 9px 14px; }
+.nav .who { margin-inline-start: auto; display: inline-flex; align-items: center; gap: 10px; color: var(--muted, inherit); }

@@ -14,6 +14,9 @@
   function dm(iso) { var p = iso.split("-"); return Number(p[2]) + "/" + Number(p[1]); }
   function answer(r) {
     return r.json().catch(function () { return {}; }).then(function (body) {
+      if (r.status === 401 && body.login && location.pathname !== "/login") {
+        location.href = "/login";                        // the session ended: back to the login page
+      }
       if (!r.ok) {
         var text = body.message || (typeof body.detail === "string" ? body.detail : "") ||
           (r.status === 422 ? "הנתונים שנשלחו לא תקינים" : "שגיאה " + r.status);
@@ -99,6 +102,27 @@
   }
   function norm(s) { return String(s || "").replace(/["'׳״\-־]/g, "").replace(/\s+/g, " ").trim().toLowerCase(); }
   function longDate(iso) { var p = iso.split("-"); return Number(p[2]) + "/" + Number(p[1]) + "/" + p[0]; }
+
+  // On the server (login is on) the row of screens ends with who entered and "יציאה".
+  // On this computer the answer is "no login" and the page stays as it is.
+  function showWhoEntered() {
+    var nav = document.querySelector("nav.nav");
+    if (!nav) { return; }
+    getJSON("/api/me").then(function (me) {
+      if (!me.login) { return; }
+      var box = el("span", "who");
+      box.appendChild(el("span", null, me.name));
+      var out = el("button", "btn quiet", "יציאה");
+      out.type = "button";
+      out.addEventListener("click", function () {
+        postJSON("/api/logout", {}).then(function () { location.href = "/login"; }, function () { location.href = "/login"; });
+      });
+      box.appendChild(out);
+      nav.appendChild(box);
+    }).catch(function () { /* the page works without it */ });
+  }
+  if (document.readyState === "loading") { document.addEventListener("DOMContentLoaded", showWhoEntered); }
+  else { showWhoEntered(); }
 
   window.Haluka = { $: $, el: el, clear: clear, dm: dm, getJSON: getJSON, postJSON: postJSON, notice: notice,
                     typeOf: typeOf, chip: chip, group: group, stamp: stamp, printNote: printNote, norm: norm,

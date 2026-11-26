@@ -25,12 +25,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import _util  # noqa: E402,F401  (puts the repository root on sys.path)
 
-from web import (app as webapp, backup_service, card_service, cards, config, event_service, history_service,  # noqa: E402
+from web import (app as webapp, auth, backup_service, card_service, cards, config, event_service, history_service,  # noqa: E402
                  planner, service, settings_service, store)
 from web.engine import selection  # noqa: E402
 
 PLANNER, STORE, API, CARDS = "test_planner.py", "test_store.py", "test_api.py", "test_cards.py"
 HISTORY, SETTINGS, BACKUP = "test_history.py", "test_settings.py", "test_backup.py"
+AUTH = "test_auth.py"             # the login of the server stage
 COMPARE = "test_compare.py"       # the test of the comparison tool (web/tests/local_check_real.py)
 
 
@@ -81,7 +82,7 @@ def mutate(target, name, obj, attr, broken):
     results.append(caught)
 
 
-for target in (PLANNER, STORE, API, CARDS, HISTORY, SETTINGS, BACKUP, COMPARE):
+for target in (PLANNER, STORE, API, CARDS, HISTORY, SETTINGS, BACKUP, COMPARE, AUTH):
     if ONLY and not ONLY.search(target) and target != API:
         continue
     code, noticed = run(target)
@@ -1053,6 +1054,49 @@ mutate(COMPARE, "nobody checks that the sharing between computers is off for the
 
 mutate(COMPARE, "only the site is asked who is marked for the holidays (seeing nobody passes for 'there is nobody')",
        compare_tool, "marks_agree", lambda site, desktop: True)
+
+# ── the login of the server stage ─────────────────────────────────────────────
+def _everyone_is_welcome(request):
+    request.state.user = ""
+    return None
+
+
+mutate(AUTH, "with the login on, the site answers to anyone", webapp, "_refuse_stranger", _everyone_is_welcome)
+
+_refuse = webapp._refuse_stranger
+
+
+def _static_is_open(request):
+    if request.url.path.startswith("/static/"):
+        request.state.user = ""
+        return None
+    return _refuse(request)
+
+
+mutate(AUTH, "the static files are served to anyone", webapp, "_refuse_stranger", _static_is_open)
+
+mutate(AUTH, "one more address is open without a login", webapp, "OPEN_PATHS", webapp.OPEN_PATHS | {"/api/people"})
+
+mutate(AUTH, "a site that answers to an outside name can be left without a login", config, "login_required",
+       lambda: os.environ.get("HALUKA_WEB_LOGIN") == "1")
+
+mutate(AUTH, "any password fits", auth, "verify_password", lambda password, stored: True)
+
+mutate(AUTH, "the password itself is written to the users file", auth, "hash_password", lambda password: "scrypt$" + password)
+
+mutate(AUTH, "wrong passwords are never counted (no lock)", auth, "locked_minutes", lambda conn, key, now: 0)
+
+mutate(AUTH, "leaving only clears the browser's cookie (the session lives on in the server)", auth, "logout",
+       lambda token: None)
+
+mutate(AUTH, "a new password leaves the old sessions alive", auth, "end_sessions", lambda key: None)
+
+mutate(AUTH, "a session never ends", auth, "SESSION_DAYS", 10 ** 5)
+
+mutate(AUTH, "the server keeps the session itself, not its hash", auth, "_token_hash", lambda token: token)
+
+mutate(AUTH, "a name is matched as typed (capital letters and extra spaces lock a user out)", auth, "_key",
+       lambda name: str(name or ""))
 
 breaks = len(results) - BASELINES
 if all(results):
