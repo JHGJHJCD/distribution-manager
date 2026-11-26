@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import (auth, backup_service, card_service, config, event_service, google_login, history_service, offsite,
+from . import (auth, backup_service, card_service, config, drive, event_service, google_login, history_service, offsite,
                service,
                settings_service, store)
 
@@ -44,7 +44,11 @@ def _from_this_site(request: Request) -> bool:
 # What answers without a session when login is on: the login page with its style and script,
 # the login itself, and the "is the site alive" check. Nothing here carries data.
 OPEN_PATHS = frozenset({"/login", "/api/login", "/healthz", "/static/style.css", "/static/login.js",
-                        "/auth/google", google_login.CALLBACK})
+                        "/auth/google", google_login.CALLBACK,
+                        # the way back from Google after "connect the Drive": the session cookie is
+                        # not sent on it (it comes from another site), so the state cookie that
+                        # only a logged-in user was given is what lets it in
+                        drive.CALLBACK})
 
 
 def _session_user(request: Request) -> str:
@@ -532,6 +536,47 @@ def api_offsite():
     """Does a copy of the backup leave the server, and when did the last one leave.
     (No path and no command; on this computer the screen shows nothing of it.)"""
     return offsite.status(config.now())
+
+
+# ── the copy that leaves the server: Google Drive ────────────────────────────
+@app.get("/api/drive")
+def api_drive():
+    return drive.view()
+
+
+@app.post("/api/drive/key-kept")
+def api_drive_key_kept():
+    return drive.key_kept()
+
+
+@app.post("/api/drive/disconnect")
+def api_drive_disconnect():
+    return drive.disconnect()
+
+
+@app.get("/auth/drive")
+def drive_start():
+    if not (config.login_required() and drive.available()):
+        raise HTTPException(404)
+    url, state = drive.start()
+    response = RedirectResponse(url, status_code=303)
+    response.set_cookie(drive.STATE_COOKIE, state, max_age=google_login.STATE_SECONDS, path="/",
+                        secure=True, httponly=True, samesite="lax")
+    return response
+
+
+@app.get(drive.CALLBACK)
+def drive_callback(request: Request, code: str = Query("", max_length=2000), state: str = Query("", max_length=200)):
+    if not config.login_required():
+        raise HTTPException(404)
+    try:
+        drive.finish(code, state, request.cookies.get(drive.STATE_COOKIE, ""), config.now())
+        where = "/settings#drive-ok"
+    except drive.Refused as e:
+        where = "/settings#drive-" + str(e)
+    response = HTMLResponse(_ENTERED.replace("url=/", "url=" + where).replace('href="/"', f'href="{where}"'))
+    response.delete_cookie(drive.STATE_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return response
 
 
 # ── the move to the server: entering and leaving ─────────────────────────────

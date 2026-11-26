@@ -5,7 +5,8 @@ The backups of web/backup_service.py live beside the database: if the server is 
 are lost with it. This sends a fresh, whole copy somewhere else. Run by the server's timer:
     <python> -m web.offsite            (exit 0 = a copy left and was checked, 1 = it did not)
 
-Where to, from the environment (one of the two; neither = switched off):
+Where to: Google Drive, when it was connected from the settings screen (web/drive.py) — or,
+from the environment (one of the two, and then they come first):
     HALUKA_OFFSITE_DIR   a folder that is not on this server's own disk (a mounted drive).
                          The copy is written there, read back and compared, byte for byte.
     HALUKA_OFFSITE_CMD   a command that takes the file away; the word {file} is replaced by
@@ -23,7 +24,7 @@ import subprocess
 import sys
 from datetime import datetime
 
-from . import backup_service, config, store
+from . import backup_service, config, drive, store
 
 LATE_DAYS = 2                        # no copy for this many days = the screen warns
 CMD_SECONDS = 900
@@ -31,9 +32,11 @@ _STAMP = "%Y-%m-%d %H:%M"
 
 
 def target() -> tuple:
-    """("dir", folder) / ("cmd", command) / ("", "")."""
+    """("dir", folder) / ("cmd", command) / ("drive", "") when Google Drive was connected / ("", "")."""
     folder, cmd = os.environ.get("HALUKA_OFFSITE_DIR", "").strip(), os.environ.get("HALUKA_OFFSITE_CMD", "").strip()
-    return ("dir", folder) if folder else ("cmd", cmd) if cmd else ("", "")
+    if folder or cmd:
+        return ("dir", folder) if folder else ("cmd", cmd)
+    return ("drive", "") if drive.connected() else ("", "")
 
 
 def status_path() -> str:
@@ -110,7 +113,10 @@ def run(now: datetime) -> dict:
         if not made:
             raise OSError("there is no data yet")
         backup_service.check(made)                           # never send a copy that cannot be restored
-        (_to_folder if kind == "dir" else _to_command)(made, where)
+        if kind == "drive":
+            drive.send(made)                                 # encrypted there, checked on arrival
+        else:
+            (_to_folder if kind == "dir" else _to_command)(made, where)
         state.update(last_ok=now.strftime(_STAMP), last_file=os.path.basename(made),
                      last_size_kb=max(1, round(os.path.getsize(made) / 1024)), error="")
     except Exception as e:                                   # whatever went wrong: say so, change nothing

@@ -96,8 +96,8 @@ leaks = [name for name in STATIC if "/static/" + name not in webapp.OPEN_PATHS
 t.ok("L4 every static file but the login page's own two refuses a stranger", not leaks and len(STATIC) > 10, str(leaks))
 t.ok("L4 what is open: the login page, its script and style, and the alive check — and nothing else",
      webapp.OPEN_PATHS == {"/login", "/api/login", "/healthz", "/static/style.css", "/static/login.js",
-                           "/auth/google", "/auth/google/callback"}
-     and all(c.get(p).status_code == 200 for p in webapp.OPEN_PATHS if p != "/api/login" and "google" not in p))
+                           "/auth/google", "/auth/google/callback", "/auth/drive/callback"}
+     and all(c.get(p).status_code == 200 for p in webapp.OPEN_PATHS if p != "/api/login" and "/auth/" not in p))
 t.ok("L4 with no Google settings the Google way in does not exist, and the page offers the password only",
      c.get("/auth/google").status_code == 404 and 'data-ways="password"' in c.get("/login").text)
 r = c.get("/login")

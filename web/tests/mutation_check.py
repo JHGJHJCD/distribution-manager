@@ -25,7 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import _util  # noqa: E402,F401  (puts the repository root on sys.path)
 
-from web import (app as webapp, auth, google_login, offsite, server_check, backup_service, card_service, cards, config, event_service, history_service,  # noqa: E402
+from web import (app as webapp, auth, drive, google_login, offsite, server_check, backup_service, card_service, cards, config, event_service, history_service,  # noqa: E402
                  planner, service, settings_service, store)
 from web.engine import selection  # noqa: E402
 
@@ -62,7 +62,7 @@ def run(target: str):
 
 
 _SWAPPED_BY_TESTS = [(config, "now"), (config, "backup_dir"), (store, "backup"), (store, "COPY_SECONDS"),
-                     (offsite.shutil, "copyfile"), (google_login, "fetch_token")]
+                     (offsite.shutil, "copyfile"), (google_login, "fetch_token"), (drive, "_http")]
 ONLY = re.compile(sys.argv[1]) if len(sys.argv) > 1 else None
 results = []
 
@@ -1165,6 +1165,29 @@ mutate(SERVER, "the readiness check lets a server with the login off pass", serv
        lambda: [("OK" if "login is OFF" in text else level, text) for level, text in _checks()])
 
 mutate(SERVER, "the readiness check does not look at who can read the files", server_check.stat, "S_IMODE", lambda mode: 0)
+
+# ── the copy that goes to Google Drive ────────────────────────────────────────
+mutate(SERVER, "the copy goes to Google Drive as it is, not encrypted", drive, "encrypt", lambda plain, key: plain)
+
+mutate(SERVER, "nobody checks what arrived at Google Drive", drive, "_arrived", lambda done, sealed: True)
+
+mutate(SERVER, "the recovery key stays on the screen for ever", drive, "key_kept", lambda: drive.view())
+
+mutate(SERVER, "the way back from Google connects a Drive without the cookie of the visit", google_login, "_same",
+       lambda got, want: True)
+
+
+def _forgets_the_key():
+    drive._write({})
+    return drive.view()
+
+
+mutate(SERVER, "disconnecting throws the key away (the copies on the Drive can never be opened)", drive, "disconnect",
+       _forgets_the_key)
+
+_target = offsite.target
+mutate(SERVER, "a connected Drive is not used by the daily copy", offsite, "target",
+       lambda: ("", "") if _target()[0] == "drive" else _target())
 
 breaks = len(results) - BASELINES
 if all(results):
