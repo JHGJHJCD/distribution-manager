@@ -61,10 +61,14 @@ def random_events(rng, weeks) -> list:
     return out
 
 
-def build_population(rng, case_dir, hrng):
+COMMUNITIES = ["קהילה א", "קהילה א", "קהילה א", "קהילה ב", "קהילה ב", "קהילה ג", ""]
+
+
+def build_population(rng, case_dir, hrng, crng):
     """A fresh desktop database with cards and a few weeks of recorded history. `hrng` is a
     stream of its own for what stage 4 added (the holiday marks, the children, the events),
-    so the populations and the weeks of the earlier stages stay exactly the ones they were."""
+    and `crng` for what came after it (the communities), so the populations and the weeks of
+    the earlier stages stay exactly the ones they were."""
     old.use_db(os.path.join(case_dir, "ManhalHaluka", "data.db"))
     with old.clock() as sim:
         sim._today = wk(-9)
@@ -83,7 +87,7 @@ def build_population(rng, case_dir, hrng):
                     "per_soul": rng.choice(["", "0", "-300", str(rng.randint(1, 3000))]),
                     "income": rng.choice(["", str(rng.randint(0, 9000))]),
                     "start_date": (wk(-30) + timedelta(days=rng.randint(0, 120))).isoformat()}
-            card.update(holiday_fields(hrng))
+            card.update(holiday_fields(hrng), representative=crng.choice(COMMUNITIES))
             if rng.random() < 0.25:                                # an imported "last distribution"
                 card["last_distribution"] = (wk(-rng.randint(1, 6)) - timedelta(days=rng.choice([0, 0, 1, 2]))).isoformat()
             people.append(db.add_recipient(card))
@@ -93,13 +97,14 @@ def build_population(rng, case_dir, hrng):
                     "per_soul": rng.choice(["", "0", "-50", str(rng.randint(1, 3000))]),
                     "income": hrng.choice(["", "0", str(hrng.randint(100, 9000))]),
                     "start_date": (wk(-40) + timedelta(days=rng.randint(0, 200))).isoformat()}
-            card.update(holiday_fields(hrng))
+            card.update(holiday_fields(hrng), representative=crng.choice(COMMUNITIES))
             if rng.random() < 0.15:
                 card["last_distribution"] = wk(-rng.randint(1, 7)).isoformat()
             people.append(db.add_recipient(card))
         for i in range(rng.randint(0, 6)):                        # data-only cards
             people.append(db.add_recipient(dict({"full_name": names[150 + i], "status": "פעיל", "frequency": "",
-                                                 "priority": rng.choice([None, 1, 0])}, **holiday_fields(hrng))))
+                                                 "priority": rng.choice([None, 1, 0]),
+                                                 "representative": crng.choice(COMMUNITIES)}, **holiday_fields(hrng))))
         all_guids = [dict(db.get_recipient(rid))["guid"] for rid in people]
         # recorded rounds of the last weeks: Wednesdays, a Sunday / Monday one, a late Thursday
         # one, holiday and bonus rounds, recorded no-shows
@@ -129,27 +134,48 @@ seen = {"people": 0, "regulars": 0, "one_timers": 0, "reserve": 0, "history_rows
         "weeks_with_waiting_regulars": 0, "weeks_with_paused_one_timers": 0}
 hol = {"events": 0, "people": 0, "reserve": 0, "cut": 0, "filtered": 0, "missing_data": 0, "outside_filter": 0,
        "on_a_wednesday": 0, "weeks_after_an_event": 0, "one_timers_who_received": 0, "other_cards_who_received": 0}
+sc = {"weeks": 0, "cut": 0, "reserve_of_regulars": 0, "order_differs_from_waiting": 0}
+bal = {"events": 0, "communities": 0, "people": 0, "reserve": 0, "fills": 0, "left_without_a_place": 0,
+       "with_fixed_percentages": 0, "with_a_filter": 0}
 for seed in range(N):
-    rng, hrng = random.Random(1000 + seed), random.Random(5000 + seed)
+    rng, hrng, crng = random.Random(1000 + seed), random.Random(5000 + seed), random.Random(9000 + seed)
     case = os.path.join(TMP, f"case{seed}")
-    cooldown = build_population(rng, case, hrng)
+    cooldown = build_population(rng, case, hrng, crng)
     src = db.DB_PATH
     products = rng.choice([0, 3, 8, 15, 25, 52, 52, 80])
     reserve = rng.choice([0, 0, 3, 10])
     weeks = rng.randint(4, 9)
     events = random_events(hrng, weeks)
+    # the later additions, on their own stream: weeks that are cut by need score, holiday
+    # rounds that are split between the communities, and percentages fixed for communities
+    scored = {wk(i) for i in range(weeks) if crng.random() < 0.4}
+    for e in events:
+        e["balance"] = crng.random() < 0.6
+    pcts = crng.choice([{}, {}, {"קהילה ב": 50.0}, {"קהילה א": 20.0, "קהילה ג": 30.0}, {"קהילה ג": 100.0}])
 
     # the site: import the desktop database, then plan forward
+    db.set_community_quotas(pcts)                          # what the manager fixed in the desktop program
     web_db = os.path.join(case, "web", "haluka.db")
     import_old.import_old(src, web_db, now=__import__("datetime").datetime(W0.year, W0.month, W0.day, 10, 0))
     conn = store.connect(web_db)
     settings = store.get_settings(conn)
+    if store.community_pcts(settings) != pcts:
+        problems.append(f"population {seed}: the percentages fixed for communities did not come with the import")
+    pcts = store.community_pcts(settings)
     mine_line = planner.plan_timeline(
         store.load_recipients(conn), store.load_received(conn), start=W0, weeks=weeks, horizon=W0,
         weights=planner.need_weights(settings),
         cooldown_weeks=store.int_setting(settings, "onetime_cooldown_weeks", 4),
-        portions=products, reserve=reserve, events=events)
+        portions=products, reserve=reserve, events=events,
+        modes={w: planner.MODE_SCORED for w in scored}, pinned=pcts)
     mine = mine_line["weeks"]
+    plain = None
+    if scored:                                             # the same weeks in the ordinary way, to see that the mark matters
+        plain = planner.plan_timeline(
+            store.load_recipients(conn), store.load_received(conn), start=W0, weeks=weeks, horizon=W0,
+            weights=planner.need_weights(settings),
+            cooldown_weeks=store.int_setting(settings, "onetime_cooldown_weeks", 4),
+            portions=products, reserve=reserve, events=events, pinned=pcts)["weeks"]
     seen["history_rows"] += len(store.load_received(conn))
     conn.close()
     for w in mine:
@@ -164,7 +190,8 @@ for seed in range(N):
     sim_db = os.path.join(case, "sim", "ManhalHaluka", "data.db")
     old.copy_db(src, sim_db)
     old.use_db(sim_db)
-    theirs_line = old.simulate_line(W0, weeks, products, reserve, events=events)
+    theirs_line = old.simulate_line(W0, weeks, products, reserve, events=events, scored_weeks=scored,
+                                    community_pcts=pcts)
     theirs = theirs_line["weeks"]
 
     # the holiday rounds: same people, same order, same reserve
@@ -188,10 +215,27 @@ for seed in range(N):
         hol["weeks_after_an_event"] += sum(1 for w in mine if w["date"] > a["date"])
         hol["one_timers_who_received"] += sum(1 for e in a["main"] if e["kind"] == "onetime")
         hol["other_cards_who_received"] += sum(1 for e in a["main"] if e["kind"] == "other")
+        if a["balance"]:
+            bal["events"] += 1
+            bal["communities"] += len(a["communities"])
+            bal["people"] += len(a["main"])
+            bal["reserve"] += len(a["reserve_list"])
+            bal["fills"] += sum(1 for e in a["main"] if e.get("fill"))
+            bal["left_without_a_place"] += sum(1 for e in a["out"] if e["group"] == planner.OUT_EV_CUT)
+            bal["with_fixed_percentages"] += any(c["pinned"] for c in a["communities"])
+            bal["with_a_filter"] += bool(a["criteria"])
+            if sum(c["main"] for c in a["communities"]) != len(a["main"]) or any(c["main"] > c["quota"] for c in a["communities"]):
+                problems.append(f"{tag}: the split shown for the communities does not add up to the list")
 
     for i, (a, b) in enumerate(zip(mine, theirs)):
         total_weeks += 1
-        tag = f"population {seed} week {i} (portions {products}, reserve {reserve}, pause {cooldown})"
+        tag = (f"population {seed} week {i} (portions {products}, reserve {reserve}, pause {cooldown}"
+               f"{', by score' if a['by_score'] else ''})")
+        if a["by_score"] and products > 0:
+            sc["weeks"] += 1
+            sc["cut"] += a["cut"]
+            sc["reserve_of_regulars"] += sum(1 for e in a["reserve_list"] if e["kind"] == "regular")
+            sc["order_differs_from_waiting"] += guids(a["main"]) != guids(plain[i]["main"])
         if products <= 0:
             # the desktop SCREEN shows an empty table for 0 portions (rule 8); its core does not cut
             if a["main"] or a["reserve_list"]:
@@ -219,6 +263,11 @@ for seed in range(N):
 
 t.ok(f"{N} random populations, {total_weeks} weeks: same people, same order, same reserve as the desktop program",
      not problems, " | ".join(problems[:6]))
+t.ok("the weeks that were marked 'by score' were really cut by score: weeks with more regulars than portions, "
+     "with regulars on the reserve, and lists that differ from the ordinary way", all(sc.values()), str(sc))
+t.ok("the holiday rounds that were split between the communities were not empty either: people, a reserve, "
+     "shares topped up from the same community, people left without a place, fixed percentages, a filter",
+     all(bal.values()), str(bal))
 t.ok("the comparison covered weeks with more regulars than portions", cut_weeks > 0, f"cut weeks: {cut_weeks}")
 t.ok("...and weeks where the reserve was topped up after a cut (rule 3)", topped > 0, f"topped: {topped}")
 t.ok("the comparison was not empty: regulars, one-timers, reserve, waiting and paused people all appeared",
@@ -227,5 +276,7 @@ t.ok("...and so were the holiday rounds: with and without a filter, cut and not,
      "one-timers and other cards receiving, weeks after them", all(hol.values()), str(hol))
 print(f"       ({total_weeks} weeks compared, {cut_weeks} of them cut; {seen})")
 print(f"       (holiday rounds: {hol})")
+print(f"       (weeks by score: {sc})")
+print(f"       (holiday rounds split between communities: {bal})")
 shutil.rmtree(TMP, ignore_errors=True)
 t.done()

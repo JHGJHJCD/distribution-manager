@@ -84,6 +84,28 @@ MUTATIONS = [
      "    row['days_since'] = planner.recency_days(row, day)\n"
      "    return row\n"
      "planner.event_row = event_row"),
+    # ── after stage 4: a week by need score, a holiday list split between the communities ──
+    ("a week that is marked 'by score' is cut by who waited longest",
+     "from web.engine import selection\n"
+     "def _c(due, by_hand, weights, portions, reserve_auto):\n"
+     "    ranked = selection.rank_by_wait(due, weights)\n"
+     "    slots = max(0, portions - len(by_hand[planner.MANUAL_ADD]))\n"
+     "    selection.assign_roles(ranked, slots, reserve_auto)\n"
+     "    return ranked, len(ranked) > slots\n"
+     "planner._cut_by_score = _c"),
+    ("by score, the regulars who were cut are not put on the reserve",
+     "_cs = planner._cut_by_score\n"
+     "planner._cut_by_score = lambda due, by_hand, weights, portions, reserve_auto: _cs(due, by_hand, weights, portions, 0)"),
+    ("a holiday list that should be split between the communities is cut by who waited longest",
+     "_pe = planner.plan_event\n"
+     "planner.plan_event = lambda event, people, ledger, **kw: _pe(dict(event, balance=False), people, ledger, **kw)"),
+    ("the percentages fixed for communities are ignored",
+     "_pe2 = planner.plan_event\n"
+     "planner.plan_event = lambda event, people, ledger, weights, pinned=None: _pe2(event, people, ledger, weights=weights, pinned=None)"),
+    ("a split holiday list is built from everybody active, marked or not",
+     "_pe3 = planner.plan_event\n"
+     "planner.plan_event = lambda event, people, ledger, **kw: _pe3(event, [dict(p, holiday_support=1, holidays='') for p in people] "
+     "if event.get('balance') else people, ledger, **kw)"),
     ("on a holiday list nobody's waiting days are counted (who waited longest is lost)",
      "_er3 = planner.event_row\n"
      "planner.event_row = lambda rec, day, ledger: dict(_er3(rec, day, ledger), days_since=0)"),

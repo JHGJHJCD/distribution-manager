@@ -519,6 +519,56 @@ t.ok("A20 weights that do not add up to 100 are refused in words (409); a broken
 t.ok("A20 the settings carry no name and no detail of anybody", SECRET_PHONE not in client.get("/api/settings").text
      and "בדיקה" not in client.get("/api/settings").text and "בדיקה" not in look.text)
 
+# ── A21: a week by score, a holiday list split between communities, fixed percentages ──
+NEXT = plan_now(2)["weeks"][1]["date"]
+writes = [("/api/week/mode", {"date": NEXT, "mode": "scored"}), ("/api/settings/communities", {"percents": {}})]
+t.ok("A21 neither can be written without the site's own header (403) or reached with GET (405)",
+     [post(u, b, headers={}).status_code for u, b in writes] == [403, 403] and [client.get(u).status_code for u, _ in writes] == [405, 405]
+     and plan_now(2)["weeks"][1]["by_score"] is False)
+t.ok("A21 a coming week is marked 'by score' and unmarked again; the answers of the weeks say so",
+     post("/api/week/mode", {"date": NEXT, "mode": "scored"}).status_code == 200 and plan_now(2)["weeks"][1]["by_score"] is True
+     and client.get("/api/week", params={"date": NEXT}).json()["by_score"] is True and plan_now(2)["weeks"][0]["by_score"] is False
+     and post("/api/week/mode", {"date": NEXT, "mode": "wait"}).status_code == 200 and plan_now(2)["weeks"][1]["by_score"] is False)
+t.ok("A21 a way that does not exist is refused (422); a week that passed, and a day that is not a Wednesday, are refused in words (409)",
+     [post("/api/week/mode", {"date": NEXT, "mode": "lottery"}).status_code,
+      post("/api/week/mode", {"date": "2026-11-18", "mode": "scored"}).status_code,
+      post("/api/week/mode", {"date": "2026-12-01", "mode": "scored"}).status_code] == [422, 409, 409]
+     and "שבוע" in post("/api/week/mode", {"date": "2026-11-18", "mode": "scored"}).json()["message"]
+     and not any(w["by_score"] for w in plan_now(3)["weeks"]))
+conn = store.connect(path)
+with store.tx(conn):
+    conn.execute("UPDATE recipients SET representative='קהילה א', holiday_support=1 WHERE guid IN ('g0001','g0002','g0003')")
+    conn.execute("UPDATE recipients SET representative='קהילה ב', holiday_support=1 WHERE guid IN ('g0021','g0022')")
+conn.close()
+seen = client.get("/api/settings").json()
+t.ok("A21 the settings list the communities of the active cards with their sizes, and who has none",
+     [(c["name"], c["size"], c["percent"]) for c in seen["communities"]] == [("קהילה א", 3, 0), ("קהילה ב", 2, 0)]
+     and seen["no_community"] > 0 and seen["communities_sum"] == 0)
+t.ok("A21 a percentage is fixed for a community; one for a community nobody belongs to, or more than 100 together, is refused in words",
+     post("/api/settings/communities", {"percents": {"קהילה ב": 60}}).status_code == 200
+     and [c["percent"] for c in client.get("/api/settings").json()["communities"]] == [0, 60]
+     and post("/api/settings/communities", {"percents": {"קהילה שאין": 10}}).status_code == 409
+     and post("/api/settings/communities", {"percents": {"קהילה א": 70, "קהילה ב": 60}}).status_code == 409
+     and "100" in post("/api/settings/communities", {"percents": {"קהילה א": 70, "קהילה ב": 60}}).json()["message"]
+     and post("/api/settings/communities", {"percents": "half"}).status_code == 422
+     and [c["percent"] for c in client.get("/api/settings").json()["communities"]] == [0, 60])
+r = post("/api/event/save", dict(EVENT, date="2026-12-06", portions=4, reserve=1, balance=True))
+EV3 = r.json().get("guid", "")
+split = client.get("/api/event", params={"guid": EV3}).json()
+t.ok("A21 a holiday event that is split between the communities shows each community's share (the fixed percentage included)",
+     r.status_code == 200 and split["balance"] is True and {c["name"]: c["pinned"] for c in split["communities"]}.get("קהילה ב") is True
+     and sum(c["main"] for c in split["communities"]) == len(split["main"]) == 4
+     and all(e.get("community") and e.get("fill") is False for e in split["main"]), str(split.get("communities")))
+t.ok("A21 ...its answer carries names, reasons and communities only — no phone, id number or note",
+     SECRET_PHONE not in str(split) and SECRET_ID not in str(split) and SECRET_NOTE not in str(split)
+     and all(set(e) <= {"guid", "name", "kind", "freq", "role", "why", "group", "manual", "community", "fill"} for e in split["main"]))
+look = post("/api/settings/preview", {"communities": {"קהילה א": 90}})
+t.ok("A21 'what would change' also answers for percentages, and saves nothing",
+     look.status_code == 200 and "changed" in look.json() and [c["percent"] for c in client.get("/api/settings").json()["communities"]] == [0, 60])
+t.ok("A21 an event whose split is not yes or no is refused (422)",
+     post("/api/event/save", dict(EVENT, date="2026-12-06", balance="sometimes")).status_code == 422)
+post("/api/event/delete", {"event": EV3})
+
 # ── A18: every screen of the site ─────────────────────────────────────────────
 SCREENS = {"/": "app.js", "/people": "people.js", "/holiday": "holiday.js", "/history": "history.js",
            "/settings": "settings.js"}

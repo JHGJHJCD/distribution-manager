@@ -156,6 +156,11 @@ class NumbersBody(BaseModel):
     reserve: Optional[int] = Field(default=None, ge=0, le=service.MAX_PORTIONS)
 
 
+class ModeBody(BaseModel):
+    date: str = Field(pattern=_DATE)
+    mode: str = Field(pattern=r"^(wait|scored)$")
+
+
 class PrintedBody(BaseModel):
     """A range of weeks (`start` + `weeks`) or one holiday event (`event`)."""
     start: Optional[str] = Field(default=None, pattern=_DATE)
@@ -180,6 +185,16 @@ def api_numbers(body: NumbersBody):
 
     def do(conn, path):
         service.set_numbers(conn, config.now(), wed, body.portions, body.reserve, path)
+        return {"ok": True}
+    return _run(do)
+
+
+@app.post("/api/week/mode")
+def api_mode(body: ModeBody):
+    wed = _wed(body.date)
+
+    def do(conn, path):
+        service.set_mode(conn, config.now(), wed, body.mode, path)
         return {"ok": True}
     return _run(do)
 
@@ -326,6 +341,7 @@ class EventBody(BaseModel):
     portions: int = Field(ge=0, le=service.MAX_PORTIONS)
     reserve: int = Field(default=0, ge=0, le=service.MAX_PORTIONS)
     criteria: dict[str, Bound] = Field(default_factory=dict)
+    balance: bool = False
 
 
 class EventGuidBody(BaseModel):
@@ -411,10 +427,16 @@ class WeightsSettings(BaseModel):
     weights: dict[str, float]
 
 
+class CommunitiesSettings(BaseModel):
+    model_config = {"extra": "forbid"}
+    percents: dict[str, float]
+
+
 class PreviewSettings(BaseModel):
     model_config = {"extra": "forbid"}
     numbers: Optional[NumbersSettings] = None
     weights: Optional[dict[str, float]] = None
+    communities: Optional[dict[str, float]] = None
 
 
 @app.get("/api/settings")
@@ -430,6 +452,11 @@ def api_settings_numbers(body: NumbersSettings):
 @app.post("/api/settings/weights")
 def api_settings_weights(body: WeightsSettings):
     return _run(lambda conn, path: settings_service.save_weights(conn, config.now(), body.weights, path))
+
+
+@app.post("/api/settings/communities")
+def api_settings_communities(body: CommunitiesSettings):
+    return _run(lambda conn, path: settings_service.save_communities(conn, config.now(), body.percents, path))
 
 
 @app.post("/api/settings/preview")

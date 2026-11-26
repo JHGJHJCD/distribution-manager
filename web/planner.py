@@ -56,6 +56,11 @@ OUT_EV_OTHER = "ev_other"      # marked for other holidays only
 # What the manager can set by hand for one person in one week.
 MANUAL_ADD, MANUAL_RESERVE, MANUAL_REMOVE = "add", "reserve", "remove"
 MANUAL_ACTIONS = (MANUAL_ADD, MANUAL_RESERVE, MANUAL_REMOVE)
+# How ONE week picks among the regulars in turn when there are fewer portions than them:
+# whoever waited longest (the ordinary way, rule 8), or — when the manager marked that week
+# — by the need score (the desktop program's "קבועים לפי ניקוד" mode).
+MODE_WAIT, MODE_SCORED = "wait", "scored"
+WEEK_MODES = (MODE_WAIT, MODE_SCORED)
 
 PRIORITY_LABEL = {3: "עדיפות ראשונה", 2: "עדיפות שנייה"}
 
@@ -307,11 +312,32 @@ def _kind(row: dict) -> str:
     return KIND_REGULAR if selection.is_regular(row) else KIND_ONE_TIME
 
 
+def _cut_by_score(due: list, by_hand: dict, weights: dict, portions: int, reserve_auto: int) -> tuple:
+    """A week that is marked "by score": the regulars in turn in the order of their need
+    score — the first take the portions, the next `reserve_auto` are the reserve, the rest
+    are off the list. Exactly the desktop program's 'קבועים לפי ניקוד' mode: everybody on
+    the screen is scored together on ONE scale (also who was put there by hand —
+    selection.rank_by_need), and EVERY card added by hand takes a place from the lowest
+    (selection.limit_to_products; in the ordinary mode only a regular added by hand does).
+    Returns (the regulars in turn by score — each with its `_role`, was anybody cut)."""
+    pool = due + by_hand[MANUAL_ADD] + by_hand[MANUAL_RESERVE]
+    ranked = selection.rank_by_need(pool, weights)
+    in_turn = {id(r) for r in due}
+    line = [r for r in ranked if id(r) in in_turn]
+    slots = max(0, portions - len(by_hand[MANUAL_ADD]))
+    selection.assign_roles(line, slots, reserve_auto)
+    return line, len(line) > slots
+
+
 def plan_week(wed: date, people: list, ledger: Ledger, *, portions: int, reserve: int,
-              weights: dict, cooldown_weeks: int, manual: dict = None) -> dict:
+              weights: dict, cooldown_weeks: int, manual: dict = None, mode: str = None) -> dict:
     """The list of the Wednesday `wed`. `people`: active cards, ordered by name.
     Returns main / reserve_list / out (entries with a Hebrew 'why') and the week's numbers.
     Nothing is recorded here — plan_weeks() does that between weeks.
+
+    `mode` = how this week picks among the regulars in turn when the portions are short:
+    None / MODE_WAIT — whoever waited longest (rule 8); MODE_SCORED — by the need score
+    (_cut_by_score). With a portion for every regular in turn the two give the same people.
 
     `manual` = what the manager set by hand for THIS week, {guid: 'add' | 'reserve' |
     'remove'} (decision 25/11/2026: it stays while everything around it is recomputed):
@@ -334,6 +360,7 @@ def plan_week(wed: date, people: list, ledger: Ledger, *, portions: int, reserve
     regs = [week_row(p, wed, ledger) for p in free if selection.is_regular(p)]
     ones = [week_row(p, wed, ledger) for p in free if selection.is_one_time_candidate(p)]
 
+    by_score = mode == MODE_SCORED
     main, reserve_list, out, warnings = [], [], [], []
     for r in by_hand[MANUAL_REMOVE]:
         out.append(_entry(r, _kind(r), ROLE_OUT,
@@ -382,7 +409,7 @@ def plan_week(wed: date, people: list, ledger: Ledger, *, portions: int, reserve
                               f"מקום {i + 1} בתור · אין מנות בשבוע הזה",
                               group=OUT_NO_PORTIONS, place=i + 1, sort=(1, i)))
         return _week(wed, portions, reserve, regs_due, 0, False, main, reserve_list, out,
-                     warnings, len(queue))
+                     warnings, len(queue), by_score)
 
     # 3a. What the manager set by hand comes first.
     for r in by_hand[MANUAL_ADD]:
@@ -397,35 +424,51 @@ def plan_week(wed: date, people: list, ledger: Ledger, *, portions: int, reserve
     added_others = len(by_hand[MANUAL_ADD]) - added_regs
     reserve_auto = max(0, reserve - len(by_hand[MANUAL_RESERVE]))
 
-    # 3. Rule 8: fewer portions than regulars in turn -> whoever waited longest.
-    kept = selection.limit_due_regulars(due, weights, portions, reserve_auto, added_regs)
-    cut = len(kept) < regs_due or any(r.get("_reserve") for r in kept)
-    if cut:
-        warnings.append(f"{regs_due} קבועים בתור ורק {portions} מנות: נכנסו מי שחיכו הכי הרבה זמן")
+    # 3. Rule 8: fewer portions than regulars in turn -> whoever waited longest; in a week
+    #    that is marked "by score" -> whoever has the highest need score.
+    place = {}
+    if by_score:
+        line, cut = _cut_by_score(due, by_hand, weights, portions, reserve_auto)
+        kept = [r for r in line if r["_role"] != ROLE_OUT]
+        place = {id(r): i + 1 for i, r in enumerate(line)}
+        if cut:
+            warnings.append(f"{regs_due} קבועים בתור ורק {portions} מנות: נכנסו בעלי הניקוד הגבוה ביותר "
+                            "(השבוע הזה מחולק לפי ניקוד)")
+    else:
+        kept = selection.limit_due_regulars(due, weights, portions, reserve_auto, added_regs)
+        cut = len(kept) < regs_due or any(r.get("_reserve") for r in kept)
+        if cut:
+            warnings.append(f"{regs_due} קבועים בתור ורק {portions} מנות: נכנסו מי שחיכו הכי הרבה זמן")
+    short = f"יש {regs_due} קבועים בתור ורק {portions} מנות"
     reg_reserve = 0
     for r in kept:
         label = _freq_label(r)
         if r.get("_reserve"):
             reg_reserve += 1
+            how = f"רזרבה לפי הניקוד (מקום {place[id(r)]} מתוך {regs_due})" if by_score else "רזרבה"
             reserve_list.append(_entry(
                 r, KIND_REGULAR, ROLE_RESERVE,
-                f"{label} · התור שלו הגיע, אבל יש {regs_due} קבועים בתור ורק {portions} מנות · "
-                "רזרבה: נכנס אם מישהו לא מגיע"))
+                f"{label} · התור שלו הגיע, אבל {short} · {how}: נכנס אם מישהו לא מגיע"))
         else:
             why = (f"{label} · {_last_text(r)} · התור שלו הגיע" if r.get("last_distribution")
                    else f"{label} · עוד לא קיבל אף פעם, ולכן נכנס מיד")
-            if cut:
+            if cut and by_score:
+                why += f" · נכנס לפי הניקוד: מקום {place[id(r)]} מתוך {regs_due} קבועים בתור"
+            elif cut:
                 why += f" · נכנס כי הוא מחכה {r.get('days_since') or 0} ימים, יותר מאחרים"
             main.append(_entry(r, KIND_REGULAR, ROLE_MAIN, why))
     if cut:
         dropped = [r for r in due if r.get("_role") == ROLE_OUT]
-        dropped.sort(key=lambda r: (-(r.get("days_since") or 0), -(r.get("need_score") or 0),
-                                    r.get("full_name") or ""))
+        if by_score:
+            dropped.sort(key=lambda r: place[id(r)])
+        else:
+            dropped.sort(key=lambda r: (-(r.get("days_since") or 0), -(r.get("need_score") or 0),
+                                        r.get("full_name") or ""))
         for i, r in enumerate(dropped):
+            lower = f"הניקוד שלו נמוך יותר (מקום {place[id(r)]} מתוך {regs_due}) · " if by_score else ""
             out.append(_entry(
                 r, KIND_REGULAR, ROLE_OUT,
-                f"{_freq_label(r)} · התור שלו הגיע, אבל יש {regs_due} קבועים בתור ורק {portions} מנות · "
-                "לא נשאר מקום גם ברזרבה",
+                f"{_freq_label(r)} · התור שלו הגיע, אבל {short} · {lower}לא נשאר מקום גם ברזרבה",
                 group=OUT_REG_CUT, sort=("", i)))
 
     # 4. The portions left go to the one-timers' queue; the reserve comes right after
@@ -453,21 +496,22 @@ def plan_week(wed: date, people: list, ledger: Ledger, *, portions: int, reserve
         warnings.append(f"ברשימה {len(main)} מקבלים ויש רק {portions} מנות: "
                         f"{-empty} יותר מדי, בגלל הוספות ביד")
     return _week(wed, portions, reserve, regs_due, slots, cut, main, reserve_list, out,
-                 warnings, n_queue)
+                 warnings, n_queue, by_score)
 
 
 _OUT_ORDER = {OUT_REMOVED: -1, OUT_REG_CUT: 0, OUT_NO_PORTIONS: 1, OUT_ONE_QUEUE: 2,
               OUT_REG_WAIT: 3, OUT_ONE_PAUSE: 4}
 
 
-def _week(wed, portions, reserve, regs_due, slots, cut, main, reserve_list, out, warnings, n_queue):
+def _week(wed, portions, reserve, regs_due, slots, cut, main, reserve_list, out, warnings, n_queue,
+          by_score=False):
     out.sort(key=lambda e: (_OUT_ORDER.get(e.get("group"), 9), e.pop("sort", ("",))))
     counts = {}
     for e in main:
         key = e["freq"] if e["kind"] == KIND_REGULAR else ONE_TIME
         counts[key] = counts.get(key, 0) + 1
     return {
-        "date": wed, "portions": portions, "reserve": reserve,
+        "date": wed, "portions": portions, "reserve": reserve, "by_score": bool(by_score),
         "regulars_due": regs_due, "one_time_slots": slots, "one_time_queue": n_queue, "cut": cut,
         "main": main, "reserve_list": reserve_list, "out": out,
         "main_regulars": sum(1 for e in main if e["kind"] == KIND_REGULAR),
@@ -526,26 +570,35 @@ _EV_OUT_ORDER = {OUT_REMOVED: -1, OUT_EV_MISSING: 0, OUT_EV_CUT: 1, OUT_NO_PORTI
                  OUT_EV_FILTER: 2, OUT_EV_OTHER: 3}
 
 
-def plan_event(event: dict, people: list, ledger: Ledger, *, weights: dict) -> dict:
+def plan_event(event: dict, people: list, ledger: Ledger, *, weights: dict, pinned: dict = None) -> dict:
     """The list of ONE holiday event. `event`: {guid, date, holiday ('*' = everybody marked
     "נתמך חגים", or a holiday's name), portions, reserve, criteria {field: {min, max}},
-    manual {guid: 'add' | 'reserve' | 'remove'}}. `people`: active cards, ordered by name.
+    balance (split the portions between the communities), manual {guid: 'add' | 'reserve' |
+    'remove'}}. `people`: active cards, ordered by name. `pinned`: the percentages the manager
+    fixed for communities, {community: percent} (used only with `balance`).
 
     Who is on it is decided by the engine, in the order the desktop program builds a holiday
-    list (database.get_filtered_list, without the community balance):
+    list (database.get_filtered_list):
       1. the holiday mark is a HARD gate (selection.holiday_filter) — also for the reserve:
          nobody who is not marked gets onto either list by himself;
       2. the turn gates are skipped — an extra round takes regulars whatever their turn
          and one-timers whatever their pause (selection.due_filter, ignore=True);
       3. every threshold that was set must hold, and a card with no value in a filtered
          field does not pass (selection.filter_by_criteria; 0 in income / per-soul = unknown);
-      4. short of portions -> whoever waited longest (selection.rank_by_wait), then the
-         reserve; the rest are off this list.
+      4. WITHOUT `balance`: short of portions -> whoever waited longest
+         (selection.rank_by_wait), then the reserve; the rest are off this list.
+         WITH `balance` (selection.balance_by_community): every community ("נציג") gets a
+         share of the portions by its size — the number of its members who are marked for
+         this holiday — or by the percentage that was fixed for it. Inside a community the
+         ones who pass the filter come first, by need score; a share that they cannot fill
+         is topped up from the SAME community, by closeness to the filter. The reserve is
+         the next in line of all the communities together.
     What the manager set by hand comes first, as in a week: 'add' takes a portion and counts
     as received, 'reserve' / 'remove' do not. Nothing is recorded here."""
     day = event["date"]
     portions = max(0, int(event.get("portions") or 0))
     reserve = max(0, int(event.get("reserve") or 0))
+    balance = bool(event.get("balance"))
     crit = event_criteria(event)
     code = crit[selection.HOLIDAY_KEY]
     filtered = any(f in crit for f, _label in selection.FILTER_FIELDS)
@@ -566,9 +619,30 @@ def plan_event(event: dict, people: list, ledger: Ledger, *, weights: dict) -> d
     marked = selection.holiday_filter(free, crit)
     marked = selection.due_filter(marked, selection.upcoming_wednesday(day), ignore=True)
     eligible = selection.filter_by_criteria(marked, crit)
-    ranked = selection.rank_by_wait(eligible, weights)
-    n = len(ranked)
+    n = len(eligible)
     many = f"{n} שעוברים את הסינון" if filtered else f"{n} {group_words}"
+    passes = f"{mark} · עובר את הסינון" if filtered else mark
+    slots = max(0, portions - len(by_hand[MANUAL_ADD]))
+    reserve_auto = max(0, reserve - len(by_hand[MANUAL_RESERVE]))
+
+    # who takes the portions, and who waits on the reserve
+    main_rows, reserve_rows, communities, ranked = [], [], [], []
+    if portions > 0 and balance:
+        if slots > 0:
+            picked = selection.balance_by_community(marked, crit, weights, slots, pinned, reserve_count=reserve_auto)
+            main_rows = [r for r in picked if r.get("_role") == ROLE_MAIN]
+            reserve_rows = [r for r in picked if r.get("_role") == ROLE_RESERVE]
+        else:                                  # every portion was given by hand: only a reserve is left
+            reserve_rows = selection.rank_by_need(eligible, weights)[:reserve_auto]
+        communities = _communities(marked, eligible, main_rows, slots, pinned)
+    elif portions > 0:
+        ranked = selection.rank_by_wait(eligible, weights)
+        selection.assign_roles(ranked, slots, reserve_auto)
+        main_rows = [r for r in ranked if r["_role"] == ROLE_MAIN]
+        reserve_rows = [r for r in ranked if r["_role"] == ROLE_RESERVE]
+    taken = {id(r) for r in main_rows + reserve_rows}
+    passing = {id(r) for r in eligible}
+    quota_of = {c["name"]: c["quota"] for c in communities}
 
     main, reserve_list, out, warnings = [], [], [], []
     for r in by_hand[MANUAL_REMOVE]:
@@ -576,11 +650,11 @@ def plan_event(event: dict, people: list, ledger: Ledger, *, weights: dict) -> d
                           "הוסר ביד מהחלוקה הזו · לא נחשב כמי שקיבל",
                           group=OUT_REMOVED, manual=MANUAL_REMOVE, sort=(r.get("full_name") or "",)))
 
-    # everybody else who is not in the line, by reason
-    in_line, gate = {id(r) for r in eligible}, {id(r) for r in marked}
+    # everybody who is neither on the list nor in the line for it, by reason
+    gate = {id(r) for r in marked}
     missing_n = unmarked = 0
     for r in free:
-        if id(r) in in_line:
+        if id(r) in passing or id(r) in taken:
             continue
         name = r.get("full_name") or ""
         if id(r) not in gate:
@@ -609,14 +683,13 @@ def plan_event(event: dict, people: list, ledger: Ledger, *, weights: dict) -> d
         out.sort(key=lambda e: (_EV_OUT_ORDER.get(e.get("group"), 9), e.pop("sort", ("",))))
         return {
             "guid": event.get("guid"), "date": day, "holiday": code,
-            "portions": portions, "reserve": reserve,
+            "portions": portions, "reserve": reserve, "balance": balance, "communities": communities,
             "criteria": {f: crit[f] for f, _label in selection.FILTER_FIELDS if f in crit},
             "main": main, "reserve_list": reserve_list, "out": out, "warnings": warnings,
             "marked": marked_total, "eligible": n, "missing": missing_n, "unmarked": unmarked,
             "cut": cut, "empty_portions": max(0, portions - len(main)),
         }
 
-    passes = f"{mark} · עובר את הסינון" if filtered else mark
     if portions <= 0:
         # as in a week (rule 8): no portions -> an empty list, and nobody is recorded
         warnings.insert(0, "0 מנות: הרשימה של החלוקה הזו ריקה")
@@ -624,7 +697,7 @@ def plan_event(event: dict, people: list, ledger: Ledger, *, weights: dict) -> d
             out.append(_entry(r, _event_kind(r), ROLE_OUT, "סומן ביד לחלוקה הזו, אבל אין בה מנות",
                               group=OUT_NO_PORTIONS, manual=manual[r["guid"]],
                               sort=(0, r.get("full_name") or "")))
-        for i, r in enumerate(ranked):
+        for i, r in enumerate(selection.rank_by_wait(eligible, weights)):
             out.append(_entry(r, _event_kind(r), ROLE_OUT, f"{passes} · אין מנות בחלוקה הזו",
                               group=OUT_NO_PORTIONS, sort=(1, i)))
         return result(False)
@@ -636,33 +709,85 @@ def plan_event(event: dict, people: list, ledger: Ledger, *, weights: dict) -> d
         reserve_list.append(_entry(r, _event_kind(r), ROLE_RESERVE,
                                    "הועבר ביד לרזרבה · נכנס אם מישהו לא מגיע, ולא נחשב כמי שקיבל",
                                    manual=MANUAL_RESERVE))
-    slots = max(0, portions - len(by_hand[MANUAL_ADD]))
-    selection.assign_roles(ranked, slots, max(0, reserve - len(by_hand[MANUAL_RESERVE])))
-    cut = n > slots
-    if cut:
-        warnings.insert(0, f"{many} ורק {portions} מנות: נכנסו מי שמחכים הכי הרבה זמן")
-    for i, r in enumerate(ranked):
-        if r["_role"] == ROLE_MAIN:
+    # who passes the filter and was left without a place (without the balance: in the order of the line)
+    left = [r for r in (eligible if balance else ranked) if id(r) not in taken]
+    cut = bool(left) or any(id(r) in passing for r in reserve_rows)
+    if balance:
+        fills = 0
+        for r in main_rows:
+            own = r.get("_community") or selection.NO_COMMUNITY_LABEL
+            if r.get("_balance_fill"):
+                fills += 1
+                missing, failed = _why_outside(r, crit)
+                what = " · ".join(failed) if failed else "חסר בכרטיס: " + (", ".join(missing) or "נתון")
+                why = (f"{mark} · לא עובר את הסינון ({what}) · נכנס כדי להשלים את החלק של {own}: "
+                       "הוא הקרוב ביותר לסף מבין מי שנשאר בה")
+            else:
+                why = f"{passes} · נכנס בחלק של {own} ({quota_of.get(own, 0)} מנות), לפי הניקוד"
+            main.append(_entry(r, _event_kind(r), ROLE_MAIN, why, community=own, fill=bool(r.get("_balance_fill"))))
+        for r in reserve_rows:
+            near = "" if id(r) in passing else " · לא עובר את הסינון, אבל הוא הקרוב ביותר לסף"
+            reserve_list.append(_entry(
+                r, _event_kind(r), ROLE_RESERVE,
+                f"{mark}{near} · רזרבה: הבא בתור מכל הקהילות יחד · נכנס אם מישהו לא מגיע",
+                community=selection.community_key(r) or selection.NO_COMMUNITY_LABEL))
+        for r in left:
+            own = selection.community_key(r) or selection.NO_COMMUNITY_LABEL
+            out.append(_entry(
+                r, _event_kind(r), ROLE_OUT,
+                f"{passes} · החלק של {own} ({quota_of.get(own, 0)} מנות) התמלא במי שהניקוד שלהם גבוה יותר · "
+                "לא נשאר מקום גם ברזרבה",
+                group=OUT_EV_CUT, community=own, sort=(own, r.get("full_name") or "")))
+        if cut:
+            warnings.insert(0, f"{many} ורק {portions} מנות: המנות חולקו בין הקהילות לפי הגודל שלהן, "
+                               "ובתוך כל קהילה לפי הניקוד")
+        if fills:
+            warnings.append(f"{fills} נכנסו בלי לעבור את הסינון, כדי להשלים את החלק של הקהילה שלהם")
+    else:
+        if cut:
+            warnings.insert(0, f"{many} ורק {portions} מנות: נכנסו מי שמחכים הכי הרבה זמן")
+        for r in main_rows:
             why = f"{passes} · {_last_text(r)}"
             if cut:
                 why += f" · נכנס כי הוא מחכה {r.get('days_since') or 0} ימים, יותר מאחרים"
             main.append(_entry(r, _event_kind(r), ROLE_MAIN, why))
-        elif r["_role"] == ROLE_RESERVE:
+        for r in reserve_rows:
             reserve_list.append(_entry(
                 r, _event_kind(r), ROLE_RESERVE,
                 f"{mark} · יש {many} ורק {portions} מנות · רזרבה: נכנס אם מישהו לא מגיע"))
-        else:
+        for i, r in enumerate(left):
             out.append(_entry(
                 r, _event_kind(r), ROLE_OUT,
                 f"{mark} · יש {many} ורק {portions} מנות · לא נשאר מקום גם ברזרבה",
                 group=OUT_EV_CUT, sort=(i,)))
     empty = portions - len(main)
     if empty > 0:
-        warnings.append(f"{empty} מנות נשארו בלי מקבל: אין עוד {none_left}")
+        warnings.append(f"{empty} מנות נשארו בלי מקבל: אין עוד {group_words if balance else none_left}")
     elif empty < 0:
         warnings.append(f"ברשימה {len(main)} מקבלים ויש רק {portions} מנות: "
                         f"{-empty} יותר מדי, בגלל הוספות ביד")
     return result(cut)
+
+
+def _communities(marked: list, eligible: list, main_rows: list, slots: int, pinned: dict) -> list:
+    """How a balanced holiday list was split: for every community its size (members who are
+    marked for this holiday), how many of them pass the filter, the share it was given
+    (selection.community_quotas — the very numbers balance_by_community works with), how
+    many received, and how many of those came in only to fill the share. Largest first."""
+    groups = {}
+    for r in marked:
+        groups.setdefault(selection.community_key(r), []).append(r)
+    sizes = {c: len(members) for c, members in groups.items()}
+    quotas = selection.community_quotas(slots, sizes, pinned) if slots > 0 else {}
+    passing, got = {id(r) for r in eligible}, {id(r) for r in main_rows}
+    out = [{"name": c or selection.NO_COMMUNITY_LABEL, "size": sizes[c],
+            "passing": sum(1 for r in members if id(r) in passing), "quota": quotas.get(c, 0),
+            "pinned": bool(c) and (pinned or {}).get(c) is not None and float((pinned or {}).get(c) or 0) > 0,
+            "main": sum(1 for r in members if id(r) in got),
+            "filled": sum(1 for r in members if id(r) in got and r.get("_balance_fill"))}
+           for c, members in groups.items()]
+    out.sort(key=lambda c: (-c["size"], c["name"]))
+    return out
 
 
 # ── many weeks ────────────────────────────────────────────────────────────────
@@ -680,7 +805,8 @@ def _event_order(event: dict) -> tuple:
 
 def plan_timeline(recipients, received, *, start: date, weeks: int, horizon: date,
                   weights: dict, cooldown_weeks: int, portions: int = 52, reserve: int = 0,
-                  per_week: dict = None, manual: dict = None, events: list = None) -> dict:
+                  per_week: dict = None, manual: dict = None, events: list = None,
+                  modes: dict = None, pinned: dict = None) -> dict:
     """Lay out `weeks` consecutive Wednesdays from `start`, and the holiday events that
     fall among them, ALL IN DATE ORDER — each round sees what the rounds before it gave.
 
@@ -690,6 +816,8 @@ def plan_timeline(recipients, received, *, start: date, weeks: int, horizon: dat
     per_week   — optional {Wednesday: {"portions": n, "reserve": n}} for single weeks.
     manual     — optional {Wednesday: {guid: 'add' | 'reserve' | 'remove'}} (see plan_week).
     events     — optional holiday events that have not happened yet (see plan_event).
+    modes      — optional {Wednesday: MODE_SCORED} for the weeks that are cut by need score.
+    pinned     — optional {community: percent} for the holiday events that are balanced.
 
     The order of the rounds: an event dated before a Wednesday is laid out before that
     week; an event ON a Wednesday is the extra round of that day and comes after the
@@ -711,7 +839,7 @@ def plan_timeline(recipients, received, *, start: date, weeks: int, horizon: dat
     def lay_out_events(until: date, including: bool):
         while pending and (pending[0]["date"] < until or (including and pending[0]["date"] == until)):
             event = pending.pop(0)
-            laid = plan_event(event, people, ledger, weights=weights)
+            laid = plan_event(event, people, ledger, weights=weights, pinned=pinned)
             out_events.append(laid)
             for e in laid["main"]:
                 ledger.add_extra(e["guid"], event["date"])
@@ -725,7 +853,7 @@ def plan_timeline(recipients, received, *, start: date, weeks: int, horizon: dat
                          portions=over.get("portions", portions),
                          reserve=over.get("reserve", reserve),
                          weights=weights, cooldown_weeks=cooldown_weeks,
-                         manual=(manual or {}).get(wed))
+                         manual=(manual or {}).get(wed), mode=(modes or {}).get(wed))
         out_weeks.append(week)
         for e in week["main"]:
             ledger.add_regular(e["guid"], wed)
@@ -738,12 +866,14 @@ def plan_timeline(recipients, received, *, start: date, weeks: int, horizon: dat
 
 def plan_weeks(recipients, received, *, start: date, weeks: int, horizon: date,
                weights: dict, cooldown_weeks: int, portions: int = 52, reserve: int = 0,
-               per_week: dict = None, manual: dict = None, events: list = None) -> list:
+               per_week: dict = None, manual: dict = None, events: list = None,
+               modes: dict = None, pinned: dict = None) -> list:
     """The weeks of plan_timeline (the holiday events among them are laid out too — the
     weeks after an event depend on it — but only the weeks are returned)."""
     return plan_timeline(recipients, received, start=start, weeks=weeks, horizon=horizon,
                          weights=weights, cooldown_weeks=cooldown_weeks, portions=portions,
-                         reserve=reserve, per_week=per_week, manual=manual, events=events)["weeks"]
+                         reserve=reserve, per_week=per_week, manual=manual, events=events,
+                         modes=modes, pinned=pinned)["weeks"]
 
 
 def weeks_through(start: date, day: date) -> int:

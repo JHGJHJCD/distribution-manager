@@ -179,5 +179,64 @@ t.ok("T5 a look ahead at nothing, or at settings that could not be saved, is ref
      all(refusal(lambda d=d: settings_service.preview(conn, NOW, d, path)) for d in bad_preview))
 conn.close()
 
+# ── T6: the percentage fixed for a community ──────────────────────────────────
+A, B, C = "קהילה א", "קהילה ב", "קהילה ג"
+recs6 = ([person(n, "שבועי", holiday_support=1, representative=A, per_soul=str(100 * n)) for n in (1, 2, 3, 4, 5, 6)]
+         + [person(n, "שבועי", holiday_support=1, representative=B, per_soul=str(100 * n)) for n in (11, 12, 13)]
+         + [person(21, "חד-פעמי", 3, holiday_support=1, representative=f"  {C} "), person(22, "שבועי", representative=C, status="מושהה"),
+            person(30, "", None), person(31, "שבועי", holiday_support=1)])
+path = os.path.join(TMP, "c", "haluka.db")
+store.create(path)
+conn = store.connect(path)
+with store.tx(conn):
+    for r in recs6:
+        cols = ["id", "guid"] + [c for c in store.RECIPIENT_COLUMNS if c in r]
+        conn.execute(f"INSERT INTO recipients ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})", [r[c] for c in cols])
+    store.set_meta(conn, "closed_through", wk(-1).isoformat())
+v = settings_service.view(conn, NOW, path)
+t.ok("T6 the communities of the ACTIVE cards, the largest first, with their sizes; cards with no community are counted apart",
+     [(c["name"], c["size"], c["percent"]) for c in v["communities"]] == [(A, 6, 0), (B, 3, 0), (C, 1, 0)]
+     and v["no_community"] == 2 and v["communities_sum"] == 0, str(v["communities"]))
+settings_service.save_communities(conn, NOW, {B: 50, C: 12.5}, path)
+v = settings_service.view(conn, NOW, path)
+t.ok("T6 a fixed percentage is saved and shown; a community with none stays at 0 (its share is by its size)",
+     [c["percent"] for c in v["communities"]] == [0, 50, 12.5] and v["communities_sum"] == 62.5
+     and store.community_pcts(store.get_settings(conn)) == {B: 50.0, C: 12.5})
+settings_service.save_communities(conn, NOW, {A: 0, B: 0, C: 30}, path)
+t.ok("T6 a save replaces the whole table: 0 means 'not fixed' and is not kept",
+     store.community_pcts(store.get_settings(conn)) == {C: 30.0})
+kept = store.community_pcts(store.get_settings(conn))
+bad_pcts = {
+    "together more than 100": {A: 60, B: 50},
+    "every community fixed, and the sum is not 100": {A: 50, B: 30, C: 10},
+    "a community nobody active belongs to": {"קהילה שאין": 20},
+    "a negative percentage": {A: -5},
+    "more than 100 for one": {A: 101},
+    "two decimal places": {A: 33.33},
+    "text": {A: "half"},
+    "true instead of a number": {A: True},
+    "nothing at all": None,
+}
+said = {what: refusal(lambda d=d: settings_service.save_communities(conn, NOW, d, path)) for what, d in bad_pcts.items()}
+for what, words in said.items():
+    t.ok(f"T6 refused: {what}", bool(words), "it was accepted")
+t.ok("T6 a refusal says what is wrong, and nothing of a refused save is written",
+     "100" in said["together more than 100"] and "110" in said["together more than 100"]
+     and "בדיוק" in said["every community fixed, and the sum is not 100"] and store.community_pcts(store.get_settings(conn)) == kept)
+settings_service.save_communities(conn, NOW, {A: 50, B: 30, C: 20}, path)
+t.ok("T6 every community fixed and the sum exactly 100 is accepted",
+     store.community_pcts(store.get_settings(conn)) == {A: 50.0, B: 30.0, C: 20.0})
+settings_service.save_communities(conn, NOW, {}, path)
+g = event_service.save(conn, NOW, {"date": (W0 + timedelta(days=2)).isoformat(), "holiday": "*", "portions": 6,
+                                   "reserve": 0, "criteria": {}, "balance": True}, path)["guid"]
+by_size = {c["name"]: c["quota"] for c in event_service.detail(conn, NOW, g, path)["communities"]}
+p = settings_service.preview(conn, NOW, {"communities": {B: 50}}, path)
+t.ok("T6 'what would change': a percentage for the small community moves names in the holiday list that is split, and saves nothing",
+     by_size[A] > by_size[B] and p["same"] is False and [c["kind"] for c in p["changed"]] == ["event"]
+     and p["changed"][0]["enter"] == p["changed"][0]["leave"] > 0 and store.community_pcts(store.get_settings(conn)) == {}, str(p))
+t.ok("T6 ...and percentages that could not be saved are refused there too",
+     bool(refusal(lambda: settings_service.preview(conn, NOW, {"communities": {A: 60, B: 50}}, path))))
+conn.close()
+
 shutil.rmtree(TMP, ignore_errors=True)
 t.done()

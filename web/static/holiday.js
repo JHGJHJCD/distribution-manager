@@ -258,6 +258,7 @@
     $("evHol").value = ev.holiday;
     $("evPortions").value = shown(ev.portions);
     $("evReserve").value = shown(ev.reserve);
+    $("evBalance").checked = !!ev.balance;
     state.ov.filter.forEach(function (f) {
       var b = (ev.criteria || {})[f.field] || {};
       $("f_" + f.field + "_min").value = shown(b.min);
@@ -293,10 +294,12 @@
       if (lo !== null || hi !== null) { criteria[f.field] = { min: lo, max: hi }; }
     });
     if (error) { return { error: error }; }
-    return { data: { date: date, holiday: $("evHol").value, portions: portions, reserve: reserve, criteria: criteria } };
+    return { data: { date: date, holiday: $("evHol").value, portions: portions, reserve: reserve, criteria: criteria,
+                     balance: $("evBalance").checked } };
   }
   function sameAsSaved(data, ev) {
-    if (data.date !== ev.date || data.holiday !== ev.holiday || data.portions !== ev.portions || data.reserve !== ev.reserve) { return false; }
+    if (data.date !== ev.date || data.holiday !== ev.holiday || data.portions !== ev.portions || data.reserve !== ev.reserve ||
+        data.balance !== !!ev.balance) { return false; }
     return state.ov.filter.every(function (f) {
       var a = data.criteria[f.field] || {}, b = (ev.criteria || {})[f.field] || {};
       return shown(a.min) === shown(b.min) && shown(a.max) === shown(b.max);
@@ -321,7 +324,9 @@
     state.detail = null;
     state.who = null;
     notice("");
-    fillForm({ date: "", holiday: state.ov.holidays[0].code, portions: null, reserve: state.ov.defaults.reserve, criteria: {} });
+    // a new distribution starts with the split between the communities on, as in the desktop program
+    fillForm({ date: "", holiday: state.ov.holidays[0].code, portions: null, reserve: state.ov.defaults.reserve, criteria: {},
+               balance: true });
     renderEvent();
     window.scrollTo(0, 0);
     $("evDate").focus();
@@ -352,17 +357,46 @@
 
   // ── one distribution ───────────────────────────────────────────────────────
   function chip(entry) {
-    return H.chip(entry, entry.guid === state.who, function () {
+    var b = H.chip(entry, entry.guid === state.who, function () {
       state.who = entry.guid;
       renderEvent();
       if (!whySeen) { $("evWhy").scrollIntoView({ block: "nearest" }); }
     });
+    if (entry.fill) {                       // came in only to fill his community's share
+      b.classList.add("fill");
+      b.title = "נכנס להשלמת החלק של הקהילה שלו";
+    }
+    return b;
   }
   function group(title, entries, cls) { return H.group(title, entries, chip, cls); }
   function chips(entries) {
     var box = el("div", "chips");
     entries.forEach(function (e) { box.appendChild(chip(e)); });
     return box;
+  }
+
+  // How the portions were split between the communities (only for a distribution that is split).
+  function renderCommunities(d, filtered) {
+    var box = $("evCommunities"), rows = $("evCommRows");
+    var list = d.communities || [];
+    box.hidden = !(d.balance && list.length);
+    clear(rows);
+    if (box.hidden) { return; }
+    $("thPassing").hidden = !filtered;
+    list.forEach(function (c) {
+      var tr = el("tr");
+      tr.appendChild(el("th", null, c.name));
+      tr.appendChild(el("td", null, String(c.size)));
+      var passing = el("td", null, String(c.passing));
+      passing.hidden = !filtered;
+      tr.appendChild(passing);
+      tr.appendChild(el("td", null, c.quota + (c.pinned ? " (אחוז קבוע)" : "")));
+      tr.appendChild(el("td", null, c.main + (c.filled ? " · מתוכם " + c.filled + " להשלמה" : "")));
+      rows.appendChild(tr);
+    });
+    $("commNote").textContent = "קהילה היא כל מי שרשום אצלו אותו נציג בכרטיס. החלק של כל קהילה נקבע לפי מספר המסומנים לחג שיש בה," +
+      " או לפי אחוז שנקבע לה במסך ההגדרות." +
+      (filtered ? " חלק שאי אפשר למלא ממי שעובר את הסינון מושלם מאותה קהילה, ממי שהכי קרוב לסף." : "");
   }
 
   function renderEvent() {
@@ -393,9 +427,16 @@
       $("stMissing").textContent = d.missing;
       $("stMissingTile").className = "stat" + (d.missing > 0 ? " amber" : "");
     }
+    var split = !closed && !!d.balance;
     $("mainSub").textContent = closed ? "מי שקיבל בחלוקה הזו, כמו שנרשם."
+      : split ? "כל קהילה מקבלת חלק מהמנות. בתוך קהילה: " + (filtered ? "קודם מי שעובר את הסינון, " : "") + "לפי הניקוד."
       : filtered ? "מי שמסומן לחג ועובר את הסינון. מי שמחכה הכי הרבה זמן, ראשון."
                  : "מי שמסומן לחג. מי שמחכה הכי הרבה זמן, ראשון.";
+    $("infoOrder").textContent = split
+      ? "באיזון בין הקהילות המנות מתחלקות לפי גודל הקהילה, ובתוך כל קהילה נכנסים לפי הניקוד (המשקלים שבמסך ההגדרות)."
+      : "כשאין מספיק מנות לכל מי שמתאים, נכנסים מי שמחכים הכי הרבה זמן מאז שקיבלו בפעם האחרונה.";
+    $("fillLegend").hidden = !(split && d.main.some(function (e) { return e.fill; }));
+    if (closed) { $("evCommunities").hidden = true; } else { renderCommunities(d, filtered); }
 
     var warn = $("evWarnings");
     clear(warn);
@@ -411,8 +452,13 @@
 
     var byHand = d.main.filter(function (e) { return e.manual; });
     var inLine = d.main.filter(function (e) { return !e.manual; });
-    if (byHand.length) {
-      main.appendChild(group("נוספו ביד", byHand));
+    if (byHand.length) { main.appendChild(group("נוספו ביד", byHand)); }
+    if (split) {                                  // a split list is shown community by community, the largest first
+      (d.communities || []).forEach(function (c) {
+        var own = inLine.filter(function (e) { return e.community === c.name; });
+        if (own.length) { main.appendChild(group(c.name, own)); }
+      });
+    } else if (byHand.length) {
       if (inLine.length) { main.appendChild(group("לפי זמן ההמתנה", inLine)); }
     } else if (inLine.length) {
       main.appendChild(chips(inLine));
@@ -436,7 +482,8 @@
     if (!closed) {
       OUT_GROUPS.forEach(function (g3) {
         var list = d.out.filter(function (e) { return e.group === g3[0]; });
-        if (list.length) { out.appendChild(group(g3[1], list, g3[2])); }
+        var title = g3[0] === "ev_cut" && split ? "מתאימים, והחלק של הקהילה שלהם התמלא" : g3[1];
+        if (list.length) { out.appendChild(group(title, list, g3[2])); }
       });
       if (!d.out.length) { out.appendChild(el("p", "empty", "כל מי שמסומן לחג הזה נמצא ברשימה או ברזרבה.")); }
       if (d.unmarked > 0) {

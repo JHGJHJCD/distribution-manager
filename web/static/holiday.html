@@ -68,12 +68,15 @@
           <span class="pair"><label for="evPortions">מנות</label><input id="evPortions" type="number" min="0" max="2000" inputmode="numeric"></span>
           <span class="pair"><label for="evReserve">רזרבה</label><input id="evReserve" type="number" min="0" max="2000" inputmode="numeric"></span>
         </div>
+        <div class="tool-group">
+          <label class="tick" for="evBalance"><input type="checkbox" id="evBalance"> איזון בין הקהילות</label>
+        </div>
       </div>
       <div class="filter">
         <h3>סינון (לא חובה)</h3>
         <div class="f-body">
           <div class="f-grid" id="evFilter"></div>
-          <p class="sub f-note">ריק = בלי הגבלה. מי שחסר לו בכרטיס נתון שמסננים לפיו לא נכנס, ומסומן למטה.</p>
+          <p class="sub f-note" id="filterNote">ריק = בלי הגבלה. מי שחסר לו בכרטיס נתון שמסננים לפיו לא נכנס, ומסומן למטה.</p>
         </div>
       </div>
     </div>
@@ -101,6 +104,17 @@
 
       <div id="evWarnings"></div>
 
+      <div class="filter" id="evCommunities" hidden>
+        <h3>החלוקה בין הקהילות</h3>
+        <div class="table-scroll">
+          <table class="split">
+            <thead><tr><th>קהילה</th><th>מסומנים לחג</th><th id="thPassing">עוברים את הסינון</th><th>החלק שלה</th><th>מקבלים</th></tr></thead>
+            <tbody id="evCommRows"></tbody>
+          </table>
+        </div>
+        <p class="sub" id="commNote"></p>
+      </div>
+
       <div class="search narrow" id="evSearch">
         <label class="sr" for="evQ">חיפוש שם, כדי להוסיף ביד</label>
         <input id="evQ" type="search" placeholder="חיפוש שם, כדי להוסיף ביד" autocomplete="off" spellcheck="false">
@@ -118,6 +132,7 @@
         <span><i class="sw t-one"></i>חד־פעמי</span>
         <span><i class="sw t-other"></i>כרטיס בלבד</span>
         <span>✋ נקבע ביד</span>
+        <span id="fillLegend" hidden><i class="sw fill-mark"></i>נכנס להשלמת החלק של הקהילה</span>
       </div>
 
       <div class="buckets">
@@ -140,7 +155,7 @@
 
       <div class="notice lines" id="evInfo">
         <p>חלוקת חג היא סיבוב נוסף: התור של הקבועים לא זז בגללה, וחד־פעמי שמקבל בה לא נכנס להפסקה.</p>
-        <p>כשאין מספיק מנות לכל מי שמתאים, נכנסים מי שמחכים הכי הרבה זמן מאז שקיבלו בפעם האחרונה.</p>
+        <p id="infoOrder">כשאין מספיק מנות לכל מי שמתאים, נכנסים מי שמחכים הכי הרבה זמן מאז שקיבלו בפעם האחרונה.</p>
         <p>בבוקר שאחרי יום החלוקה, ב־06:00, הרשימה נכנסת להיסטוריה כמו שהיא, ומאז אי אפשר לשנות אותה.</p>
       </div>
     </div>

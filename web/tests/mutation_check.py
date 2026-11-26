@@ -363,9 +363,9 @@ mutate(PLANNER, "a holiday round counts as a regular round (it moves a regular's
 _plan_event = planner.plan_event
 
 
-def _reserve_topped_up(event, people, ledger, *, weights):
+def _reserve_topped_up(event, people, ledger, **kw):
     """What the desktop SCREEN does (found 26/11/2026): fill a holiday reserve from the one-timers' queue."""
-    e = _plan_event(event, people, ledger, weights=weights)
+    e = _plan_event(event, people, ledger, **kw)
     listed = {x["guid"] for x in e["main"] + e["reserve_list"] + e["out"]}
     queue = [p for p in people if p["guid"] not in listed and selection.is_one_time_candidate(p)]
     for p in queue[:max(0, 5 - len(e["reserve_list"]))]:
@@ -379,8 +379,8 @@ mutate(PLANNER, "the reserve of a holiday event is filled from the one-timers' q
        planner, "plan_event", _reserve_topped_up)
 
 
-def _event_hand_ignored(event, people, ledger, *, weights):
-    return _plan_event(dict(event, manual={}), people, ledger, weights=weights)
+def _event_hand_ignored(event, people, ledger, **kw):
+    return _plan_event(dict(event, manual={}), people, ledger, **kw)
 
 
 mutate(PLANNER, "what was set by hand for an event is ignored", planner, "plan_event", _event_hand_ignored)
@@ -407,8 +407,8 @@ def _event_before_its_wednesday(recipients, received, **k):
 mutate(PLANNER, "an event on a Wednesday is laid out before that day's regular list", planner, "plan_timeline", _event_before_its_wednesday)
 
 
-def _event_numbers_quoted(event, people, ledger, *, weights):
-    e = _plan_event(event, people, ledger, weights=weights)
+def _event_numbers_quoted(event, people, ledger, **kw):
+    e = _plan_event(event, people, ledger, **kw)
     cards_ = {p["guid"]: p for p in people}
     for x in e["out"]:
         x["why"] += f" (הכנסה {cards_[x['guid']].get('income')})"
@@ -670,6 +670,112 @@ mutate(SETTINGS, "the weights of the settings also reorder the one-timers' queue
 
 mutate(API, "the settings can be saved without checking them again on the server's side",
        settings_service, "clean_weights", lambda data: {k: float((data or {}).get(k) or 0) for k in settings_service.WEIGHT_KEYS})
+
+# ── after stage 4: a week by need score ───────────────────────────────────────
+_cut_by_score = planner._cut_by_score
+
+
+def _score_week_by_wait(due, by_hand, weights, portions, reserve_auto):
+    ranked = selection.rank_by_wait(due, weights)
+    slots = max(0, portions - len(by_hand[planner.MANUAL_ADD]))
+    selection.assign_roles(ranked, slots, reserve_auto)
+    return ranked, len(ranked) > slots
+
+
+mutate(PLANNER, "a week that is marked 'by score' is cut by who waited longest", planner, "_cut_by_score", _score_week_by_wait)
+
+mutate(PLANNER, "every week is cut by score, marked or not", planner, "MODE_SCORED", None)
+
+mutate(PLANNER, "by score, who is added by hand does not take a place from the lowest", planner, "_cut_by_score",
+       lambda due, by_hand, weights, portions, reserve_auto:
+       _cut_by_score(due, dict(by_hand, **{planner.MANUAL_ADD: []}), weights, portions, reserve_auto))
+
+mutate(PLANNER, "by score, the regulars who were cut are not put on the reserve", planner, "_cut_by_score",
+       lambda due, by_hand, weights, portions, reserve_auto: _cut_by_score(due, by_hand, weights, portions, 0))
+
+_entry = planner._entry
+mutate(PLANNER, "a reason quotes the money of the card", planner, "_entry",
+       lambda row, kind, role, why, **extra: _entry(row, kind, role, f"{why} · {row.get('per_soul')} · {row.get('income')}", **extra))
+
+mutate(STORE, "the mark 'by score' is not stored", store, "set_mode", lambda conn, wed, mode, now: None)
+
+
+class _EveryWeek(dict):
+    def get(self, key, default=None):
+        return "scored"
+
+
+mutate(STORE, "the mark 'by score' of one week applies to every week", store, "load_modes", lambda conn: _EveryWeek())
+
+mutate(STORE, "a way of cutting a week that does not exist is accepted", planner, "WEEK_MODES", ("wait", "scored", "random"))
+
+# ── after stage 4: a holiday list split between the communities ───────────────
+_plan_event = planner.plan_event
+mutate(PLANNER, "the split between the communities is ignored: the list is cut by who waited longest", planner, "plan_event",
+       lambda event, people, ledger, **kw: _plan_event(dict(event, balance=False), people, ledger, **kw))
+
+mutate(PLANNER, "the percentages fixed for communities are ignored", planner, "plan_event",
+       lambda event, people, ledger, weights, pinned=None: _plan_event(event, people, ledger, weights=weights, pinned=None))
+
+_criteria_gap = selection.criteria_gap
+mutate(PLANNER, "a share is topped up with whoever is neediest, not with the nearest to the filter",
+       selection, "criteria_gap", lambda rec, criteria: 0.0)
+
+_communities = planner._communities
+mutate(PLANNER, "the shares the screen shows are not the ones the list was built with", planner, "_communities",
+       lambda marked, eligible, main_rows, slots, pinned: _communities(marked, eligible, main_rows, slots + 1, pinned))
+
+_balance = selection.balance_by_community
+mutate(PLANNER, "in a split list a share is filled with members who are not marked for the holidays", planner, "plan_event",
+       (lambda real: lambda event, people, ledger, **kw:
+        real(event, [dict(p, holiday_support=1, holidays="") for p in people], ledger, **kw))(_plan_event))
+
+mutate(PLANNER, "a split list has no reserve", selection, "balance_by_community",
+       lambda rows, criteria, weights, n_products, manual_pcts=None, reserve_count=0:
+       _balance(rows, criteria, weights, n_products, manual_pcts, reserve_count=0))
+
+_save_event = store.save_event
+mutate(STORE, "the split of an event is not saved", store, "save_event",
+       lambda conn, guid, day, holiday, portions, reserve, criteria, now, balance=False:
+       _save_event(conn, guid, day, holiday, portions, reserve, criteria, now, False))
+
+mutate(STORE, "the percentages fixed for communities are never read", store, "community_pcts", lambda settings: {})
+
+_clean_communities = settings_service.clean_communities
+mutate(SETTINGS, "the percentages of the communities may pass 100", settings_service, "clean_communities",
+       lambda data, sizes: {k: float(v) for k, v in (data or {}).items() if isinstance(v, (int, float)) and v > 0}
+       if isinstance(data, dict) and set(data) <= set(sizes)
+       and all(isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 100 and round(v, 1) == round(v, 6)
+               for v in data.values()) else _clean_communities(data, sizes))
+
+mutate(SETTINGS, "a percentage is saved for a community nobody belongs to", settings_service, "clean_communities",
+       lambda data, sizes: _clean_communities(data, dict(sizes, **{k: 1 for k in (data or {})})) if isinstance(data, dict)
+       else _clean_communities(data, sizes))
+
+_sizes = settings_service.community_sizes
+
+
+def _sizes_with_paused(conn):
+    sizes = {}
+    for r in store.load_recipients(conn):
+        key = selection.community_key(r)
+        sizes[key] = sizes.get(key, 0) + 1
+    none = sizes.pop(selection.NO_COMMUNITY, 0)
+    return sizes, none
+
+
+mutate(SETTINGS, "paused cards are counted in the size of a community", settings_service, "community_sizes", _sizes_with_paused)
+
+_changed_context = settings_service._changed_context
+mutate(SETTINGS, "'what would change' ignores the percentages that were typed", settings_service, "_changed_context",
+       lambda conn, ctx, data: _changed_context(conn, ctx, dict(data, communities=None)))
+
+_event_detail = event_service.detail
+mutate(API, "the shares of the communities are not sent to the screen", event_service, "detail",
+       lambda conn, now, guid, db_path=None: dict(_event_detail(conn, now, guid, db_path), communities=[]))
+
+mutate(API, "who came in to fill a community's share is not marked for the screen", service, "_ENTRY_FIELDS",
+       tuple(f for f in service._ENTRY_FIELDS if f != "fill"))
 
 breaks = len(results) - BASELINES
 if all(results):

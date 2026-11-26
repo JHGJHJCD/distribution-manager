@@ -702,5 +702,121 @@ t.ok("S23 ...and it can be taken away and brought back", store.load_events(conn)
      and event_service.restore(conn, NOW, g, path)["guid"] == g and len(store.load_events(conn)) == 1)
 conn.close()
 
+# ══ after stage 4: a week by score, a holiday list split between the communities ══
+# ── S24: a week that is marked "by score" ─────────────────────────────────────
+recs4 = ([person(n, "שבועי", per_soul=str(money)) for n, money in ((1, 350), (2, 900), (3, 200), (4, 1200), (5, 600))]
+         + [person(6, "דו-שבועי", per_soul="5000"), person(21, "חד-פעמי", 3), person(22, "חד-פעמי", 3)])
+hist4 = [(f"g000{n}", wk(-1)) for n in (1, 2, 3, 4, 5)] + [("g0006", wk(-2))]
+money_only = dict({f"need_w_{k}": 0 for k in ("souls", "recency", "income", "housing", "medical")}, need_w_money=100)
+path, conn = fresh("s24", recs4, hist=hist4, closed=wk(-1), settings=dict(money_only, default_portions=3, default_reserve=1))
+ordinary = service.plan_overview(conn, NOW, 3, path)
+service.set_mode(conn, NOW, W0, "scored", path)
+conn.close()
+conn = store.connect(path)                                             # a new connection: it is on the disk
+ov = service.plan_overview(conn, NOW, 3, path)
+t.ok("S24 a week that is marked 'by score' is stored, and only that week is cut by score",
+     store.load_modes(conn) == {W0: "scored"} and [w["by_score"] for w in ov["weeks"]] == [True, False, False]
+     and [w["by_score"] for w in ordinary["weeks"]] == [False, False, False])
+t.ok("S24 by score the three with the least money receive; in the ordinary way who waited longest is in first",
+     ov["weeks"][0]["main"] == ["g0003", "g0001", "g0005"] and ordinary["weeks"][0]["main"] == ["g0006", "g0003", "g0001"])
+d = service.week_detail(conn, NOW, W0, path)
+t.ok("S24 the week's own answer says so, and its reasons speak of the score",
+     d["by_score"] is True and "לפי הניקוד" in d["main"][0]["why"] and any("לפי ניקוד" in x for x in d["warnings"]))
+service.set_manual(conn, NOW, wk(1), "g0021", "add", path)
+service.set_numbers(conn, NOW, W0, 4, None, path)
+t.ok("S24 the mark stays while other things are set by hand, in this week and in others",
+     store.load_modes(conn) == {W0: "scored"} and service.plan_overview(conn, NOW, 1, path)["weeks"][0]["main"] == ["g0003", "g0001", "g0005", "g0002"])
+service.set_numbers(conn, NOW, W0, None, None, path)
+service.set_manual(conn, NOW, wk(1), "g0021", "clear", path)
+said = {
+    "a way that does not exist": refusal(lambda: service.set_mode(conn, NOW, W0, "random", path)),
+    "a week that has passed": refusal(lambda: service.set_mode(conn, NOW, wk(-1), "scored", path)),
+    "a day that is not a Wednesday": refusal(lambda: service.set_mode(conn, NOW, W0 + timedelta(days=1), "scored", path)),
+}
+t.ok("S24 a way that does not exist, a week that passed and a day that is not a Wednesday are refused in words",
+     all(said.values()) and store.load_modes(conn) == {W0: "scored"}, str(said))
+shown = service.week_detail(conn, NOW, W0, path)
+service.roll_forward(conn, datetime(2026, 11, 26, 6, 0), path)        # Thursday 06:00: the week closes by itself
+t.ok("S24 a week by score closes into the history exactly as the screen showed it",
+     [r["recipient_guid"] for r in conn.execute("SELECT recipient_guid FROM history WHERE dist_date=? ORDER BY id", (W0.isoformat(),))]
+     == guids(shown["main"]) == ["g0003", "g0001", "g0005"])
+service.set_mode(conn, at(wk(1)), wk(1), "scored", path)
+service.set_mode(conn, at(wk(1)), wk(1), "wait", path)
+t.ok("S24 'wait' takes the mark off again", wk(1) not in store.load_modes(conn))
+conn.close()
+
+# ── S25: a holiday event that is split between the communities ────────────────
+A_, B_ = "קהילה א", "קהילה ב"
+recs5 = ([person(n, "שבועי", holiday_support=1, representative=A_, income="2000", per_soul=str(100 * n)) for n in (1, 2, 3, 4, 5)]
+         + [person(6, "שבועי", holiday_support=1, representative=A_, income="5000", per_soul="50"),
+            person(11, "שבועי", holiday_support=1, representative=B_, income="2000", per_soul="700", phone1="0501120011"),
+            person(12, "שבועי", holiday_support=1, representative=B_, income="3100", per_soul="800"),
+            person(13, "שבועי", holiday_support=1, representative=B_, income="9000", per_soul="10"),
+            person(14, "שבועי", representative=B_, income="100", per_soul="1")])
+hist5 = [(r["guid"], wk(-1)) for r in recs5]
+path, conn = fresh("s25", recs5, hist=hist5, closed=wk(-1), settings=dict(money_only, default_portions=4, default_reserve=0))
+weeks_before = service.plan_overview(conn, NOW, 3, path)
+g = event_service.save(conn, NOW, {"date": FRI.isoformat(), "holiday": "*", "portions": 6, "reserve": 2,
+                                   "criteria": {"income": {"min": None, "max": 3000}}, "balance": True}, path)["guid"]
+conn.close()
+conn = store.connect(path)
+d = event_service.detail(conn, NOW, g, path)
+comm = {c["name"]: c for c in d["communities"]}
+t.ok("S25 the split is stored with the event, and the event shows each community's share",
+     store.get_event(conn, g)["balance"] is True and d["balance"] is True
+     and (comm[A_]["quota"], comm[B_]["quota"], comm[B_]["filled"]) == (4, 2, 1)
+     and event_service.overview(conn, NOW, path)["open"][0]["balance"] is True, str(d["communities"]))
+t.ok("S25 who is on the list carries his community, and who came in to fill a share is marked",
+     [e["guid"] for e in d["main"] if e.get("fill")] == ["g0012"] and all(e.get("community") in (A_, B_) for e in d["main"])
+     and guids(d["reserve_list"]) == ["g0005", "g0006"])
+t.ok("S25 a holiday list that is split changes no week either", service.plan_overview(conn, NOW, 3, path)["weeks"] == weeks_before["weeks"])
+with store.tx(conn):
+    store.set_community_pcts(conn, {B_: 50.0})
+d2 = event_service.detail(conn, NOW, g, path)
+t.ok("S25 a percentage fixed for a community is read from the settings and changes the shares at once",
+     {c["name"]: c["quota"] for c in d2["communities"]} == {A_: 3, B_: 3}
+     and store.community_pcts(store.get_settings(conn)) == {B_: 50.0})
+event_service.save(conn, NOW, {"guid": g, "date": FRI.isoformat(), "holiday": "*", "portions": 6, "reserve": 2,
+                               "criteria": {"income": {"min": None, "max": 3000}}, "balance": False}, path)
+d3 = event_service.detail(conn, NOW, g, path)
+t.ok("S25 the split can be switched off: the list is again by who waited longest, and no community is shown",
+     d3["balance"] is False and d3["communities"] == [] and not any(e.get("fill") for e in d3["main"])
+     and set(guids(d3["main"])) == {"g0001", "g0002", "g0003", "g0004", "g0005", "g0011"})
+t.ok("S25 the split must be yes or no", "כן או לא" in refusal(lambda: event_service.save(
+    conn, NOW, {"guid": g, "date": FRI.isoformat(), "holiday": "*", "portions": 6, "balance": "maybe"}, path)))
+event_service.save(conn, NOW, {"guid": g, "date": FRI.isoformat(), "holiday": "*", "portions": 6, "reserve": 2,
+                               "criteria": {"income": {"min": None, "max": 3000}}, "balance": True}, path)
+shown = event_service.detail(conn, NOW, g, path)
+sheet = event_service.paper(conn, NOW, g, path)[0]
+t.ok("S25 the paper sheet of a split list holds the same people (by name), with the phones",
+     sorted(r["name"] for r in sheet["main"]) == sorted(e["name"] for e in shown["main"])
+     and next(r for r in sheet["main"] if r["name"] == "בדיקה 0011")["phones"] == "0501120011")
+event_service.overview(conn, datetime(2026, 11, 28, 7, 0), path)       # the Friday of the event is over
+written = [r["recipient_guid"] for r in conn.execute("SELECT recipient_guid FROM history WHERE holiday='*' ORDER BY id")]
+closed = event_service.detail(conn, datetime(2026, 11, 28, 7, 0), g, path)
+t.ok("S25 a split list closes into the history exactly as the screen showed it, the topped-up one included",
+     written == guids(shown["main"]) and "g0012" in written and closed["closed"] is True and closed["balance"] is True
+     and "להשלים" in next(e for e in closed["main"] if e["guid"] == "g0012")["why"])
+conn.close()
+
+# ── S26: a database from before these two gets them by itself ─────────────────
+path, conn = fresh("s26", recs5, hist=hist5, closed=wk(-1), settings=settings3)
+g = new_event(conn, path, FRI)
+conn.executescript("ALTER TABLE events DROP COLUMN balance; DROP TABLE week_modes;")
+conn.close()
+store._ensured.discard(path)
+store.ensure_schema(path)
+conn = store.connect(path)
+t.ok("S26 the new column and the new table are added; the event that was there is not split",
+     "balance" in {r["name"] for r in conn.execute("PRAGMA table_info(events)")} and store.load_modes(conn) == {}
+     and store.get_event(conn, g)["balance"] is False and event_service.detail(conn, NOW, g, path)["communities"] == [])
+service.set_mode(conn, NOW, W0, "scored", path)
+t.ok("S26 ...and both can be used in it", store.load_modes(conn) == {W0: "scored"})
+t.ok("S26 percentages that are not numbers above zero are read as 'none fixed' (never a crash)",
+     store.community_pcts({"community_quotas": '{"א": 0, "ב": -5, "ג": "x", "ד": true, "ה": 12.5}'}) == {"ה": 12.5}
+     and store.community_pcts({"community_quotas": "not json"}) == {} and store.community_pcts({"community_quotas": "[1]"}) == {}
+     and store.community_pcts({}) == {})
+conn.close()
+
 shutil.rmtree(TMP, ignore_errors=True)
 t.done()

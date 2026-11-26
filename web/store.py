@@ -79,6 +79,9 @@ CREATE TABLE IF NOT EXISTS week_manual (
 CREATE TABLE IF NOT EXISTS week_numbers (
     week_wed TEXT PRIMARY KEY, portions INTEGER, reserve INTEGER, set_at TEXT NOT NULL
 );
+-- a week the manager marked "by score": when its portions are short, the regulars in turn
+-- are picked by need score and not by who waited longest (it survives every recompute)
+CREATE TABLE IF NOT EXISTS week_modes (week_wed TEXT PRIMARY KEY, mode TEXT NOT NULL, set_at TEXT NOT NULL);
 -- the list as it stood when it was last printed / exported: only for the note
 -- "changed since it was printed" — it never holds the list in place
 CREATE TABLE IF NOT EXISTS week_prints (
@@ -106,7 +109,8 @@ CREATE TABLE IF NOT EXISTS events (
     criteria TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
     closed_at TEXT, main_count INTEGER, batch_guid TEXT,
-    deleted_at TEXT                     -- taken away by the manager; can be brought back
+    deleted_at TEXT,                    -- taken away by the manager; can be brought back
+    balance INTEGER NOT NULL DEFAULT 0  -- split the portions between the communities
 );
 CREATE TABLE IF NOT EXISTS event_manual (
     event_guid TEXT NOT NULL, recipient_guid TEXT NOT NULL, action TEXT NOT NULL, set_at TEXT NOT NULL,
@@ -178,7 +182,7 @@ def create(path: str) -> None:
 
 # Columns that were added to a table after it first shipped: {table: {column: its DDL}}.
 # Additive only — a column is added when it is missing, nothing is ever changed or dropped.
-_LATER_COLUMNS = {"events": {"deleted_at": "TEXT"}}
+_LATER_COLUMNS = {"events": {"deleted_at": "TEXT", "balance": "INTEGER NOT NULL DEFAULT 0"}}
 
 
 def _add_missing_columns(conn) -> None:
@@ -247,6 +251,50 @@ def set_numbers(conn, wed: date, portions, reserve, now: datetime) -> None:
             "set_at=excluded.set_at", (wed.isoformat(), portions, reserve, now.strftime("%Y-%m-%d %H:%M:%S")))
 
 
+def load_modes(conn) -> dict:
+    """{Wednesday: mode} — only the weeks that were marked (today: "scored")."""
+    out = {}
+    for r in conn.execute("SELECT week_wed, mode FROM week_modes"):
+        try:
+            out[date.fromisoformat(r["week_wed"])] = r["mode"]
+        except ValueError:
+            continue
+    return out
+
+
+def set_mode(conn, wed: date, mode, now: datetime) -> None:
+    """None = back to the ordinary way for this week."""
+    if mode is None:
+        conn.execute("DELETE FROM week_modes WHERE week_wed=?", (wed.isoformat(),))
+    else:
+        conn.execute("INSERT INTO week_modes (week_wed, mode, set_at) VALUES (?,?,?) "
+                     "ON CONFLICT(week_wed) DO UPDATE SET mode=excluded.mode, set_at=excluded.set_at",
+                     (wed.isoformat(), mode, now.strftime("%Y-%m-%d %H:%M:%S")))
+
+
+COMMUNITY_PCTS = "community_quotas"        # the same key the desktop program keeps them under
+
+
+def community_pcts(settings: dict) -> dict:
+    """The percentage the manager fixed for a community, {community: percent} — only the
+    ones above 0 (a community that is not here gets its share by its size)."""
+    import json
+    try:
+        data = json.loads((settings or {}).get(COMMUNITY_PCTS) or "{}")
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): float(v) for k, v in data.items()
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v and float(v) > 0}
+
+
+def set_community_pcts(conn, pcts: dict) -> None:
+    import json
+    set_setting(conn, COMMUNITY_PCTS, json.dumps({k: v for k, v in (pcts or {}).items() if v and v > 0},
+                                                 ensure_ascii=False, sort_keys=True))
+
+
 def load_prints(conn) -> dict:
     """{Wednesday: {"printed_at", "how", "main": [guid], "reserve": [guid]}}"""
     import json
@@ -281,7 +329,7 @@ def _event(r, manual: dict = None) -> dict:
             "portions": r["portions"], "reserve": r["reserve"],
             "criteria": criteria if isinstance(criteria, dict) else {},
             "created_at": r["created_at"], "updated_at": r["updated_at"], "closed_at": r["closed_at"],
-            "deleted_at": r["deleted_at"],
+            "deleted_at": r["deleted_at"], "balance": bool(r["balance"]),
             "main_count": r["main_count"], "batch_guid": r["batch_guid"], "manual": manual or {}}
 
 
@@ -323,7 +371,7 @@ def first_passed_event(conn, before: date):
 
 
 def save_event(conn, guid, day: date, holiday: str, portions: int, reserve: int, criteria: dict,
-               now: datetime) -> str:
+               now: datetime, balance: bool = False) -> str:
     """A new event (guid None) or a change to one. The caller holds the transaction and
     has already checked that the event is still ahead."""
     import json
@@ -331,12 +379,13 @@ def save_event(conn, guid, day: date, holiday: str, portions: int, reserve: int,
     if guid is None:
         guid = uuid.uuid4().hex
         conn.execute("INSERT INTO events (guid, event_date, holiday, portions, reserve, criteria, "
-                     "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
-                     (guid, day.isoformat(), holiday, portions, reserve, crit, _stamp(now), _stamp(now)))
+                     "created_at, updated_at, balance) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (guid, day.isoformat(), holiday, portions, reserve, crit, _stamp(now), _stamp(now),
+                      int(bool(balance))))
     else:
         conn.execute("UPDATE events SET event_date=?, holiday=?, portions=?, reserve=?, criteria=?, "
-                     "updated_at=? WHERE guid=? AND closed_at IS NULL AND deleted_at IS NULL",
-                     (day.isoformat(), holiday, portions, reserve, crit, _stamp(now), guid))
+                     "updated_at=?, balance=? WHERE guid=? AND closed_at IS NULL AND deleted_at IS NULL",
+                     (day.isoformat(), holiday, portions, reserve, crit, _stamp(now), int(bool(balance)), guid))
     return guid
 
 

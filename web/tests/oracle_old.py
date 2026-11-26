@@ -85,14 +85,22 @@ def copy_db(src: str, dest: str):
         a.close()
 
 
-def build_week(wed: dt.date, products: int, reserve: int) -> dict:
-    """One Wednesday, exactly as the desktop screen composes it in the regular mode."""
+def build_week(wed: dt.date, products: int, reserve: int, scored: bool = False) -> dict:
+    """One Wednesday, exactly as the desktop screen composes it: in the regular mode, or —
+    `scored` — in its 'קבועים לפי ניקוד' mode (database.get_regulars_scored: the regulars in
+    turn; selection.rank_by_need: by need score; selection.limit_to_products: the first take
+    the products, the next are the reserve). The one-timers are added in both the same way."""
     import selection
     db = _state["db"]
     weights = db.get_need_weights()
-    base = db.get_weekly_list(area_filter="הכל", on_date=wed)
-    regs_due = len(base)
-    kept = selection.limit_due_regulars(base, weights, products, reserve, 0)
+    if scored:
+        base = db.get_regulars_scored(area_filter="הכל", on_date=wed)
+        regs_due = len(base)
+        kept = selection.limit_to_products(selection.rank_by_need(base, weights), products, reserve)
+    else:
+        base = db.get_weekly_list(area_filter="הכל", on_date=wed)
+        regs_due = len(base)
+        kept = selection.limit_due_regulars(base, weights, products, reserve, 0)
     cut = len(kept) < regs_due or any(r.get("_reserve") for r in kept)
     main, res = [], []
     for r in kept:
@@ -119,15 +127,17 @@ def record(guids: list, day: dt.date, holiday: str = "", not_received: list = No
                                   not_received=missed, holiday=holiday)
 
 
-def build_holiday(day: dt.date, code: str, criteria: dict, products: int, reserve: int) -> dict:
+def build_holiday(day: dt.date, code: str, criteria: dict, products: int, reserve: int,
+                  balance: bool = False) -> dict:
     """A holiday list on `day`, as the desktop program's data layer builds it for the
     'סינון מותאם' mode with a holiday (database.get_filtered_list): the holiday mark is a
-    hard gate, the turn gates are skipped, the thresholds, then who waited longest.
-    WITHOUT the community balance (the site has none), and without the SCREEN's reserve
-    top-up from the one-timers' queue — the audit of 26/11/2026 proved that it lets
-    families that are not marked for the holidays into a holiday reserve."""
+    hard gate, the turn gates are skipped, the thresholds, then who waited longest — or,
+    with `balance`, the split between the communities (selection.balance_by_community, with
+    the percentages the manager fixed: database.get_community_quotas).
+    Without the SCREEN's reserve top-up from the one-timers' queue — the audit of 26/11/2026
+    proved that it lets families that are not marked for the holidays into a holiday reserve."""
     db = _state["db"]
-    crit = dict(criteria or {}, holiday=code, balance_communities=False)
+    crit = dict(criteria or {}, holiday=code, balance_communities=bool(balance))
     rows = db.get_filtered_list(crit, area_filter="הכל", on_date=day, products=products, reserve=reserve)
     return {"date": day, "holiday": code,
             "main": [r["guid"] for r in rows if not r.get("_reserve")],
@@ -159,24 +169,30 @@ def simulate(start: dt.date, weeks: int, products: int, reserve: int, prior: lis
 
 
 def simulate_line(start: dt.date, weeks: int, products: int, reserve: int, prior: list = None,
-                  events: list = None, extra_counts: bool = False) -> dict:
+                  events: list = None, extra_counts: bool = False, scored_weeks=(),
+                  community_pcts: dict = None) -> dict:
     """The weeks, and the holiday rounds among them, in date order (a holiday round before a
     Wednesday first; one ON a Wednesday after that day's regular list). Each list is built
     by the desktop code from what is recorded so far, and its MAIN list is then recorded:
     a week as a regular round, a holiday list as a holiday round (`holiday` = its code).
-    `events`: [{"date", "holiday", "criteria", "portions", "reserve"}].
+    `events`: [{"date", "holiday", "criteria", "portions", "reserve", "balance"}].
+    `scored_weeks`: the Wednesdays that are built in the 'קבועים לפי ניקוד' mode.
+    `community_pcts`: the percentages fixed for communities (the desktop setting), for the
+    holiday rounds that are balanced.
     `extra_counts` False (the website's rule, decision 26/11/2026): a week is built with every
     card's "last distribution" set to its last REGULAR round (stored_last). True = the desktop
     program exactly as it is, where a holiday / bonus portion pauses a one-timer."""
     out = {"weeks": [], "events": []}
     pending = sorted(events or [], key=lambda e: e["date"])
+    _state["db"].set_community_quotas(community_pcts or {})
     with clock() as sim:
         def holiday_rounds(until, including):
             while pending and (pending[0]["date"] < until or (including and pending[0]["date"] == until)):
                 e = pending.pop(0)
                 sim._today = e["date"]
                 stored_last(regular_only=False)          # a holiday list: since he last received anything
-                h = build_holiday(e["date"], e["holiday"], e.get("criteria"), e["portions"], e["reserve"])
+                h = build_holiday(e["date"], e["holiday"], e.get("criteria"), e["portions"], e["reserve"],
+                                  balance=e.get("balance", False))
                 out["events"].append(h)
                 record(h["main"], e["date"], holiday=e["holiday"], name="holiday")
 
@@ -190,7 +206,7 @@ def simulate_line(start: dt.date, weeks: int, products: int, reserve: int, prior
             holiday_rounds(wed, False)
             sim._today = wed
             stored_last(regular_only=not extra_counts)
-            w = build_week(wed, products, reserve)
+            w = build_week(wed, products, reserve, scored=wed in scored_weeks)
             out["weeks"].append(w)
             if products > 0:
                 # with 0 products the desktop SCREEN shows an empty table (rule 8; its core
