@@ -336,7 +336,26 @@
     $("bkMore").hidden = bk.all || more <= 0;
     $("bkMore").textContent = "הצג את כל " + v.backups.length + " הגיבויים";
   }
+  // On the server: does a copy of the backup leave it, and when did the last one leave.
+  function showOffsite(v) {
+    var late = $("osLate"), line = $("osLine");
+    late.hidden = true;
+    line.hidden = true;
+    if (!v.show) { return; }                              // on this computer: nothing to say
+    if (!v.on) {
+      late.textContent = "עוד לא נקבע לאן יוצא גיבוי מחוץ לשרת. עד אז הגיבויים נמצאים רק בשרת עצמו.";
+      late.hidden = false;
+    } else if (v.late) {
+      late.textContent = (v.last_ok ? "הגיבוי האחרון שיצא מהשרת הוא מ־" + H.stamp(v.last_ok) + "." : "עוד לא יצא אף גיבוי מהשרת.") +
+        " הוא אמור לצאת לבד פעם ביום. צריך לומר ליהודה.";
+      late.hidden = false;
+    } else {
+      line.textContent = "עותק של הנתונים יוצא מהשרת לבד פעם ביום. האחרון יצא ב־" + H.stamp(v.last_ok) + ".";
+      line.hidden = false;
+    }
+  }
   function loadBackups() {
+    getJSON("/api/offsite").then(showOffsite).catch(function () { /* the list below still loads */ });
     return getJSON("/api/backups").then(showBackups).catch(function (e) {
       if (e.status !== 503) { bkSay("לא הצלחתי לקבל את רשימת הגיבויים. " + (e.message || ""), true); }
     });

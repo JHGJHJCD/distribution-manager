@@ -43,6 +43,7 @@ REASONS = {
     "before-delete-card": "לפני מחיקת כרטיס",
     "before-merge-cards": "לפני מיזוג כרטיסים",
     "before-reimport": "לפני ייבוא מחדש מהתוכנה הישנה",
+    "offsite": "עותק שיוצא מהשרת",              # web/offsite.py: lives in the outbox only until it left
 }
 DAY_KEY = "daily_backup_day"          # meta: the last day whose daily backup was taken
 # what a file must hold to be a database of this site

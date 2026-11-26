@@ -1,0 +1,12 @@
+[Unit]
+Description=Haluka website: send today's copy of the data off the server
+
+[Service]
+Type=oneshot
+User=haluka
+Group=haluka
+WorkingDirectory=/opt/haluka/app
+EnvironmentFile=/etc/haluka/web.env
+ExecStart=/opt/haluka/venv/bin/python -m web.offsite
+UMask=0077
+NoNewPrivileges=true

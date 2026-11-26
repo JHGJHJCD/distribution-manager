@@ -1,0 +1,23 @@
+[Unit]
+Description=Haluka website (weekly food distribution lists)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=haluka
+Group=haluka
+WorkingDirectory=/opt/haluka/app
+EnvironmentFile=/etc/haluka/web.env
+# This computer only: the outside world reaches it through the tunnel, never directly.
+ExecStart=/opt/haluka/venv/bin/python -m uvicorn web.app:app --host 127.0.0.1 --port 8787 --no-server-header
+Restart=always
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/haluka/data
+
+[Install]
+WantedBy=multi-user.target

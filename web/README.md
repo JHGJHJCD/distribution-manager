@@ -118,3 +118,10 @@ python web/tests/local_check_real.py --from <data.db> --report --open   # ההש
 python -m web.import_old --from <עותק של data.db> [--sent-history <sent_history.json>] [--replace]
 ```
 המקור נפתח לקריאה בלבד. `--replace` מגבה קודם את המאגר הקיים של האתר. הדוח שמודפס מכיל מספרים בלבד.
+
+## בשרת: כניסה, התקנה, וגיבוי שיוצא החוצה (26/11/2026)
+- **כניסה** (`auth.py`): כשהאתר עונה לשם שאינו `127.0.0.1` / `localhost` (ההגדרה `HALUKA_WEB_HOSTS`), הכול נסגר מאחורי שם וסיסמה. פתוחים רק מסך הכניסה, הסגנון והסקריפט שלו, ו-`/healthz`. קובעים סיסמה מהשרת: `python -m web.auth set <שם>` (גם `list`, `remove`). חמש סיסמאות שגויות נועלות את השם לרבע שעה; כניסה מחזיקה 30 יום מהשימוש האחרון.
+- **במחשב המקומי אין כניסה**, ושום דבר לא השתנה.
+- **התקנה:** `deploy/צעדים_לשרת.md` (צעדים), `deploy/*.service`, `deploy/web.env.example`. בדיקת מוכנות: `python -m web.server_check`.
+- **גיבוי שיוצא מהשרת** (`offsite.py`): `python -m web.offsite`, פעם ביום דרך `deploy/haluka-offsite.timer`. היעד: `HALUKA_OFFSITE_DIR` (תיקייה שאינה בדיסק של השרת) או `HALUKA_OFFSITE_CMD` (פקודה עם `{file}`). מסך ההגדרות מציג מתי יצא העותק האחרון.
+- בדיקות: `tests/test_auth.py`, `tests/test_server.py`.

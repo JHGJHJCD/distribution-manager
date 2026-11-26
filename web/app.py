@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import (auth, backup_service, card_service, config, event_service, history_service, service,
+from . import (auth, backup_service, card_service, config, event_service, history_service, offsite, service,
                settings_service, store)
 
 STATIC_DIR = os.path.join(config.WEB_DIR, "static")
@@ -523,6 +523,13 @@ def api_backup_make():
 @app.post("/api/backup/restore")
 def api_backup_restore(body: BackupBody):
     return _run(lambda conn, path: backup_service.restore(conn, config.now(), body.name, path))
+
+
+@app.get("/api/offsite")
+def api_offsite():
+    """Does a copy of the backup leave the server, and when did the last one leave.
+    (No path and no command; on this computer the screen shows nothing of it.)"""
+    return offsite.status(config.now())
 
 
 # ── the move to the server: entering and leaving ─────────────────────────────

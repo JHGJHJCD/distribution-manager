@@ -1,0 +1,5 @@
+# What the site needs on the server (the desktop program has its own list in the repository root).
+fastapi>=0.110
+uvicorn>=0.29
+openpyxl>=3.1
+tzdata

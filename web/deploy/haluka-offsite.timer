@@ -1,0 +1,11 @@
+[Unit]
+Description=Haluka website: daily copy off the server
+
+[Timer]
+# 01:10 UTC = 03:10 or 04:10 in Israel: nobody is working, and the day's lists are written.
+OnCalendar=*-*-* 01:10:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
