@@ -12,6 +12,7 @@ Writing routes (stage 2) are POST only and need the header `X-Haluka: 1`, which 
 another website cannot send to this server — so no other site open in the browser can
 change a list behind the user's back.
 """
+import hmac
 import os
 from datetime import date
 from typing import Optional
@@ -51,6 +52,15 @@ OPEN_PATHS = frozenset({"/login", "/api/login", "/healthz", "/static/style.css",
                         drive.CALLBACK})
 
 
+def _through_the_front(request: Request) -> bool:
+    """With HALUKA_PROXY_SECRET set, only what came through the fixed front address is served
+    (the alive check stays open: the server asks it of itself)."""
+    secret = config.proxy_secret()
+    if not secret or request.url.path == "/healthz":
+        return True
+    return hmac.compare_digest(request.headers.get("x-haluka-proxy", "").encode(), secret.encode())
+
+
 def _session_user(request: Request) -> str:
     return auth.session_user(request.cookies.get(auth.COOKIE, ""), config.now())
 
@@ -71,7 +81,9 @@ def _refuse_stranger(request: Request):
 
 @app.middleware("http")
 async def _guard_and_headers(request: Request, call_next):
-    if not _from_this_site(request):
+    if not _through_the_front(request):
+        response = JSONResponse({"message": "אין גישה מהכתובת הזו"}, status_code=403)
+    elif not _from_this_site(request):
         response = JSONResponse({"message": "הבקשה לא הגיעה מהאתר עצמו"}, status_code=403)
     else:
         response = _refuse_stranger(request) or await call_next(request)

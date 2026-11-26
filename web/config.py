@@ -46,6 +46,13 @@ def login_required() -> bool:
     return os.environ.get("HALUKA_WEB_LOGIN") == "1" or any(h not in LOCAL_HOSTS for h in allowed_hosts())
 
 
+def proxy_secret() -> str:
+    """When the site sits behind a fixed front address that forwards to a changing tunnel
+    (web/deploy/worker.js), the front adds this secret to every request — and the site answers
+    only to requests that carry it, so the tunnel's own address is useless to anyone else."""
+    return os.environ.get("HALUKA_PROXY_SECRET", "").strip()
+
+
 def now() -> datetime:
     """The current time in Israel, as a plain (naive) datetime."""
     try:
