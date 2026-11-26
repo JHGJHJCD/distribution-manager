@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS history (
     batch_guid TEXT, created_at TEXT, source TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS history_by_recipient ON history (recipient_guid, dist_date);
+CREATE INDEX IF NOT EXISTS history_by_batch ON history (batch_guid);
 CREATE TABLE IF NOT EXISTS weeks (
     week_wed TEXT PRIMARY KEY,
     portions INTEGER NOT NULL, reserve INTEGER NOT NULL, main_count INTEGER NOT NULL,
@@ -94,6 +95,31 @@ CREATE TABLE IF NOT EXISTS merged_guids (drop_guid TEXT PRIMARY KEY, keep_guid T
 -- "these are two different people": the answer to a look-alike suggestion (a < b)
 CREATE TABLE IF NOT EXISTS not_duplicates (
     guid_a TEXT NOT NULL, guid_b TEXT NOT NULL, set_at TEXT NOT NULL, PRIMARY KEY (guid_a, guid_b)
+);
+-- stage 4: a HOLIDAY EVENT the manager set up (a date, portions, a filter). Like a coming
+-- week, its list is never stored while it is ahead: it is computed each time. Once its day
+-- has passed it is written to the history (closed_at) and stays as it was.
+CREATE TABLE IF NOT EXISTS events (
+    guid TEXT PRIMARY KEY,
+    event_date TEXT NOT NULL, holiday TEXT NOT NULL,
+    portions INTEGER NOT NULL, reserve INTEGER NOT NULL DEFAULT 0,
+    criteria TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    closed_at TEXT, main_count INTEGER, batch_guid TEXT,
+    deleted_at TEXT                     -- taken away by the manager; can be brought back
+);
+CREATE TABLE IF NOT EXISTS event_manual (
+    event_guid TEXT NOT NULL, recipient_guid TEXT NOT NULL, action TEXT NOT NULL, set_at TEXT NOT NULL,
+    PRIMARY KEY (event_guid, recipient_guid)
+);
+CREATE TABLE IF NOT EXISTS event_prints (
+    event_guid TEXT PRIMARY KEY, printed_at TEXT NOT NULL, how TEXT NOT NULL,
+    main TEXT NOT NULL, reserve TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS event_members (
+    event_guid TEXT NOT NULL, recipient_guid TEXT NOT NULL, role TEXT NOT NULL,
+    position INTEGER NOT NULL, kind TEXT NOT NULL, why TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (event_guid, recipient_guid)
 );
 """
 
@@ -142,11 +168,25 @@ def create(path: str) -> None:
     conn = connect(path)
     try:
         conn.executescript(_SCHEMA % {"recipient_columns": _recipient_ddl()})
+        _add_missing_columns(conn)
         with tx(conn):
             conn.execute("INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', ?)",
                          (str(SCHEMA_VERSION),))
     finally:
         conn.close()
+
+
+# Columns that were added to a table after it first shipped: {table: {column: its DDL}}.
+# Additive only — a column is added when it is missing, nothing is ever changed or dropped.
+_LATER_COLUMNS = {"events": {"deleted_at": "TEXT"}}
+
+
+def _add_missing_columns(conn) -> None:
+    for table, columns in _LATER_COLUMNS.items():
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for column, ddl in columns.items():
+            if column not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 _ensured = set()
@@ -228,6 +268,175 @@ def set_print(conn, wed: date, how: str, main: list, reserve: list, now: datetim
         "ON CONFLICT(week_wed) DO UPDATE SET printed_at=excluded.printed_at, how=excluded.how, "
         "main=excluded.main, reserve=excluded.reserve",
         (wed.isoformat(), now.strftime("%Y-%m-%d %H:%M"), how, json.dumps(main), json.dumps(reserve)))
+
+
+# ── stage 4: holiday events ───────────────────────────────────────────────────
+def _event(r, manual: dict = None) -> dict:
+    import json
+    try:
+        criteria = json.loads(r["criteria"] or "{}")
+    except ValueError:
+        criteria = {}
+    return {"guid": r["guid"], "date": date.fromisoformat(r["event_date"]), "holiday": r["holiday"],
+            "portions": r["portions"], "reserve": r["reserve"],
+            "criteria": criteria if isinstance(criteria, dict) else {},
+            "created_at": r["created_at"], "updated_at": r["updated_at"], "closed_at": r["closed_at"],
+            "deleted_at": r["deleted_at"],
+            "main_count": r["main_count"], "batch_guid": r["batch_guid"], "manual": manual or {}}
+
+
+def load_events(conn, open_only: bool = True) -> list:
+    """Holiday events in date order (two on one day: in the order they were created).
+    open_only: the ones that are still ahead — not history yet — each with what the
+    manager set by hand for it. An event that was taken away is never among them."""
+    manual = {}
+    for r in conn.execute("SELECT event_guid, recipient_guid, action FROM event_manual"):
+        manual.setdefault(r["event_guid"], {})[r["recipient_guid"]] = r["action"]
+    out = []
+    for r in conn.execute("SELECT * FROM events WHERE deleted_at IS NULL"
+                          + (" AND closed_at IS NULL" if open_only else "")
+                          + " ORDER BY event_date, created_at, guid"):
+        try:
+            out.append(_event(r, manual.get(r["guid"])))
+        except ValueError:
+            continue
+    return out
+
+
+def get_event(conn, guid: str):
+    r = conn.execute("SELECT * FROM events WHERE guid=?", (guid,)).fetchone()
+    if r is None:
+        return None
+    manual = {m["recipient_guid"]: m["action"] for m in conn.execute(
+        "SELECT recipient_guid, action FROM event_manual WHERE event_guid=?", (guid,))}
+    try:
+        return _event(r, manual)
+    except ValueError:
+        return None
+
+
+def first_passed_event(conn, before: date):
+    """The earliest event that is still open although its day is before `before`."""
+    r = conn.execute("SELECT guid FROM events WHERE closed_at IS NULL AND deleted_at IS NULL AND event_date < ? "
+                     "ORDER BY event_date, created_at, guid LIMIT 1", (before.isoformat(),)).fetchone()
+    return get_event(conn, r["guid"]) if r else None
+
+
+def save_event(conn, guid, day: date, holiday: str, portions: int, reserve: int, criteria: dict,
+               now: datetime) -> str:
+    """A new event (guid None) or a change to one. The caller holds the transaction and
+    has already checked that the event is still ahead."""
+    import json
+    crit = json.dumps(criteria or {}, ensure_ascii=False, sort_keys=True)
+    if guid is None:
+        guid = uuid.uuid4().hex
+        conn.execute("INSERT INTO events (guid, event_date, holiday, portions, reserve, criteria, "
+                     "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                     (guid, day.isoformat(), holiday, portions, reserve, crit, _stamp(now), _stamp(now)))
+    else:
+        conn.execute("UPDATE events SET event_date=?, holiday=?, portions=?, reserve=?, criteria=?, "
+                     "updated_at=? WHERE guid=? AND closed_at IS NULL AND deleted_at IS NULL",
+                     (day.isoformat(), holiday, portions, reserve, crit, _stamp(now), guid))
+    return guid
+
+
+def delete_event(conn, guid: str, now: datetime) -> None:
+    """Take away an event that has NOT happened yet (a plan, never history). Nothing is
+    erased: the event is only marked, with everything that was set for it, so that it can be
+    brought back (restore_event). An event that is already history is never taken away."""
+    done = conn.execute("UPDATE events SET deleted_at=? WHERE guid=? AND closed_at IS NULL AND deleted_at IS NULL",
+                        (_stamp(now), guid)).rowcount
+    if not done:
+        raise LookupError(guid)
+
+
+def restore_event(conn, guid: str) -> None:
+    """Bring back an event that was taken away, as it was (the caller has checked that its
+    day has not passed)."""
+    done = conn.execute("UPDATE events SET deleted_at=NULL WHERE guid=? AND closed_at IS NULL "
+                        "AND deleted_at IS NOT NULL", (guid,)).rowcount
+    if not done:
+        raise LookupError(guid)
+
+
+def deleted_events(conn) -> list:
+    """The events that were taken away, the latest first."""
+    out = []
+    for r in conn.execute("SELECT * FROM events WHERE deleted_at IS NOT NULL AND closed_at IS NULL "
+                          "ORDER BY deleted_at DESC, guid"):
+        try:
+            out.append(_event(r))
+        except ValueError:
+            continue
+    return out
+
+
+def set_event_manual(conn, guid: str, recipient_guid: str, action, now: datetime) -> None:
+    """action None = back to automatic for this person in this event."""
+    if action is None:
+        conn.execute("DELETE FROM event_manual WHERE event_guid=? AND recipient_guid=?", (guid, recipient_guid))
+    else:
+        conn.execute(
+            "INSERT INTO event_manual (event_guid, recipient_guid, action, set_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(event_guid, recipient_guid) DO UPDATE SET action=excluded.action, set_at=excluded.set_at",
+            (guid, recipient_guid, action, _stamp(now)))
+
+
+def load_event_prints(conn) -> dict:
+    """{event guid: {"printed_at", "how", "main": [guid], "reserve": [guid]}}"""
+    import json
+    return {r["event_guid"]: {"printed_at": r["printed_at"], "how": r["how"],
+                              "main": json.loads(r["main"]), "reserve": json.loads(r["reserve"])}
+            for r in conn.execute("SELECT * FROM event_prints")}
+
+
+def set_event_print(conn, guid: str, how: str, main: list, reserve: list, now: datetime) -> None:
+    import json
+    conn.execute(
+        "INSERT INTO event_prints (event_guid, printed_at, how, main, reserve) VALUES (?,?,?,?,?) "
+        "ON CONFLICT(event_guid) DO UPDATE SET printed_at=excluded.printed_at, how=excluded.how, "
+        "main=excluded.main, reserve=excluded.reserve",
+        (guid, now.strftime("%Y-%m-%d %H:%M"), how, json.dumps(main), json.dumps(reserve)))
+
+
+def event_batch_guid(guid: str) -> str:
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"manhal-haluka/web/event/{guid}").hex
+
+
+def event_row_guid(guid: str, recipient_guid: str) -> str:
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"manhal-haluka/web/event/{guid}/{recipient_guid}").hex
+
+
+def close_event(conn, plan: dict, name: str, now: datetime) -> bool:
+    """Write a holiday event whose day has passed into the history, exactly as the planner
+    laid it out: everybody on its MAIN list received — in an EXTRA round (the holiday code
+    is on every row, so no regular turn moves) — and the reserve is kept for the record
+    only. An event that is already closed is left alone (returns False), so two requests
+    can never write it twice. The caller holds the transaction."""
+    guid = plan["guid"]
+    row = conn.execute("SELECT closed_at, deleted_at FROM events WHERE guid=?", (guid,)).fetchone()
+    if row is None or row["closed_at"] or row["deleted_at"]:
+        return False
+    iso, stamp, batch, code = plan["date"].isoformat(), _stamp(now), event_batch_guid(guid), plan["holiday"]
+    main = plan["main"]
+    conn.execute(
+        "INSERT INTO batches (guid, dist_name, dist_date, quantity, recipient_count, holiday, created_at, source) "
+        "VALUES (?,?,?,?,?,?,?,?)", (batch, name, iso, plan["portions"], len(main), code, stamp, "web"))
+    for e in main:
+        conn.execute(
+            "INSERT INTO history (guid, recipient_guid, recipient_name, dist_date, received, holiday, "
+            "batch_guid, created_at, source) VALUES (?,?,?,?,1,?,?,?,?)",
+            (event_row_guid(guid, e["guid"]), e["guid"], e["name"], iso, code, batch, stamp, "web"))
+    pos = 0
+    for role, entries in (("main", main), ("reserve", plan["reserve_list"])):
+        for e in entries:
+            pos += 1
+            conn.execute(
+                "INSERT INTO event_members (event_guid, recipient_guid, role, position, kind, why) "
+                "VALUES (?,?,?,?,?,?)", (guid, e["guid"], role, pos, e["kind"], e["why"]))
+    conn.execute("UPDATE events SET closed_at=?, main_count=?, batch_guid=? WHERE guid=?",
+                 (stamp, len(main), batch, guid))
+    return True
 
 
 # ── meta / settings ───────────────────────────────────────────────────────────
@@ -367,11 +576,13 @@ def delete_recipient(conn, guid: str, now: datetime) -> None:
     if card is None:
         raise LookupError(guid)
     n = conn.execute("SELECT COUNT(*) AS n FROM history WHERE recipient_guid=?", (guid,)).fetchone()["n"]
-    n += conn.execute("SELECT COUNT(*) AS n FROM week_members WHERE recipient_guid=?", (guid,)).fetchone()["n"]
+    for table in ("week_members", "event_members"):
+        n += conn.execute(f"SELECT COUNT(*) AS n FROM {table} WHERE recipient_guid=?", (guid,)).fetchone()["n"]
     if n:
         raise ValueError("has history")
     _remember_deleted(conn, card, "delete", now)
-    conn.execute("DELETE FROM week_manual WHERE recipient_guid=?", (guid,))
+    for table in ("week_manual", "event_manual"):
+        conn.execute(f"DELETE FROM {table} WHERE recipient_guid=?", (guid,))
     conn.execute("DELETE FROM recipients WHERE guid=?", (guid,))
 
 
@@ -420,20 +631,22 @@ def merge_recipients(conn, keep_guid: str, drop_guid: str, fields: dict, now: da
     update_recipient(conn, keep_guid, fields, now)
     moved = conn.execute("UPDATE history SET recipient_guid=? WHERE recipient_guid=?",
                          (keep_guid, drop_guid)).rowcount
-    for table in ("week_members", "week_manual"):
-        # a week that already holds the kept card keeps its own line
-        conn.execute(f"DELETE FROM {table} WHERE recipient_guid=? AND week_wed IN "
-                     f"(SELECT week_wed FROM {table} WHERE recipient_guid=?)", (drop_guid, keep_guid))
+    for table, key in (("week_members", "week_wed"), ("week_manual", "week_wed"),
+                       ("event_members", "event_guid"), ("event_manual", "event_guid")):
+        # a week / an event that already holds the kept card keeps its own line
+        conn.execute(f"DELETE FROM {table} WHERE recipient_guid=? AND {key} IN "
+                     f"(SELECT {key} FROM {table} WHERE recipient_guid=?)", (drop_guid, keep_guid))
         conn.execute(f"UPDATE {table} SET recipient_guid=? WHERE recipient_guid=?", (keep_guid, drop_guid))
-    for r in conn.execute("SELECT week_wed, main, reserve FROM week_prints").fetchall():
-        lists = {}
-        for col in ("main", "reserve"):
-            old = json.loads(r[col])
-            new = list(dict.fromkeys(keep_guid if g == drop_guid else g for g in old))
-            if new != old:
-                lists[col] = json.dumps(new)
-        for col, value in lists.items():
-            conn.execute(f"UPDATE week_prints SET {col}=? WHERE week_wed=?", (value, r["week_wed"]))
+    for table, key in (("week_prints", "week_wed"), ("event_prints", "event_guid")):
+        for r in conn.execute(f"SELECT {key} AS k, main, reserve FROM {table}").fetchall():
+            lists = {}
+            for col in ("main", "reserve"):
+                old = json.loads(r[col])
+                new = list(dict.fromkeys(keep_guid if g == drop_guid else g for g in old))
+                if new != old:
+                    lists[col] = json.dumps(new)
+            for col, value in lists.items():
+                conn.execute(f"UPDATE {table} SET {col}=? WHERE {key}=?", (value, r["k"]))
     conn.execute("DELETE FROM not_duplicates WHERE guid_a=? OR guid_b=?", (drop_guid, drop_guid))
     conn.execute("INSERT OR REPLACE INTO merged_guids (drop_guid, keep_guid, ts) VALUES (?,?,?)",
                  (drop_guid, keep_guid, _stamp(now)))

@@ -309,6 +309,235 @@ t.ok("A12 the print page is served, right-to-left, with its own script and style
 t.ok("A12 no name is written into the page itself (the lists come separately, and are not kept by the browser)",
      "בדיקה 00" not in r.text and r.headers.get("cache-control") == "no-store")
 
+
+# ══ stage 4: holiday events ════════════════════════════════════════════════════
+# It is still Thursday 26/11 07:00. Five cards get the holiday mark (one of them the card
+# that takes no part in the weeks), with an income for the filter.
+conn = store.connect(path)
+with store.tx(conn):
+    for g_, income in (("g0001", "3000"), ("g0003", "8000"), ("g0021", "2000"), ("g0022", ""), ("g0040", "1000")):
+        conn.execute("UPDATE recipients SET holiday_support=1, income=? WHERE guid=?", (income, g_))
+conn.close()
+HDAY = (wk(1) - timedelta(days=3)).isoformat()                             # Sunday 29/11
+EVENT = {"date": HDAY, "holiday": "*", "portions": 10, "reserve": 2, "criteria": {}}
+
+# ── A13: the event routes write only with the site's own header ───────────────
+writes = [("/api/event/save", EVENT), ("/api/event/delete", {"event": "x"}), ("/api/event/restore", {"event": "x"}),
+          ("/api/event/manual", {"event": "x", "guid": "g0001", "action": "add"})]
+t.ok("A13 an event cannot be set up, changed or deleted without the site's own header (403)",
+     [post(u, b, headers={}).status_code for u, b in writes] == [403] * 4
+     and client.get("/api/events").json()["open"] == [])
+t.ok("A13 the writing routes of an event cannot be reached with GET", [client.get(u).status_code for u, _ in writes] == [405] * 4)
+
+# ── A14: setting an event up, reading it ──────────────────────────────────────
+weeks_before = [w["main"] for w in plan_now(3)["weeks"]]
+r = post("/api/event/save", EVENT)
+EV = r.json().get("guid", "")
+t.ok("A14 a new event: an answer with its own id", r.status_code == 200 and r.json()["ok"] is True and len(EV) >= 8)
+ovw = client.get("/api/events").json()
+t.ok("A14 /api/events: the event that is ahead, in numbers; what an event can be for; the filter fields",
+     [e["guid"] for e in ovw["open"]] == [EV] and ovw["open"][0]["main_count"] == 5 and ovw["open"][0]["marked"] == 5
+     and ovw["holidays"][0] == {"code": "*", "label": "כל נתמכי החגים"} and len(ovw["holidays"]) == 7
+     and [f["field"] for f in ovw["filter"]] == ["children_total", "income", "per_soul"] and ovw["first_day"] == "2026-11-26")
+ed = client.get("/api/event", params={"guid": EV}).json()
+t.ok("A14 /api/event: the five marked cards receive, each with a reason; nobody unmarked is listed",
+     {e["guid"] for e in ed["main"]} == {"g0001", "g0003", "g0021", "g0022", "g0040"} and all(e["why"] for e in ed["main"])
+     and ed["out"] == [] and ed["unmarked"] == 11 and ed["closed"] is False)
+r = post("/api/event/save", dict(EVENT, guid=EV, criteria={"income": {"max": 5000}}))
+ed = client.get("/api/event", params={"guid": EV}).json()
+groups = {e["guid"]: e["group"] for e in ed["out"]}
+t.ok("A14 a filter: who passes receives; missing data and outside-the-filter are set apart",
+     r.status_code == 200 and {e["guid"] for e in ed["main"]} == {"g0001", "g0021", "g0040"}
+     and groups == {"g0022": "ev_missing", "g0003": "ev_filter"} and ed["criteria"] == {"income": {"min": None, "max": 5000.0}})
+plan3 = plan_now(3)
+t.ok("A14 the weeks screen is told about the event — and the weeks themselves are exactly as before it ('חג לא נספר')",
+     [e["guid"] for e in plan3["events"]] == [EV] and "g0021" in plan3["events"][0]["main"]
+     and [w["main"] for w in plan3["weeks"]] == weeks_before)
+bad_shape = [dict(EVENT, date="next week"), dict(EVENT, portions=-1), dict(EVENT, portions=2001), dict(EVENT, portions=2.5),
+             dict(EVENT, portions="הרבה"), {k: v for k, v in EVENT.items() if k != "holiday"}, dict(EVENT, colour="red"),
+             dict(EVENT, criteria={"income": {"max": "הרבה"}}), dict(EVENT, criteria={"income": {"most": 5}}),
+             dict(EVENT, guid="x" * 65)]
+t.ok("A14 an event that is not in the right shape is refused before it reaches the data (422)",
+     [post("/api/event/save", b).status_code for b in bad_shape] == [422] * len(bad_shape))
+refused = {
+    "a day that has passed": post("/api/event/save", dict(EVENT, date=W0.isoformat())),
+    "a holiday that does not exist": post("/api/event/save", dict(EVENT, holiday="יום העצמאות")),
+    "'from' above 'up to'": post("/api/event/save", dict(EVENT, criteria={"income": {"min": 9, "max": 3}})),
+    "a filter field that does not exist": post("/api/event/save", dict(EVENT, criteria={"souls": {"min": 3}})),
+    "a change to an event that does not exist": post("/api/event/save", dict(EVENT, guid="nope")),
+    "an event that does not exist": client.get("/api/event", params={"guid": "nope"}),
+}
+t.ok("A14 what cannot be done is refused with a sentence in Hebrew (409)",
+     all(x.status_code == 409 and x.json().get("message") for x in refused.values())
+     and "עבר" in refused["a day that has passed"].json()["message"],
+     str({k: (v.status_code, v.text[:60]) for k, v in refused.items()}))
+t.ok("A14 after all the refusals there is still exactly one event", len(client.get("/api/events").json()["open"]) == 1)
+
+# ── A15: by hand for an event ─────────────────────────────────────────────────
+r = post("/api/event/manual", {"event": EV, "guid": "g0002", "action": "add"})
+ed = client.get("/api/event", params={"guid": EV}).json()
+t.ok("A15 add: a card that is not marked is on the event's list, marked as set by hand",
+     r.status_code == 200 and ed["main"][0]["guid"] == "g0002" and ed["main"][0]["manual"] == "add" and ed["manual_count"] == 1)
+post("/api/event/manual", {"event": EV, "guid": "g0002", "action": "clear"})
+t.ok("A15 clear: he is off it again", "g0002" not in [e["guid"] for e in client.get("/api/event", params={"guid": EV}).json()["main"]])
+refused = [post("/api/event/manual", {"event": EV, "guid": "g0041", "action": "add"}),
+           post("/api/event/manual", {"event": EV, "guid": "g9999", "action": "add"}),
+           post("/api/event/manual", {"event": "nope", "guid": "g0001", "action": "add"})]
+t.ok("A15 a paused card, a card or an event that does not exist: refused in words (409)",
+     all(x.status_code == 409 and x.json().get("message") for x in refused) and "מושהה" in refused[0].json()["message"])
+t.ok("A15 a request in the wrong shape is refused (422)",
+     [post("/api/event/manual", b).status_code for b in ({"event": EV, "guid": "g0001", "action": "delete"},
+                                                         {"event": EV, "guid": "g0001"}, {"guid": "g0001", "action": "add"})] == [422] * 3)
+
+# ── A16: nothing private in the event's answers; the paper gets the phones ────
+blob = client.get("/api/events").text + client.get("/api/event", params={"guid": EV}).text + client.get("/api/plan?weeks=4").text
+t.ok("A16 the event's answers carry no phone, id number, address, note — and no income",
+     not any(s_ in blob for s_ in (SECRET_PHONE, SECRET_ID, SECRET_NOTE, "רחוב סודי", "8000", "2000"))
+     and '"score"' not in blob and '"days_since"' not in blob and '"priority"' not in blob)
+t.ok("A16 about a person in an event the screen gets the name, the kind and the reason only",
+     all(set(e) <= allowed for e in ed["main"] + ed["reserve_list"] + ed["out"]))
+r = client.get("/api/print", params={"event": EV})
+sheet = r.json().get("weeks", [{}])[0]
+t.ok("A16 /api/print for an event: one sheet, named for the holiday and its day, by name, with the phones",
+     r.status_code == 200 and len(r.json()["weeks"]) == 1 and "חלוקת חג" in sheet["title"] and "יום ראשון" in sheet["title"]
+     and [x["name"] for x in sheet["main"]] == sorted(x["name"] for x in sheet["main"]) and len(sheet["main"]) == 3
+     and all(x["phones"] == SECRET_PHONE for x in sheet["main"] if x["name"] != "בדיקה 0040")
+     and not any(s_ in r.text for s_ in (SECRET_ID, SECRET_NOTE, "רחוב סודי")))
+r = client.get("/api/export.xlsx", params={"event": EV})
+wb = openpyxl.load_workbook(io.BytesIO(r.content)) if r.status_code == 200 else None
+t.ok("A16 the Excel file of an event: a download named for its day, one right-to-left sheet with the list",
+     wb is not None and r.headers.get("content-disposition") == f'attachment; filename="haluka-holiday-{HDAY}.xlsx"'
+     and len(wb.worksheets) == 1 and wb.worksheets[0].sheet_view.rightToLeft
+     and "חלוקת חג" in str(wb.worksheets[0]["A1"].value) and "בדיקה 0001" in [c.value for c in wb.worksheets[0]["B"]])
+t.ok("A16 an event that does not exist has no paper and no file",
+     client.get("/api/print", params={"event": "nope"}).status_code == 409
+     and client.get("/api/export.xlsx", params={"event": "nope"}).status_code == 409
+     and client.get("/api/export.xlsx").status_code == 422)
+t.ok("A16 before printing the event carries no note", client.get("/api/event", params={"guid": EV}).json()["print"] is None)
+r = post("/api/printed", {"event": EV, "how": "print"})
+post("/api/event/manual", {"event": EV, "guid": "g0002", "action": "add"})
+note = client.get("/api/event", params={"guid": EV}).json()["print"]
+t.ok("A16 printed, then changed: the event says who was added since",
+     r.status_code == 200 and note["changed"] is True and note["added_names"] == ["בדיקה 0002"] and note["removed"] == 0)
+t.ok("A16 a 'printed' that names neither weeks nor an event is refused",
+     post("/api/printed", {"how": "print"}).status_code == 422 and post("/api/printed", {"event": "nope", "how": "print"}).status_code == 409)
+
+# ── A17: the clock closes an event too; then it is history ────────────────────
+config.now = lambda: datetime(2026, 11, 30, 6, 5)                           # Monday morning: Sunday's event is over
+p = client.get("/api/plan?weeks=2").json()
+ovw = client.get("/api/events").json()
+t.ok("A17 on Monday morning Sunday's event has closed by itself, once",
+     p["closed_events_now"] == ["חלוקת חג 29/11/2026"] and client.get("/api/plan?weeks=2").json()["closed_events_now"] == []
+     and ovw["open"] == [] and [e["guid"] for e in ovw["past"]] == [EV] and ovw["past"][0]["main_count"] == 4)
+closed = client.get("/api/event", params={"guid": EV}).json()
+t.ok("A17 the passed event is shown as it was written (the one added by hand included), names only",
+     closed["closed"] is True and {e["guid"] for e in closed["main"]} == {"g0001", "g0002", "g0021", "g0040"}
+     and SECRET_PHONE not in str(closed))
+t.ok("A17 a passed event cannot be changed, set by hand, printed or deleted (409)",
+     [post("/api/event/save", dict(EVENT, guid=EV, date="2026-12-06")).status_code,
+      post("/api/event/manual", {"event": EV, "guid": "g0003", "action": "add"}).status_code,
+      post("/api/event/delete", {"event": EV}).status_code,
+      client.get("/api/print", params={"event": EV}).status_code] == [409] * 4)
+r = post("/api/event/save", dict(EVENT, date="2026-12-06", holiday="חנוכה", portions=4))
+EV2 = r.json().get("guid", "")
+r = post("/api/event/delete", {"event": EV2})
+t.ok("A17 an event that is still ahead can be deleted",
+     r.status_code == 200 and client.get("/api/events").json()["open"] == []
+     and client.get("/api/event", params={"guid": EV2}).status_code == 409)
+t.ok("A17 ...it is offered for bringing back, and a request without the site's header does not bring it back",
+     [e["guid"] for e in client.get("/api/events").json()["deleted"]] == [EV2]
+     and client.post("/api/event/restore", json={"event": EV2}).status_code == 403
+     and client.get("/api/events").json()["open"] == [])
+r = post("/api/event/restore", {"event": EV2})
+back = client.get("/api/events").json()
+t.ok("A17 bringing it back returns it to the events ahead, as it was",
+     r.status_code == 200 and [(e["guid"], e["name"], e["portions"]) for e in back["open"]] == [(EV2, "חלוקת חנוכה", 4)]
+     and back["deleted"] == [] and post("/api/event/restore", {"event": EV2}).status_code == 409)
+config.now = lambda: datetime(2026, 11, 26, 7, 0)
+
+# ── A19: the history — reading only, names only ───────────────────────────────
+hist = client.get("/api/history")
+rounds = hist.json().get("rounds", [])
+t.ok("A19 the history lists the rounds that passed, the latest first: the holiday event and the weeks the site closed",
+     hist.status_code == 200 and len(rounds) >= 2 and rounds[0]["kind"] == "holiday" and rounds[0]["label"] == "חלוקת חג"
+     and all(r["from_site"] for r in rounds) and hist.json()["total"] == len(rounds),
+     str([(r["date"], r["kind"]) for r in rounds]))
+one = client.get("/api/history/round", params={"batch": rounds[0]["batch"]})
+t.ok("A19 a round opens to who received in it", one.status_code == 200
+     and {e["guid"] for e in one.json()["people"]} == {"g0001", "g0002", "g0021", "g0040"})
+who = client.get("/api/history/person", params={"guid": "g0001"})
+t.ok("A19 one person's history: every row, each with its round", who.status_code == 200
+     and who.json()["received"] == len(who.json()["rows"]) >= 2 and who.json()["rows"][0]["batch"] == rounds[0]["batch"])
+t.ok("A19 a short page says that there is more", client.get("/api/history", params={"limit": 1}).json()["more"] is True
+     and len(client.get("/api/history", params={"limit": 1, "offset": 1}).json()["rounds"]) == 1)
+blob = hist.text + one.text + who.text
+t.ok("A19 the history carries names only: no phone, id number, note or address",
+     SECRET_PHONE not in blob and SECRET_ID not in blob and SECRET_NOTE not in blob and "רחוב סודי" not in blob)
+t.ok("A19 what is not there is refused in words (409), and a broken address is refused (422)",
+     [client.get("/api/history/round", params={"batch": "nope"}).status_code,
+      client.get("/api/history/person", params={"guid": "g9999"}).status_code,
+      client.get("/api/history/old", params={"date": "2026-01-01"}).status_code] == [409] * 3
+     and "לא נמצא" in client.get("/api/history/person", params={"guid": "g9999"}).json()["message"]
+     and [client.get("/api/history/round").status_code, client.get("/api/history/person", params={"guid": "a b"}).status_code,
+          client.get("/api/history", params={"limit": 0}).status_code, client.get("/api/history", params={"limit": 5000}).status_code,
+          client.get("/api/history", params={"offset": -1}).status_code] == [422] * 5)
+rows_before = [tuple(r) for r in store.connect(path).execute("SELECT * FROM history ORDER BY id")]
+t.ok("A19 the history cannot be written through the site: there is no writing route, with the site's header or without it",
+     [post(u, {}).status_code for u in ("/api/history", "/api/history/round", "/api/history/person", "/api/history/old")] == [405] * 4
+     and [post(u, {}, headers={}).status_code for u in ("/api/history", "/api/history/person")] == [403] * 2
+     and [tuple(r) for r in store.connect(path).execute("SELECT * FROM history ORDER BY id")] == rows_before)
+
+# ── A20: the settings ─────────────────────────────────────────────────────────
+WEIGHTS = {"money": 50, "souls": 50, "recency": 0, "income": 0, "housing": 0, "medical": 0}
+NUMBERS = {"portions": 7, "reserve": 1, "cooldown_weeks": 3}
+seen = client.get("/api/settings").json()
+t.ok("A20 the settings screen gets the numbers and the six weights as they are",
+     set(seen["numbers"]) == {"portions", "reserve", "cooldown_weeks"} and len(seen["weights"]) == 6 and seen["weights_sum"] == 100)
+writes = [("/api/settings/numbers", NUMBERS), ("/api/settings/weights", {"weights": WEIGHTS}),
+          ("/api/settings/preview", {"weights": WEIGHTS})]
+t.ok("A20 no setting can be written without the site's own header (403), and nothing was written",
+     [post(u, b, headers={}).status_code for u, b in writes] == [403] * 3 and client.get("/api/settings").json() == seen)
+t.ok("A20 the writing routes cannot be reached with GET", [client.get(u).status_code for u, _ in writes] == [405] * 3)
+look = post("/api/settings/preview", {"numbers": NUMBERS})
+t.ok("A20 'what would change' answers, and saves nothing",
+     look.status_code == 200 and look.json()["same"] is False and client.get("/api/settings").json() == seen)
+t.ok("A20 saving the numbers and the weights: the screen and the coming weeks follow at once",
+     post("/api/settings/numbers", NUMBERS).status_code == 200 and post("/api/settings/weights", {"weights": WEIGHTS}).status_code == 200
+     and client.get("/api/settings").json()["numbers"] == NUMBERS
+     and {w["key"]: w["value"] for w in client.get("/api/settings").json()["weights"]} == WEIGHTS
+     and plan_now(1)["defaults"]["portions"] == 7 and post("/api/settings/preview", {"numbers": NUMBERS}).json()["same"] is True)
+t.ok("A20 weights that do not add up to 100 are refused in words (409); a broken request is refused (422)",
+     post("/api/settings/weights", {"weights": dict(WEIGHTS, money=40)}).status_code == 409
+     and "100" in post("/api/settings/weights", {"weights": dict(WEIGHTS, money=40)}).json()["message"]
+     and [post("/api/settings/numbers", dict(NUMBERS, portions=-1)).status_code,
+          post("/api/settings/numbers", dict(NUMBERS, portions=5000)).status_code,
+          post("/api/settings/numbers", dict(NUMBERS, extra=1)).status_code,
+          post("/api/settings/numbers", {"portions": 5}).status_code,
+          post("/api/settings/weights", {"weights": "all"}).status_code,
+          post("/api/settings/weights", {}).status_code] == [422] * 6
+     and client.get("/api/settings").json()["numbers"] == NUMBERS)
+t.ok("A20 the settings carry no name and no detail of anybody", SECRET_PHONE not in client.get("/api/settings").text
+     and "בדיקה" not in client.get("/api/settings").text and "בדיקה" not in look.text)
+
+# ── A18: every screen of the site ─────────────────────────────────────────────
+SCREENS = {"/": "app.js", "/people": "people.js", "/holiday": "holiday.js", "/history": "history.js",
+           "/settings": "settings.js"}
+NAV = ['href="/"', 'href="/people"', 'href="/holiday"', 'href="/history"', 'href="/settings"']
+pages = {u: client.get(u) for u in SCREENS}
+t.ok("A18 every screen is served, right-to-left, with the whole strip of screens on it",
+     all(r.status_code == 200 and 'dir="rtl"' in r.text and all(link in r.text for link in NAV) for r in pages.values()),
+     str({u: r.status_code for u, r in pages.items()}))
+t.ok("A18 each screen marks itself — and only itself — as the current one",
+     all(r.text.count('aria-current="page"') == 1 and f'href="{u}" aria-current="page"' in r.text for u, r in pages.items()))
+t.ok("A18 no screen carries code or style of its own inside the page (the browser is told to refuse it)",
+     all("<script>" not in r.text and "style=" not in r.text and "onclick" not in r.text and "<style" not in r.text
+         for r in pages.values()))
+code = "".join(pages[u].text + client.get(f"/static/{js}").text for u, js in SCREENS.items()) + client.get("/static/common.js").text
+t.ok("A18 no screen loads anything from another site, and data never enters a page as markup",
+     "http://" not in code and "https://" not in code and "innerHTML" not in code and "outerHTML" not in code
+     and "insertAdjacentHTML" not in code and "eval(" not in code and "document.write" not in code)
+t.ok("A18 every screen's own script is served", all(client.get(f"/static/{js}").status_code == 200 for js in SCREENS.values()))
+
 client.close()
 shutil.rmtree(TMP, ignore_errors=True)
 t.done()

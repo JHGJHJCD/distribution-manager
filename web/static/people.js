@@ -14,7 +14,8 @@
   var MAIN = [["last_name", "שם משפחה", "text"], ["first_name", "שם פרטי", "text"],
               ["phone1", "טלפון", "tel"], ["phone2", "טלפון 2", "tel"], ["phone3", "טלפון 3", "tel"],
               ["souls", "נפשות", "number"], ["type", "סוג", "type"]];
-  var MORE = [["address", "כתובת", "text"], ["id_number", "תעודת זהות", "text"],
+  var MORE = [["children_total", "מספר ילדים", "number"],
+              ["address", "כתובת", "text"], ["id_number", "תעודת זהות", "text"],
               ["spouse_id_number", "תעודת זהות בן/בת זוג", "text"], ["email", "מייל", "text"],
               ["synagogue", "בית כנסת", "text"], ["representative", "נציג / קהילה", "text"],
               ["income", "הכנסה", "text"], ["per_soul", "פנוי לנפש", "text"],
@@ -67,7 +68,8 @@
     b.type = "button";
     b.appendChild(el("span", "row-name", card.name));
     b.appendChild(typeChip(card));
-    b.appendChild(el("span", "row-num", card.souls ? card.souls + " נפשות" : ""));
+    b.appendChild(el("span", "row-num", [card.souls ? card.souls + " נפשות" : "",
+                                         card.holiday ? "נתמך חגים" : ""].filter(Boolean).join(" · ")));
     b.appendChild(el("span", "row-last", card.last ? "קיבל לאחרונה " + longDate(card.last) : "עוד לא קיבל"));
     b.appendChild(el("span", "row-status" + (card.status === ACTIVE ? "" : " off"), card.status));
     if (extra) { b.appendChild(el("span", "row-last", extra)); }
@@ -151,13 +153,44 @@
       if (kind === "number") { input.min = "0"; input.max = "99"; input.inputMode = "numeric"; }
       if (kind === "tel") { input.dir = "ltr"; input.className = "ltr"; }
       var v = card[name];
-      input.value = (v === null || v === undefined || (name === "souls" && !v)) ? "" : String(v);
+      input.value = (v === null || v === undefined || (kind === "number" && !v)) ? "" : String(v);
     }
     input.id = "f_" + name;
     input.name = name;
     wrap.appendChild(label);
     wrap.appendChild(input);
     return wrap;
+  }
+
+  // The holiday mark: one tick for "receives in holiday distributions", and under it the
+  // holidays themselves (none ticked = all of them). Ticks only, so nothing can be misread.
+  function tick(id, text, checked) {
+    var label = el("label", "tick");
+    var box = document.createElement("input");
+    box.type = "checkbox";
+    box.id = id;
+    box.checked = !!checked;
+    label.appendChild(box);
+    label.appendChild(el("span", null, text));
+    return label;
+  }
+
+  function renderHoliday(card) {
+    var box = $("holidayField");
+    clear(box);
+    box.appendChild(tick("f_holiday_support", "נתמך חגים · מקבל גם בחלוקות חג", card.holiday_support));
+    var which = el("div", "ticks");
+    which.id = "holidayWhich";
+    which.appendChild(el("span", "sub", "באילו חגים? בלי סימון = כל החגים:"));
+    (card.holiday_names || []).forEach(function (name, i) {
+      var one = tick("f_holiday_" + i, name, (card.holidays || []).indexOf(name) >= 0);
+      one.firstChild.value = name;
+      which.appendChild(one);
+    });
+    box.appendChild(which);
+    function sync() { which.hidden = !$("f_holiday_support").checked; }
+    $("f_holiday_support").addEventListener("change", sync);
+    sync();
   }
 
   function renderCard(card) {
@@ -169,7 +202,8 @@
       clear(box);
       pair[1].forEach(function (def) { box.appendChild(field(def, card)); });
     });
-    $("moreBox").open = MORE.some(function (def) { return String(card[def[0]] || "").trim(); });
+    $("moreBox").open = MORE.some(function (def) { return String(card[def[0]] || "").trim() && card[def[0]] !== 0; });
+    renderHoliday(card);
     var notes = $("notesField");
     clear(notes);
     var label = el("label", null, "הערות");
@@ -222,6 +256,9 @@
     } else {
       hist.appendChild(el("span", null, "רשום בהיסטוריה " + card.history_count + " פעמים" +
         (got.length ? " · לאחרונה: " + got.slice(0, 5).map(function (h) { return longDate(h.date); }).join(" · ") : "")));
+      var all = el("a", "link", "כל ההיסטוריה שלו");
+      all.href = "/history?who=" + encodeURIComponent(card.guid);
+      hist.appendChild(el("div", "when")).appendChild(all);
     }
     hist.appendChild(el("div", "when", "סטטוס: " + card.status));
   }
@@ -244,6 +281,9 @@
     var data = { guid: state.card.guid, seen: state.card.seen };
     MAIN.concat(MORE).forEach(function (def) { data[def[0]] = $("f_" + def[0]).value; });
     data.notes = $("f_notes").value;
+    data.holiday_support = $("f_holiday_support").checked;
+    data.holidays = Array.prototype.filter.call($("holidayWhich").querySelectorAll("input"),
+                                                function (c) { return c.checked; }).map(function (c) { return c.value; });
     return data;
   }
 

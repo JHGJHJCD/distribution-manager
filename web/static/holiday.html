@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>חלוקת חג · מנהל חלוקה</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1>חלוקת חג</h1>
+      <p class="sub">חלוקה נוספת לנתמכי החגים. היא לא מזיזה את התור הרגיל של אף אחד.</p>
+    </div>
+    <p class="test-copy">עותק לבדיקה · לא הנתונים שרון עובד עליהם</p>
+  </header>
+
+  <nav class="nav" aria-label="מסכים">
+    <a href="/">שבועות</a>
+    <a href="/people">מקבלים</a>
+    <a href="/holiday" aria-current="page">חלוקת חג</a>
+    <a href="/history">היסטוריה</a>
+    <a href="/settings">הגדרות</a>
+  </nav>
+
+  <div id="notice" class="notice" role="status" hidden></div>
+
+  <!-- the holiday distributions -->
+  <section class="panel" id="holList" hidden>
+    <div class="head">
+      <h2>חלוקות חג שלפנינו</h2>
+      <button type="button" class="btn main" id="holNew">+ חלוקת חג חדשה</button>
+    </div>
+    <div class="notice undo" id="holUndo" role="status" hidden>
+      <span id="holUndoText"></span>
+      <button type="button" class="btn small" id="holUndoBtn">בטל מחיקה</button>
+    </div>
+    <div class="rows" id="holRows"></div>
+    <details class="fold" id="holPast" hidden>
+      <summary id="holPastTitle"></summary>
+      <p class="sub">חלוקה שהיום שלה עבר נשמרה כמו שהייתה, ואי אפשר לשנות אותה.</p>
+      <div class="rows" id="holPastRows"></div>
+    </details>
+    <details class="fold" id="holDeleted" hidden>
+      <summary id="holDeletedTitle"></summary>
+      <p class="sub">אפשר להחזיר חלוקה שנמחקה, עם כל מה שנקבע בה, כל עוד היום שלה לא עבר.</p>
+      <div class="rows" id="holDeletedRows"></div>
+    </details>
+  </section>
+
+  <!-- one holiday distribution -->
+  <section class="panel" id="holEvent" hidden>
+    <div class="head">
+      <h2 id="evTitle"></h2>
+      <button type="button" class="btn quiet" id="evBack">חזרה לרשימה</button>
+    </div>
+    <p class="notice" id="evClosedNote" hidden>החלוקה הזו עברה. הרשימה שלה נשמרה בהיסטוריה כמו שהייתה, ואי אפשר לשנות אותה.</p>
+
+    <div class="stack" id="evForm">
+      <div class="tools start">
+        <div class="tool-group">
+          <span class="pair"><label for="evDate">תאריך</label><input id="evDate" type="date"></span>
+          <span class="pair"><label for="evHol">לאיזה חג</label><select id="evHol"></select></span>
+        </div>
+        <div class="tool-group">
+          <span class="pair"><label for="evPortions">מנות</label><input id="evPortions" type="number" min="0" max="2000" inputmode="numeric"></span>
+          <span class="pair"><label for="evReserve">רזרבה</label><input id="evReserve" type="number" min="0" max="2000" inputmode="numeric"></span>
+        </div>
+      </div>
+      <div class="filter">
+        <h3>סינון (לא חובה)</h3>
+        <div class="f-body">
+          <div class="f-grid" id="evFilter"></div>
+          <p class="sub f-note">ריק = בלי הגבלה. מי שחסר לו בכרטיס נתון שמסננים לפיו לא נכנס, ומסומן למטה.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions bar" id="evCreate" hidden>
+      <button type="button" class="btn main" id="evCreateBtn">צור את החלוקה</button>
+      <button type="button" class="btn quiet" id="evCancel">ביטול</button>
+      <span class="sub">עד שלוחצים "צור את החלוקה" שום דבר לא נשמר.</span>
+    </div>
+    <div class="actions bar" id="evActions" hidden>
+      <button type="button" class="btn main" id="evPrint">הדפס</button>
+      <button type="button" class="btn" id="evExcel">אקסל</button>
+      <button type="button" class="btn quiet danger push" id="evDelete">מחק את החלוקה</button>
+    </div>
+
+    <div class="stack" id="evBody" hidden>
+      <div class="stats" id="evStats" aria-label="המספרים של החלוקה">
+        <div class="stat"><b id="stMarked">0</b><span>מסומנים לחג הזה</span></div>
+        <div class="stat"><b id="stPass">0</b><span id="stPassLabel">עוברים את הסינון</span></div>
+        <div class="stat"><b id="stMain">0</b><span>מקבלים</span></div>
+        <div class="stat"><b id="stRes">0</b><span>ברזרבה</span></div>
+        <div class="stat"><b id="stNoRoom">0</b><span>לא נשאר להם מקום</span></div>
+        <div class="stat" id="stMissingTile"><b id="stMissing">0</b><span>חסר להם נתון</span></div>
+      </div>
+
+      <div id="evWarnings"></div>
+
+      <div class="search narrow" id="evSearch">
+        <label class="sr" for="evQ">חיפוש שם, כדי להוסיף ביד</label>
+        <input id="evQ" type="search" placeholder="חיפוש שם, כדי להוסיף ביד" autocomplete="off" spellcheck="false">
+        <ul id="evHits" class="hits" hidden></ul>
+      </div>
+
+      <div id="whyMark" aria-hidden="true"></div>
+      <div class="why pinned" id="evWhy" aria-live="polite"></div>
+
+      <div class="legend" aria-label="מקרא">
+        <span><i class="sw t-w1"></i>שבועי</span>
+        <span><i class="sw t-w2"></i>דו־שבועי</span>
+        <span><i class="sw t-w3"></i>תלת־שבועי</span>
+        <span><i class="sw t-w4"></i>חודשי</span>
+        <span><i class="sw t-one"></i>חד־פעמי</span>
+        <span><i class="sw t-other"></i>כרטיס בלבד</span>
+        <span>✋ נקבע ביד</span>
+      </div>
+
+      <div class="buckets">
+        <div class="bk bk-main">
+          <h3>מקבלים <b id="cMain"></b></h3>
+          <p class="sub" id="mainSub">מי שמסומן לחג ועובר את הסינון. מי שמחכה הכי הרבה זמן, ראשון.</p>
+          <div id="evMain"></div>
+        </div>
+        <div class="bk bk-res">
+          <h3>רזרבה <b id="cRes"></b></h3>
+          <p class="sub">הבאים בתור. נכנסים אם מישהו לא מגיע, ולא נחשבים כמי שקיבלו.</p>
+          <div id="evRes"></div>
+        </div>
+        <div class="bk bk-out" id="outBucket">
+          <h3>לא בחלוקה הזו <b id="cOut"></b></h3>
+          <p class="sub">לפי הסיבה. לחיצה על שם מסבירה.</p>
+          <div id="evOut"></div>
+        </div>
+      </div>
+
+      <div class="notice lines" id="evInfo">
+        <p>חלוקת חג היא סיבוב נוסף: התור של הקבועים לא זז בגללה, וחד־פעמי שמקבל בה לא נכנס להפסקה.</p>
+        <p>כשאין מספיק מנות לכל מי שמתאים, נכנסים מי שמחכים הכי הרבה זמן מאז שקיבלו בפעם האחרונה.</p>
+        <p>בבוקר שאחרי יום החלוקה, ב־06:00, הרשימה נכנסת להיסטוריה כמו שהיא, ומאז אי אפשר לשנות אותה.</p>
+      </div>
+    </div>
+  </section>
+
+</div>
+<script src="/static/common.js"></script>
+<script src="/static/holiday.js"></script>
+</body>
+</html>

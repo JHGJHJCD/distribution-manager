@@ -305,6 +305,53 @@ t.ok("C9 the weeks are still computed after all this, and the merged card is on 
      plan.status_code == 200 and all(w["main"].count("g0001") <= 1 and "dupA" not in w["main"] + w["reserve_list"]
                                      for w in plan.json()["weeks"]))
 
+# ── C11: the holiday mark and the number of children (stage 4) ────────────────
+t.ok("C11 the holiday mark in words: nothing / all the holidays / the ones listed",
+     [cards.holiday_text(r) for r in ({"holiday_support": 0, "holidays": "פסח"}, {"holiday_support": 1, "holidays": ""},
+                                      {"holiday_support": 1, "holidays": "פסח,סוכות"})] == ["", "כל החגים", "סוכות, פסח"])
+t.ok("C11 only a yes / no and known holidays can be written",
+     cards.clean({"holiday_support": True, "holidays": ["פסח", "סוכות"]}, {"guid": "x"}) == {"holiday_support": 1, "holidays": "סוכות,פסח"}
+     and cards.clean({"holiday_support": False, "holidays": []}, {"guid": "x"}) == {"holiday_support": 0, "holidays": ""}
+     and cards.clean({"holidays": list(cards.holidays.HOLIDAYS)}, {"guid": "x"}) == {"holidays": ""})
+for what, data in (("a holiday that does not exist", {"holidays": ["יום העצמאות"]}), ("free text", {"holidays": "כן (פסח)"}),
+                   ("a mark that is a word", {"holiday_support": "כן"})):
+    try:
+        cards.clean(data, {"guid": "x"})
+        refused = False
+    except cards.Invalid:
+        refused = True
+    t.ok(f"C11 refused: {what}", refused)
+card = get("/api/card", guid="g0002").json()
+t.ok("C11 a card that was never marked: no mark, no holidays, and the form knows the six holidays",
+     card["holiday_support"] is False and card["holidays"] == [] and card["holiday_names"] == list(cards.holidays.HOLIDAYS)
+     and card["children_total"] == 0)
+r = post("/api/card/save", {"guid": "g0002", "seen": card["seen"], "holiday_support": True, "holidays": ["פסח"], "children_total": "6"})
+card = get("/api/card", guid="g0002").json()
+t.ok("C11 saved from the card: the mark, the holiday and the number of children — and nothing else moved",
+     r.status_code == 200 and card["holiday_support"] is True and card["holidays"] == ["פסח"] and card["children_total"] == 6
+     and count("SELECT COUNT(*) FROM recipients WHERE guid='g0002' AND holiday_support=1 AND holidays='פסח' AND children_total=6") == 1
+     and card["type"] == "w1" and card["name"] == "בדיקה 0002")
+rows = get("/api/cards", show="holiday").json()
+t.ok("C11 the list can show only the cards with the holiday mark, and says so on the row",
+     [c["guid"] for c in rows["cards"]] == ["g0002"] and rows["cards"][0]["holiday"] == "פסח"
+     and all(c["holiday"] == "" for c in get("/api/cards", show="all").json()["cards"] if c["guid"] != "g0002"))
+bad = [post("/api/card/save", {"guid": "g0002", "seen": card["seen"], "holidays": ["יום העצמאות"]}),
+       post("/api/card/save", {"guid": "g0002", "seen": card["seen"], "children_total": "-2"})]
+t.ok("C11 a holiday that does not exist, or a negative number of children, is refused in words",
+     all(x.status_code == 409 and x.json().get("message") for x in bad)
+     and get("/api/card", guid="g0002").json()["holidays"] == ["פסח"])
+t.ok("C11 a mark in the wrong shape never reaches the card (422)",
+     post("/api/card/save", {"guid": "g0002", "seen": card["seen"], "holidays": "פסח"}).status_code == 422
+     and post("/api/card/save", {"guid": "g0002", "seen": card["seen"], "holiday_support": "אולי"}).status_code == 422)
+keep_, drop_ = {"guid": "k", "holiday_support": 0, "holidays": "סוכות"}, {"guid": "d", "holiday_support": 1, "holidays": "פסח"}
+fill = cards.merge_fill(keep_, drop_, store.RECIPIENT_COLUMNS)
+t.ok("C11 in a merge the holiday mark and its holidays travel together, and never replace a mark the kept card has",
+     (fill.get("holiday_support"), fill.get("holidays")) == (1, "פסח")
+     and "holiday_support" not in cards.merge_fill(dict(keep_, holiday_support=1), drop_, store.RECIPIENT_COLUMNS)
+     and "holidays" not in cards.merge_fill(dict(keep_, holiday_support=1), drop_, store.RECIPIENT_COLUMNS))
+t.ok("C11 before a merge the comparison shows a different holiday mark",
+     {"label": "נתמך חגים", "a": "לא", "b": "פסח"} in cards.differences(keep_, drop_))
+
 # ── C10: the page ─────────────────────────────────────────────────────────────
 page = client.get("/people")
 t.ok("C10 the page is served: right-to-left, no code or style inside it, nothing from outside",

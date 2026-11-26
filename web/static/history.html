@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>היסטוריה · מנהל חלוקה</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1>היסטוריה</h1>
+      <p class="sub">כל חלוקה שעברה ומי קיבל בה. שמות בלבד, בלי טלפונים. מה שעבר לא משתנה.</p>
+    </div>
+    <p class="test-copy">עותק לבדיקה · לא הנתונים שרון עובד עליהם</p>
+  </header>
+
+  <nav class="nav" aria-label="מסכים">
+    <a href="/">שבועות</a>
+    <a href="/people">מקבלים</a>
+    <a href="/holiday">חלוקת חג</a>
+    <a href="/history" aria-current="page">היסטוריה</a>
+    <a href="/settings">הגדרות</a>
+  </nav>
+
+  <div id="notice" class="notice" role="status" hidden></div>
+
+  <section class="panel">
+    <div class="head">
+      <h2>מתי פלוני קיבל?</h2>
+    </div>
+    <div class="search narrow">
+      <label class="sr" for="hQ">מתי פלוני קיבל? הקלידו שם</label>
+      <input id="hQ" type="search" placeholder="הקלידו שם" autocomplete="off" spellcheck="false">
+      <ul id="hHits" class="hits" hidden></ul>
+    </div>
+    <div class="bk" id="hPerson" aria-live="polite" hidden></div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <h2>חלוקות שעברו</h2>
+      <p class="sub" id="hCount"></p>
+    </div>
+    <div class="rows" id="hRounds"></div>
+    <div class="actions bar">
+      <button type="button" class="btn quiet" id="hMore" hidden>חלוקות ישנות יותר</button>
+    </div>
+    <details class="fold" id="hOld" hidden>
+      <summary id="hOldTitle"></summary>
+      <p class="sub">רישומים שעברו מהתוכנה הישנה בלי רשימת חלוקה. הם נספרים בחיפוש "מתי פלוני קיבל", ומוצגים כאן בנפרד, לפי תאריך.</p>
+      <div class="rows" id="hOldRows"></div>
+    </details>
+  </section>
+
+</div>
+<script src="/static/common.js"></script>
+<script src="/static/history.js"></script>
+</body>
+</html>

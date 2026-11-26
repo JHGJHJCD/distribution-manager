@@ -119,11 +119,67 @@ def record(guids: list, day: dt.date, holiday: str = "", not_received: list = No
                                   not_received=missed, holiday=holiday)
 
 
+def build_holiday(day: dt.date, code: str, criteria: dict, products: int, reserve: int) -> dict:
+    """A holiday list on `day`, as the desktop program's data layer builds it for the
+    'סינון מותאם' mode with a holiday (database.get_filtered_list): the holiday mark is a
+    hard gate, the turn gates are skipped, the thresholds, then who waited longest.
+    WITHOUT the community balance (the site has none), and without the SCREEN's reserve
+    top-up from the one-timers' queue — the audit of 26/11/2026 proved that it lets
+    families that are not marked for the holidays into a holiday reserve."""
+    db = _state["db"]
+    crit = dict(criteria or {}, holiday=code, balance_communities=False)
+    rows = db.get_filtered_list(crit, area_filter="הכל", on_date=day, products=products, reserve=reserve)
+    return {"date": day, "holiday": code,
+            "main": [r["guid"] for r in rows if not r.get("_reserve")],
+            "reserve_list": [r["guid"] for r in rows if r.get("_reserve")]}
+
+
+def stored_last(regular_only: bool) -> None:
+    """Rewrite every card's stored "last distribution" in the throw-away database: the last
+    round of ANY kind (what the desktop program keeps), or — regular_only — the last REGULAR
+    round. Decision 26/11/2026 ("חג לא נספר"): on the website a holiday / bonus portion is not
+    seen by the regular lists. The desktop program has no such rule, so the yardstick gets it
+    here, in how its rows are prepared — the lists themselves are still built by its own code."""
+    db = _state["db"]
+    today = SimDate.today()
+    horizon = (today if today.weekday() == 2 else db.next_wednesday(today)).isoformat()
+    with db.get_connection() as conn:
+        for r in conn.execute("SELECT id, last_dist_base FROM recipients").fetchall():
+            base = db._valid_iso(r["last_dist_base"])
+            if base and base > horizon:
+                base = ""
+            last = max(db._history_last(conn, r["id"], regular_only=regular_only, max_date=horizon), base)
+            conn.execute("UPDATE recipients SET last_distribution=? WHERE id=?", (last, r["id"]))
+
+
 def simulate(start: dt.date, weeks: int, products: int, reserve: int, prior: list = None) -> list:
     """`weeks` Wednesdays in a row on the CURRENT database (give it a throw-away copy):
     after each week its MAIN list is recorded as received, the reserve is not."""
-    out = []
+    return simulate_line(start, weeks, products, reserve, prior=prior)["weeks"]
+
+
+def simulate_line(start: dt.date, weeks: int, products: int, reserve: int, prior: list = None,
+                  events: list = None, extra_counts: bool = False) -> dict:
+    """The weeks, and the holiday rounds among them, in date order (a holiday round before a
+    Wednesday first; one ON a Wednesday after that day's regular list). Each list is built
+    by the desktop code from what is recorded so far, and its MAIN list is then recorded:
+    a week as a regular round, a holiday list as a holiday round (`holiday` = its code).
+    `events`: [{"date", "holiday", "criteria", "portions", "reserve"}].
+    `extra_counts` False (the website's rule, decision 26/11/2026): a week is built with every
+    card's "last distribution" set to its last REGULAR round (stored_last). True = the desktop
+    program exactly as it is, where a holiday / bonus portion pauses a one-timer."""
+    out = {"weeks": [], "events": []}
+    pending = sorted(events or [], key=lambda e: e["date"])
     with clock() as sim:
+        def holiday_rounds(until, including):
+            while pending and (pending[0]["date"] < until or (including and pending[0]["date"] == until)):
+                e = pending.pop(0)
+                sim._today = e["date"]
+                stored_last(regular_only=False)          # a holiday list: since he last received anything
+                h = build_holiday(e["date"], e["holiday"], e.get("criteria"), e["portions"], e["reserve"])
+                out["events"].append(h)
+                record(h["main"], e["date"], holiday=e["holiday"], name="holiday")
+
         for p in (prior or []):
             import selection
             day = selection.round_wednesday(dt.date.fromisoformat(str(p["date"])[:10]))
@@ -131,9 +187,16 @@ def simulate(start: dt.date, weeks: int, products: int, reserve: int, prior: lis
             record(list(p["guids"]), day, name="sent")
         wed = start
         for _ in range(weeks):
+            holiday_rounds(wed, False)
             sim._today = wed
+            stored_last(regular_only=not extra_counts)
             w = build_week(wed, products, reserve)
-            out.append(w)
-            record(w["main"], wed)
+            out["weeks"].append(w)
+            if products > 0:
+                # with 0 products the desktop SCREEN shows an empty table (rule 8; its core
+                # does not cut), so nobody is ticked and nothing is recorded that week
+                record(w["main"], wed)
+            holiday_rounds(wed, True)
             wed += dt.timedelta(days=7)
+        holiday_rounds(wed, False)
     return out

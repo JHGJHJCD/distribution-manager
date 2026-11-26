@@ -1,0 +1,142 @@
+<title>שם הדף בשתיים עד ארבע מילים</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* שלד לדף של יהודה: עמודה אחת רגועה. למעלה משפט שאומר את המצב, אחריו מספרים גדולים
+   (רק אם הם העיקר), שורה לכל פריט, ובלוק ענבר של "מה מחכה לך". למחוק את מה שלא צריך. */
+:root {
+  --bg: #f4f7f6; --surface: #ffffff; --fg: #17221e; --muted: #5b6a64; --line: #dbe3e0;
+  --accent: #0b7d5f; --on-accent: #ffffff; --soft: #e3f3ed;
+  --next-bg: #fff3d6; --next-fg: #7a4d00;            /* ענבר: מחכה לך / הבא בתור */
+  --mock-bg: #fde8ef; --mock-fg: #8c1d43;            /* ורוד: "המחשה בלבד" */
+  /* צבע לכל סוג מקבל, כמו במסכי האתר (web/static/style.css) */
+  --w1: #0b7d5f; --w2: #2a72bd; --w3: #8a5cd0; --w4: #a8620f; --one: #c23d63;
+  --font: "Segoe UI", "Heebo", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111816; --surface: #1a2320; --fg: #e5eeea; --muted: #9aaaa3; --line: #2b3732;
+    --accent: #3cc9a0; --on-accent: #0c1512; --soft: #173a30;
+    --next-bg: #3d3012; --next-fg: #ffd88a; --mock-bg: #3d1826; --mock-fg: #ffb3cb;
+    --w1: #1d9c7a; --w2: #3f8bd6; --w3: #9b72dc; --w4: #c07a1c; --one: #d6557a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111816; --surface: #1a2320; --fg: #e5eeea; --muted: #9aaaa3; --line: #2b3732;
+  --accent: #3cc9a0; --on-accent: #0c1512; --soft: #173a30;
+  --next-bg: #3d3012; --next-fg: #ffd88a; --mock-bg: #3d1826; --mock-fg: #ffb3cb;
+  --w1: #1d9c7a; --w2: #3f8bd6; --w3: #9b72dc; --w4: #c07a1c; --one: #d6557a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font); font-size: 16px; line-height: 1.55;
+  padding-block: 24px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.wrap { max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 24px; }
+header, section { display: flex; flex-direction: column; gap: 10px; }
+header { align-items: flex-start; }
+h1 { margin: 0; font-size: 2.1rem; line-height: 1.15; text-wrap: balance; }
+h2 { margin: 0; font-size: 1.1rem; }
+p { margin: 0; }
+.lead { color: var(--muted); max-width: 58ch; }
+.stamp { background: var(--soft); color: var(--accent); font-weight: 700; border-radius: 999px; padding: 3px 14px; font-size: .88rem; }
+.mock-pill { background: var(--mock-bg); color: var(--mock-fg); font-weight: 600; border-radius: 999px; padding: 3px 14px; font-size: .88rem; }
+
+/* מספרים גדולים: רק כשהמספרים הם העיקר של הדף */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tile b { font-size: 1.9rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.tile span { color: var(--muted); font-size: .9rem; }
+.tile.next { background: var(--next-bg); border-color: var(--next-bg); }
+.tile.next b, .tile.next span { color: var(--next-fg); }
+
+/* שורה לכל פריט, עם תווית מצב בצד */
+.rows { list-style: none; margin: 0; padding: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.rows li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 14px; align-items: start; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+.rows li:last-child { border-bottom: 0; }
+.rows b { display: block; }
+.rows .see { color: var(--muted); font-size: .93rem; }
+.state { font-size: .84rem; font-weight: 700; border-radius: 999px; padding: 2px 12px; white-space: nowrap; color: var(--muted); border: 1px solid var(--line); }
+.done > .state { color: var(--accent); background: var(--soft); border-color: var(--soft); }
+.next > .state { color: var(--next-fg); background: var(--next-bg); border-color: var(--next-bg); }
+
+/* מה מחכה ליהודה: רק דברים שהוא עצמו צריך לעשות */
+.todo { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.todo li { background: var(--next-bg); color: var(--next-fg); border-radius: 10px; padding: 10px 14px; }
+.todo b { display: block; }
+.todo span { font-size: .93rem; }
+
+/* צילום מסך עם משפט אחד מתחתיו */
+.shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; align-items: start; }
+.shot { margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.shot img { max-width: 100%; border: 1px solid var(--line); border-radius: 10px; display: block; }
+.shot figcaption { color: var(--muted); font-size: .9rem; }
+
+/* דף הכרעה: שאלה אחת, האפשרויות זו ליד זו, המומלצת ראשונה */
+.ask { border: 2px solid var(--accent); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 12px; background: var(--surface); }
+.options { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.option { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.option.best { border-color: var(--accent); background: var(--soft); }
+
+.model { color: var(--muted); font-size: .92rem; border-top: 1px dashed var(--line); padding-top: 12px; }
+
+@media (max-width: 560px) {
+  h1 { font-size: 1.6rem; }
+  .rows li { grid-template-columns: minmax(0, 1fr); }
+  .state { justify-self: start; }
+}
+</style>
+<div class="wrap" dir="rtl" lang="he">
+
+  <header>
+    <span class="stamp">מעודכן ל־DD/MM/YYYY</span>
+    <!-- בהמחשה: <span class="mock-pill">המחשה בלבד · אנשים מומצאים</span> -->
+    <h1>משפט אחד שאומר את המצב</h1>
+    <p class="lead">שורה או שתיים של הקשר. לא יותר.</p>
+  </header>
+
+  <section aria-label="המספרים">
+    <div class="tiles">
+      <div class="tile"><b>0</b><span>מה המספר הזה</span></div>
+      <div class="tile next"><b>0</b><span>מספר שדורש תשומת לב</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>כותרת של רשימה</h2>
+    <ul class="rows">
+      <li class="done"><div><b>פריט שנגמר</b><span class="see">מה רואים בסופו, במשפט.</span></div><span class="state">גמור</span></li>
+      <li class="next"><div><b>הפריט הבא</b><span class="see">מה יקרה בו.</span></div><span class="state">הבא בתור</span></li>
+      <li><div><b>פריט לאחר כך</b><span class="see">…</span></div><span class="state">אחר כך</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>איך זה נראה</h2>
+    <div class="shots">
+      <figure class="shot"><img src="shots/desktop.png" alt="המסך במחשב"><figcaption>מה רואים כאן, במשפט אחד.</figcaption></figure>
+      <figure class="shot"><img src="shots/phone.png" alt="המסך בטלפון"><figcaption>אותו מסך בטלפון.</figcaption></figure>
+    </div>
+  </section>
+
+  <section>
+    <h2>מה נבדק, ומה לא</h2>
+    <ul class="rows">
+      <li class="done"><div><b>נבדק</b><span class="see">מה, ואיך.</span></div><span class="state">נבדק</span></li>
+      <li class="next"><div><b>לא נבדק</b><span class="see">מה, ולמה (למשל: הנתונים האמיתיים לא נמצאים בענן).</span></div><span class="state">לא נבדק</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>מה מחכה לך</h2>
+    <ul class="todo">
+      <li><b>פעולה אחת שיהודה צריך לעשות</b><span>למה, ומה יקרה אחריה.</span></li>
+    </ul>
+  </section>
+
+  <p class="model">מודל לשלב הבא: …</p>
+
+</div>

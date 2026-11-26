@@ -54,6 +54,39 @@ MUTATIONS = [
     ("cards are not ordered by name before ranking (ties fall differently)",
      "_ap = planner.active_people\n"
      "planner.active_people = lambda recs: sorted(_ap(recs), key=lambda r: r.get('guid') or '')"),
+    # ── stage 4: the holiday rounds ──
+    ("the regular lists count a holiday / bonus portion as 'received last' (a one-timer is paused after it)",
+     "_wr3 = planner.week_row\n"
+     "def week_row(rec, wed, ledger):\n"
+     "    row = _wr3(rec, wed, ledger)\n"
+     "    a = planner._last_dates(rec, ledger)[0]\n"
+     "    row['last_distribution'] = a.isoformat() if a else ''\n"
+     "    row['days_since'] = planner.recency_days(row, wed)\n"
+     "    return row\n"
+     "planner.week_row = week_row"),
+    ("a holiday portion is forgotten: a later holiday list does not see it",
+     "planner.Ledger.add_extra = lambda self, guid, day: None"),
+    ("a holiday round counts as a regular round (it moves the regular turn)",
+     "planner.Ledger.add_extra = planner.Ledger.add_regular"),
+    ("the thresholds of a holiday event are dropped (everybody marked is on its list)",
+     "_ec = planner.event_criteria\n"
+     "planner.event_criteria = lambda event: {'holiday': _ec(event)['holiday']}"),
+    ("a named holiday is read as 'all the holidays'",
+     "_ec2 = planner.event_criteria\n"
+     "planner.event_criteria = lambda event: dict(_ec2(event), holiday='*')"),
+    ("on a holiday list only the last REGULAR round counts as 'received last' (an earlier holiday portion is forgotten)",
+     "_er = planner.event_row\n"
+     "import datetime\n"
+     "def event_row(rec, day, ledger):\n"
+     "    row = _er(rec, day, ledger)\n"
+     "    a, r, b = planner._last_dates(rec, ledger)\n"
+     "    row['last_distribution'] = r.isoformat() if r else ''\n"
+     "    row['days_since'] = planner.recency_days(row, day)\n"
+     "    return row\n"
+     "planner.event_row = event_row"),
+    ("on a holiday list nobody's waiting days are counted (who waited longest is lost)",
+     "_er3 = planner.event_row\n"
+     "planner.event_row = lambda rec, day, ledger: dict(_er3(rec, day, ledger), days_since=0)"),
 ]
 
 

@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 
 from _util import Checker, ROOT, W0, guids, person, wk
 
-from web import config, import_old, planner, service, store
+from web import card_service, config, event_service, import_old, planner, service, store
 
 t = Checker("web store")
 TMP = tempfile.mkdtemp(prefix="haluka_store_")
@@ -394,6 +394,312 @@ t.ok("S15 the three new tables are added; cards and history are untouched",
      and conn.execute("SELECT COUNT(*) FROM history").fetchone()[0] == len(hist2))
 service.set_manual(conn, NOW, W0, "g0001", "remove", path)
 t.ok("S15 ...and a change by hand can be saved in it", store.load_manual(conn) == {W0: {"g0001": "remove"}})
+conn.close()
+
+
+# ══ stage 4: holiday events ════════════════════════════════════════════════════
+# two weekly and a monthly marked for the holidays, a weekly that is not; one-timers marked
+# and not; a card that takes no part in the weeks but is marked; a paused marked card.
+recs3 = ([person(n, "שבועי", holiday_support=1, phone1=f"05011200{n:02d}", income="3000") for n in (1, 2)]
+         + [person(3, "חודשי", holiday_support=1, income="3000"), person(4, "שבועי", income="3000")]
+         + [person(21, "חד-פעמי", 3, holiday_support=1, income="2000", phone1="0501120021"),
+            person(22, "חד-פעמי", 3, income="2000"), person(23, "חד-פעמי", 2, holiday_support=1, income="")]
+         + [person(40, "", None, holiday_support=1, income="1000"),
+            person(41, "שבועי", holiday_support=1, status="מושהה")])
+hist3 = [(g, wk(-1)) for g in ("g0001", "g0002", "g0003", "g0004")]
+settings3 = {"default_portions": 4, "default_reserve": 1}
+FRI, NEXT_SUN = W0 + timedelta(days=2), wk(1) - timedelta(days=3)
+MARKED = {"g0001", "g0002", "g0003", "g0021", "g0023", "g0040"}
+
+
+def new_event(conn, path, day, holiday="*", portions=10, reserve=2, criteria=None, now=None):
+    return event_service.save(conn, now or NOW, {"date": day.isoformat(), "holiday": holiday, "portions": portions,
+                                                 "reserve": reserve, "criteria": criteria or {}}, path)["guid"]
+
+
+# ── S16: an event is set up, changed and taken away ───────────────────────────
+path, conn = fresh("s16", recs3, hist=hist3, closed=wk(-1), settings=settings3)
+before = service.plan_overview(conn, NOW, 4, path)
+g = new_event(conn, path, FRI)
+conn.close()
+conn = store.connect(path)                                             # a new connection: it is on the disk
+ev0 = store.load_events(conn)[0]
+t.ok("S16 a new event is saved: its day, holiday and numbers",
+     (ev0["guid"], ev0["date"], ev0["holiday"], ev0["portions"], ev0["reserve"], ev0["criteria"]) == (g, FRI, "*", 10, 2, {})
+     and ev0["closed_at"] is None)
+ov = event_service.overview(conn, NOW, path)
+t.ok("S16 the holiday screen: one event ahead, in numbers; everybody marked receives",
+     len(ov["open"]) == 1 and ov["open"][0]["main_count"] == 6 and ov["open"][0]["marked"] == 6
+     and ov["open"][0]["name"] == "חלוקת חג" and ov["open"][0]["day"] == "יום שישי" and ov["past"] == [])
+event_service.save(conn, NOW, {"guid": g, "date": NEXT_SUN.isoformat(), "holiday": "פסח", "portions": 3, "reserve": 1,
+                               "criteria": {"income": {"min": None, "max": 2500}}}, path)
+ev0 = store.load_events(conn)[0]
+t.ok("S16 a change replaces the event's settings (it stays the same event)",
+     len(store.load_events(conn)) == 1 and (ev0["date"], ev0["holiday"], ev0["portions"], ev0["reserve"]) == (NEXT_SUN, "פסח", 3, 1)
+     and ev0["criteria"] == {"income": {"min": None, "max": 2500.0}})
+event_service.remove(conn, NOW, g, path)
+t.ok("S16 an event that has not happened can be taken away, and the weeks are exactly as before it",
+     store.load_events(conn) == [] and service.plan_overview(conn, NOW, 4, path) == before)
+bad_events = {
+    "a day that has passed": {"date": (W0 - timedelta(days=1)).isoformat(), "holiday": "*", "portions": 5},
+    "a day too far ahead": {"date": (W0 + timedelta(days=900)).isoformat(), "holiday": "*", "portions": 5},
+    "a date that is not a date": {"date": "soon", "holiday": "*", "portions": 5},
+    "a holiday that does not exist": {"date": FRI.isoformat(), "holiday": "יום העצמאות", "portions": 5},
+    "no holiday": {"date": FRI.isoformat(), "holiday": "", "portions": 5},
+    "a negative number of portions": {"date": FRI.isoformat(), "holiday": "*", "portions": -1},
+    "portions that are text": {"date": FRI.isoformat(), "holiday": "*", "portions": "5"},
+    "a filter field that does not exist": {"date": FRI.isoformat(), "holiday": "*", "portions": 5, "criteria": {"souls": {"min": 3}}},
+    "'from' above 'up to'": {"date": FRI.isoformat(), "holiday": "*", "portions": 5, "criteria": {"income": {"min": 9, "max": 3}}},
+    "a threshold that is not a number": {"date": FRI.isoformat(), "holiday": "*", "portions": 5, "criteria": {"income": {"max": "הרבה"}}},
+    "a change to an event that does not exist": {"guid": "nope", "date": FRI.isoformat(), "holiday": "*", "portions": 5},
+}
+said = {what: refusal(lambda d=d: event_service.save(conn, NOW, d, path)) for what, d in bad_events.items()}
+for what, words in said.items():
+    t.ok(f"S16 refused: {what}", bool(words), "it was accepted")
+t.ok("S16 the refusals are sentences, and nothing was written",
+     "עבר" in said["a day that has passed"] and "לאיזה חג" in said["no holiday"] and store.load_events(conn) == [])
+t.ok("S16 today itself is still allowed (the day is over only at 06:00 the next morning)",
+     bool(new_event(conn, path, W0, now=datetime(2026, 11, 26, 5, 30))) and store.load_events(conn)[0]["date"] == W0)
+conn.close()
+
+# ── S17: one event in full — the reasons, names only ──────────────────────────
+path, conn = fresh("s17", recs3, hist=hist3, closed=wk(-1), settings=settings3)
+g = new_event(conn, path, FRI, criteria={"income": {"min": None, "max": 2500}})
+d = event_service.detail(conn, NOW, g, path)
+where3 = {e["guid"]: "main" for e in d["main"]}
+where3.update({e["guid"]: e["group"] for e in d["out"]})
+t.ok("S17 on the list: the marked cards that pass the filter",
+     {x for x, v in where3.items() if v == "main"} == {"g0021", "g0040"} and (d["marked"], d["eligible"], d["missing"]) == (6, 2, 1))
+t.ok("S17 outside: who is missing a value is set apart from who is outside the filter",
+     where3["g0023"] == planner.OUT_EV_MISSING and where3["g0001"] == where3["g0003"] == planner.OUT_EV_FILTER)
+t.ok("S17 a card that is not marked is not listed at all, only counted", "g0004" not in where3 and d["unmarked"] == 2)
+allowed3 = {"guid", "name", "kind", "freq", "role", "why", "group", "manual"}
+t.ok("S17 about a person the screen gets the name, the kind and the reason — nothing else",
+     all(set(e) <= allowed3 for e in d["main"] + d["reserve_list"] + d["out"]) and "0501120021" not in str(d)
+     and "2000" not in str(d["main"]) and "3000" not in str(d["out"]))
+t.ok("S17 the same event in the overview, in numbers only",
+     event_service.overview(conn, NOW, path)["open"][0]["main_count"] == 2
+     and "main" not in event_service.overview(conn, NOW, path)["open"][0])
+strip = service.plan_overview(conn, NOW, 3, path)
+t.ok("S17 the weeks screen is told where the event sits among the weeks",
+     [(e["guid"], e["date"], e["name"]) for e in strip["events"]] == [(g, FRI.isoformat(), "חלוקת חג")]
+     and set(strip["events"][0]["main"]) == {"g0021", "g0040"})
+t.ok("S17 an event that does not exist is refused in words", "לא נמצאה" in refusal(lambda: event_service.detail(conn, NOW, "nope", path)))
+conn.close()
+
+# ── S18: an event whose day has passed becomes history, as it was shown ───────
+path, conn = fresh("s18", recs3, hist=hist3, closed=wk(-1), settings=settings3)
+weeks_plain = service.plan_overview(conn, NOW, 4, path)["weeks"]
+g = new_event(conn, path, NEXT_SUN, portions=10, reserve=1)             # Sunday of NEXT week
+shown = event_service.detail(conn, NOW, g, path)
+weeks_shown = service.plan_overview(conn, NOW, 4, path)["weeks"]
+t.ok("S18 an event that is ahead changes no week: the weeks are exactly as before it was set up",
+     weeks_shown == weeks_plain and "g0021" in guids(shown["main"]))
+ov = service.plan_overview(conn, datetime(2026, 11, 26, 6, 30), 3, path)   # Thursday: the week closes, the event does not
+t.ok("S18 Thursday 06:30: this week's list closed, the event of next Sunday is still ahead",
+     ov["closed_now"] == [W0.isoformat()] and ov["closed_events_now"] == [] and len(store.load_events(conn)) == 1)
+ov = service.plan_overview(conn, datetime(2026, 11, 29, 23, 0), 3, path)   # Sunday night: the day is not over
+t.ok("S18 on the event's own day, and until 06:00 the next morning, nothing is written",
+     ov["closed_events_now"] == [] and len(store.load_events(conn)) == 1
+     and conn.execute("SELECT COUNT(*) FROM history WHERE holiday<>''").fetchone()[0] == 0)
+monday = datetime(2026, 11, 30, 6, 0)
+ov = service.plan_overview(conn, monday, 3, path)
+rows = [r["recipient_guid"] for r in conn.execute(
+    "SELECT recipient_guid FROM history WHERE dist_date=? AND holiday='*' AND received=1 ORDER BY id", (NEXT_SUN.isoformat(),))]
+t.ok("S18 Monday 06:00: the event closes by itself — everybody on its list is in the history, in a holiday round",
+     ov["closed_events_now"] == ["חלוקת חג " + NEXT_SUN.strftime("%d/%m/%Y")] and ov["closed_now"] == []
+     and rows == guids(shown["main"]) and len(rows) == 6, f"{rows} vs {guids(shown['main'])}")
+batch = conn.execute("SELECT * FROM batches WHERE holiday='*'").fetchone()
+ev_row = conn.execute("SELECT * FROM events WHERE guid=?", (g,)).fetchone()
+t.ok("S18 the round is recorded with its name, its code and its numbers; the event is marked as passed",
+     batch["dist_name"] == "חלוקת חג " + NEXT_SUN.strftime("%d/%m/%Y") and batch["recipient_count"] == 6
+     and ev_row["closed_at"] and ev_row["main_count"] == 6 and ev_row["batch_guid"] == batch["guid"]
+     and store.load_events(conn) == [])
+t.ok("S18 the weeks after are exactly the lists that were shown before: a holiday portion in the history is not counted in them",
+     ov["weeks"][0]["date"] == wk(1).isoformat() and ov["weeks"][0]["main"] == weeks_shown[1]["main"]
+     and ov["weeks"][1]["main"] == weeks_shown[2]["main"])
+again = service.plan_overview(conn, datetime(2026, 11, 30, 9, 0), 3, path)
+t.ok("S18 asking again writes nothing twice", again["closed_events_now"] == []
+     and conn.execute("SELECT COUNT(*) FROM history WHERE holiday='*'").fetchone()[0] == 6
+     and conn.execute("SELECT COUNT(*) FROM batches WHERE holiday='*'").fetchone()[0] == 1)
+closed = event_service.detail(conn, monday, g, path)
+t.ok("S18 a passed event is shown as it was written — and can no longer be changed, set by hand or deleted",
+     closed["closed"] is True and guids(closed["main"]) == rows and closed["name"] == "חלוקת חג"
+     and "עברה" in refusal(lambda: event_service.save(conn, monday, {"guid": g, "date": "2026-12-06", "holiday": "*", "portions": 3}, path))
+     and "עברה" in refusal(lambda: event_service.set_manual(conn, monday, g, "g0004", "add", path))
+     and "עברה" in refusal(lambda: event_service.remove(conn, monday, g, path)))
+t.ok("S18 ...and it is listed among the events that passed",
+     [e["guid"] for e in event_service.overview(conn, monday, path)["past"]] == [g]
+     and event_service.overview(conn, monday, path)["past"][0]["main_count"] == 6)
+t.ok("S18 a backup was taken before the automatic write",
+     sum(1 for f in os.listdir(config.backup_dir()) if f.endswith("before-closing-weeks.db")) >= 2)
+conn.close()
+
+# ── S19: weeks and events that passed while the site was closed close in date order ──
+path, conn = fresh("s19", recs3, hist=hist3, closed=wk(-1), settings=settings3)
+g_sun = new_event(conn, path, NEXT_SUN, portions=2, reserve=1)          # before the Wednesday of week 1
+g_wed = new_event(conn, path, wk(1), holiday="פסח", portions=10)       # ON the Wednesday of week 1
+g_far = new_event(conn, path, wk(5) + timedelta(days=1), portions=10)   # still ahead later on
+ctx0 = service._context(conn, NOW)
+straight = planner.plan_timeline(ctx0["recipients"], ctx0["received"], start=W0, weeks=5, horizon=W0,
+                                 weights=ctx0["weights"], cooldown_weeks=ctx0["cooldown"], portions=4, reserve=1,
+                                 events=ctx0["events"])
+ov = service.plan_overview(conn, at(wk(3)), 2, path)                     # opened three weeks later
+hist_w, hist_e = {}, {}
+for r in conn.execute("SELECT recipient_guid, dist_date, holiday FROM history WHERE source='web' ORDER BY id"):
+    (hist_e if r["holiday"] else hist_w).setdefault((r["dist_date"], r["holiday"]), []).append(r["recipient_guid"])
+t.ok("S19 three weeks and two events closed; the event that is still ahead did not",
+     ov["closed_now"] == [W0.isoformat(), wk(1).isoformat(), wk(2).isoformat()] and len(ov["closed_events_now"]) == 2
+     and [e["guid"] for e in store.load_events(conn)] == [g_far])
+t.ok("S19 each closed week holds the list of the one straight computation (the events among them included)",
+     [hist_w.get((w["date"].isoformat(), ""), []) for w in straight["weeks"][:3]] == [guids(w["main"]) for w in straight["weeks"][:3]])
+t.ok("S19 each closed event holds its list too — the Sunday one before that Wednesday, the Wednesday one after the regular list",
+     [x["guid"] for x in straight["events"][:2]] == [g_sun, g_wed]
+     and hist_e.get((NEXT_SUN.isoformat(), "*")) == guids(straight["events"][0]["main"])
+     and hist_e.get((wk(1).isoformat(), "פסח")) == guids(straight["events"][1]["main"]))
+order = [r["guid"] for r in conn.execute("SELECT guid FROM batches WHERE source='web' ORDER BY rowid")]
+t.ok("S19 they were written oldest first: week, the Sunday event, week, the Wednesday event, week",
+     order == [store.week_batch_guid(W0), store.event_batch_guid(g_sun), store.week_batch_guid(wk(1)),
+               store.event_batch_guid(g_wed), store.week_batch_guid(wk(2))])
+t.ok("S19 the coming weeks continue the same chain",
+     [w["main"] for w in ov["weeks"]] == [guids(w["main"]) for w in straight["weeks"][3:5]])
+conn.close()
+
+# ── S20: by hand for an event, and "changed since it was printed" ─────────────
+path, conn = fresh("s20", recs3, hist=hist3, closed=wk(-1), settings=settings3)
+g = new_event(conn, path, FRI, portions=10, reserve=1)
+base_d = event_service.detail(conn, NOW, g, path)
+event_service.set_manual(conn, NOW, g, "g0004", "add", path)             # not marked: by hand only
+event_service.set_manual(conn, NOW, g, "g0001", "remove", path)
+event_service.set_manual(conn, NOW, g, "g0002", "reserve", path)
+d = event_service.detail(conn, NOW, g, path)
+marks = {e["guid"]: e["manual"] for e in d["main"] + d["reserve_list"] + d["out"] if e.get("manual")}
+t.ok("S20 by hand: added is on the list, moved is first on the reserve, removed is on no list — each marked",
+     marks == {"g0004": "add", "g0001": "remove", "g0002": "reserve"} and d["main"][0]["guid"] == "g0004"
+     and d["reserve_list"][0]["guid"] == "g0002" and d["manual_count"] == 3
+     and store.get_event(conn, g)["manual"] == marks)
+said = {
+    "a paused card onto an event's list": refusal(lambda: event_service.set_manual(conn, NOW, g, "g0041", "add", path)),
+    "a card that does not exist": refusal(lambda: event_service.set_manual(conn, NOW, g, "g9999", "add", path)),
+    "an action that does not exist": refusal(lambda: event_service.set_manual(conn, NOW, g, "g0001", "delete", path)),
+    "an event that does not exist": refusal(lambda: event_service.set_manual(conn, NOW, "nope", "g0001", "add", path)),
+}
+t.ok("S20 what cannot be set by hand is refused in words", all(said.values()) and "מושהה" in said["a paused card onto an event's list"])
+for card in ("g0004", "g0001", "g0002"):
+    event_service.set_manual(conn, NOW, g, card, "clear", path)
+t.ok("S20 'clear' forgets the change: the event is exactly as before",
+     event_service.detail(conn, NOW, g, path) == base_d and store.get_event(conn, g)["manual"] == {})
+t.ok("S20 an event that was never printed carries no note", base_d["print"] is None)
+event_service.mark_printed(conn, NOW, g, "print", path)
+d = event_service.detail(conn, NOW, g, path)
+t.ok("S20 right after printing nothing has changed", d["print"]["changed"] is False and d["print"]["printed_at"] == "2026-11-25 10:00")
+event_service.set_manual(conn, NOW, g, "g0004", "add", path)
+event_service.set_manual(conn, NOW, g, "g0001", "remove", path)
+d = event_service.detail(conn, NOW, g, path)
+t.ok("S20 after a change the event says who was added and who went out, by name; the overview only how many",
+     d["print"]["changed"] is True and d["print"]["added_names"] == ["בדיקה 0004"] and d["print"]["removed_names"] == ["בדיקה 0001"]
+     and "added_names" not in event_service.overview(conn, NOW, path)["open"][0]["print"]
+     and event_service.overview(conn, NOW, path)["open"][0]["print"]["changed"] is True)
+sheet = event_service.paper(conn, NOW, g, path)[0]
+t.ok("S20 the paper sheet: named for the holiday and the day, by name, with the phones",
+     "חלוקת חג" in sheet["title"] and "יום שישי" in sheet["title"] and FRI.strftime("%d/%m/%Y") in sheet["title"]
+     and [r["name"] for r in sheet["main"]] == sorted(e["name"] for e in d["main"])
+     and next(r for r in sheet["main"] if r["name"] == "בדיקה 0021")["phones"] == "0501120021"
+     and next(r for r in sheet["main"] if r["name"] == "בדיקה 0040")["kind"] == "כרטיס בלבד")
+t.ok("S20 an unknown way of producing is refused", bool(refusal(lambda: event_service.mark_printed(conn, NOW, g, "fax", path))))
+conn.close()
+
+# ── S21: a database from stage 3 gets the event tables; a merged card keeps its events ──
+path, conn = fresh("s21", recs3, hist=hist3, closed=wk(-1), settings=settings3)
+conn.executescript("DROP TABLE events; DROP TABLE event_manual; DROP TABLE event_prints; DROP TABLE event_members;")
+conn.close()
+store._ensured.discard(path)
+store.ensure_schema(path)
+conn = store.connect(path)
+tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+t.ok("S21 the four event tables are added; cards and history are untouched",
+     {"events", "event_manual", "event_prints", "event_members"} <= tables
+     and conn.execute("SELECT COUNT(*) FROM recipients").fetchone()[0] == len(recs3)
+     and conn.execute("SELECT COUNT(*) FROM history").fetchone()[0] == len(hist3))
+g = new_event(conn, path, FRI)
+event_service.set_manual(conn, NOW, g, "g0022", "add", path)
+event_service.mark_printed(conn, NOW, g, "print", path)
+with store.tx(conn):
+    store.merge_recipients(conn, "g0004", "g0022", {}, NOW)              # g0022 becomes part of g0004
+t.ok("S21 a card that is merged into another takes its place in the event with it",
+     store.get_event(conn, g)["manual"] == {"g0004": "add"}
+     and "g0004" in store.load_event_prints(conn)[g]["main"] and "g0022" not in store.load_event_prints(conn)[g]["main"])
+with store.tx(conn):
+    store.insert_recipient(conn, {"full_name": "בדיקה 0050", "frequency": ""}, NOW, guid="g0050")
+event_service.set_manual(conn, NOW, g, "g0050", "add", path)
+card_service.delete(conn, NOW, "g0050", path)
+t.ok("S21 a card that never received can be deleted also when it was set by hand for an event (the mark goes with it)",
+     "g0050" not in store.get_event(conn, g)["manual"] and store.get_recipient(conn, "g0050") is None)
+saturday = datetime(2026, 11, 28, 7, 0)                                 # the Friday event is over
+service.roll_forward(conn, saturday, path)
+t.ok("S21 a card that received in a holiday event has history: it cannot be deleted",
+     "g0040" in [r["recipient_guid"] for r in conn.execute("SELECT recipient_guid FROM history WHERE holiday='*'")]
+     and "היסטוריה" in refusal(lambda: card_service.delete(conn, saturday, "g0040", path)))
+conn.close()
+
+# ── S22: an event that is taken away can be brought back, as it was ───────────
+path, conn = fresh("s22", recs3, hist=hist3, closed=wk(-1), settings=settings3)
+weeks_before = service.plan_overview(conn, NOW, 4, path)
+g = new_event(conn, path, FRI, holiday="פסח", portions=3, reserve=1, criteria={"income": {"min": None, "max": 5000}})
+event_service.set_manual(conn, NOW, g, "g0004", "add", path)
+event_service.mark_printed(conn, NOW, g, "print", path)
+whole = event_service.detail(conn, NOW, g, path)
+event_service.remove(conn, NOW, g, path)
+ov = event_service.overview(conn, NOW, path)
+t.ok("S22 an event that was taken away is on no list of events, and the weeks are as before it",
+     ov["open"] == [] and store.load_events(conn) == [] and store.load_events(conn, open_only=False) == []
+     and service.plan_overview(conn, NOW, 4, path) == weeks_before)
+t.ok("S22 ...but it is offered for bringing back, by its name and day",
+     [(e["guid"], e["name"], e["day"], e["portions"]) for e in ov["deleted"]] == [(g, "חלוקת פסח", "יום שישי", 3)])
+said = {
+    "showing it": refusal(lambda: event_service.detail(conn, NOW, g, path)),
+    "changing it": refusal(lambda: event_service.save(conn, NOW, {"guid": g, "date": FRI.isoformat(), "holiday": "*", "portions": 9}, path)),
+    "setting somebody by hand in it": refusal(lambda: event_service.set_manual(conn, NOW, g, "g0001", "add", path)),
+    "printing it": refusal(lambda: event_service.paper(conn, NOW, g, path)),
+    "taking it away again": refusal(lambda: event_service.remove(conn, NOW, g, path)),
+}
+t.ok("S22 while it is away it cannot be shown, changed, set by hand, printed or taken away again",
+     all("לא נמצאה" in words for words in said.values()), str(said))
+t.ok("S22 nothing of it was erased: its settings and what was set by hand are still stored",
+     store.get_event(conn, g)["manual"] == {"g0004": "add"} and store.get_event(conn, g)["portions"] == 3
+     and g in store.load_event_prints(conn))
+event_service.restore(conn, NOW, g, path)
+t.ok("S22 brought back, it is exactly the event it was — its filter, what was set by hand and its print note",
+     event_service.detail(conn, NOW, g, path) == whole and event_service.overview(conn, NOW, path)["deleted"] == [])
+t.ok("S22 bringing back what is not away is refused",
+     "לשחזר" in refusal(lambda: event_service.restore(conn, NOW, g, path))
+     and "לשחזר" in refusal(lambda: event_service.restore(conn, NOW, "nope", path)))
+event_service.remove(conn, NOW, g, path)
+sunday = datetime(2026, 11, 29, 9, 0)                                   # the Friday of the event is over
+ov = event_service.overview(conn, sunday, path)
+t.ok("S22 an event that was away when its day passed is NOT written to the history",
+     conn.execute("SELECT COUNT(*) FROM history WHERE holiday<>''").fetchone()[0] == 0
+     and conn.execute("SELECT COUNT(*) FROM batches WHERE holiday<>''").fetchone()[0] == 0
+     and ov["past"] == [] and ov["open"] == [])
+t.ok("S22 ...and it can no longer be brought back (the past is fixed), nor is it offered",
+     "עבר" in refusal(lambda: event_service.restore(conn, sunday, g, path)) and ov["deleted"] == []
+     and store.get_event(conn, g)["deleted_at"] is not None)
+conn.close()
+
+# ── S23: an events table from before "taken away" gets the new column by itself ──
+path, conn = fresh("s23", recs3, hist=hist3, closed=wk(-1), settings=settings3)
+g = new_event(conn, path, FRI)
+conn.execute("ALTER TABLE events DROP COLUMN deleted_at")
+conn.close()
+store._ensured.discard(path)
+store.ensure_schema(path)
+conn = store.connect(path)
+t.ok("S23 the column is added, and the event that was there is still there",
+     "deleted_at" in {r["name"] for r in conn.execute("PRAGMA table_info(events)")}
+     and [e["guid"] for e in store.load_events(conn)] == [g] and store.get_event(conn, g)["deleted_at"] is None)
+event_service.remove(conn, NOW, g, path)
+t.ok("S23 ...and it can be taken away and brought back", store.load_events(conn) == []
+     and event_service.restore(conn, NOW, g, path)["guid"] == g and len(store.load_events(conn)) == 1)
 conn.close()
 
 shutil.rmtree(TMP, ignore_errors=True)
