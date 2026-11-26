@@ -286,6 +286,18 @@ def compare_line(mine: dict, theirs: dict, reserve: int, cards: dict) -> list:
 
 
 # ── the whole comparison ──────────────────────────────────────────────────────
+def desktop_marked(both: Both, start, probe: dict, portions: int, reserve: int) -> int:
+    """How many people the desktop program puts on a holiday list that has a portion for
+    everybody who is marked for the holidays."""
+    laid = both.desktop(start, 1, portions, reserve, events=[probe])["events"]
+    return len(laid[0]["main"]) if laid else 0
+
+
+def marks_agree(site: int, desktop: int) -> bool:
+    """The two programs must find the same number of people marked for the holidays."""
+    return site == desktop
+
+
 def saved_filter_of(both: Both):
     """The thresholds that are saved in the desktop program (its last 'סינון מותאם'), as an
     event's filter — or None when there are none / they are not thresholds the site knows."""
@@ -345,6 +357,16 @@ def run(src: str, work: str, now: datetime, *, weeks: int = 13, portions: int = 
     hol_weeks = min(weeks, HOLIDAY_WEEKS)
     saved = saved_filter_of(both)
     codes = [c["code"] for c in event_service.holiday_choices()]
+    # who is marked for the holidays at all — asked of BOTH programs, so that "the site sees
+    # nobody" is never taken for "there is nobody" (the lists below are laid out only for the
+    # holidays the site finds somebody for). The report always says what was found.
+    probe = {"guid": "probe", "date": day, "holiday": selection.HOLIDAY_ANY, "criteria": {}, "portions": FAR,
+             "reserve": 0, "balance": False, "created_at": "2026-01-01 00:00:00"}
+    on_site = both.site(start, 1, portions, reserve, events=[probe])["events"]
+    marked = {"site": len(on_site[0]["main"]) if on_site else 0,
+              "desktop": desktop_marked(both, start, probe, portions, reserve)}
+    marked["same"] = marks_agree(marked["site"], marked["desktop"])
+    say(f"  marked for the holidays: the site finds {marked['site']}, the desktop program {marked['desktop']}")
     for code in codes[:1] if quick else codes:
         def event(n, **kw):
             return dict({"guid": "check", "date": day, "holiday": code, "criteria": {}, "portions": n,
@@ -382,7 +404,8 @@ def run(src: str, work: str, now: datetime, *, weeks: int = 13, portions: int = 
                                              "one_time_first_or_second_priority", "not_taking_part")},
         "regulars": dict(rep.get("regulars_by_frequency") or {}),
         "last_date_check": dict(rep.get("last_date_check") or {}),
-        "sections": sections, "lists": lists, "differ": differ, "identical": differ == 0,
+        "sections": sections, "lists": lists, "differ": differ, "identical": differ == 0 and marked["same"],
+        "holiday_marked": marked,
         "expected_differences": expected,
         # a difference against the program "as it is" is the decision's doing only when the
         # same weeks match once the decision is applied on both sides
@@ -502,12 +525,30 @@ def _section_html(s: dict, explained: bool) -> str:
             f'<tbody>{"".join(body)}</tbody></table></div></section>')
 
 
+def _holiday_note(r: dict) -> str:
+    """What was found about the holiday lists when there is no list to show for them."""
+    m = r["holiday_marked"]
+    if not m["same"]:
+        return ('<section><div class="head"><h2>חלוקות חג</h2><span class="tag bad">הבדל</span></div>'
+                f'<p>מי שמסומן "נתמך חגים": האתר מוצא {m["site"]}, והתוכנה הישנה {m["desktop"]}. '
+                'המספרים האלה צריכים להיות שווים.</p></section>')
+    if not m["site"]:
+        return ('<section><div class="head"><h2>חלוקות חג</h2><span class="tag note">לא הושוו</span></div>'
+                '<p>אף כרטיס פעיל לא מסומן "נתמך חגים", לא באתר ולא בתוכנה הישנה. רשימת חג יוצאת ריקה בשתיהן, '
+                'ולכן אין מה להשוות. אחרי שיסומנו מקבלים לחג, כדאי להריץ את ההשוואה שוב.</p></section>')
+    return ""
+
+
 def render(result: dict) -> str:
     """The report as one self-contained page (numbers and fixed words only)."""
     r = result
     if r["identical"]:
         verdict = (f'<div class="verdict ok">האתר והתוכנה הישנה נותנים אותן רשימות'
                    f'<small>{_count(r["lists"], "רשימה אחת נבדקה", "רשימות נבדקו")}: אותם אנשים, באותו סדר, ואותה רזרבה.</small></div>')
+    elif not r["differ"]:
+        verdict = ('<div class="verdict bad">הרשימות זהות, אבל לא אותם אנשים מסומנים לחג'
+                   f'<small>האתר מוצא {r["holiday_marked"]["site"]} מסומנים "נתמך חגים", והתוכנה הישנה '
+                   f'{r["holiday_marked"]["desktop"]}. עד שזה מוסבר, לא לסמוך על רשימות החג של האתר.</small></div>')
     else:
         verdict = (f'<div class="verdict bad">יש הבדל ב־{r["differ"]} מתוך {r["lists"]} רשימות'
                    '<small>הפירוט למטה, בכל רשימה שיצאה שונה. עד שזה מוסבר, לא לסמוך על האתר בנתונים האלה.</small></div>')
@@ -529,6 +570,7 @@ def render(result: dict) -> str:
 <p><b>מה הושווה:</b> {r["weeks"]} שבועות החל מ־{_dmy(r["start"])}, {r["portions"]} מנות ו־{r["reserve"]} ברזרבה
 בשבוע רגיל{" (הרצה מקוצרת)" if r["quick"] else ""}.</p></div>
 {"".join(_section_html(s, r["expected_explained"]) for s in r["sections"])}
+{_holiday_note(r)}
 <section><h2>מה לא הושווה, ולמה</h2>
 <p>נעילת רשימות, רישום "הגיע / לא הגיע", ו"סינון מותאם" לשבוע רגיל: אלה קיימים רק בתוכנה הישנה, ובאתר אין להם מקבילה.</p>
 <p>שינויים ביד (הוספה, רזרבה, הסרה): הם תלויים במה שהמנהל בוחר, ולכן נבדקים בבדיקות של האתר ולא כאן.</p></section>
@@ -597,6 +639,10 @@ def main(argv=None) -> int:
     print(f"\nRESULT: {result['lists']} lists compared, {result['differ']} differ"
           + (f"; {result['expected_differences']} more differ from the desktop program as it is today "
              "(expected: a holiday portion does not count on the site)" if result["expected_differences"] else ""))
+    m = result["holiday_marked"]
+    print(f"        marked for the holidays: the site finds {m['site']}, the desktop program {m['desktop']}"
+          + ("" if m["same"] else "  <- THESE MUST BE EQUAL")
+          + ("  (nobody is marked: no holiday list to compare)" if m["same"] and not m["site"] else ""))
     print("        " + ("the site and the desktop program give the SAME lists on this data"
                          if result["identical"] else "DIFFERENCES found — do not trust the site on this data yet"))
     return 0 if result["identical"] else 1
