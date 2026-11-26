@@ -636,6 +636,23 @@ def criteria_is_active(criteria: dict) -> bool:
     return False
 
 
+# הכרעת יהודה 26/11/2026: בשדות ה"low" של הניקוד (הכנסה / פנוי לנפש) 0 = "לא ידוע"
+# (כלל 4) — וכך גם בסינון: מי שרשום אצלו 0 לא עובר סף "עד X" כאילו זו הכנסה אמיתית
+# של אפס (כלל 2: חסר נתון בשדה מסונן = לא נכלל). מינוס (חוב) נשאר נתון אמיתי;
+# "0 ילדים" נשאר כמו שהוא. מקור אחד לרשימת השדות: scoring.NEED_FACTORS.
+ZERO_IS_UNKNOWN_FIELDS = frozenset(f["field"] for f in scoring.NEED_FACTORS if f["dir"] == "low")
+
+
+def filter_value(rec: dict, field: str):
+    """The number the custom filter reads from a card, or None when there is no usable
+    value — an empty / unparseable field, or a 0 in a field where 0 means "unknown"
+    (`ZERO_IS_UNKNOWN_FIELDS`). Pure."""
+    num = to_number(rec.get(field))
+    if num == 0 and field in ZERO_IS_UNKNOWN_FIELDS:
+        return None
+    return num
+
+
 def matches_criteria(rec: dict, criteria: dict) -> bool:
     """Does a single recipient satisfy EVERY set bound (AND across fields)?
 
@@ -651,7 +668,7 @@ def matches_criteria(rec: dict, criteria: dict) -> bool:
         lo, hi = b.get("min"), b.get("max")
         if lo is None and hi is None:
             continue
-        val = to_number(rec.get(field))
+        val = filter_value(rec, field)
         if val is None:
             return False
         if lo is not None and val < lo:
@@ -688,7 +705,7 @@ def criteria_gap(rec: dict, criteria: dict) -> float:
         lo, hi = b.get("min"), b.get("max")
         if lo is None and hi is None:
             continue
-        val = to_number(rec.get(field))
+        val = filter_value(rec, field)
         if val is None:
             total += 1.0            # missing data on a constrained field — worst
             continue
@@ -705,7 +722,7 @@ def criteria_missing(rec: dict, criteria: dict) -> int:
     for field, _label in FILTER_FIELDS:
         b = (criteria or {}).get(field) or {}
         if (b.get("min") is not None or b.get("max") is not None) \
-                and to_number(rec.get(field)) is None:
+                and filter_value(rec, field) is None:
             n += 1
     return n
 
@@ -778,9 +795,9 @@ def community_quotas(n_products: int, sizes: dict, manual_pcts: dict = None) -> 
     sizes: {community: total active member count} (may include NO_COMMUNITY).
     manual_pcts: {community: percent} pinned by the operator; communities not
     pinned split the leftover percent proportionally to size. Manual totals over
-    100 are scaled down to 100. Quotas are capped at the community size; capped
-    leftovers are re-spread over communities with remaining capacity. Largest-
-    remainder rounding keeps the total exact. Pure."""
+    100 are scaled down to 100. Quotas are capped at the community size; what a
+    capped community cannot take is re-split among the others BY THEIR WEIGHT
+    (size / pinned percent). Largest-remainder rounding keeps the total exact. Pure."""
     communities = [c for c in sizes if (sizes.get(c) or 0) > 0]
     n = max(0, int(n_products or 0))
     if not communities or n == 0:
@@ -808,26 +825,39 @@ def community_quotas(n_products: int, sizes: dict, manual_pcts: dict = None) -> 
         total_w = sum(weights.values())
 
     def _largest_remainder(amount: int, weight_map: dict, caps: dict) -> dict:
-        wsum = sum(weight_map.values())
-        if wsum <= 0 or amount <= 0:
-            return {c: 0 for c in weight_map}
-        exact = {c: amount * w / wsum for c, w in weight_map.items()}
-        base = {c: min(int(exact[c]), caps[c]) for c in weight_map}
-        left = amount - sum(base.values())
-        order = sorted(weight_map,
-                       key=lambda c: (-(exact[c] - int(exact[c])), -weight_map[c], c))
-        while left > 0:
-            gave = False
-            for c in order:
-                if left <= 0:
-                    break
-                if base[c] < caps[c]:
-                    base[c] += 1
-                    left -= 1
-                    gave = True
-            if not gave:      # everyone at cap — no more room anywhere
-                break
-        return base
+        """`amount` split by weight, nobody above his cap. A community whose share is
+        larger than its size is filled, and what it cannot take is split again among
+        the others BY THEIR WEIGHT (יהודה 26/11/2026 — until then the excess was dealt
+        out one-by-one, so a small community got far more than its share)."""
+        out = {c: 0 for c in weight_map}
+        left = max(0, int(amount))
+        active = [c for c in weight_map if caps[c] > 0 and weight_map[c] > 0]
+        while active and left > 0:
+            wsum = sum(weight_map[c] for c in active)
+            exact = {c: left * weight_map[c] / wsum for c in active}
+            full = [c for c in active if exact[c] >= caps[c] - out[c]]
+            if full:                                   # fill them, re-split the rest
+                for c in full:
+                    left -= caps[c] - out[c]
+                    out[c] = caps[c]
+                active = [c for c in active if c not in full]
+                continue
+            for c in active:
+                out[c] += int(exact[c])
+            rest = left - sum(int(exact[c]) for c in active)
+            order = sorted(active, key=lambda c: (-(exact[c] - int(exact[c])), -weight_map[c], c))
+            for c in order[:rest]:
+                out[c] += 1
+            left = 0
+        if left > 0:
+            # only zero-weight communities still have room (manual pins took 100%) — by size
+            room = {c: caps[c] - out[c] for c in weight_map if caps[c] - out[c] > 0}
+            if room:
+                extra = _largest_remainder(min(left, sum(room.values())),
+                                           {c: float(room[c]) for c in room}, room)
+                for c, k in extra.items():
+                    out[c] += k
+        return out
 
     caps = {c: int(sizes[c]) for c in communities}
     quotas = _largest_remainder(min(n, sum(caps.values())), weights, caps)

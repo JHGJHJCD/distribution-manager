@@ -719,20 +719,81 @@ finally:
 ok("R9m חלוקת ראשון לפני 18/10/2026 (לא מסומנת) עדיין נוספת: התור לא זז והמקבל ברשימה",
    "ישן-חודשי" in _lw and _ln == "2026-10-14", f"list={sorted(_lw)} next={_ln}")
 
-# …ועל התאריך האמיתי גם שאר המצבים (ניקוד / כל המקבלים) — אותה שער
+# …ועל התאריך האמיתי גם שאר המצבים (ניקוד / כל המקבלים) — אותה שער.
+# תוקן 26/11/2026: עד אז הבדיקה ציפתה שבחמישי–שבת החודשי יחזור לרשימה, אבל חלוקת הראשון
+# הייתה רגילה והזיזה את התור שלו ב-4 שבועות (כלל 9) — הוא לא ברשימה בשום יום בשבוע.
+# מקבל-ביקורת שתורו הגיע מוכיח שהרשימות לא סתם ריקות.
 db.reset_all_data()
 _todayR = _dr9.today()
 _bwR = _todayR if _todayR.weekday() == 2 else selection.next_wednesday(_todayR)
 _rsunR = _todayR - timedelta(days=(_todayR.weekday() + 1) % 7)
-_inR = _bwR - timedelta(days=3) <= _rsunR <= _bwR
 _ridR = db.add_recipient({"full_name": "ר9-מצבים", "status": "פעיל", "frequency": "חודשי", "priority": 4})
 _rowR = [{"id": _ridR, "full_name": "ר9-מצבים", "frequency": "חודשי"}]
 db.bulk_add_distributions(_rowR, (_bwR - timedelta(days=28)).isoformat(), "", 1, "")
 db.bulk_add_distributions(_rowR, _rsunR.isoformat(), "", 1, "")
-ok("R9k get_scored_all / get_regulars_scored מסננים כמו get_weekly_list",
-   (("ר9-מצבים" in {r["full_name"] for r in db.get_scored_all()}) != _inR)
-   and (("ר9-מצבים" in {r["full_name"] for r in db.get_regulars_scored()}) != _inR),
-   f"in_window={_inR}")
+_ridC = db.add_recipient({"full_name": "ר9-מצבים-ביקורת", "status": "פעיל", "frequency": "חודשי", "priority": 4})
+db.bulk_add_distributions([{"id": _ridC, "full_name": "ר9-מצבים-ביקורת", "frequency": "חודשי"}],
+                          (_bwR - timedelta(days=28)).isoformat(), "", 1, "")
+_modesR = {"לוח": db.get_weekly_list(), "הכל-ניקוד": db.get_scored_all(), "קבועים-ניקוד": db.get_regulars_scored()}
+_namesR = {k: {r["full_name"] for r in v} for k, v in _modesR.items()}
+ok("R9k קיבל ביום ראשון רגיל (השבוע או שעבר) — לא ברשימה באף מצב; מי שתורו הגיע — בכולם",
+   all("ר9-מצבים" not in n and "ר9-מצבים-ביקורת" in n for n in _namesR.values()),
+   f"יום {_todayR.weekday()} ראשון {_rsunR} רביעי {_bwR} " + str({k: sorted(n) for k, n in _namesR.items()}))
+
+# קבוע (עדיפות 4) בלי תדירות שכבר קיבל: בתור בכל רביעי — גם ביום רביעי עצמו (26/11/2026)
+for _dayN, _dN in ((_wedT - timedelta(days=1), "שלישי"), (_wedT, "רביעי"), (_wedT + timedelta(days=1), "חמישי")):
+    class _FakeN(_Real9):
+        @classmethod
+        def today(cls, _d=_dayN):
+            return _Real9(_d.year, _d.month, _d.day)
+    db.date = _FakeN
+    try:
+        db.reset_all_data()
+        _rb = db.add_recipient({"full_name": "קבוע-בלי-תדירות", "status": "פעיל", "frequency": "", "priority": 4})
+        db.bulk_add_distributions([{"id": _rb, "full_name": "קבוע-בלי-תדירות", "frequency": ""}],
+                                  (_wedT - timedelta(days=14)).isoformat(), "", 1, "")
+        db.init_db()                                            # כמו הפעלה: הגזירה מחדש מרוקנת את next
+        _inS = "קבוע-בלי-תדירות" in {r["full_name"] for r in db.get_weekly_list()}
+        _inN = "קבוע-בלי-תדירות" in {r["full_name"] for r in db.get_regulars_scored()}
+        _ndN = db.get_recipient(_rb)["next_distribution"]
+    finally:
+        db.date = _Real9
+    ok(f"R9o קבוע בלי תדירות ברשימת הלוח ביום {_dN} (כמו במצב הניקוד), בלי לכתוב next_distribution",
+       _inS and _inN and not _ndN, f"schedule={_inS} scored={_inN} next={_ndN!r}")
+
+# ── סינון: 0 בהכנסה / פנוי לנפש = "לא ידוע" ולא "אפס" (יהודה 26/11/2026) ──
+_cz = {"income": {"min": None, "max": 1200}}
+_fz = [rec("ה-0", income="0"), rec("ה-0-מספר", income=0), rec("ה-1000", income="1000"),
+       rec("ה-ריק", income=""), rec("ה-חוב", income="-300"), rec("ה-3000", income="3000")]
+ok("Z1 'הכנסה עד 1200': 0 לא עובר (לא ידוע), חוב עובר, ריק לא",
+   [r["full_name"] for r in selection.filter_by_criteria(_fz, _cz)] == ["ה-1000", "ה-חוב"],
+   str([r["full_name"] for r in selection.filter_by_criteria(_fz, _cz)]))
+ok("Z2 0 בהכנסה נספר כנתון חסר (בהשלמת קהילה — אחרון)",
+   selection.criteria_missing(_fz[0], _cz) == 1 and selection.criteria_gap(_fz[0], _cz) == 1.0
+   and selection.criteria_missing(_fz[2], _cz) == 0)
+ok("Z3 'פנוי לנפש עד 500': 0 לא עובר",
+   not selection.matches_criteria(rec("פ", per_soul="0"), {"per_soul": {"min": None, "max": 500}}))
+ok("Z4 '0 ילדים' נשאר נתון אמיתי",
+   selection.matches_criteria(rec("י", children_total=0), {"children_total": {"min": None, "max": 2}})
+   and not selection.matches_criteria(rec("י", children_total=0), {"children_total": {"min": 1, "max": None}}))
+
+# ── מכסות קהילה: מה שקהילה מלאה לא יכולה לקבל מתחלק לשאר לפי גודל (יהודה 26/11/2026) ──
+_qs = {"א": 5, "ב": 60, "ג": 20, "ד": 6}
+_qq = selection.community_quotas(60, _qs, {"א": 30})
+ok("Q1 אחוז ידני גדול מהקהילה: העודף לפי גודל (ב 38 · ג 13 · ד 4), לא שווה בשווה",
+   _qq == {"א": 5, "ב": 38, "ג": 13, "ד": 4}, str(_qq))
+_qq2 = selection.community_quotas(50, {"א": 2, "ב": 100, "ג": 10}, {"א": 90})
+ok("Q2 קהילה קטנה לא מתמלאת על חשבון הגדולה", _qq2 == {"א": 2, "ב": 44, "ג": 4}, str(_qq2))
+import random as _rq
+_rr = _rq.Random(3); _badq = []
+for _ in range(3000):
+    _sz = {f"ק{i}": _rr.randint(0, 40) for i in range(_rr.randint(1, 6))}
+    _mp = {c: _rr.choice([5, 20, 50, 90]) for c in _sz if _rr.random() < 0.3}
+    _n = _rr.randint(0, 150)
+    _q = selection.community_quotas(_n, _sz, _mp)
+    if sum(_q.values()) != min(_n, sum(_sz.values())) or any(_q[c] > _sz[c] or _q[c] < 0 for c in _sz):
+        _badq.append((_n, _sz, _mp, _q))
+ok("Q3 בכל מקרה: הסכום = המוצרים (או כל האנשים), ואף קהילה לא מעל גודלה", not _badq, str(_badq[:1]))
 
 # ── הכנה קדימה, שלב 1 (יהודה 18/10/2026): הרשימה עוקבת אחרי התאריך שנבחר (on_date) ──
 # אחרי שנרשמה חלוקת השבוע, רשימת השבוע הבא מציגה רק מי שתורו הגיע ביום ההוא —
