@@ -20,7 +20,8 @@ def _row(r: dict, last: dict) -> dict:
     return {"guid": r["guid"], "name": r.get("full_name") or "",
             "status": cards.normalize_status(r.get("status")),
             "type": cards.type_key(r), "type_label": cards.type_label(r),
-            "souls": r.get("souls") or 0, "last": last.get(r["guid"]) or ""}
+            "souls": r.get("souls") or 0, "last": last.get(r["guid"]) or "",
+            "holiday": cards.holiday_text(r)}
 
 
 def card_list(conn, query: str = "", show: str = "all") -> dict:
@@ -33,6 +34,8 @@ def card_list(conn, query: str = "", show: str = "all") -> dict:
         rows = [r for r in rows if r["status"] == cards.ACTIVE]
     elif show == "paused":
         rows = [r for r in rows if r["status"] != cards.ACTIVE]
+    elif show == "holiday":
+        rows = [r for r in rows if r["holiday"]]
     groups = cards.duplicate_groups(recipients, store.different_pairs(conn))
     return {"cards": rows[:LIST_LIMIT], "found": len(rows), "total": len(recipients),
             "active": sum(1 for r in recipients if planner.is_active(r)),
@@ -75,7 +78,8 @@ def card(conn, now: datetime, guid: str, db_path: str = None) -> dict:
 def blank_card() -> dict:
     """What the 'new card' form starts from."""
     view = {f: "" for f, _l, _k in cards.FIELDS}
-    view.update(guid="", name="", status=cards.ACTIVE, type="w1", seen="", souls="")
+    view.update(guid="", name="", status=cards.ACTIVE, type="w1", seen="", souls="", children_total="",
+                holiday_support=False, holidays=[], holiday_names=list(cards.holidays.HOLIDAYS))
     return view
 
 
@@ -203,7 +207,7 @@ def compare(conn, a: str, b: str) -> dict:
     counts = store.history_counts(conn)
     keep, drop = cards.pick_keep(ra, rb, counts)
     gain = cards.merge_fill(keep, drop, store.RECIPIENT_COLUMNS)
-    labels = dict(cards.FIELD_LABEL, frequency="סוג", last_dist_base="חלוקה אחרונה")
+    labels = dict(cards.FIELD_LABEL, frequency="סוג", last_dist_base="חלוקה אחרונה", holiday_support="נתמך חגים")
     return {"keep": {"guid": keep["guid"], "name": keep.get("full_name") or "",
                      "history_count": counts.get(keep["guid"], 0)},
             "drop": {"guid": drop["guid"], "name": drop.get("full_name") or "",

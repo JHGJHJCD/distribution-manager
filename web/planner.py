@@ -17,12 +17,20 @@ This module only
 
 web/tests/test_vs_old.py runs this side by side with the desktop program's own code on
 random data and requires the same lists, week after week.
+
+Stage 4 — a HOLIDAY EVENT is one more round on the same time line (plan_timeline). It is
+an EXTRA round, exactly as in the desktop program: everybody marked "נתמך חגים" for that
+holiday who passes the event's filter, whatever his kind and whatever his turn (the turn
+gates are skipped); short of portions -> whoever waited longest. It never moves a
+regular's turn, but it does count as "received" — so a one-timer who got a holiday portion
+starts his pause, and everybody's waiting days start again. That is why the weeks after an
+event depend on it, and why events are laid out in date order together with the weeks.
 """
 import re
 from bisect import bisect_left
 from datetime import date, timedelta
 
-from .engine import scoring, selection
+from .engine import holidays, scoring, selection
 
 _ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -31,6 +39,7 @@ ONE_TIME = "חד-פעמי"
 ROLE_MAIN, ROLE_RESERVE, ROLE_OUT = selection.ROLE_MAIN, selection.ROLE_RESERVE, selection.ROLE_OUT
 
 KIND_REGULAR, KIND_ONE_TIME = "regular", "onetime"
+KIND_OTHER = "other"           # a card that takes no part in the weekly lists (holiday events only)
 # Why somebody is not on a week's list — the third column of the screen, by reason.
 OUT_REG_WAIT = "reg_wait"      # a regular whose turn has not come (rule 6) / served this week (rule 9)
 OUT_REG_CUT = "reg_cut"        # a regular whose turn came but the portions ran out (rule 8)
@@ -38,6 +47,11 @@ OUT_ONE_PAUSE = "one_pause"    # a one-timer inside the pause after receiving (r
 OUT_ONE_QUEUE = "one_queue"    # a one-timer waiting in the queue, portions and reserve are full
 OUT_NO_PORTIONS = "no_portions"
 OUT_REMOVED = "removed"        # taken off this week's list by hand
+# ...and why somebody marked for the holidays is not on a holiday event's list.
+OUT_EV_MISSING = "ev_missing"  # a field the event filters by has no value on his card
+OUT_EV_CUT = "ev_cut"          # passes the filter, but the portions and the reserve ran out
+OUT_EV_FILTER = "ev_filter"    # outside the event's filter
+OUT_EV_OTHER = "ev_other"      # marked for other holidays only
 # What the manager can set by hand for one person in one week.
 MANUAL_ADD, MANUAL_RESERVE, MANUAL_REMOVE = "add", "reserve", "remove"
 MANUAL_ACTIONS = (MANUAL_ADD, MANUAL_RESERVE, MANUAL_REMOVE)
@@ -176,6 +190,13 @@ class Ledger:
         else:
             lst.append(wed)
 
+    def add_extra(self, guid: str, day: date):
+        """A laid-out HOLIDAY event: `guid` is on its MAIN list and counts as received on
+        `day` — in an extra round. It is his last distribution from now on (waiting days,
+        a one-timer's pause), but never a regular round: a regular's turn does not move."""
+        if guid not in self._any or day > self._any[guid]:
+            self._any[guid] = day
+
     def last_any(self, guid):
         return self._any.get(guid)
 
@@ -199,17 +220,24 @@ def _later(a, b):
     return a if a >= b else b
 
 
+def _last_dates(rec: dict, ledger: Ledger) -> tuple:
+    """(last round of ANY kind, last REGULAR round, the imported base date) of one card.
+    The base — a "last distribution" that came with an import, with no history row behind
+    it — counts like a regular round; one dated after the horizon is a typing mistake."""
+    guid = rec.get("guid")
+    base = to_date(rec.get("last_dist_base"))
+    if base is not None and base > ledger.horizon:
+        base = None
+    return _later(ledger.last_any(guid), base), _later(ledger.last_regular(guid), base), base
+
+
 def week_row(rec: dict, wed: date, ledger: Ledger) -> dict:
     """A copy of the card with the fields the engine reads, as they stand for the week of
     `wed`: last_distribution (any round), next_distribution (from the last REGULAR round),
     round_served (rule 9) and days_since. The card itself is never modified."""
     row = dict(rec)
     guid = rec.get("guid")
-    base = to_date(rec.get("last_dist_base"))
-    if base is not None and base > ledger.horizon:
-        base = None
-    last_any = _later(ledger.last_any(guid), base)
-    last_reg = _later(ledger.last_regular(guid), base)
+    last_any, last_reg, base = _last_dates(rec, ledger)
     row["last_distribution"] = last_any.isoformat() if last_any else ""
     row["next_distribution"] = ""
     row.pop("round_served", None)
@@ -224,6 +252,20 @@ def week_row(rec: dict, wed: date, ledger: Ledger) -> dict:
         row["round_served"] = (ledger.regular_between(guid, lo, wed)
                                or (base is not None and lo <= base <= wed))
     row["days_since"] = recency_days(row, wed)
+    return row
+
+
+def event_row(rec: dict, day: date, ledger: Ledger) -> dict:
+    """A copy of the card as it stands on the day of a holiday event. A holiday round
+    skips the turn gates (rules 6, 7, 9), so only two things are read from the past: the
+    last distribution of any kind, and the waiting days counted from it."""
+    row = dict(rec)
+    last_any, _last_reg, _base = _last_dates(rec, ledger)
+    row["last_distribution"] = last_any.isoformat() if last_any else ""
+    row["next_distribution"] = ""
+    row.pop("round_served", None)
+    row.pop("planned_elsewhere", None)
+    row["days_since"] = recency_days(row, day)
     return row
 
 
@@ -429,6 +471,194 @@ def _week(wed, portions, reserve, regs_due, slots, cut, main, reserve_list, out,
     }
 
 
+# ── one holiday event ─────────────────────────────────────────────────────────
+def event_criteria(event: dict) -> dict:
+    """The event's filter in the engine's own shape: the thresholds that were set, and the
+    holiday gate — which is always on (an event that names no holiday takes everybody who
+    is marked "נתמך חגים")."""
+    crit = {}
+    given = event.get("criteria") or {}
+    for field, _label in selection.FILTER_FIELDS:
+        b = given.get(field) or {}
+        lo, hi = b.get("min"), b.get("max")
+        if lo is not None or hi is not None:
+            crit[field] = {"min": lo, "max": hi}
+    crit[selection.HOLIDAY_KEY] = str(event.get("holiday") or "").strip() or selection.HOLIDAY_ANY
+    return crit
+
+
+def _num_text(x) -> str:
+    return f"{int(x):,}" if float(x).is_integer() else f"{x:,}"
+
+
+def _why_outside(row: dict, crit: dict) -> tuple:
+    """For a card that IS marked for the holiday but did not pass the event's filter:
+    (labels of the filtered fields that have no value on the card, the thresholds it is
+    outside of — in words). Read with the engine's own reader (selection.filter_value), so
+    the words always agree with the decision; the card's own numbers are never quoted."""
+    missing, failed = [], []
+    for field, label in selection.FILTER_FIELDS:
+        b = crit.get(field) or {}
+        lo, hi = b.get("min"), b.get("max")
+        if lo is None and hi is None:
+            continue
+        val = selection.filter_value(row, field)
+        if val is None:
+            missing.append(label)
+        elif lo is not None and val < lo:
+            failed.append(f"{label} מתחת ל-{_num_text(lo)}")
+        elif hi is not None and val > hi:
+            failed.append(f"{label} מעל {_num_text(hi)}")
+    return missing, failed
+
+
+def _event_kind(row: dict) -> str:
+    return participation(row) or KIND_OTHER
+
+
+_EV_OUT_ORDER = {OUT_REMOVED: -1, OUT_EV_MISSING: 0, OUT_EV_CUT: 1, OUT_NO_PORTIONS: 1,
+                 OUT_EV_FILTER: 2, OUT_EV_OTHER: 3}
+
+
+def plan_event(event: dict, people: list, ledger: Ledger, *, weights: dict) -> dict:
+    """The list of ONE holiday event. `event`: {guid, date, holiday ('*' = everybody marked
+    "נתמך חגים", or a holiday's name), portions, reserve, criteria {field: {min, max}},
+    manual {guid: 'add' | 'reserve' | 'remove'}}. `people`: active cards, ordered by name.
+
+    Who is on it is decided by the engine, in the order the desktop program builds a holiday
+    list (database.get_filtered_list, without the community balance):
+      1. the holiday mark is a HARD gate (selection.holiday_filter) — also for the reserve:
+         nobody who is not marked gets onto either list by himself;
+      2. the turn gates are skipped — an extra round takes regulars whatever their turn
+         and one-timers whatever their pause (selection.due_filter, ignore=True);
+      3. every threshold that was set must hold, and a card with no value in a filtered
+         field does not pass (selection.filter_by_criteria; 0 in income / per-soul = unknown);
+      4. short of portions -> whoever waited longest (selection.rank_by_wait), then the
+         reserve; the rest are off this list.
+    What the manager set by hand comes first, as in a week: 'add' takes a portion and counts
+    as received, 'reserve' / 'remove' do not. Nothing is recorded here."""
+    day = event["date"]
+    portions = max(0, int(event.get("portions") or 0))
+    reserve = max(0, int(event.get("reserve") or 0))
+    crit = event_criteria(event)
+    code = crit[selection.HOLIDAY_KEY]
+    filtered = any(f in crit for f, _label in selection.FILTER_FIELDS)
+    manual = event.get("manual") or {}
+    mark = "נתמך חגים" if code == selection.HOLIDAY_ANY else f"נתמך חגים ({code})"
+    group_words = selection.holiday_label(crit)                 # "נתמכי חגים" / "נתמכי פסח"
+    none_left = "מי שעובר את הסינון" if filtered else group_words
+
+    by_hand = {MANUAL_ADD: [], MANUAL_RESERVE: [], MANUAL_REMOVE: []}
+    free = []
+    for p in people:
+        row = event_row(p, day, ledger)
+        action = manual.get(p.get("guid"))
+        (by_hand[action] if action in by_hand else free).append(row)
+    marked_total = sum(1 for r in free + by_hand[MANUAL_ADD] + by_hand[MANUAL_RESERVE] + by_hand[MANUAL_REMOVE]
+                       if selection.holiday_matches(r, crit))
+
+    marked = selection.holiday_filter(free, crit)
+    marked = selection.due_filter(marked, selection.upcoming_wednesday(day), ignore=True)
+    eligible = selection.filter_by_criteria(marked, crit)
+    ranked = selection.rank_by_wait(eligible, weights)
+    n = len(ranked)
+    many = f"{n} שעוברים את הסינון" if filtered else f"{n} {group_words}"
+
+    main, reserve_list, out, warnings = [], [], [], []
+    for r in by_hand[MANUAL_REMOVE]:
+        out.append(_entry(r, _event_kind(r), ROLE_OUT,
+                          "הוסר ביד מהחלוקה הזו · לא נחשב כמי שקיבל",
+                          group=OUT_REMOVED, manual=MANUAL_REMOVE, sort=(r.get("full_name") or "",)))
+
+    # everybody else who is not in the line, by reason
+    in_line, gate = {id(r) for r in eligible}, {id(r) for r in marked}
+    missing_n = unmarked = 0
+    for r in free:
+        if id(r) in in_line:
+            continue
+        name = r.get("full_name") or ""
+        if id(r) not in gate:
+            if holidays.is_supported(r):
+                out.append(_entry(r, _event_kind(r), ROLE_OUT,
+                                  f"מסומן נתמך חגים רק ל: {holidays.display(r)} · לא לחג הזה",
+                                  group=OUT_EV_OTHER, sort=(name,)))
+            else:
+                unmarked += 1          # not marked at all: counted, not listed
+            continue
+        missing, failed = _why_outside(r, crit)
+        if failed:
+            out.append(_entry(r, _event_kind(r), ROLE_OUT,
+                              f"{mark}, אבל לא עובר את הסינון: {' · '.join(failed)}",
+                              group=OUT_EV_FILTER, sort=(name,)))
+        else:
+            missing_n += 1
+            out.append(_entry(r, _event_kind(r), ROLE_OUT,
+                              f"{mark}, אבל חסר בכרטיס: {', '.join(missing) or 'נתון'} · "
+                              "בלי זה אי אפשר לדעת אם הוא עובר את הסינון",
+                              group=OUT_EV_MISSING, sort=(name,)))
+    if missing_n:
+        warnings.append(f"{missing_n} {group_words} לא נכנסו כי חסר להם נתון בכרטיס")
+
+    def result(cut):
+        out.sort(key=lambda e: (_EV_OUT_ORDER.get(e.get("group"), 9), e.pop("sort", ("",))))
+        return {
+            "guid": event.get("guid"), "date": day, "holiday": code,
+            "portions": portions, "reserve": reserve,
+            "criteria": {f: crit[f] for f, _label in selection.FILTER_FIELDS if f in crit},
+            "main": main, "reserve_list": reserve_list, "out": out, "warnings": warnings,
+            "marked": marked_total, "eligible": n, "missing": missing_n, "unmarked": unmarked,
+            "cut": cut, "empty_portions": max(0, portions - len(main)),
+        }
+
+    passes = f"{mark} · עובר את הסינון" if filtered else mark
+    if portions <= 0:
+        # as in a week (rule 8): no portions -> an empty list, and nobody is recorded
+        warnings.insert(0, "0 מנות: הרשימה של החלוקה הזו ריקה")
+        for r in by_hand[MANUAL_ADD] + by_hand[MANUAL_RESERVE]:
+            out.append(_entry(r, _event_kind(r), ROLE_OUT, "סומן ביד לחלוקה הזו, אבל אין בה מנות",
+                              group=OUT_NO_PORTIONS, manual=manual[r["guid"]],
+                              sort=(0, r.get("full_name") or "")))
+        for i, r in enumerate(ranked):
+            out.append(_entry(r, _event_kind(r), ROLE_OUT, f"{passes} · אין מנות בחלוקה הזו",
+                              group=OUT_NO_PORTIONS, sort=(1, i)))
+        return result(False)
+
+    for r in by_hand[MANUAL_ADD]:
+        main.append(_entry(r, _event_kind(r), ROLE_MAIN,
+                           "נוסף ביד לחלוקה הזו · נחשב כמי שקיבל", manual=MANUAL_ADD))
+    for r in by_hand[MANUAL_RESERVE]:
+        reserve_list.append(_entry(r, _event_kind(r), ROLE_RESERVE,
+                                   "הועבר ביד לרזרבה · נכנס אם מישהו לא מגיע, ולא נחשב כמי שקיבל",
+                                   manual=MANUAL_RESERVE))
+    slots = max(0, portions - len(by_hand[MANUAL_ADD]))
+    selection.assign_roles(ranked, slots, max(0, reserve - len(by_hand[MANUAL_RESERVE])))
+    cut = n > slots
+    if cut:
+        warnings.insert(0, f"{many} ורק {portions} מנות: נכנסו מי שמחכים הכי הרבה זמן")
+    for i, r in enumerate(ranked):
+        if r["_role"] == ROLE_MAIN:
+            why = f"{passes} · {_last_text(r)}"
+            if cut:
+                why += f" · נכנס כי הוא מחכה {r.get('days_since') or 0} ימים, יותר מאחרים"
+            main.append(_entry(r, _event_kind(r), ROLE_MAIN, why))
+        elif r["_role"] == ROLE_RESERVE:
+            reserve_list.append(_entry(
+                r, _event_kind(r), ROLE_RESERVE,
+                f"{mark} · יש {many} ורק {portions} מנות · רזרבה: נכנס אם מישהו לא מגיע"))
+        else:
+            out.append(_entry(
+                r, _event_kind(r), ROLE_OUT,
+                f"{mark} · יש {many} ורק {portions} מנות · לא נשאר מקום גם ברזרבה",
+                group=OUT_EV_CUT, sort=(i,)))
+    empty = portions - len(main)
+    if empty > 0:
+        warnings.append(f"{empty} מנות נשארו בלי מקבל: אין עוד {none_left}")
+    elif empty < 0:
+        warnings.append(f"ברשימה {len(main)} מקבלים ויש רק {portions} מנות: "
+                        f"{-empty} יותר מדי, בגלל הוספות ביד")
+    return result(cut)
+
+
 # ── many weeks ────────────────────────────────────────────────────────────────
 def active_people(recipients) -> list:
     """Active cards in the order the lists are built from: by name (then by id, so two
@@ -437,32 +667,80 @@ def active_people(recipients) -> list:
                   key=lambda r: (r.get("full_name") or "", r.get("id") or 0))
 
 
-def plan_weeks(recipients, received, *, start: date, weeks: int, horizon: date,
-               weights: dict, cooldown_weeks: int, portions: int = 52, reserve: int = 0,
-               per_week: dict = None, manual: dict = None) -> list:
-    """Lay out `weeks` consecutive Wednesdays from `start`.
+def _event_order(event: dict) -> tuple:
+    """Events are laid out by date; two on one day keep the order they were created in."""
+    return (event["date"], str(event.get("created_at") or ""), str(event.get("guid") or ""))
+
+
+def plan_timeline(recipients, received, *, start: date, weeks: int, horizon: date,
+                  weights: dict, cooldown_weeks: int, portions: int = 52, reserve: int = 0,
+                  per_week: dict = None, manual: dict = None, events: list = None) -> dict:
+    """Lay out `weeks` consecutive Wednesdays from `start`, and the holiday events that
+    fall among them, ALL IN DATE ORDER — each round sees what the rounds before it gave.
 
     recipients — every card (dicts); only active ones take part.
     received   — history rows (dicts: recipient_guid, dist_date, received, holiday).
     horizon    — the upcoming Wednesday as of today (history dated after it is ignored).
     per_week   — optional {Wednesday: {"portions": n, "reserve": n}} for single weeks.
     manual     — optional {Wednesday: {guid: 'add' | 'reserve' | 'remove'}} (see plan_week).
-    After each week its MAIN list counts as received; the reserve never does.
+    events     — optional holiday events that have not happened yet (see plan_event).
+
+    The order of the rounds: an event dated before a Wednesday is laid out before that
+    week; an event ON a Wednesday is the extra round of that day and comes after the
+    regular list (so the regular list is exactly what it would be without the event).
+    After a week its MAIN list counts as received in a regular round; after an event its
+    MAIN list counts as received in an extra round. The reserve never does.
+
+    Returns {"weeks": [...], "events": [the events that were laid out, in order],
+    "later": [events dated on or after the first Wednesday that was NOT laid out — their
+    lists depend on weeks that were not asked for, so they are not computed]}.
     The inputs are not modified; the same inputs always give the same lists."""
     if start.weekday() != 2:
         raise ValueError("start must be a Wednesday")
     people = active_people(recipients)
     ledger = Ledger(horizon).load(received)
-    out = []
-    for i in range(max(0, int(weeks))):
+    pending = sorted(events or [], key=_event_order)
+    out_weeks, out_events = [], []
+
+    def lay_out_events(until: date, including: bool):
+        while pending and (pending[0]["date"] < until or (including and pending[0]["date"] == until)):
+            event = pending.pop(0)
+            laid = plan_event(event, people, ledger, weights=weights)
+            out_events.append(laid)
+            for e in laid["main"]:
+                ledger.add_extra(e["guid"], event["date"])
+
+    weeks = max(0, int(weeks))
+    for i in range(weeks):
         wed = start + timedelta(days=7 * i)
+        lay_out_events(wed, False)
         over = (per_week or {}).get(wed) or {}
         week = plan_week(wed, people, ledger,
                          portions=over.get("portions", portions),
                          reserve=over.get("reserve", reserve),
                          weights=weights, cooldown_weeks=cooldown_weeks,
                          manual=(manual or {}).get(wed))
-        out.append(week)
+        out_weeks.append(week)
         for e in week["main"]:
             ledger.add_regular(e["guid"], wed)
-    return out
+        lay_out_events(wed, True)
+    # ...and the events up to the first Wednesday that was NOT laid out: every week they
+    # depend on is already here (with no week asked for: the events before `start`)
+    lay_out_events(start + timedelta(days=7 * weeks), False)
+    return {"weeks": out_weeks, "events": out_events, "later": pending}
+
+
+def plan_weeks(recipients, received, *, start: date, weeks: int, horizon: date,
+               weights: dict, cooldown_weeks: int, portions: int = 52, reserve: int = 0,
+               per_week: dict = None, manual: dict = None, events: list = None) -> list:
+    """The weeks of plan_timeline (the holiday events among them are laid out too — the
+    weeks after an event depend on it — but only the weeks are returned)."""
+    return plan_timeline(recipients, received, start=start, weeks=weeks, horizon=horizon,
+                         weights=weights, cooldown_weeks=cooldown_weeks, portions=portions,
+                         reserve=reserve, per_week=per_week, manual=manual, events=events)["weeks"]
+
+
+def weeks_through(start: date, day: date) -> int:
+    """How many Wednesdays from `start` have to be laid out before an event on `day` can
+    be: every Wednesday up to and including that day (0 when the day is before `start`)."""
+    return 0 if day < start else (day - start).days // 7 + 1

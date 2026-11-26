@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import card_service, config, service, store
+from . import card_service, config, event_service, service, store
 
 STATIC_DIR = os.path.join(config.WEB_DIR, "static")
 _NO_DATA = {"error": "no_data",
@@ -104,21 +104,42 @@ def api_people():
     return _run(lambda conn, path: service.people(conn))
 
 
+_EVENT = Query(None, min_length=1, max_length=64, pattern=r"^[0-9A-Za-z_-]+$")
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _need_range(from_):
+    if not from_:
+        raise HTTPException(422, "חסר מאיזה שבוע להפיק את הרשימה")
+    return _wed(from_)
+
+
+# The two answers that carry phones — the paper sheet and the Excel file — for a range of
+# weeks (`from` + `weeks`) or for one holiday event (`event`).
 @app.get("/api/print")
-def api_print(from_: str = Query(..., alias="from", pattern=_DATE), weeks: int = Query(1, ge=1, le=config.MAX_WEEKS)):
-    start = _wed(from_)
+def api_print(from_: Optional[str] = Query(None, alias="from", pattern=_DATE),
+              weeks: int = Query(1, ge=1, le=config.MAX_WEEKS), event: Optional[str] = _EVENT):
+    if event:
+        return _run(lambda conn, path: {"weeks": event_service.paper(conn, config.now(), event, path)})
+    start = _need_range(from_)
     return _run(lambda conn, path: {"weeks": service.print_weeks(conn, config.now(), start, weeks, path)})
 
 
 @app.get("/api/export.xlsx")
-def api_export(from_: str = Query(..., alias="from", pattern=_DATE), weeks: int = Query(1, ge=1, le=config.MAX_WEEKS)):
-    start = _wed(from_)
+def api_export(from_: Optional[str] = Query(None, alias="from", pattern=_DATE),
+               weeks: int = Query(1, ge=1, le=config.MAX_WEEKS), event: Optional[str] = _EVENT):
+    if event:
+        def build_event(conn, path):
+            data = event_service.export_xlsx(conn, config.now(), event, path)
+            name = f"haluka-holiday-{event_service.file_date(conn, event)}.xlsx"
+            return Response(data, media_type=_XLSX, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        return _run(build_event)
+    start = _need_range(from_)
 
     def build(conn, path):
         data = service.export_xlsx(conn, config.now(), start, weeks, path)
         name = f"haluka-{start.isoformat()}-{weeks}w.xlsx"
-        return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        return Response(data, media_type=_XLSX, headers={"Content-Disposition": f'attachment; filename="{name}"'})
     return _run(build)
 
 
@@ -136,9 +157,11 @@ class NumbersBody(BaseModel):
 
 
 class PrintedBody(BaseModel):
-    start: str = Field(pattern=_DATE)
+    """A range of weeks (`start` + `weeks`) or one holiday event (`event`)."""
+    start: Optional[str] = Field(default=None, pattern=_DATE)
     weeks: int = Field(default=1, ge=1, le=config.MAX_WEEKS)
     how: str = Field(pattern=r"^(print|excel)$")
+    event: Optional[str] = Field(default=None, min_length=1, max_length=64, pattern=r"^[0-9A-Za-z_-]+$")
 
 
 @app.post("/api/week/manual")
@@ -163,7 +186,10 @@ def api_numbers(body: NumbersBody):
 
 @app.post("/api/printed")
 def api_printed(body: PrintedBody):
-    start = _wed(body.start)
+    if body.event:
+        return _run(lambda conn, path: {"ok": True, "weeks": event_service.mark_printed(
+            conn, config.now(), body.event, body.how, path)})
+    start = _need_range(body.start)
 
     def do(conn, path):
         return {"ok": True, "weeks": service.mark_printed(conn, config.now(), start, body.weeks, body.how, path)}
@@ -189,6 +215,9 @@ class CardBody(BaseModel):
     phone2: Optional[str] = None
     phone3: Optional[str] = None
     souls: Optional[str] = Field(default=None, max_length=6)
+    children_total: Optional[str] = Field(default=None, max_length=6)
+    holiday_support: Optional[bool] = None
+    holidays: Optional[list[str]] = Field(default=None, max_length=12)
     address: Optional[str] = None
     id_number: Optional[str] = None
     spouse_id_number: Optional[str] = None
@@ -221,7 +250,7 @@ class MergeBody(BaseModel):
 
 
 @app.get("/api/cards")
-def api_cards(q: str = Query("", max_length=100), show: str = Query("all", pattern=r"^(all|active|paused)$")):
+def api_cards(q: str = Query("", max_length=100), show: str = Query("all", pattern=r"^(all|active|paused|holiday)$")):
     return _run(lambda conn, path: card_service.card_list(conn, q, show))
 
 
@@ -279,6 +308,60 @@ def api_different(body: GuidsBody):
 @app.post("/api/duplicates/merge")
 def api_merge(body: MergeBody):
     return _run(lambda conn, path: card_service.merge(conn, config.now(), body.keep, body.drop, path))
+
+
+# ── stage 4: holiday events ───────────────────────────────────────────────────
+class Bound(BaseModel):
+    model_config = {"extra": "forbid"}
+    min: Optional[float] = Field(default=None, ge=-1e9, le=1e9)
+    max: Optional[float] = Field(default=None, ge=-1e9, le=1e9)
+
+
+class EventBody(BaseModel):
+    """A holiday event as the form sends it; every value is checked again in event_service."""
+    model_config = {"extra": "forbid"}
+    guid: str = Field(default="", max_length=64, pattern=r"^[0-9A-Za-z_-]*$")
+    date: str = Field(pattern=_DATE)
+    holiday: str = Field(min_length=1, max_length=30)
+    portions: int = Field(ge=0, le=service.MAX_PORTIONS)
+    reserve: int = Field(default=0, ge=0, le=service.MAX_PORTIONS)
+    criteria: dict[str, Bound] = Field(default_factory=dict)
+
+
+class EventGuidBody(BaseModel):
+    event: str = _GUID
+
+
+class EventManualBody(BaseModel):
+    event: str = _GUID
+    guid: str = _GUID
+    action: str = Field(pattern=r"^(add|reserve|remove|clear)$")
+
+
+@app.get("/api/events")
+def api_events():
+    return _run(lambda conn, path: event_service.overview(conn, config.now(), path))
+
+
+@app.get("/api/event")
+def api_event(guid: str = Query(..., min_length=1, max_length=64, pattern=r"^[0-9A-Za-z_-]+$")):
+    return _run(lambda conn, path: event_service.detail(conn, config.now(), guid, path))
+
+
+@app.post("/api/event/save")
+def api_event_save(body: EventBody):
+    data = body.model_dump()
+    return _run(lambda conn, path: event_service.save(conn, config.now(), data, path))
+
+
+@app.post("/api/event/delete")
+def api_event_delete(body: EventGuidBody):
+    return _run(lambda conn, path: event_service.remove(conn, config.now(), body.event, path))
+
+
+@app.post("/api/event/manual")
+def api_event_manual(body: EventManualBody):
+    return _run(lambda conn, path: event_service.set_manual(conn, config.now(), body.event, body.guid, body.action, path))
 
 
 # ── pages ─────────────────────────────────────────────────────────────────────

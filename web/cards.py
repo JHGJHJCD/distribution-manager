@@ -10,7 +10,7 @@ These rules mirror the desktop program's (database.normalize_status, split_full_
 join_name, merge_fill_updates, find_duplicate_groups); `database.py` itself is not
 imported here — the website has its own store.
 """
-from .engine import selection
+from .engine import holidays, selection
 
 ACTIVE, SUSPENDED = "פעיל", "מושהה"
 _LEGACY_ENDED = "הסתיים"
@@ -37,7 +37,7 @@ TEXT, PHONE, NUMBER, LONG = "text", "phone", "number", "long"
 FIELDS = [
     ("last_name", "שם משפחה", TEXT), ("first_name", "שם פרטי", TEXT),
     ("phone1", "טלפון", PHONE), ("phone2", "טלפון 2", PHONE), ("phone3", "טלפון 3", PHONE),
-    ("souls", "נפשות", NUMBER),
+    ("souls", "נפשות", NUMBER), ("children_total", "מספר ילדים", NUMBER),
     ("address", "כתובת", TEXT), ("id_number", "תעודת זהות", TEXT),
     ("spouse_id_number", "תעודת זהות בן/בת זוג", TEXT), ("email", "מייל", TEXT),
     ("synagogue", "בית כנסת", TEXT), ("representative", "נציג / קהילה", TEXT),
@@ -152,6 +152,18 @@ def clean(data: dict, existing: dict = None) -> dict:
             raise Invalid("חסר שם")
         out["first_name"], out["last_name"], out["full_name"] = first, last, full
 
+    # The holiday mark (stage 4): the general yes / no, and which holidays — none listed =
+    # all of them. Ticked boxes only, never free text, so a mark cannot be misread.
+    if "holiday_support" in data:
+        if not isinstance(data["holiday_support"], (bool, int)):
+            raise Invalid("נתמך חגים: צריך כן או לא")
+        out["holiday_support"] = 1 if data["holiday_support"] else 0
+    if "holidays" in data:
+        names = data["holidays"]
+        if not isinstance(names, (list, tuple)) or any(n not in holidays.HOLIDAYS for n in names):
+            raise Invalid("נתמך חגים: חג לא מוכר")
+        out["holidays"] = holidays.to_field(names)
+
     if "status" in data:
         status = normalize_status(data["status"])
         if status not in (ACTIVE, SUSPENDED):
@@ -185,8 +197,15 @@ def card_view(rec: dict) -> dict:
     view = {f: ("" if rec.get(f) is None else rec.get(f)) for f, _l, _k in FIELDS}
     view.update(guid=rec["guid"], name=rec.get("full_name") or "", first_name=first, last_name=last,
                 status=normalize_status(rec.get("status")), type=type_key(rec),
-                type_label=type_label(rec), seen=rec.get("updated_at") or "")
+                type_label=type_label(rec), seen=rec.get("updated_at") or "",
+                holiday_support=holidays.is_supported(rec), holidays=holidays.parse_list(rec.get("holidays")),
+                holiday_names=list(holidays.HOLIDAYS))
     return view
+
+
+def holiday_text(rec: dict) -> str:
+    """'' / 'כל החגים' / 'סוכות, פסח' — the holiday mark in words."""
+    return holidays.display(rec)
 
 
 # ── search ────────────────────────────────────────────────────────────────────
@@ -282,7 +301,7 @@ def pick_keep(a: dict, b: dict, history_count: dict) -> tuple:
 
 _NEVER_FILLED = {"full_name", "first_name", "last_name", "phone1", "phone2", "phone3", "notes",
                  "status", "priority", "priority_raw", "frequency", "last_dist_base",
-                 "created_at", "updated_at"}
+                 "created_at", "updated_at", "holiday_support", "holidays"}
 
 
 def merge_fill(keep: dict, drop: dict, columns: list) -> dict:
@@ -299,6 +318,9 @@ def merge_fill(keep: dict, drop: dict, columns: list) -> dict:
     if type_key(keep) in ("none", "one0") and type_key(drop) not in ("none", "one0"):
         for f in ("frequency", "priority", "priority_raw"):
             fields[f] = drop.get(f)
+    if not holidays.is_supported(keep) and holidays.is_supported(drop):
+        # the mark and its list of holidays travel together (a list alone means nothing)
+        fields["holiday_support"], fields["holidays"] = 1, str(drop.get("holidays") or "")
     base_drop = str(drop.get("last_dist_base") or "").strip()
     if len(base_drop) == 10 and base_drop > str(keep.get("last_dist_base") or "").strip():
         fields["last_dist_base"] = base_drop
@@ -328,6 +350,8 @@ def differences(a: dict, b: dict) -> list:
            {"label": "טלפונים", "a": " · ".join(phones(a)), "b": " · ".join(phones(b))},
            {"label": "סוג", "a": type_label(a), "b": type_label(b)},
            {"label": "סטטוס", "a": normalize_status(a.get("status")), "b": normalize_status(b.get("status"))}]
+    if holiday_text(a) != holiday_text(b):
+        out.append({"label": "נתמך חגים", "a": holiday_text(a) or "לא", "b": holiday_text(b) or "לא"})
     for f, label, kind in FIELDS:
         if f in ("first_name", "last_name") or kind == PHONE:
             continue

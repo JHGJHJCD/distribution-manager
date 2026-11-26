@@ -338,4 +338,278 @@ for seed in range(40):
                 bad.append((seed, i, f"{action} landed in {where}"))
 t.ok("P14 forty random sets of hand changes: each lands where it was set, nobody twice", not bad, str(bad[:4]))
 
+
+# ══ stage 4: a holiday event — an EXTRA round on the same time line as the weeks ══
+SUN = W0 - timedelta(days=3)                 # the Sunday before W0
+CRIT_KEYS = [f for f, _label in selection.FILTER_FIELDS]
+
+
+def ev(day, holiday="*", portions=50, reserve=0, criteria=None, manual=None, guid="e1", **kw):
+    return dict({"guid": guid, "date": day, "holiday": holiday, "portions": portions, "reserve": reserve,
+                 "criteria": criteria or {}, "manual": manual or {}}, **kw)
+
+
+def line(recs, hist, events, weeks=1, portions=52, reserve=0, cooldown=4, start=W0, manual=None):
+    return planner.plan_timeline(recs, hist, start=start, weeks=weeks, horizon=start, weights=WEIGHTS,
+                                 cooldown_weeks=cooldown, portions=portions, reserve=reserve,
+                                 manual=manual, events=events)
+
+
+def where(e):
+    """{guid: 'main' | 'reserve' | the reason group} for everybody an event's answer lists."""
+    out = {x["guid"]: "main" for x in e["main"]}
+    out.update({x["guid"]: "reserve" for x in e["reserve_list"]})
+    out.update({x["guid"]: x["group"] for x in e["out"]})
+    return out
+
+
+# ── P15: who is on a holiday list — the mark is the gate, the turn is not ─────
+recs = [person(1, "שבועי", holiday_support=1), person(2, "חודשי", holiday_support=1), person(3, "שבועי"),
+        person(4, "שבועי", holiday_support=1, holidays="סוכות"),
+        person(5, "דו-שבועי", holiday_support=1, holidays="סוכות,פסח"),
+        person(11, "חד-פעמי", 3, holiday_support=1), person(12, "חד-פעמי", 2),
+        person(20, "", None, holiday_support=1), person(21, "חד-פעמי", None, holiday_support=1),
+        person(30, "שבועי", holiday_support=1, status="מושהה")]
+hist = [got(g, wk(-1)) for g in ("g0001", "g0002", "g0005", "g0011")]
+e = line(recs, hist, [ev(SUN, "*")])["events"][0]
+t.ok("P15 '*' = everybody marked נתמך חגים, whatever the holidays listed on the card",
+     set(guids(e["main"])) == {"g0001", "g0002", "g0004", "g0005", "g0011", "g0020", "g0021"}, str(guids(e["main"])))
+t.ok("P15 the turn gates are skipped: a monthly served last week and a one-timer inside his pause are on it",
+     {"g0002", "g0011"} <= set(guids(e["main"])))
+kinds = {x["guid"]: x["kind"] for x in e["main"]}
+t.ok("P15 a marked card that takes no part in the weekly lists receives too, shown as its own kind",
+     kinds["g0020"] == kinds["g0021"] == planner.KIND_OTHER and kinds["g0001"] == "regular" and kinds["g0011"] == "onetime")
+t.ok("P15 whoever is not marked is on no list and is only counted; a paused card is nowhere",
+     not ({"g0003", "g0012", "g0030"} & set(where(e))) and e["unmarked"] == 2 and e["marked"] == 7)
+e = line(recs, hist, [ev(SUN, "פסח")])["events"][0]
+w_ = where(e)
+t.ok("P15 a named holiday: the cards marked for all holidays, or for this one",
+     {g for g, x in w_.items() if x == "main"} == {"g0001", "g0002", "g0005", "g0011", "g0020", "g0021"})
+other = next(x for x in e["out"] if x["guid"] == "g0004")
+t.ok("P15 marked for other holidays only: outside, and the reason names them",
+     w_["g0004"] == planner.OUT_EV_OTHER and "סוכות" in other["why"] and e["marked"] == 6)
+e = line(recs, hist, [ev(SUN, "חנוכה")])["events"][0]
+t.ok("P15 a card listing two holidays is outside a third one",
+     where(e).get("g0005") == planner.OUT_EV_OTHER and where(e).get("g0001") == "main")
+t.ok("P15 every entry of an event carries a reason", all(x["why"].strip() for x in e["main"] + e["out"]))
+
+# ── P16: the event's filter — every threshold, and a missing value never passes ──
+frecs = [person(1, "שבועי", holiday_support=1, children_total=5, income="3000", per_soul="400"),
+         person(2, "שבועי", holiday_support=1, children_total=2, income="3000", per_soul="400"),
+         person(3, "שבועי", holiday_support=1, children_total=5, income="9111", per_soul="400"),
+         person(4, "שבועי", holiday_support=1, children_total=5, income="", per_soul="400"),
+         person(5, "שבועי", holiday_support=1, children_total=5, income="0", per_soul="400"),
+         person(6, "שבועי", holiday_support=1, children_total=5, income="3000", per_soul="-200"),
+         person(7, "שבועי", holiday_support=1, children_total=0, income="", per_soul=""),
+         person(8, "שבועי", children_total=9, income="100", per_soul="1")]
+crit = {"children_total": {"min": 3, "max": None}, "income": {"min": None, "max": 5000},
+        "per_soul": {"min": None, "max": 500}}
+e = line(frecs, [], [ev(SUN, "*", criteria=crit)])["events"][0]
+w_ = where(e)
+t.ok("P16 on the list: only who passes every threshold (a debt passes 'up to')",
+     {g for g, x in w_.items() if x == "main"} == {"g0001", "g0006"}, str(w_))
+t.ok("P16 a missing value, and a 0 where 0 means 'unknown', do not pass — and are set apart as MISSING DATA",
+     w_["g0004"] == w_["g0005"] == planner.OUT_EV_MISSING and e["missing"] == 2
+     and any("חסר להם נתון" in x for x in e["warnings"]))
+why = {x["guid"]: x["why"] for x in e["out"]}
+t.ok("P16 the missing field is named", "הכנסה חודשית" in why["g0004"] and "מספר ילדים" not in why["g0004"])
+t.ok("P16 outside a threshold: the reason says which, in words",
+     w_["g0002"] == w_["g0003"] == planner.OUT_EV_FILTER and "מספר ילדים מתחת ל-3" in why["g0002"]
+     and "הכנסה חודשית מעל 5,000" in why["g0003"])
+t.ok("P16 somebody who fails a threshold is not called 'missing data', whatever else is blank on his card",
+     w_["g0007"] == planner.OUT_EV_FILTER)
+t.ok("P16 the card's own numbers are never quoted in a reason", not any(
+    n in x["why"] for x in e["main"] + e["out"] for n in ("9111", "9,111", "3000", "3,000", "400", "200")))
+t.ok("P16 perfect numbers do not help a card that is not marked", "g0008" not in w_ and e["unmarked"] == 1)
+full = dict(crit, holiday="*")
+t.ok("P16 on the list = exactly what the engine's own filter says (selection.matches_criteria)",
+     all((r["guid"] in guids(e["main"])) == selection.matches_criteria(dict(r), full) for r in frecs))
+e = line(frecs, [], [ev(SUN, "*", criteria={"income": {"min": 1000, "max": 4000}})])["events"][0]
+t.ok("P16 a 'from' and an 'up to' on one field both hold", set(guids(e["main"])) == {"g0001", "g0002", "g0006"})
+
+# ── P17: short of portions -> who waited longest; the reserve is never topped up from outside ──
+recs = [person(n, "שבועי", holiday_support=1) for n in range(1, 9)] + [person(n, "חד-פעמי", 3) for n in (21, 22, 23)]
+hist = [got(f"g{n:04d}", wk(-n)) for n in range(1, 9)]                    # g0008 waited longest
+e = line(recs, hist, [ev(SUN, "*", portions=3, reserve=2)])["events"][0]
+t.ok("P17 three portions -> the three who waited longest", guids(e["main"]) == ["g0008", "g0007", "g0006"], str(guids(e["main"])))
+t.ok("P17 the reserve = the next two in the same line", guids(e["reserve_list"]) == ["g0005", "g0004"])
+t.ok("P17 the rest are off this list, in their order, and the event says so",
+     [x["guid"] for x in e["out"] if x["group"] == planner.OUT_EV_CUT] == ["g0003", "g0002", "g0001"]
+     and e["cut"] and "מחכים הכי הרבה זמן" in e["warnings"][0])
+rows = [planner.event_row(p, SUN, planner.Ledger(W0).load(hist)) for p in planner.active_people(recs) if p.get("holiday_support")]
+t.ok("P17 the order is the engine's own (selection.rank_by_wait)",
+     [r["guid"] for r in selection.rank_by_wait(rows, WEIGHTS)][:5] == guids(e["main"]) + guids(e["reserve_list"]))
+e = line(recs, hist, [ev(SUN, "*", portions=20, reserve=5)])["events"][0]
+t.ok("P17 portions to spare: everybody marked receives, and nobody UNMARKED fills the reserve (the mark is a hard gate)",
+     len(e["main"]) == 8 and e["reserve_list"] == [] and not ({"g0021", "g0022", "g0023"} & set(where(e)))
+     and e["empty_portions"] == 12 and not e["cut"])
+e0 = line(recs, hist, [ev(SUN, "*", portions=0, reserve=3)])["events"][0]
+t.ok("P17 0 portions: an empty list, and everybody is told why",
+     e0["main"] == [] and e0["reserve_list"] == [] and all(x["group"] == planner.OUT_NO_PORTIONS for x in e0["out"])
+     and len(e0["out"]) == 8)
+
+# ── P18: an extra round never moves a regular's turn (and is no "round of the week") ──
+recs = [person(1, "שבועי", holiday_support=1), person(2, "דו-שבועי", holiday_support=1),
+        person(3, "תלת-שבועי", holiday_support=1), person(4, "חודשי", holiday_support=1)]
+hist = [got(f"g000{n}", wk(-1)) for n in (1, 2, 3, 4)]
+plain = [guids(w["main"]) for w in plan(recs, hist, weeks=9)]
+for label, day in (("on a Monday", wk(1) - timedelta(days=2)), ("on the Wednesday itself", wk(1)),
+                   ("on a Friday", wk(1) + timedelta(days=2))):
+    tl = line(recs, hist, [ev(day, "*")], weeks=9)
+    t.ok(f"P18 an event {label}: all four receive in it, and every regular list is exactly as without it",
+         len(tl["events"][0]["main"]) == 4 and [guids(w["main"]) for w in tl["weeks"]] == plain)
+tl = line(recs, hist, [ev(wk(1) - timedelta(days=2), "*")], weeks=3)
+t.ok("P18 a holiday portion on Monday does not take a weekly regular off that Wednesday (rule 9 counts regular rounds)",
+     "g0001" in guids(tl["weeks"][1]["main"]))
+
+# ── P19: ...but a one-timer who received a holiday portion starts his pause (rule 7) ──
+recs = [person(1, "שבועי"), person(21, "חד-פעמי", 3, holiday_support=1), person(22, "חד-פעמי", 3)]
+tl = line(recs, [], [ev(SUN, "*")], weeks=6, portions=3)
+t.ok("P19 he received on Sunday: off the regular lists for 4 weeks, counted from that week's Wednesday",
+     [("g0021" in guids(w["main"])) for w in tl["weeks"]] == [False, False, False, False, True, False],
+     str([("g0021" in guids(w["main"])) for w in tl["weeks"]]))
+pause = next(x for x in tl["weeks"][0]["out"] if x["guid"] == "g0021")
+t.ok("P19 the week says why, and when he is back",
+     pause["group"] == planner.OUT_ONE_PAUSE and SUN.strftime("%d/%m") in pause["why"] and wk(4).strftime("%d/%m") in pause["why"],
+     pause["why"])
+t.ok("P19 the one-timer who is not marked is untouched by the event",
+     [("g0022" in guids(w["main"])) for w in tl["weeks"]] == [True, False, False, False, True, False])
+tl = line(recs, [], [ev(W0 + timedelta(days=1), "*")], weeks=6, portions=3)
+t.ok("P19 an event on Thursday comes after that week's list, and belongs to its Wednesday for the pause",
+     [("g0021" in guids(w["main"])) for w in tl["weeks"]] == [True, False, False, False, True, False])
+tl = line(recs, [], [ev(SUN, "*")], weeks=3, portions=3, cooldown=0)
+t.ok("P19 with the pause switched off (0 weeks) a holiday portion holds nobody back",
+     all("g0021" in guids(w["main"]) for w in tl["weeks"]))
+
+# ── P20: the order of the rounds on the time line ─────────────────────────────
+recs = [person(n, "שבועי", holiday_support=1) for n in (1, 2, 3, 4)]
+hist = [got(f"g000{n}", wk(-n)) for n in (1, 2, 3, 4)]                     # g0004 waited longest
+tl = line(recs, hist, [ev(SUN, "*", portions=2)], weeks=1, portions=2)
+t.ok("P20 an event BEFORE the Wednesday is laid out first: it takes the two who waited longest",
+     guids(tl["events"][0]["main"]) == ["g0004", "g0003"])
+t.ok("P20 ...and that Wednesday sees it: in a week short of portions the two who just received wait behind the others",
+     guids(tl["weeks"][0]["main"]) == ["g0002", "g0001"], str(guids(tl["weeks"][0]["main"])))
+tl = line(recs, hist, [ev(W0, "*", portions=2)], weeks=1, portions=2)
+t.ok("P20 an event ON the Wednesday is the extra round of that day: the regular list is laid out first, as if there were no event",
+     guids(tl["weeks"][0]["main"]) == guids(plan(recs, hist, portions=2)[0]["main"]) == ["g0004", "g0003"])
+t.ok("P20 ...and the event sees it: its two portions go to the two who did not receive that day",
+     guids(tl["events"][0]["main"]) == ["g0002", "g0001"])
+tl = line(recs, hist, [ev(wk(3), "*", guid="far"), ev(SUN, "*", guid="near")], weeks=2)
+t.ok("P20 an event after the last Wednesday asked for is not laid out (its list depends on weeks nobody asked for)",
+     [x["guid"] for x in tl["events"]] == ["near"] and [x["guid"] for x in tl["later"]] == ["far"])
+tl = line(recs, hist, [ev(SUN, "*", guid="near"), ev(W0, "*", guid="same-day")], weeks=0)
+t.ok("P20 with no week asked for, only the events before the first Wednesday are laid out",
+     [x["guid"] for x in tl["events"]] == ["near"] and tl["weeks"] == [])
+tl = line(recs, hist, [ev(SUN, "*", guid="b", created_at="2026-11-01 10:00:00", portions=1),
+                       ev(SUN, "*", guid="a", created_at="2026-11-02 10:00:00", portions=1)], weeks=0)
+t.ok("P20 two events on one day: in the order they were set up, the second sees the first",
+     [x["guid"] for x in tl["events"]] == ["b", "a"] and guids(tl["events"][0]["main"]) == ["g0004"]
+     and guids(tl["events"][1]["main"]) == ["g0003"])
+
+# ── P21: what the manager sets by hand for an event ───────────────────────────
+recs = [person(1, "שבועי", holiday_support=1), person(2, "שבועי", holiday_support=1), person(3, "שבועי"),
+        person(21, "חד-פעמי", 3), person(22, "חד-פעמי", 3, holiday_support=1), person(40, "שבועי", status="מושהה")]
+hand = {"g0003": "add", "g0021": "add", "g0001": "remove", "g0002": "reserve", "g0040": "add"}
+tl = line(recs, [], [ev(SUN, "*", portions=3, reserve=1, manual=hand)], weeks=6, portions=5)
+e = tl["events"][0]
+t.ok("P21 add: somebody who is not marked is on the list, marked as set by hand, and takes a portion",
+     guids(e["main"]) == ["g0003", "g0021", "g0022"] and [x.get("manual") for x in e["main"]] == ["add", "add", None]
+     and "נוסף ביד" in e["main"][0]["why"])
+t.ok("P21 reserve: first on the reserve; remove: on no list, shown first with the reason",
+     guids(e["reserve_list"]) == ["g0002"] and e["reserve_list"][0]["manual"] == "reserve"
+     and e["out"][0]["guid"] == "g0001" and e["out"][0]["group"] == planner.OUT_REMOVED)
+t.ok("P21 a paused card cannot be put on an event's list", "g0040" not in where(e))
+t.ok("P21 added by hand = received: the one-timer starts his pause; the one-timer who was not touched does not",
+     [("g0021" in guids(w["main"])) for w in tl["weeks"]] == [False, False, False, False, True, False]
+     and "g0021" in guids(line(recs, [], [ev(SUN, "*", portions=3)], weeks=1, portions=5)["weeks"][0]["main"]))
+e = line(recs, [], [ev(SUN, "*", portions=1, manual={"g0003": "add", "g0021": "add"})])["events"][0]
+t.ok("P21 more added by hand than portions: the list is longer, with a warning, and nobody else gets in",
+     guids(e["main"]) == ["g0003", "g0021"] and any("יותר מדי" in x for x in e["warnings"])
+     and where(e)["g0001"] == planner.OUT_EV_CUT)
+e = line(recs, [], [ev(SUN, "*", portions=0, manual={"g0003": "add"})])["events"][0]
+t.ok("P21 0 portions: also what was set by hand waits outside", e["main"] == [] and where(e)["g0003"] == planner.OUT_NO_PORTIONS)
+
+# ── P22: pure — inputs untouched, the same answer twice ───────────────────────
+events = [ev(SUN, "*", portions=4, reserve=2, criteria={"income": {"min": None, "max": 5000}}, manual={"g0003": "add"})]
+before = copy.deepcopy((frecs, hist, events))
+a = line(frecs, hist, events, weeks=5, portions=4, reserve=2)
+b = line(frecs, hist, events, weeks=5, portions=4, reserve=2)
+t.ok("P22 the cards, the history and the events are not modified", (frecs, hist, events) == before)
+t.ok("P22 the same inputs give the same weeks and the same event lists", a == b)
+t.ok("P22 plan_weeks = the weeks of the time line (the events among them are laid out too)",
+     planner.plan_weeks(frecs, hist, start=W0, weeks=5, horizon=W0, weights=WEIGHTS, cooldown_weeks=4,
+                        portions=4, reserve=2, events=events) == a["weeks"])
+t.ok("P22 how many weeks an event needs: every Wednesday up to its day",
+     [planner.weeks_through(W0, d) for d in (SUN, W0, W0 + timedelta(days=1), wk(1), wk(3) - timedelta(days=1))] == [0, 1, 1, 2, 3])
+
+# ── P23: random populations with events — the rules hold ──────────────────────
+HOLS = ["", "", "פסח", "סוכות", "פסח,חנוכה"]
+bad = []
+for seed in range(50):
+    rng = random.Random(7000 + seed)
+    recs, hist = [], []
+    for n in range(1, rng.randint(6, 40)):
+        freq = rng.choice(FREQS + ["חד-פעמי", "חד-פעמי", ""])
+        recs.append(person(n, freq, rng.choice([3, 2, None]) if freq in ("חד-פעמי", "") else 4,
+                           holiday_support=rng.choice([0, 1, 1]), holidays=rng.choice(HOLS),
+                           children_total=rng.randint(0, 8), income=rng.choice(["", "0", str(rng.randint(500, 9000))]),
+                           per_soul=rng.choice(["", "0", "-100", str(rng.randint(50, 2000))]),
+                           status=rng.choice(["פעיל"] * 9 + ["מושהה"])))
+        if rng.random() < 0.7:
+            hist.append(got(f"g{n:04d}", wk(-rng.randint(1, 6)) - timedelta(days=rng.choice([0, 0, 1, 3])),
+                            holiday=rng.choice(["", "", "", "פסח"])))
+    cooldown = rng.choice([0, 3, 4])
+    events = []
+    for k in range(rng.randint(1, 2)):
+        c = {}
+        if rng.random() < 0.6:
+            c["children_total"] = {"min": rng.randint(0, 4), "max": None}
+        if rng.random() < 0.5:
+            c["income"] = {"min": None, "max": rng.choice([3000, 6000])}
+        if rng.random() < 0.3:
+            c["per_soul"] = {"min": None, "max": 800}
+        events.append(ev(W0 + timedelta(days=rng.randint(-3, 30)), rng.choice(["*", "*", "פסח", "סוכות"]),
+                         portions=rng.randint(0, 25), reserve=rng.randint(0, 4), criteria=c, guid=f"e{k}"))
+    tl = line(recs, hist, events, weeks=7, portions=200, cooldown=cooldown)
+    no_events = line(recs, hist, [], weeks=7, portions=200, cooldown=cooldown)["weeks"]
+    by = {r["guid"]: r for r in recs}
+    active = {g for g, r in by.items() if r["status"] == "פעיל"}
+    if len(tl["events"]) + len(tl["later"]) != len(events):
+        bad.append((seed, "an event was lost"))
+    for e in tl["events"]:
+        full = dict(planner.event_criteria(e))
+        m, r_, o = guids(e["main"]), guids(e["reserve_list"]), guids(e["out"])
+        passing = {g for g in active if selection.matches_criteria(dict(by[g]), full)}
+        marked = {g for g in active if selection.holiday_matches(by[g], full)}
+        if len(set(m + r_ + o)) != len(m + r_ + o):
+            bad.append((seed, "somebody is listed twice in an event"))
+        if len(m) > e["portions"] or len(r_) > e["reserve"]:
+            bad.append((seed, "more people than portions / reserve"))
+        if not set(m + r_) <= passing:
+            bad.append((seed, "somebody who does not pass is on the list or the reserve"))
+        if passing - set(m + r_ + o) or (marked - passing) - set(o):
+            bad.append((seed, "a marked card is nowhere"))
+        if (e["marked"], e["eligible"], e["unmarked"]) != (len(marked), len(passing), len(active - {g for g in active if by[g].get("holiday_support")})):
+            bad.append((seed, f"the event's numbers are wrong {(e['marked'], e['eligible'], e['unmarked'])}"))
+        if e["portions"] and set(m) != passing and len(m) < e["portions"]:
+            bad.append((seed, "an empty portion while somebody who passes is outside"))
+        days = lambda xs: [x["days_since"] for x in xs]                                  # noqa: E731
+        cut_out = [x for x in e["out"] if x["group"] == planner.OUT_EV_CUT]
+        if (e["main"] and e["reserve_list"] and min(days(e["main"])) < max(days(e["reserve_list"]))) or \
+           (e["reserve_list"] and cut_out and min(days(e["reserve_list"])) < max(days(cut_out))) or \
+           (e["main"] and cut_out and min(days(e["main"])) < max(days(cut_out))):
+            bad.append((seed, "somebody who waited less is ahead of somebody who waited more"))
+    for i, (w, w0) in enumerate(zip(tl["weeks"], no_events)):
+        regs = [x["guid"] for x in w["main"] if x["kind"] == "regular"]
+        if regs != [x["guid"] for x in w0["main"] if x["kind"] == "regular"]:
+            bad.append((seed, f"week {i}: an event changed which regulars receive"))
+        for e in tl["events"]:
+            rw = selection.round_wednesday(e["date"])
+            if cooldown and e["date"] < w["date"] < rw + timedelta(days=7 * cooldown):
+                back = {x["guid"] for x in e["main"] if x["kind"] != "regular"} & set(guids(w["main"]))
+                if back:
+                    bad.append((seed, f"week {i}: a one-timer is back inside the pause after a holiday portion"))
+t.ok("P23 fifty random populations with holiday events: the gate, the filter, the order, the numbers; regulars untouched, one-timers paused",
+     not bad, str(bad[:4]))
+
 t.done()

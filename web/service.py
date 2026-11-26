@@ -7,7 +7,7 @@ import io
 from datetime import date, datetime, timedelta
 
 from . import config, planner, store
-from .engine import selection
+from .engine import holidays, selection
 
 # A week closes on the Thursday after its Wednesday, at this hour — the same moment the
 # desktop program's automatic registration opened (selection.AUTO_REGISTER_HOUR).
@@ -21,7 +21,19 @@ class Refused(Exception):
 
 def current_week(now: datetime) -> date:
     """The Wednesday being prepared: this week's until Thursday 06:00, then the next."""
-    return selection.upcoming_wednesday((now - timedelta(hours=CLOSE_HOUR)).date())
+    return selection.upcoming_wednesday(open_day(now))
+
+
+def open_day(now: datetime) -> date:
+    """The first day whose round is not over yet. Every round — a Wednesday's list or a
+    holiday event — becomes history at 06:00 on the morning after its day; a round dated
+    before this day has passed."""
+    return (now - timedelta(hours=CLOSE_HOUR)).date()
+
+
+def event_name(code: str, day: date) -> str:
+    """'חלוקת פסח 18/04/2027' / 'חלוקת חג 18/04/2027' — the name an event carries in the history."""
+    return f"{holidays.dist_label(code or selection.HOLIDAY_ANY)} {day.strftime('%d/%m/%Y')}"
 
 
 def _context(conn, now: datetime) -> dict:
@@ -38,49 +50,84 @@ def _context(conn, now: datetime) -> dict:
         "manual": store.load_manual(conn),
         "numbers": store.load_numbers(conn),
         "prints": store.load_prints(conn),
+        "events": store.load_events(conn),              # holiday events that are still ahead
+        "event_prints": store.load_event_prints(conn),
     }
 
 
-def _plan(ctx: dict, start: date, weeks: int) -> list:
-    return planner.plan_weeks(
+def _timeline(ctx: dict, start: date, weeks: int) -> dict:
+    """The coming weeks AND the holiday events among them, in date order (planner.plan_timeline)."""
+    return planner.plan_timeline(
         ctx["recipients"], ctx["received"], start=start, weeks=weeks, horizon=ctx["horizon"],
         weights=ctx["weights"], cooldown_weeks=ctx["cooldown"],
         portions=ctx["portions"], reserve=ctx["reserve"],
-        per_week=ctx["numbers"], manual=ctx["manual"])
+        per_week=ctx["numbers"], manual=ctx["manual"], events=ctx["events"])
+
+
+def _plan(ctx: dict, start: date, weeks: int) -> list:
+    return _timeline(ctx, start, weeks)["weeks"]
 
 
 def roll_forward(conn, now: datetime, db_path: str = None) -> list:
     """Close every week that has passed and is not in the history yet, oldest first, each
     one as it is computed from the data of this moment (decision 25/11/2026) — what the
-    manager set by hand for it included. Returns the Wednesdays closed now ([] almost
-    always). A fresh database starts from this week."""
-    cur = current_week(now)
+    manager set by hand for it included. Holiday events whose day has passed close with
+    them, in date order. Returns the Wednesdays closed now ([] almost always). A fresh
+    database starts from this week."""
+    return _roll(conn, now, db_path)[0]
+
+
+def _week_goes_first(wed: date, event_day: date) -> bool:
+    """Of a week and a holiday event that are both over, which is written first: the one
+    dated earlier, and on the same day the week (the event is the extra round of that day).
+    The same order planner.plan_timeline lays them out in."""
+    return wed <= event_day
+
+
+def _roll(conn, now: datetime, db_path: str = None) -> tuple:
+    """(Wednesdays closed now, holiday events closed now as {guid, date, name}).
+
+    A round is over at 06:00 on the morning after its day. The rounds that are over are
+    closed ONE BY ONE in date order — a week before an event of the same day, exactly the
+    order they are planned in — and each is computed after the ones before it are already
+    history, so what is written is what the screen showed."""
+    cur, day = current_week(now), open_day(now)
     done = store.closed_through(conn)
     if done is None:
         with store.tx(conn):
             if store.closed_through(conn) is None:
                 store.set_meta(conn, "closed_through", (cur - timedelta(days=7)).isoformat())
-        return []
-    if done + timedelta(days=7) >= cur:
-        return []
+        return [], []
+    if done + timedelta(days=7) >= cur and store.first_passed_event(conn, day) is None:
+        return [], []
     if db_path:
         store.backup(db_path, config.backup_dir(), "before-closing-weeks", now)
-    closed = []
-    wed = done + timedelta(days=7)
-    while wed < cur:
+    weeks, events = [], []
+    while True:
         with store.tx(conn):
-            # re-read inside the write lock: another request may have closed it meanwhile
-            latest = store.closed_through(conn)
-            if latest is not None and latest >= wed:
-                wed = latest + timedelta(days=7)
-                continue
-            week = _plan(_context(conn, now), wed, 1)[0]
-            if store.close_week(conn, week, now, "auto"):
-                closed.append(wed)
-            elif latest is None or latest < wed:
-                store.set_meta(conn, "closed_through", wed.isoformat())   # already written: move on
-        wed += timedelta(days=7)
-    return closed
+            # everything is re-read inside the write lock: another request may have closed it meanwhile
+            wed = store.closed_through(conn) + timedelta(days=7)
+            event = store.first_passed_event(conn, day)
+            week_over = wed < cur
+            if not week_over and event is None:
+                break
+            if week_over and (event is None or _week_goes_first(wed, event["date"])):
+                week = _timeline(_context(conn, now), wed, 1)["weeks"][0]
+                if store.close_week(conn, week, now, "auto"):
+                    weeks.append(wed)
+                else:
+                    store.set_meta(conn, "closed_through", wed.isoformat())   # already written: move on
+            else:
+                # every week up to the event's day is history by now, so the event is the
+                # first round ahead: nothing has to be laid out before it
+                laid = _timeline(_context(conn, now), wed, 0)["events"]
+                plan = next((p for p in laid if p["guid"] == event["guid"]), None)
+                if plan is None:                       # cannot happen; never loop on it
+                    raise RuntimeError("a passed holiday event was not laid out")
+                name = event_name(plan["holiday"], plan["date"])
+                if store.close_event(conn, plan, name, now):
+                    events.append({"guid": plan["guid"], "date": plan["date"], "name": name})
+    return weeks, events
 
 
 def first_open_week(conn, now: datetime) -> date:
@@ -105,10 +152,14 @@ def _open_index(conn, now: datetime, wed: date) -> int:
 # ── answers for the pages ─────────────────────────────────────────────────────
 def _print_note(w: dict, ctx: dict, names: dict = None):
     """None when the week was never printed; else when / how, and what changed since."""
-    snap = ctx["prints"].get(w["date"])
+    return since_print(ctx["prints"].get(w["date"]), [e["guid"] for e in w["main"]], names)
+
+
+def since_print(snap, now_main: list, names: dict = None):
+    """What changed on a list (a week's or a holiday event's) since it was last printed /
+    exported: None when it never was. Only the MAIN list is compared."""
     if not snap:
         return None
-    now_main = [e["guid"] for e in w["main"]]
     added = [g for g in now_main if g not in set(snap["main"])]
     removed = [g for g in snap["main"] if g not in set(now_main)]
     note = {"printed_at": snap["printed_at"], "how": snap["how"], "changed": bool(added or removed),
@@ -161,16 +212,22 @@ def clamp_weeks(n) -> int:
 
 def plan_overview(conn, now: datetime, weeks: int, db_path: str = None) -> dict:
     """The strip of coming weeks: for each one its numbers and who is on it (ids only)."""
-    closed = roll_forward(conn, now, db_path)
+    closed, closed_events = _roll(conn, now, db_path)
     ctx = _context(conn, now)
     start = first_open_week(conn, now)
-    plan = _plan(ctx, start, clamp_weeks(weeks))
+    line = _timeline(ctx, start, clamp_weeks(weeks))
     return {
         "today": now.date().isoformat(), "current_week": start.isoformat(),
         "closed_now": [d.isoformat() for d in closed],
+        "closed_events_now": [e["name"] for e in closed_events],
         "defaults": {"portions": ctx["portions"], "reserve": ctx["reserve"],
                      "cooldown_weeks": ctx["cooldown"]},
-        "weeks": [_week_summary(w, ctx) for w in plan],
+        "weeks": [_week_summary(w, ctx) for w in line["weeks"]],
+        # the holiday events that fall among these weeks: where they sit, and how many receive
+        "events": [{"guid": e["guid"], "date": e["date"].isoformat(),
+                    "name": holidays.dist_label(e["holiday"]), "main": [x["guid"] for x in e["main"]],
+                    "reserve_list": [x["guid"] for x in e["reserve_list"]], "portions": e["portions"]}
+                   for e in line["events"]],
     }
 
 
@@ -261,36 +318,49 @@ def mark_printed(conn, now: datetime, start: date, weeks: int, how: str, db_path
     return len(plan)
 
 
-_KIND_LABEL = {planner.KIND_REGULAR: "קבוע", planner.KIND_ONE_TIME: "חד-פעמי"}
+_KIND_LABEL = {planner.KIND_REGULAR: "קבוע", planner.KIND_ONE_TIME: "חד-פעמי",
+               planner.KIND_OTHER: "כרטיס בלבד"}
+_DAY_NAME = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]      # date.weekday()
+
+
+def day_name(d: date) -> str:
+    return "יום " + _DAY_NAME[d.weekday()] if d.weekday() != 5 else "שבת"
+
+
+def _paper_rows(entries: list, cards: dict) -> list:
+    """The rows of a list for paper / Excel. (Phones leave the store only through here.)"""
+    out = []
+    for i, e in enumerate(entries, 1):
+        c = cards.get(e["guid"], {})
+        phones = [str(c.get(k) or "").strip() for k in ("phone1", "phone2", "phone3")]
+        last = planner.to_date(e.get("last"))
+        out.append({
+            "n": i, "name": e["name"], "phones": " · ".join(p for p in phones if p),
+            "souls": c.get("souls") or "", "kind": _KIND_LABEL.get(e["kind"], ""),
+            "freq": e["freq"] if e["kind"] == planner.KIND_REGULAR else "",
+            "last": last.strftime("%d/%m/%Y") if last else "",
+            "manual": bool(e.get("manual")),
+        })
+    return out
+
+
+def paper_sheet(title: str, sheet: str, plan: dict, cards: dict) -> dict:
+    """One list (a week's or a holiday event's) ready for paper / Excel. On paper the list
+    is by name (easy to find a family at the table); the reserve keeps its own order,
+    because there the order is who comes in first."""
+    return {"date": plan["date"].isoformat(), "title": title, "sheet": sheet, "portions": plan["portions"],
+            "main": _paper_rows(sorted(plan["main"], key=lambda e: e["name"]), cards),
+            "reserve_list": _paper_rows(plan["reserve_list"], cards),
+            "warnings": plan["warnings"]}
 
 
 def print_weeks(conn, now: datetime, start: date, weeks: int, db_path: str = None) -> list:
     """The lists of a range of coming weeks, ready for paper / Excel: for each person the
-    name, the phones, the number of souls and the kind. (Phones leave the store only here.)"""
+    name, the phones, the number of souls and the kind."""
     plan, ctx = _range(conn, now, start, weeks, db_path)
     cards = {r["guid"]: r for r in ctx["recipients"]}
-
-    def rows(entries):
-        out = []
-        for i, e in enumerate(entries, 1):
-            c = cards.get(e["guid"], {})
-            phones = [str(c.get(k) or "").strip() for k in ("phone1", "phone2", "phone3")]
-            last = planner.to_date(e.get("last"))
-            out.append({
-                "n": i, "name": e["name"], "phones": " · ".join(p for p in phones if p),
-                "souls": c.get("souls") or "", "kind": _KIND_LABEL.get(e["kind"], ""),
-                "freq": e["freq"] if e["kind"] == planner.KIND_REGULAR else "",
-                "last": last.strftime("%d/%m/%Y") if last else "",
-                "manual": bool(e.get("manual")),
-            })
-        return out
-
-    # on paper the list is by name (easy to find a family at the table); the reserve keeps
-    # its own order, because there the order is who comes in first
-    return [{"date": w["date"].isoformat(), "portions": w["portions"],
-             "main": rows(sorted(w["main"], key=lambda e: e["name"])),
-             "reserve_list": rows(w["reserve_list"]),
-             "warnings": w["warnings"]} for w in plan]
+    return [paper_sheet(f"חלוקת רביעי {w['date'].strftime('%d/%m/%Y')}", w["date"].strftime("%d-%m-%Y"), w, cards)
+            for w in plan]
 
 
 def _keep_as_text(cell, value) -> None:
@@ -301,6 +371,11 @@ def _keep_as_text(cell, value) -> None:
 
 def export_xlsx(conn, now: datetime, start: date, weeks: int, db_path: str = None) -> bytes:
     """One workbook, a right-to-left sheet per week: the list, then the reserve."""
+    return workbook(print_weeks(conn, now, start, weeks, db_path))
+
+
+def workbook(data: list) -> bytes:
+    """An Excel file from paper sheets (paper_sheet): a right-to-left sheet for each."""
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.worksheet.properties import PageSetupProperties
@@ -312,7 +387,6 @@ def export_xlsx(conn, now: datetime, start: date, weeks: int, db_path: str = Non
             setattr(cell, k, v)
         return cell
 
-    data = print_weeks(conn, now, start, weeks, db_path)
     wb = Workbook()
     wb.remove(wb.active)
     thin = Side(style="thin", color="999999")
@@ -321,12 +395,11 @@ def export_xlsx(conn, now: datetime, start: date, weeks: int, db_path: str = Non
     headers = ["#", "שם", "טלפון", "נפשות", "סוג", "תדירות", "חלוקה אחרונה"]
     widths = [5, 26, 30, 8, 11, 12, 15]
     for w in data:
-        d = date.fromisoformat(w["date"])
-        ws = wb.create_sheet(d.strftime("%d-%m-%Y"))
+        ws = wb.create_sheet(w["sheet"])
         ws.sheet_view.rightToLeft = True
         for i, width in enumerate(widths):
             ws.column_dimensions["ABCDEFG"[i]].width = width
-        put(ws, 1, 1, f"חלוקת רביעי {d.strftime('%d/%m/%Y')}", font=Font(bold=True, size=14))
+        put(ws, 1, 1, w["title"], font=Font(bold=True, size=14))
         put(ws, 2, 1, f"{len(w['main'])} מקבלים · {len(w['reserve_list'])} ברזרבה · {w['portions']} מנות")
         r = 4
         for title, rows in (("מקבלים", w["main"]), ("רזרבה (נכנסים רק אם מישהו לא מגיע)", w["reserve_list"])):

@@ -309,6 +309,142 @@ t.ok("A12 the print page is served, right-to-left, with its own script and style
 t.ok("A12 no name is written into the page itself (the lists come separately, and are not kept by the browser)",
      "בדיקה 00" not in r.text and r.headers.get("cache-control") == "no-store")
 
+
+# ══ stage 4: holiday events ════════════════════════════════════════════════════
+# It is still Thursday 26/11 07:00. Five cards get the holiday mark (one of them the card
+# that takes no part in the weeks), with an income for the filter.
+conn = store.connect(path)
+with store.tx(conn):
+    for g_, income in (("g0001", "3000"), ("g0003", "8000"), ("g0021", "2000"), ("g0022", ""), ("g0040", "1000")):
+        conn.execute("UPDATE recipients SET holiday_support=1, income=? WHERE guid=?", (income, g_))
+conn.close()
+HDAY = (wk(1) - timedelta(days=3)).isoformat()                             # Sunday 29/11
+EVENT = {"date": HDAY, "holiday": "*", "portions": 10, "reserve": 2, "criteria": {}}
+
+# ── A13: the event routes write only with the site's own header ───────────────
+writes = [("/api/event/save", EVENT), ("/api/event/delete", {"event": "x"}),
+          ("/api/event/manual", {"event": "x", "guid": "g0001", "action": "add"})]
+t.ok("A13 an event cannot be set up, changed or deleted without the site's own header (403)",
+     [post(u, b, headers={}).status_code for u, b in writes] == [403, 403, 403]
+     and client.get("/api/events").json()["open"] == [])
+t.ok("A13 the writing routes of an event cannot be reached with GET", [client.get(u).status_code for u, _ in writes] == [405] * 3)
+
+# ── A14: setting an event up, reading it ──────────────────────────────────────
+r = post("/api/event/save", EVENT)
+EV = r.json().get("guid", "")
+t.ok("A14 a new event: an answer with its own id", r.status_code == 200 and r.json()["ok"] is True and len(EV) >= 8)
+ovw = client.get("/api/events").json()
+t.ok("A14 /api/events: the event that is ahead, in numbers; what an event can be for; the filter fields",
+     [e["guid"] for e in ovw["open"]] == [EV] and ovw["open"][0]["main_count"] == 5 and ovw["open"][0]["marked"] == 5
+     and ovw["holidays"][0] == {"code": "*", "label": "כל נתמכי החגים"} and len(ovw["holidays"]) == 7
+     and [f["field"] for f in ovw["filter"]] == ["children_total", "income", "per_soul"] and ovw["first_day"] == "2026-11-26")
+ed = client.get("/api/event", params={"guid": EV}).json()
+t.ok("A14 /api/event: the five marked cards receive, each with a reason; nobody unmarked is listed",
+     {e["guid"] for e in ed["main"]} == {"g0001", "g0003", "g0021", "g0022", "g0040"} and all(e["why"] for e in ed["main"])
+     and ed["out"] == [] and ed["unmarked"] == 11 and ed["closed"] is False)
+r = post("/api/event/save", dict(EVENT, guid=EV, criteria={"income": {"max": 5000}}))
+ed = client.get("/api/event", params={"guid": EV}).json()
+groups = {e["guid"]: e["group"] for e in ed["out"]}
+t.ok("A14 a filter: who passes receives; missing data and outside-the-filter are set apart",
+     r.status_code == 200 and {e["guid"] for e in ed["main"]} == {"g0001", "g0021", "g0040"}
+     and groups == {"g0022": "ev_missing", "g0003": "ev_filter"} and ed["criteria"] == {"income": {"min": None, "max": 5000.0}})
+plan3 = plan_now(3)
+t.ok("A14 the weeks screen is told about the event, and the marked one-timer is paused in the weeks after it",
+     [e["guid"] for e in plan3["events"]] == [EV] and "g0021" in plan3["events"][0]["main"]
+     and "g0021" not in plan3["weeks"][0]["main"] and "g0021" not in plan3["weeks"][1]["main"])
+bad_shape = [dict(EVENT, date="next week"), dict(EVENT, portions=-1), dict(EVENT, portions=2001), dict(EVENT, portions=2.5),
+             dict(EVENT, portions="הרבה"), {k: v for k, v in EVENT.items() if k != "holiday"}, dict(EVENT, colour="red"),
+             dict(EVENT, criteria={"income": {"max": "הרבה"}}), dict(EVENT, criteria={"income": {"most": 5}}),
+             dict(EVENT, guid="x" * 65)]
+t.ok("A14 an event that is not in the right shape is refused before it reaches the data (422)",
+     [post("/api/event/save", b).status_code for b in bad_shape] == [422] * len(bad_shape))
+refused = {
+    "a day that has passed": post("/api/event/save", dict(EVENT, date=W0.isoformat())),
+    "a holiday that does not exist": post("/api/event/save", dict(EVENT, holiday="יום העצמאות")),
+    "'from' above 'up to'": post("/api/event/save", dict(EVENT, criteria={"income": {"min": 9, "max": 3}})),
+    "a filter field that does not exist": post("/api/event/save", dict(EVENT, criteria={"souls": {"min": 3}})),
+    "a change to an event that does not exist": post("/api/event/save", dict(EVENT, guid="nope")),
+    "an event that does not exist": client.get("/api/event", params={"guid": "nope"}),
+}
+t.ok("A14 what cannot be done is refused with a sentence in Hebrew (409)",
+     all(x.status_code == 409 and x.json().get("message") for x in refused.values())
+     and "עבר" in refused["a day that has passed"].json()["message"],
+     str({k: (v.status_code, v.text[:60]) for k, v in refused.items()}))
+t.ok("A14 after all the refusals there is still exactly one event", len(client.get("/api/events").json()["open"]) == 1)
+
+# ── A15: by hand for an event ─────────────────────────────────────────────────
+r = post("/api/event/manual", {"event": EV, "guid": "g0002", "action": "add"})
+ed = client.get("/api/event", params={"guid": EV}).json()
+t.ok("A15 add: a card that is not marked is on the event's list, marked as set by hand",
+     r.status_code == 200 and ed["main"][0]["guid"] == "g0002" and ed["main"][0]["manual"] == "add" and ed["manual_count"] == 1)
+post("/api/event/manual", {"event": EV, "guid": "g0002", "action": "clear"})
+t.ok("A15 clear: he is off it again", "g0002" not in [e["guid"] for e in client.get("/api/event", params={"guid": EV}).json()["main"]])
+refused = [post("/api/event/manual", {"event": EV, "guid": "g0041", "action": "add"}),
+           post("/api/event/manual", {"event": EV, "guid": "g9999", "action": "add"}),
+           post("/api/event/manual", {"event": "nope", "guid": "g0001", "action": "add"})]
+t.ok("A15 a paused card, a card or an event that does not exist: refused in words (409)",
+     all(x.status_code == 409 and x.json().get("message") for x in refused) and "מושהה" in refused[0].json()["message"])
+t.ok("A15 a request in the wrong shape is refused (422)",
+     [post("/api/event/manual", b).status_code for b in ({"event": EV, "guid": "g0001", "action": "delete"},
+                                                         {"event": EV, "guid": "g0001"}, {"guid": "g0001", "action": "add"})] == [422] * 3)
+
+# ── A16: nothing private in the event's answers; the paper gets the phones ────
+blob = client.get("/api/events").text + client.get("/api/event", params={"guid": EV}).text + client.get("/api/plan?weeks=4").text
+t.ok("A16 the event's answers carry no phone, id number, address, note — and no income",
+     not any(s_ in blob for s_ in (SECRET_PHONE, SECRET_ID, SECRET_NOTE, "רחוב סודי", "8000", "2000"))
+     and '"score"' not in blob and '"days_since"' not in blob and '"priority"' not in blob)
+t.ok("A16 about a person in an event the screen gets the name, the kind and the reason only",
+     all(set(e) <= allowed for e in ed["main"] + ed["reserve_list"] + ed["out"]))
+r = client.get("/api/print", params={"event": EV})
+sheet = r.json().get("weeks", [{}])[0]
+t.ok("A16 /api/print for an event: one sheet, named for the holiday and its day, by name, with the phones",
+     r.status_code == 200 and len(r.json()["weeks"]) == 1 and "חלוקת חג" in sheet["title"] and "יום ראשון" in sheet["title"]
+     and [x["name"] for x in sheet["main"]] == sorted(x["name"] for x in sheet["main"]) and len(sheet["main"]) == 3
+     and all(x["phones"] == SECRET_PHONE for x in sheet["main"] if x["name"] != "בדיקה 0040")
+     and not any(s_ in r.text for s_ in (SECRET_ID, SECRET_NOTE, "רחוב סודי")))
+r = client.get("/api/export.xlsx", params={"event": EV})
+wb = openpyxl.load_workbook(io.BytesIO(r.content)) if r.status_code == 200 else None
+t.ok("A16 the Excel file of an event: a download named for its day, one right-to-left sheet with the list",
+     wb is not None and r.headers.get("content-disposition") == f'attachment; filename="haluka-holiday-{HDAY}.xlsx"'
+     and len(wb.worksheets) == 1 and wb.worksheets[0].sheet_view.rightToLeft
+     and "חלוקת חג" in str(wb.worksheets[0]["A1"].value) and "בדיקה 0001" in [c.value for c in wb.worksheets[0]["B"]])
+t.ok("A16 an event that does not exist has no paper and no file",
+     client.get("/api/print", params={"event": "nope"}).status_code == 409
+     and client.get("/api/export.xlsx", params={"event": "nope"}).status_code == 409
+     and client.get("/api/export.xlsx").status_code == 422)
+t.ok("A16 before printing the event carries no note", client.get("/api/event", params={"guid": EV}).json()["print"] is None)
+r = post("/api/printed", {"event": EV, "how": "print"})
+post("/api/event/manual", {"event": EV, "guid": "g0002", "action": "add"})
+note = client.get("/api/event", params={"guid": EV}).json()["print"]
+t.ok("A16 printed, then changed: the event says who was added since",
+     r.status_code == 200 and note["changed"] is True and note["added_names"] == ["בדיקה 0002"] and note["removed"] == 0)
+t.ok("A16 a 'printed' that names neither weeks nor an event is refused",
+     post("/api/printed", {"how": "print"}).status_code == 422 and post("/api/printed", {"event": "nope", "how": "print"}).status_code == 409)
+
+# ── A17: the clock closes an event too; then it is history ────────────────────
+config.now = lambda: datetime(2026, 11, 30, 6, 5)                           # Monday morning: Sunday's event is over
+p = client.get("/api/plan?weeks=2").json()
+ovw = client.get("/api/events").json()
+t.ok("A17 on Monday morning Sunday's event has closed by itself, once",
+     p["closed_events_now"] == ["חלוקת חג 29/11/2026"] and client.get("/api/plan?weeks=2").json()["closed_events_now"] == []
+     and ovw["open"] == [] and [e["guid"] for e in ovw["past"]] == [EV] and ovw["past"][0]["main_count"] == 4)
+closed = client.get("/api/event", params={"guid": EV}).json()
+t.ok("A17 the passed event is shown as it was written (the one added by hand included), names only",
+     closed["closed"] is True and {e["guid"] for e in closed["main"]} == {"g0001", "g0002", "g0021", "g0040"}
+     and SECRET_PHONE not in str(closed))
+t.ok("A17 a passed event cannot be changed, set by hand, printed or deleted (409)",
+     [post("/api/event/save", dict(EVENT, guid=EV, date="2026-12-06")).status_code,
+      post("/api/event/manual", {"event": EV, "guid": "g0003", "action": "add"}).status_code,
+      post("/api/event/delete", {"event": EV}).status_code,
+      client.get("/api/print", params={"event": EV}).status_code] == [409] * 4)
+r = post("/api/event/save", dict(EVENT, date="2026-12-06", holiday="חנוכה", portions=4))
+EV2 = r.json().get("guid", "")
+r = post("/api/event/delete", {"event": EV2})
+t.ok("A17 an event that is still ahead can be deleted",
+     r.status_code == 200 and client.get("/api/events").json()["open"] == []
+     and client.get("/api/event", params={"guid": EV2}).status_code == 409)
+config.now = lambda: datetime(2026, 11, 26, 7, 0)
+
 client.close()
 shutil.rmtree(TMP, ignore_errors=True)
 t.done()

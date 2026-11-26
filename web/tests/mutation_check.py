@@ -11,13 +11,14 @@ import io
 import os
 import runpy
 import sys
-from datetime import date
+from datetime import date, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import _util  # noqa: E402,F401  (puts the repository root on sys.path)
 
-from web import app as webapp, card_service, cards, config, planner, service, store  # noqa: E402
+from web import app as webapp, card_service, cards, config, event_service, planner, service, store  # noqa: E402
+from web.engine import selection  # noqa: E402
 
 PLANNER, STORE, API, CARDS = "test_planner.py", "test_store.py", "test_api.py", "test_cards.py"
 
@@ -180,19 +181,19 @@ mutate(STORE, "'clear' does not forget the change",
 
 mutate(STORE, "the numbers set for a week are not used", store, "load_numbers", lambda conn: {})
 
-_roll_forward = service.roll_forward
+_roll = service._roll
 
 
 def _closes_without_hand(conn, now, db_path=None):
     keep = store.load_manual
     store.load_manual = lambda c: {}
     try:
-        return _roll_forward(conn, now, db_path)
+        return _roll(conn, now, db_path)
     finally:
         store.load_manual = keep
 
 
-mutate(STORE, "a week that closes by itself forgets what was set by hand for it", service, "roll_forward", _closes_without_hand)
+mutate(STORE, "a week that closes by itself forgets what was set by hand for it", service, "_roll", _closes_without_hand)
 
 _print_note = service._print_note
 
@@ -329,6 +330,174 @@ mutate(CARDS, "pausing a card does nothing", card_service, "set_status",
        lambda conn, now, guid, status: {"ok": True, "status": status})
 
 mutate(CARDS, "a card is changed without the site's own header", webapp, "_from_this_site", lambda request: True)
+
+# ── stage 4: holiday events — the planner ─────────────────────────────────────
+mutate(PLANNER, "the holiday mark is no gate: everybody active is on a holiday list",
+       selection, "holiday_filter", lambda rows, criteria: list(rows))
+
+mutate(PLANNER, "a card with no value in a filtered field passes the event's filter",
+       selection, "filter_value", lambda rec, field: selection.to_number(rec.get(field)) or 0)
+
+mutate(PLANNER, "a holiday portion is not counted as received (a one-timer is not paused after it)",
+       planner.Ledger, "add_extra", lambda self, guid, day: None)
+
+mutate(PLANNER, "a holiday round counts as a regular round (it moves a regular's turn)",
+       planner.Ledger, "add_extra", planner.Ledger.add_regular)
+
+_plan_event = planner.plan_event
+
+
+def _reserve_topped_up(event, people, ledger, *, weights):
+    """What the desktop SCREEN does (found 26/11/2026): fill a holiday reserve from the one-timers' queue."""
+    e = _plan_event(event, people, ledger, weights=weights)
+    listed = {x["guid"] for x in e["main"] + e["reserve_list"] + e["out"]}
+    queue = [p for p in people if p["guid"] not in listed and selection.is_one_time_candidate(p)]
+    for p in queue[:max(0, 5 - len(e["reserve_list"]))]:
+        e["reserve_list"].append({"guid": p["guid"], "name": p["full_name"], "kind": "onetime", "freq": "חד-פעמי",
+                                  "priority": p.get("priority"), "role": "reserve", "why": "רזרבה", "last": "",
+                                  "days_since": 0, "score": None})
+    return e
+
+
+mutate(PLANNER, "the reserve of a holiday event is filled from the one-timers' queue (families that are not marked)",
+       planner, "plan_event", _reserve_topped_up)
+
+
+def _event_hand_ignored(event, people, ledger, *, weights):
+    return _plan_event(dict(event, manual={}), people, ledger, weights=weights)
+
+
+mutate(PLANNER, "what was set by hand for an event is ignored", planner, "plan_event", _event_hand_ignored)
+
+_plan_timeline = planner.plan_timeline
+
+
+def _event_before_its_wednesday(recipients, received, **k):
+    """An event ON a Wednesday is laid out before that day's regular list."""
+    moved = {}
+    events = []
+    for e in k.get("events") or []:
+        if e["date"].weekday() == 2:
+            moved[e.get("guid")] = e["date"]
+            e = dict(e, date=e["date"] - timedelta(days=1))
+        events.append(e)
+    out = _plan_timeline(recipients, received, **dict(k, events=events))
+    for e in out["events"]:
+        if e["guid"] in moved:
+            e["date"] = moved[e["guid"]]
+    return out
+
+
+mutate(PLANNER, "an event on a Wednesday is laid out before that day's regular list", planner, "plan_timeline", _event_before_its_wednesday)
+
+
+def _event_numbers_quoted(event, people, ledger, *, weights):
+    e = _plan_event(event, people, ledger, weights=weights)
+    cards_ = {p["guid"]: p for p in people}
+    for x in e["out"]:
+        x["why"] += f" (הכנסה {cards_[x['guid']].get('income')})"
+    return e
+
+
+mutate(PLANNER, "the reason quotes the card's own income", planner, "plan_event", _event_numbers_quoted)
+
+# ── stage 4: holiday events — the store, the closing, the routes ──────────────
+mutate(STORE, "an event whose day has passed is never written to the history",
+       store, "first_passed_event", lambda conn, before: None)
+
+_first_passed = store.first_passed_event
+mutate(STORE, "an event closes on its own day, before the morning after",
+       store, "first_passed_event", lambda conn, before: _first_passed(conn, before + timedelta(days=1)))
+
+_close_event = store.close_event
+mutate(STORE, "a passed event is written as a REGULAR round (no holiday code: it moves the turn)",
+       store, "close_event", lambda conn, plan, name, now: _close_event(conn, dict(plan, holiday=""), name, now))
+
+mutate(STORE, "the reserve of a passed event is written as having received",
+       store, "close_event", lambda conn, plan, name, now:
+       _close_event(conn, dict(plan, main=plan["main"] + plan["reserve_list"]), name, now))
+
+mutate(STORE, "of a week and an event of the same day, the event is written first",
+       service, "_week_goes_first", lambda wed, event_day: wed < event_day)
+
+_get_event = store.get_event
+
+
+def _never_passed(conn, guid):
+    e = _get_event(conn, guid)
+    return dict(e, closed_at=None) if e else e
+
+
+mutate(STORE, "an event that has passed can still be changed, set by hand and deleted", store, "get_event", _never_passed)
+
+_event_save = event_service.save
+mutate(STORE, "an event can be set up on a day that has passed",
+       event_service, "save", lambda conn, now, data, db_path=None: _event_save(conn, now - timedelta(days=30), data, db_path))
+
+_clean_criteria = event_service.clean_criteria
+mutate(STORE, "any field can be used as an event's filter, and 'from' may be above 'up to'",
+       event_service, "clean_criteria", lambda raw: {k: v for k, v in (raw or {}).items() if isinstance(v, dict)})
+
+_event_set_manual = store.set_event_manual
+mutate(STORE, "a change by hand for an event is not saved",
+       store, "set_event_manual", lambda conn, guid, card, action, now: None)
+
+mutate(STORE, "'clear' does not forget what was set by hand for an event",
+       store, "set_event_manual", lambda conn, guid, card, action, now:
+       action and _event_set_manual(conn, guid, card, action, now))
+
+_since_print = service.since_print
+
+
+def _event_never_changed(snap, now_main, names=None):
+    note = _since_print(snap, now_main, names)
+    if note:
+        note.update(changed=False, added=0, removed=0, **({"added_names": [], "removed_names": []} if names is not None else {}))
+    return note
+
+
+mutate(STORE, "an event's list that changed after it was printed says nothing", service, "since_print", _event_never_changed)
+
+_event_detail = event_service.detail
+
+
+def _event_with_phones(conn, now, guid, db_path=None):
+    d = _event_detail(conn, now, guid, db_path)
+    d["phones"] = [r["phone1"] for r in conn.execute("SELECT phone1 FROM recipients")]
+    return d
+
+
+mutate(API, "the phones go out with the event's answer", event_service, "detail", _event_with_phones)
+
+_paper_rows = service._paper_rows
+mutate(API, "the paper sheet of an event carries the id numbers too",
+       service, "_paper_rows", lambda entries, cards_:
+       [dict(r, id_number=cards_.get(e["guid"], {}).get("id_number")) for r, e in zip(_paper_rows(entries, cards_), entries)])
+
+_event_remove = event_service.remove
+mutate(API, "deleting an event does nothing", event_service, "remove", lambda conn, now, guid, db_path=None: {"ok": True})
+
+# ── stage 4: the holiday mark on the card ─────────────────────────────────────
+mutate(CARDS, "a holiday that does not exist can be written on a card",
+       cards.holidays, "HOLIDAYS", list(cards.holidays.HOLIDAYS) + ["יום העצמאות"])
+
+mutate(CARDS, "every card reads as marked for the holidays", cards, "holiday_text", lambda rec: "כל החגים")
+
+_merge_fill = cards.merge_fill
+mutate(CARDS, "in a merge the kept card's holiday mark is replaced by the other card's",
+       cards, "merge_fill", lambda keep, drop, columns:
+       dict(_merge_fill(keep, drop, columns), holiday_support=drop.get("holiday_support"), holidays=drop.get("holidays")))
+
+_card_clean = cards.clean
+
+
+def _holiday_free_text(data, existing=None):
+    if isinstance(data.get("holidays"), str):
+        data = dict(data, holidays=cards.holidays.parse_list(data["holidays"]))
+    return _card_clean(data, existing)
+
+
+mutate(CARDS, "free text is read as a list of holidays", cards, "clean", _holiday_free_text)
 
 breaks = len(results) - BASELINES
 if all(results):
