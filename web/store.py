@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """The site's own small database (SQLite) — what is KEPT.
 
-Only four things are stored: the cards, the history (weeks that have passed), the
-settings, and — from stage 2 — what the manager set by hand for a week. A list of a
+Only four things are stored: the cards (with the list of changes made to each), the
+history (weeks that have passed), the settings, and what the manager set by hand for a week. A list of a
 coming week is never stored: it is computed each time from these (web/planner.py).
 
 The derived dates of the desktop program (last_distribution / next_distribution) do not
@@ -84,6 +84,13 @@ CREATE TABLE IF NOT EXISTS week_prints (
     week_wed TEXT PRIMARY KEY, printed_at TEXT NOT NULL, how TEXT NOT NULL,
     main TEXT NOT NULL, reserve TEXT NOT NULL
 );
+-- stage 3: every change made to a card on the site, field by field (who it was before)
+CREATE TABLE IF NOT EXISTS card_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_guid TEXT NOT NULL, changed_at TEXT NOT NULL, field TEXT NOT NULL,
+    old TEXT NOT NULL DEFAULT '', new TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS card_changes_by_card ON card_changes (recipient_guid, id);
 """
 
 
@@ -217,6 +224,60 @@ def set_print(conn, wed: date, how: str, main: list, reserve: list, now: datetim
         "ON CONFLICT(week_wed) DO UPDATE SET printed_at=excluded.printed_at, how=excluded.how, "
         "main=excluded.main, reserve=excluded.reserve",
         (wed.isoformat(), now.strftime("%Y-%m-%d %H:%M"), how, json.dumps(main), json.dumps(reserve)))
+
+
+# ── cards (stage 3) ───────────────────────────────────────────────────────────
+def get_recipient(conn, guid: str):
+    row = conn.execute("SELECT * FROM recipients WHERE guid=?", (guid,)).fetchone()
+    return dict(row) if row else None
+
+
+def _stamp(now: datetime) -> str:
+    return now.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _as_text(v) -> str:
+    return "" if v is None else str(v)
+
+
+def insert_recipient(conn, fields: dict, now: datetime) -> str:
+    """A new card. `fields`: card columns only (web/cards.py cleans them). Returns its guid.
+    The caller holds the transaction."""
+    guid = uuid.uuid4().hex
+    cols = [c for c in RECIPIENT_COLUMNS if c in fields and c not in ("created_at", "updated_at")]
+    conn.execute(
+        f"INSERT INTO recipients (guid, created_at, updated_at, {', '.join(cols)}) "
+        f"VALUES (?, ?, ?, {', '.join('?' * len(cols))})",
+        [guid, _stamp(now), _stamp(now)] + [fields[c] for c in cols])
+    conn.execute("INSERT INTO card_changes (recipient_guid, changed_at, field, old, new) VALUES (?,?,?,?,?)",
+                 (guid, _stamp(now), "*", "", "כרטיס חדש"))
+    return guid
+
+
+def update_recipient(conn, guid: str, fields: dict, now: datetime) -> list:
+    """Write the fields that really differ from what is stored, and note each one in the
+    card's change list. Returns the names of the fields that changed ([] = nothing written).
+    The caller holds the transaction."""
+    current = get_recipient(conn, guid)
+    if current is None:
+        raise LookupError(guid)
+    changed = [c for c in RECIPIENT_COLUMNS
+               if c in fields and c not in ("created_at", "updated_at") and fields[c] != current.get(c)
+               and _as_text(fields[c]) != _as_text(current.get(c))]
+    if not changed:
+        return []
+    conn.execute(f"UPDATE recipients SET {', '.join(c + '=?' for c in changed)}, updated_at=? WHERE guid=?",
+                 [fields[c] for c in changed] + [_stamp(now), guid])
+    for c in changed:
+        conn.execute("INSERT INTO card_changes (recipient_guid, changed_at, field, old, new) VALUES (?,?,?,?,?)",
+                     (guid, _stamp(now), c, _as_text(current.get(c)), _as_text(fields[c])))
+    return changed
+
+
+def load_changes(conn, guid: str) -> list:
+    """The card's changes, newest first."""
+    return [dict(r) for r in conn.execute(
+        "SELECT changed_at, field, old, new FROM card_changes WHERE recipient_guid=? ORDER BY id DESC", (guid,))]
 
 
 # ── meta / settings ───────────────────────────────────────────────────────────

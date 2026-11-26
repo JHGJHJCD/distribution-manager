@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מקבלים · מנהל חלוקה</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1>מנהל חלוקה</h1>
+      <p class="sub" id="count"></p>
+    </div>
+    <nav class="nav" aria-label="מסכים">
+      <a href="/">שבועות</a>
+      <a href="/cards" aria-current="page">מקבלים</a>
+    </nav>
+    <p class="test-copy">עותק לבדיקה · לא הנתונים שרון עובד עליהם</p>
+  </header>
+
+  <div id="notice" class="notice" role="status" hidden></div>
+
+  <section class="panel">
+    <div class="filters">
+      <div class="search">
+        <label class="sr" for="q">חיפוש</label>
+        <input id="q" type="search" placeholder="חיפוש לפי שם או טלפון" autocomplete="off" spellcheck="false">
+      </div>
+      <label class="sr" for="fStatus">סטטוס</label>
+      <select id="fStatus">
+        <option value="">כולם</option>
+        <option value="פעיל">פעילים</option>
+        <option value="מושהה">מושהים</option>
+      </select>
+      <button type="button" class="btn main" id="newCard">מקבל חדש</button>
+      <button type="button" class="btn" id="showDups" hidden></button>
+    </div>
+
+    <div class="dups" id="dups" hidden></div>
+
+    <div class="split">
+      <ul class="rows" id="rows" aria-label="רשימת המקבלים"></ul>
+      <form class="form" id="form" novalidate hidden>
+        <div class="head">
+          <h2 id="cardTitle"></h2>
+          <div class="tool-group">
+            <button type="submit" class="btn main" id="save">שמור</button>
+            <button type="button" class="btn" id="toggle" hidden></button>
+          </div>
+        </div>
+        <p class="facts" id="facts"></p>
+        <div id="twins"></div>
+        <div id="groups"></div>
+        <details id="changesBox" hidden>
+          <summary>מה השתנה בכרטיס</summary>
+          <ul class="changes" id="changes"></ul>
+        </details>
+      </form>
+      <p class="empty" id="hint">בחרו מקבל מהרשימה, או לחצו "מקבל חדש".</p>
+    </div>
+  </section>
+
+</div>
+<script src="/static/cards.js"></script>
+</body>
+</html>

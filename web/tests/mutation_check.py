@@ -17,9 +17,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import _util  # noqa: E402,F401  (puts the repository root on sys.path)
 
-from web import app as webapp, config, planner, service, store  # noqa: E402
+from web import app as webapp, cards, config, planner, service, store  # noqa: E402
 
-PLANNER, STORE, API = "test_planner.py", "test_store.py", "test_api.py"
+PLANNER, STORE, API, CARDS = "test_planner.py", "test_store.py", "test_api.py", "test_cards.py"
 
 
 def run(target: str):
@@ -61,7 +61,7 @@ def mutate(target, name, obj, attr, broken):
     results.append(caught)
 
 
-for target in (PLANNER, STORE, API):
+for target in (PLANNER, STORE, API, CARDS):
     code, noticed = run(target)
     print(f"  {'OK' if code == 0 else 'FAIL'}  {target:<16} passes on the unbroken site (exit {code}) {noticed}")
     results.append(code == 0)
@@ -258,6 +258,47 @@ _mark_printed = service.mark_printed
 mutate(API, "printing is remembered for the first week of the range only",
        service, "mark_printed", lambda conn, now, start, weeks, how, db_path=None:
        _mark_printed(conn, now, start, 1, how, db_path) and weeks)
+
+# ── the cards ─────────────────────────────────────────────────────────────────
+mutate(CARDS, "the name is stored first-name-first", cards, "join_name",
+       lambda first, last: " ".join(p for p in ((first or "").strip(), (last or "").strip()) if p))
+
+mutate(CARDS, "any text is accepted as a phone", cards, "phone_ok", lambda text: True)
+
+mutate(CARDS, "the same person can be added twice without a question", cards, "lookalikes",
+       lambda conn, fields, exclude_guid=None: [])
+
+_kind_of = cards.kind_of
+mutate(CARDS, "saving an old card rewrites its priority to match the kind box", cards, "kind_of",
+       lambda rec: "?" if rec.get("priority") == 1 else _kind_of(rec))
+
+_save_card = cards.save_card
+mutate(CARDS, "a stale form overwrites a newer change", cards, "save_card",
+       lambda conn, now, guid, data, seen_updated_at=None: _save_card(conn, now, guid, data, None))
+
+_update = store.update_recipient
+
+
+def _no_change_list(conn, guid, fields, now):
+    changed = _update(conn, guid, fields, now)
+    conn.execute("DELETE FROM card_changes WHERE recipient_guid=? AND field<>'*'", (guid,))
+    return changed
+
+
+mutate(CARDS, "changes to a card are not written to its list of changes", store, "update_recipient", _no_change_list)
+
+
+def _rewrite_everything(conn, guid, fields, now):
+    conn.execute("UPDATE recipients SET updated_at=? WHERE guid=?", (now.strftime("%Y-%m-%d %H:%M:%S"), guid))
+    return _update(conn, guid, fields, now) or ["updated_at"]
+
+
+mutate(CARDS, "saving an untouched card still stamps it as changed", store, "update_recipient", _rewrite_everything)
+
+_card_list = cards.card_list
+mutate(CARDS, "the list of cards carries the id numbers too", cards, "card_list",
+       lambda conn: dict(_card_list(conn), cards=[dict(c, id_number=store.get_recipient(conn, c["guid"])["id_number"])
+                                                  for c in _card_list(conn)["cards"]]))
 
 breaks = len(results) - BASELINES
 if all(results):
