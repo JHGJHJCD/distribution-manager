@@ -17,10 +17,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import _util  # noqa: E402,F401  (puts the repository root on sys.path)
 
-from web import app as webapp, card_service, cards, config, event_service, planner, service, store  # noqa: E402
+from web import (app as webapp, card_service, cards, config, event_service, history_service, planner,  # noqa: E402
+                 service, store)
 from web.engine import selection  # noqa: E402
 
 PLANNER, STORE, API, CARDS = "test_planner.py", "test_store.py", "test_api.py", "test_cards.py"
+HISTORY = "test_history.py"
 
 
 def run(target: str):
@@ -62,7 +64,7 @@ def mutate(target, name, obj, attr, broken):
     results.append(caught)
 
 
-for target in (PLANNER, STORE, API, CARDS):
+for target in (PLANNER, STORE, API, CARDS, HISTORY):
     code, noticed = run(target)
     print(f"  {'OK' if code == 0 else 'FAIL'}  {target:<16} passes on the unbroken site (exit {code}) {noticed}")
     results.append(code == 0)
@@ -549,6 +551,68 @@ def _holiday_free_text(data, existing=None):
 
 
 mutate(CARDS, "free text is read as a list of holidays", cards, "clean", _holiday_free_text)
+
+# ── stage 4: the history screen ───────────────────────────────────────────────
+_hist_person = history_service._person
+mutate(HISTORY, "a name in the history carries the card's phone along",
+       history_service, "_person", lambda guid, written, cards_:
+       dict(_hist_person(guid, written, cards_), phone=(cards_.get(guid) or {}).get("phone1")))
+
+mutate(HISTORY, "a row whose card is gone is shown with no name at all",
+       history_service, "_person", lambda guid, written, cards_: _hist_person(guid, "", cards_))
+
+
+def _everybody_received(rows, cards_):
+    return sorted((history_service._person(r["recipient_guid"], r["recipient_name"], cards_) for r in rows),
+                  key=lambda p: p["name"]), []
+
+
+mutate(HISTORY, "a row that says 'did not come' is listed among those who received", history_service, "_split", _everybody_received)
+
+mutate(HISTORY, "a row that names a round that is not there falls between the two views",
+       history_service, "_NO_ROUND", "(h.batch_guid IS NULL OR h.batch_guid='')")
+
+mutate(HISTORY, "a date that is not a date floats to the top of 'the latest first'",
+       history_service, "_latest_first", lambda column: f"{column} DESC")
+
+_hist_overview = history_service.overview
+mutate(HISTORY, "a page of rounds never says that there are more",
+       history_service, "overview", lambda conn, now, offset=0, limit=history_service.PAGE, db_path=None:
+       dict(_hist_overview(conn, now, offset, limit, db_path), more=False))
+
+mutate(HISTORY, "a page size of nonsense returns no rounds at all",
+       history_service, "_clamp", lambda value, low, high, default: value if isinstance(value, int) else 0)
+
+_hist_round = history_service.round_detail
+
+
+def _reserve_received(conn, now, batch, db_path=None):
+    d = _hist_round(conn, now, batch, db_path)
+    return dict(d, people=d["people"] + d["reserve"], reserve=[])
+
+
+mutate(HISTORY, "who waited on the reserve of a closed week is listed as having received", history_service, "round_detail", _reserve_received)
+
+mutate(HISTORY, "the kind of a round is lost: a holiday round reads as a regular one",
+       history_service, "round_kind", lambda code: history_service.KIND_REGULAR)
+
+_roll_forward = service.roll_forward
+mutate(HISTORY, "opening the history does not first close the week that has passed",
+       service, "roll_forward", lambda conn, now, db_path=None: [])
+
+_hist_one = history_service.person
+
+
+def _person_with_notes(conn, now, guid, db_path=None):
+    d = _hist_one(conn, now, guid, db_path)
+    card = store.get_recipient(conn, guid) or {}
+    return dict(d, notes=card.get("notes"), phone=card.get("phone1"))
+
+
+mutate(API, "one person's history answers with the card's note and phone", history_service, "person", _person_with_notes)
+
+mutate(API, "the history's routes answer whatever is asked (a missing round is not refused)",
+       history_service, "round_detail", lambda conn, now, batch, db_path=None: {"people": [], "absent_people": [], "reserve": []})
 
 breaks = len(results) - BASELINES
 if all(results):

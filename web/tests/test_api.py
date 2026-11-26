@@ -455,8 +455,40 @@ t.ok("A17 bringing it back returns it to the events ahead, as it was",
      and back["deleted"] == [] and post("/api/event/restore", {"event": EV2}).status_code == 409)
 config.now = lambda: datetime(2026, 11, 26, 7, 0)
 
+# ── A19: the history — reading only, names only ───────────────────────────────
+hist = client.get("/api/history")
+rounds = hist.json().get("rounds", [])
+t.ok("A19 the history lists the rounds that passed, the latest first: the holiday event and the weeks the site closed",
+     hist.status_code == 200 and len(rounds) >= 2 and rounds[0]["kind"] == "holiday" and rounds[0]["label"] == "חלוקת חג"
+     and all(r["from_site"] for r in rounds) and hist.json()["total"] == len(rounds),
+     str([(r["date"], r["kind"]) for r in rounds]))
+one = client.get("/api/history/round", params={"batch": rounds[0]["batch"]})
+t.ok("A19 a round opens to who received in it", one.status_code == 200
+     and {e["guid"] for e in one.json()["people"]} == {"g0001", "g0002", "g0021", "g0040"})
+who = client.get("/api/history/person", params={"guid": "g0001"})
+t.ok("A19 one person's history: every row, each with its round", who.status_code == 200
+     and who.json()["received"] == len(who.json()["rows"]) >= 2 and who.json()["rows"][0]["batch"] == rounds[0]["batch"])
+t.ok("A19 a short page says that there is more", client.get("/api/history", params={"limit": 1}).json()["more"] is True
+     and len(client.get("/api/history", params={"limit": 1, "offset": 1}).json()["rounds"]) == 1)
+blob = hist.text + one.text + who.text
+t.ok("A19 the history carries names only: no phone, id number, note or address",
+     SECRET_PHONE not in blob and SECRET_ID not in blob and SECRET_NOTE not in blob and "רחוב סודי" not in blob)
+t.ok("A19 what is not there is refused in words (409), and a broken address is refused (422)",
+     [client.get("/api/history/round", params={"batch": "nope"}).status_code,
+      client.get("/api/history/person", params={"guid": "g9999"}).status_code,
+      client.get("/api/history/old", params={"date": "2026-01-01"}).status_code] == [409] * 3
+     and "לא נמצא" in client.get("/api/history/person", params={"guid": "g9999"}).json()["message"]
+     and [client.get("/api/history/round").status_code, client.get("/api/history/person", params={"guid": "a b"}).status_code,
+          client.get("/api/history", params={"limit": 0}).status_code, client.get("/api/history", params={"limit": 5000}).status_code,
+          client.get("/api/history", params={"offset": -1}).status_code] == [422] * 5)
+rows_before = [tuple(r) for r in store.connect(path).execute("SELECT * FROM history ORDER BY id")]
+t.ok("A19 the history cannot be written through the site: there is no writing route, with the site's header or without it",
+     [post(u, {}).status_code for u in ("/api/history", "/api/history/round", "/api/history/person", "/api/history/old")] == [405] * 4
+     and [post(u, {}, headers={}).status_code for u in ("/api/history", "/api/history/person")] == [403] * 2
+     and [tuple(r) for r in store.connect(path).execute("SELECT * FROM history ORDER BY id")] == rows_before)
+
 # ── A18: every screen of the site ─────────────────────────────────────────────
-SCREENS = {"/": "app.js", "/people": "people.js", "/holiday": "holiday.js"}
+SCREENS = {"/": "app.js", "/people": "people.js", "/holiday": "holiday.js", "/history": "history.js"}
 NAV = ['href="/"', 'href="/people"', 'href="/holiday"', 'href="/history"', 'href="/settings"']
 pages = {u: client.get(u) for u in SCREENS}
 t.ok("A18 every screen is served, right-to-left, with the whole strip of screens on it",

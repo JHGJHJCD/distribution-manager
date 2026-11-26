@@ -232,6 +232,13 @@ button.hrow:hover, a.hrow:hover { background: var(--soft); }
 .hrow .mark { color: var(--warn-fg); font-size: .9rem; }
 .hrow.plain { border-style: dashed; }
 .fold .rows { margin-top: 10px; }
+/* the history: a row that opens to its names, and one person's rows */
+.opened { border: 1px solid var(--line); border-radius: 9px; padding: 10px 12px; margin: 0 0 6px; display: flex; flex-direction: column;
+  gap: 8px; background: var(--bg); }
+.person-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.dim .chip { opacity: .78; }
+span.chip { display: inline-block; }
+.actions.links { gap: 6px 18px; margin-top: 0; }
 .btn.danger { border-color: var(--danger); color: var(--danger); }
 /* a holiday event among the weeks of the strip */
 .wk.ev { width: 74px; border-style: dashed; text-decoration: none; color: var(--fg); display: flex; flex-direction: column;

@@ -63,10 +63,14 @@ def build(folder: str, now: datetime = None) -> str:
                 store.insert_recipient(conn, {k: v for k, v in rec.items() if k in store.RECIPIENT_COLUMNS
                                               and v is not None}, now, guid=guid)
                 if freq in ("שבועי", "דו-שבועי", "חודשי") and n % 3:
-                    for back in (1, 3, 5):
+                    # the three latest weeks are rounds (a list of who received); what is older
+                    # was recorded one by one, with no round — and once as "did not come"
+                    for back in (1, 3, 5, 9, 11):
                         d = (cur - timedelta(days=7 * back)).isoformat()
-                        conn.execute("INSERT INTO history (guid, recipient_guid, recipient_name, dist_date, source) "
-                                     "VALUES (?,?,?,?, 'demo')", (f"h{n}-{back}", guid, rec["full_name"], d))
+                        conn.execute("INSERT INTO history (guid, recipient_guid, recipient_name, dist_date, received, "
+                                     "batch_guid, source) VALUES (?,?,?,?,?,?, 'demo')",
+                                     (f"h{n}-{back}", guid, rec["full_name"], d, 0 if back == 11 and n % 5 == 0 else 1,
+                                      f"b-week-{back}" if back <= 5 else None))
         # two look-alikes, so the suggestions screen has something to show
         store.insert_recipient(conn, {"full_name": "אלון בדיקה", "last_name": "אלון", "first_name": "בדיקה",
                                       "phone1": "052-7770001", "frequency": "חד-פעמי", "priority": 3, "souls": 5},
@@ -74,6 +78,12 @@ def build(folder: str, now: datetime = None) -> str:
         store.insert_recipient(conn, {"full_name": "שדה דוגמה", "last_name": "שדה", "first_name": "דוגמה",
                                       "phone1": "0505550002", "frequency": "חודשי", "priority": 4, "souls": 3},
                                now, guid="g9002")
+        for back in (1, 3, 5):
+            d = cur - timedelta(days=7 * back)
+            count = conn.execute("SELECT COUNT(*) FROM history WHERE batch_guid=?", (f"b-week-{back}",)).fetchone()[0]
+            conn.execute("INSERT INTO batches (guid, dist_name, dist_date, quantity, recipient_count, created_at, source) "
+                         "VALUES (?,?,?,?,?,?, 'demo')", (f"b-week-{back}", f"חלוקת רביעי {d.strftime('%d/%m/%Y')}", d.isoformat(),
+                                                           count, count, now.strftime("%Y-%m-%d %H:%M:%S")))
         # a holiday round that already happened (nine weeks ago, a Thursday), and one that is ahead
         feast = cur - timedelta(days=7 * 9 - 1)
         got = [r for r in store.load_recipients(conn) if holidays.supports(r, "סוכות") and r["id"] % 4]

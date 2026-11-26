@@ -256,6 +256,9 @@
     } else {
       hist.appendChild(el("span", null, "רשום בהיסטוריה " + card.history_count + " פעמים" +
         (got.length ? " · לאחרונה: " + got.slice(0, 5).map(function (h) { return longDate(h.date); }).join(" · ") : "")));
+      var all = el("a", "link", "כל ההיסטוריה שלו");
+      all.href = "/history?who=" + encodeURIComponent(card.guid);
+      hist.appendChild(el("div", "when")).appendChild(all);
     }
     hist.appendChild(el("div", "when", "סטטוס: " + card.status));
   }

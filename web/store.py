@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS history (
     batch_guid TEXT, created_at TEXT, source TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS history_by_recipient ON history (recipient_guid, dist_date);
+CREATE INDEX IF NOT EXISTS history_by_batch ON history (batch_guid);
 CREATE TABLE IF NOT EXISTS weeks (
     week_wed TEXT PRIMARY KEY,
     portions INTEGER NOT NULL, reserve INTEGER NOT NULL, main_count INTEGER NOT NULL,

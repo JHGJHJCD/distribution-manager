@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import card_service, config, event_service, service, store
+from . import card_service, config, event_service, history_service, service, store
 
 STATIC_DIR = os.path.join(config.WEB_DIR, "static")
 _NO_DATA = {"error": "no_data",
@@ -369,6 +369,34 @@ def api_event_manual(body: EventManualBody):
     return _run(lambda conn, path: event_service.set_manual(conn, config.now(), body.event, body.guid, body.action, path))
 
 
+# ── stage 4: the history (reading only; names only) ──────────────────────────
+def _id():
+    """An id in the address. (One object per parameter: the framework ties it to the
+    parameter's own name, so two parameters must never share one.)"""
+    return Query(..., min_length=1, max_length=64, pattern=r"^[0-9A-Za-z_-]+$")
+
+
+@app.get("/api/history")
+def api_history(offset: int = Query(0, ge=0, le=10 ** 7),
+                limit: int = Query(history_service.PAGE, ge=1, le=history_service.MAX_PAGE)):
+    return _run(lambda conn, path: history_service.overview(conn, config.now(), offset, limit, path))
+
+
+@app.get("/api/history/round")
+def api_history_round(batch: str = _id()):
+    return _run(lambda conn, path: history_service.round_detail(conn, config.now(), batch, path))
+
+
+@app.get("/api/history/old")
+def api_history_old(date_: str = Query("", alias="date", max_length=40)):
+    return _run(lambda conn, path: history_service.old_day(conn, config.now(), date_, path))
+
+
+@app.get("/api/history/person")
+def api_history_person(guid: str = _id()):
+    return _run(lambda conn, path: history_service.person(conn, config.now(), guid, path))
+
+
 # ── pages ─────────────────────────────────────────────────────────────────────
 @app.get("/")
 def index():
@@ -383,6 +411,11 @@ def people_page():
 @app.get("/holiday")
 def holiday_page():
     return FileResponse(os.path.join(STATIC_DIR, "holiday.html"))
+
+
+@app.get("/history")
+def history_page():
+    return FileResponse(os.path.join(STATIC_DIR, "history.html"))
 
 
 @app.get("/print")
