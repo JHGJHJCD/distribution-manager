@@ -385,13 +385,14 @@
     $("thPassing").hidden = !filtered;
     list.forEach(function (c) {
       var tr = el("tr");
+      // the share and who received come first: on a phone they are what must be in sight
       tr.appendChild(el("th", null, c.name));
+      tr.appendChild(el("td", null, c.quota + (c.pinned ? " (אחוז קבוע)" : "")));
+      tr.appendChild(el("td", null, c.main + (c.filled ? " · מתוכם " + c.filled + " להשלמה" : "")));
       tr.appendChild(el("td", null, String(c.size)));
       var passing = el("td", null, String(c.passing));
       passing.hidden = !filtered;
       tr.appendChild(passing);
-      tr.appendChild(el("td", null, c.quota + (c.pinned ? " (אחוז קבוע)" : "")));
-      tr.appendChild(el("td", null, c.main + (c.filled ? " · מתוכם " + c.filled + " להשלמה" : "")));
       rows.appendChild(tr);
     });
     $("commNote").textContent = "קהילה היא כל מי שרשום אצלו אותו נציג בכרטיס. החלק של כל קהילה נקבע לפי מספר המסומנים לחג שיש בה," +

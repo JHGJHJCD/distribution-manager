@@ -292,6 +292,8 @@ table.split tbody tr:last-child th, table.split tbody tr:last-child td { border-
   .f-grid { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .f-grid .f-name { font-weight: 600; margin-top: 6px; }
   .actions .push { margin-inline-start: 0; }
+  /* the communities' table fits a phone without scrolling sideways: its words wrap */
+  table.split th, table.split td { white-space: normal; padding: 5px 6px; font-size: .9rem; vertical-align: top; }
 }
 @media (max-width: 380px) { .nav a { padding: 10px 5px; font-size: .875rem; } }
 @media (max-width: 340px) { .nav a { padding: 10px 4px; font-size: .8125rem; } }
