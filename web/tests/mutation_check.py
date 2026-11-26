@@ -17,9 +17,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import _util  # noqa: E402,F401  (puts the repository root on sys.path)
 
-from web import app as webapp, config, planner, service, store  # noqa: E402
+from web import app as webapp, card_service, cards, config, planner, service, store  # noqa: E402
 
-PLANNER, STORE, API = "test_planner.py", "test_store.py", "test_api.py"
+PLANNER, STORE, API, CARDS = "test_planner.py", "test_store.py", "test_api.py", "test_cards.py"
 
 
 def run(target: str):
@@ -61,7 +61,7 @@ def mutate(target, name, obj, attr, broken):
     results.append(caught)
 
 
-for target in (PLANNER, STORE, API):
+for target in (PLANNER, STORE, API, CARDS):
     code, noticed = run(target)
     print(f"  {'OK' if code == 0 else 'FAIL'}  {target:<16} passes on the unbroken site (exit {code}) {noticed}")
     results.append(code == 0)
@@ -258,6 +258,77 @@ _mark_printed = service.mark_printed
 mutate(API, "printing is remembered for the first week of the range only",
        service, "mark_printed", lambda conn, now, start, weeks, how, db_path=None:
        _mark_printed(conn, now, start, 1, how, db_path) and weeks)
+
+# ── stage 3: the recipients ───────────────────────────────────────────────────
+mutate(CARDS, "the name is written given-name first", cards, "join_name",
+       lambda first, last: f"{first} {last}".strip())
+
+mutate(CARDS, "any word is accepted as a status", cards, "normalize_status", lambda val: "פעיל")
+
+_row = card_service._row
+mutate(CARDS, "the list carries the phones", card_service, "_row",
+       lambda r, last: dict(_row(r, last), phone=r.get("phone1") or ""))
+
+mutate(CARDS, "the search does not look at phones", cards, "phone_key", lambda p: "")
+
+mutate(CARDS, "a new card with an existing name is added without asking", cards, "look_alikes",
+       lambda recipients, full_name, numbers, exclude="": [])
+
+_clean = cards.clean
+
+
+def _kind_always_rewritten(data, existing=None):
+    out = _clean(data, existing)
+    if existing is not None and data.get("type") in cards._TYPE:
+        _l, out["frequency"], out["priority"] = cards._TYPE[data["type"]]
+    return out
+
+
+mutate(CARDS, "saving a card rewrites its kind even when it was not changed", cards, "clean", _kind_always_rewritten)
+
+mutate(CARDS, "a card is saved over a change that was made elsewhere meanwhile", card_service, "_unseen_version",
+       lambda seen, card: False)
+
+
+def _delete_anyway(conn, guid, now):
+    conn.execute("DELETE FROM recipients WHERE guid=?", (guid,))
+
+
+mutate(CARDS, "a card with history can be deleted", store, "delete_recipient", _delete_anyway)
+
+mutate(CARDS, "a deleted card is not kept (it cannot be brought back)", store, "_remember_deleted",
+       lambda conn, card, reason, now, merged_into="": None)
+
+_groups = cards.duplicate_groups
+mutate(CARDS, "'different people' is forgotten: the suggestion comes back", cards, "duplicate_groups",
+       lambda recipients, different=(): _groups(recipients, ()))
+
+_pick = cards.pick_keep
+mutate(CARDS, "in a merge the card with LESS history stays", cards, "pick_keep",
+       lambda a, b, n: tuple(reversed(_pick(a, b, n))))
+
+_fill = cards.merge_fill
+mutate(CARDS, "a merge drops the other card's phones and notes", cards, "merge_fill",
+       lambda keep, drop, columns: {k: v for k, v in _fill(keep, drop, columns).items()
+                                    if k not in ("phone1", "phone2", "phone3", "notes")})
+
+mutate(CARDS, "a merge overwrites what the kept card already had", cards, "_blank", lambda v: True)
+
+_merge = store.merge_recipients
+
+
+def _history_left_behind(conn, keep_guid, drop_guid, fields, now):
+    conn.execute("UPDATE history SET recipient_guid='' WHERE recipient_guid=?", (drop_guid,))
+    return _merge(conn, keep_guid, drop_guid, fields, now)
+
+
+mutate(CARDS, "a merge leaves the other card's history without a card", store, "merge_recipients", _history_left_behind)
+
+_set_status = card_service.set_status
+mutate(CARDS, "pausing a card does nothing", card_service, "set_status",
+       lambda conn, now, guid, status: {"ok": True, "status": status})
+
+mutate(CARDS, "a card is changed without the site's own header", webapp, "_from_this_site", lambda request: True)
 
 breaks = len(results) - BASELINES
 if all(results):

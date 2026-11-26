@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import config, service, store
+from . import card_service, config, service, store
 
 STATIC_DIR = os.path.join(config.WEB_DIR, "static")
 _NO_DATA = {"error": "no_data",
@@ -170,10 +170,126 @@ def api_printed(body: PrintedBody):
     return _run(do)
 
 
+# ── stage 3: the recipients ───────────────────────────────────────────────────
+_GUID = Field(min_length=1, max_length=64, pattern=r"^[0-9A-Za-z_-]+$")
+
+
+class CardBody(BaseModel):
+    """One card as the form sends it. Unknown fields are refused; every value is checked
+    again in web/cards.py."""
+    model_config = {"extra": "forbid"}
+    guid: str = Field(default="", max_length=64, pattern=r"^[0-9A-Za-z_-]*$")
+    seen: str = Field(default="", max_length=40)
+    sure: bool = False
+    type: Optional[str] = Field(default=None, max_length=10)
+    status: Optional[str] = Field(default=None, max_length=20)
+    last_name: Optional[str] = None
+    first_name: Optional[str] = None
+    phone1: Optional[str] = None
+    phone2: Optional[str] = None
+    phone3: Optional[str] = None
+    souls: Optional[str] = Field(default=None, max_length=6)
+    address: Optional[str] = None
+    id_number: Optional[str] = None
+    spouse_id_number: Optional[str] = None
+    email: Optional[str] = None
+    synagogue: Optional[str] = None
+    representative: Optional[str] = None
+    income: Optional[str] = None
+    per_soul: Optional[str] = None
+    housing_expenses: Optional[str] = None
+    medical_expenses: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class GuidBody(BaseModel):
+    guid: str = _GUID
+
+
+class StatusBody(BaseModel):
+    guid: str = _GUID
+    status: str = Field(max_length=20)
+
+
+class GuidsBody(BaseModel):
+    guids: list[str] = Field(min_length=2, max_length=50)
+
+
+class MergeBody(BaseModel):
+    keep: str = _GUID
+    drop: str = _GUID
+
+
+@app.get("/api/cards")
+def api_cards(q: str = Query("", max_length=100), show: str = Query("all", pattern=r"^(all|active|paused)$")):
+    return _run(lambda conn, path: card_service.card_list(conn, q, show))
+
+
+@app.get("/api/card")
+def api_card(guid: str = Query(..., min_length=1, max_length=64)):
+    return _run(lambda conn, path: card_service.card(conn, config.now(), guid, path))
+
+
+@app.get("/api/card/new")
+def api_card_new():
+    return _run(lambda conn, path: card_service.blank_card())
+
+
+@app.post("/api/card/save")
+def api_card_save(body: CardBody):
+    data = body.model_dump(exclude_none=True)
+    return _run(lambda conn, path: card_service.save(conn, config.now(), data, path))
+
+
+@app.post("/api/card/status")
+def api_card_status(body: StatusBody):
+    return _run(lambda conn, path: card_service.set_status(conn, config.now(), body.guid, body.status))
+
+
+@app.post("/api/card/delete")
+def api_card_delete(body: GuidBody):
+    return _run(lambda conn, path: card_service.delete(conn, config.now(), body.guid, path))
+
+
+@app.get("/api/cards/deleted")
+def api_cards_deleted():
+    return _run(lambda conn, path: card_service.deleted(conn))
+
+
+@app.post("/api/card/restore")
+def api_card_restore(body: GuidBody):
+    return _run(lambda conn, path: card_service.restore(conn, config.now(), body.guid))
+
+
+@app.get("/api/duplicates")
+def api_duplicates():
+    return _run(lambda conn, path: card_service.duplicates(conn))
+
+
+@app.get("/api/duplicates/compare")
+def api_compare(a: str = Query(..., min_length=1, max_length=64), b: str = Query(..., min_length=1, max_length=64)):
+    return _run(lambda conn, path: card_service.compare(conn, a, b))
+
+
+@app.post("/api/duplicates/different")
+def api_different(body: GuidsBody):
+    return _run(lambda conn, path: card_service.set_different(conn, config.now(), body.guids))
+
+
+@app.post("/api/duplicates/merge")
+def api_merge(body: MergeBody):
+    return _run(lambda conn, path: card_service.merge(conn, config.now(), body.keep, body.drop, path))
+
+
 # ── pages ─────────────────────────────────────────────────────────────────────
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+
+
+@app.get("/people")
+def people_page():
+    return FileResponse(os.path.join(STATIC_DIR, "people.html"))
 
 
 @app.get("/print")

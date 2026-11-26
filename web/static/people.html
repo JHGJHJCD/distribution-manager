@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מקבלים · מנהל חלוקה</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div>
+      <h1>מנהל חלוקה</h1>
+      <p class="sub" id="counts"></p>
+    </div>
+    <p class="test-copy">עותק לבדיקה · לא הנתונים שרון עובד עליהם</p>
+  </header>
+
+  <nav class="nav" aria-label="מסכים">
+    <a href="/">שבועות</a>
+    <a href="/people" aria-current="page">מקבלים</a>
+  </nav>
+
+  <div id="notice" class="notice" role="status" hidden></div>
+  <div id="undo" class="notice" hidden>
+    <span id="undoText"></span>
+    <button type="button" class="btn small" id="undoBtn">בטל מחיקה</button>
+  </div>
+
+  <!-- the list -->
+  <section class="panel" id="listView">
+    <div class="head">
+      <h2>מקבלים</h2>
+      <button type="button" class="btn main" id="addBtn">+ מקבל חדש</button>
+    </div>
+    <div class="tools">
+      <div class="tool-group grow">
+        <label class="sr" for="q">חיפוש</label>
+        <input id="q" class="wide" type="search" placeholder="חיפוש לפי שם, טלפון או כתובת" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="tool-group">
+        <label for="show">להציג</label>
+        <select id="show">
+          <option value="all">הכל</option>
+          <option value="active">פעילים</option>
+          <option value="paused">מושהים</option>
+        </select>
+      </div>
+    </div>
+    <button type="button" class="warn strip" id="dupStrip" hidden></button>
+    <p class="sub" id="found"></p>
+    <div class="rows" id="rows"></div>
+    <p class="sub">טלפונים ופרטים אישיים מוצגים רק בתוך כרטיס שנפתח.</p>
+    <details class="fold" id="deletedBox" hidden>
+      <summary id="deletedTitle"></summary>
+      <div class="rows" id="deletedRows"></div>
+    </details>
+  </section>
+
+  <!-- one card -->
+  <section class="panel" id="cardView" hidden>
+    <div class="head">
+      <h2 id="cardTitle"></h2>
+      <button type="button" class="btn quiet" id="backBtn">חזרה לרשימה</button>
+    </div>
+    <div class="card-grid">
+      <form id="cardForm" class="form" autocomplete="off" novalidate>
+        <div class="fields" id="mainFields"></div>
+        <details class="fold" id="moreBox">
+          <summary>פרטים נוספים</summary>
+          <div class="fields" id="moreFields"></div>
+        </details>
+        <div class="field full" id="notesField"></div>
+        <div class="actions">
+          <button type="submit" class="btn main" id="saveBtn">שמור</button>
+          <button type="button" class="btn" id="pauseBtn"></button>
+          <button type="button" class="btn quiet danger" id="deleteBtn">מחק</button>
+        </div>
+        <p class="sub" id="deleteWhy" hidden></p>
+      </form>
+      <aside class="side" id="side">
+        <div class="why" id="whenBox"></div>
+        <div class="why plain" id="histBox"></div>
+        <p class="sub">כל שינוי בכרטיס מחשב מחדש את כל השבועות הבאים.</p>
+      </aside>
+    </div>
+    <!-- asked before a new card is added, when an existing card has the same name or phone -->
+    <div class="ask" id="alikeBox" hidden>
+      <b id="alikeTitle"></b>
+      <div class="rows" id="alikeRows"></div>
+      <p class="sub">שום דבר לא מתמזג לבד. אם זה אותו אדם, פתחו את הכרטיס הקיים ועדכנו אותו.</p>
+      <div class="actions">
+        <button type="button" class="btn main" id="alikeNew">שני אנשים שונים · הוסף כרטיס חדש</button>
+        <button type="button" class="btn quiet" id="alikeCancel">ביטול</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- look-alikes -->
+  <section class="panel" id="dupView" hidden>
+    <div class="head">
+      <h2>כרטיסים שנראים כפולים</h2>
+      <button type="button" class="btn quiet" id="dupBack">חזרה לרשימה</button>
+    </div>
+    <p class="sub">אלה רק הצעות. שום כרטיס לא מתמזג לבד, ואם לא בטוחים: "אנשים שונים".</p>
+    <div id="groups"></div>
+    <div class="ask" id="compareBox" hidden>
+      <b id="compareTitle"></b>
+      <div class="warn" id="idWarn" hidden>מספרי תעודת הזהות שונים · כנראה שני אנשים שונים.</div>
+      <div class="cmp" id="compareTable"></div>
+      <p class="sub" id="compareNote"></p>
+      <div class="actions">
+        <button type="button" class="btn quiet" id="compareCancel">ביטול · להשאיר שני כרטיסים</button>
+        <button type="button" class="btn danger" id="compareMerge">מזג לכרטיס אחד</button>
+      </div>
+    </div>
+  </section>
+
+</div>
+<script src="/static/common.js"></script>
+<script src="/static/people.js"></script>
+</body>
+</html>
