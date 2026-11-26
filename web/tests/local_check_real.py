@@ -7,8 +7,9 @@ Run by hand on the fund's own computer: double-click web\\compare_with_old.bat, 
                   [--sent-history <json>] [--weeks 13] [--portions 52] [--reserve 10]
                   [--start YYYY-MM-DD] [--report [file.html]] [--open] [--quick]
 
-What it does. The source file is opened FOR READING ONLY and copied into a temp folder;
-everything else happens on copies inside that folder, which is removed at the end. The
+What it does. The source file is only READ, as plain bytes, into a temp folder — nothing is
+written to it or beside it; everything else happens on copies inside that folder, which is
+removed at the end. The
 copy is imported into the site (web/import_old.py) and, apart from that, handed to the
 desktop program's own code (web/tests/oracle_old.py). Both then lay out the same rounds:
 
@@ -39,6 +40,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 import uuid
 import webbrowser
 from datetime import date, datetime, timedelta
@@ -51,7 +53,7 @@ from web import config, event_service, import_old, planner, service, store
 from web.engine import selection
 from web.service import Refused
 
-SHOWN = 12                    # how many people a differing list spells out (by kind, never by name)
+SHOWN = 12                    # how many kinds of difference a differing list spells out (never a name)
 HOLIDAY_WEEKS = 4             # how many weeks a holiday scenario lays out around its event
 HOLIDAY_RESERVE = 5
 FAR = 10 ** 5                 # "portions for everybody": to count who is eligible for a holiday list
@@ -73,19 +75,56 @@ PLACE = {"main": "ברשימה", "reserve": "ברזרבה", "out": "לא ברש�
 
 
 # ── the two programs, each on its own copy ────────────────────────────────────
+SNAPSHOT_TRIES = 20
+
+
+def _read_pair(src: str) -> tuple:
+    """The bytes of the data file and of its -wal file (where the desktop program keeps what
+    it has not folded into the data file yet; b"" when there is none)."""
+    with open(src, "rb") as f:
+        data = f.read()
+    try:
+        with open(src + "-wal", "rb") as f:
+            wal = f.read()
+    except FileNotFoundError:
+        wal = b""
+    return data, wal
+
+
 def snapshot(src: str, dest: str) -> None:
-    """A copy of `src` made by SQLite itself (so what still sits in a -wal file is included).
-    The source is opened for reading only."""
+    """A copy of the data file to work on, taken WITHOUT WRITING ANYTHING NEAR THE SOURCE.
+
+    Even a read-only SQLite connection leaves two working files (-shm, -wal) beside a file of
+    the desktop program (it is in WAL mode). So the source is not opened with SQLite at all:
+    its bytes, and those of its -wal file, are read twice, and the copy is taken only when
+    nothing changed in between (the desktop program may be running). SQLite then opens the
+    COPY, folds the -wal in, and the copy is checked to be sound."""
     if not os.path.isfile(src):
         raise FileNotFoundError(f"the data file was not found: {src}")
+    for _ in range(SNAPSHOT_TRIES):
+        pair = _read_pair(src)
+        time.sleep(0.05)
+        if pair == _read_pair(src):
+            break
+    else:
+        raise RuntimeError("the data file kept changing while it was being copied - "
+                           "close the desktop program and run the comparison again")
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    a = sqlite3.connect(pathlib.Path(src).resolve().as_uri() + "?mode=ro", uri=True)
-    b = sqlite3.connect(dest)
+    with open(dest, "wb") as f:
+        f.write(pair[0])
+    if pair[1]:
+        with open(dest + "-wal", "wb") as f:
+            f.write(pair[1])
+    c = sqlite3.connect(dest)
     try:
-        a.backup(b)
+        sound = c.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.DatabaseError:
+        sound = False
     finally:
-        b.close()
-        a.close()
+        c.close()
+    if not sound:
+        raise RuntimeError("the copy of the data file is not a sound database")
 
 
 class Both:
@@ -403,11 +442,15 @@ def _difference_lines(row: dict) -> str:
         lines.append(f"ברשימה: באתר {row['main']}, בתוכנה הישנה {row['main_old']}.")
     if row["first_out_of_order"]:
         lines.append(f"אותם אנשים, אבל הסדר שונה החל מהמקום ה־{row['first_out_of_order']}.")
-    items = [f"{_e(d['who'])}: באתר {PLACE[d['site']]}{' (' + _e(d['why']) + ')' if d['why'] else ''}, "
-             f"בתוכנה הישנה {PLACE[d['old']]}." for d in row["differences"][:SHOWN]]
-    more = len(row["differences"]) - SHOWN
+    kinds = {}                                              # the same words once, with how many people they are true of
+    for d in row["differences"]:
+        key = (d["who"], d["site"], d["why"], d["old"])
+        kinds[key] = kinds.get(key, 0) + 1
+    items = [f"{_e(who)}{f' ({n})' if n > 1 else ''}: באתר {PLACE[site]}{' (' + _e(why) + ')' if why else ''}, "
+             f"בתוכנה הישנה {PLACE[theirs]}." for (who, site, why, theirs), n in list(kinds.items())[:SHOWN]]
+    more = len(kinds) - SHOWN
     if more > 0:
-        items.append(f"וכך גם {_count(more, 'עוד אחד', 'נוספים')}.")
+        items.append(f"ועוד {_count(more, 'סוג אחד', 'סוגים')} של הבדל.")
     out = "".join(f"<p>{_e(ln)}</p>" for ln in lines)
     if items:
         out += "<ul>" + "".join(f"<li>{i}</li>" for i in items) + "</ul>"
@@ -465,7 +508,7 @@ def render(result: dict) -> str:
 <title>השוואה מול התוכנה הישנה</title><style>{_CSS}</style></head><body><div class="wrap">
 <header><h1>השוואה בין האתר לתוכנה הישנה</h1>
 <p class="sub">נוצר ב־{_stamp(r["made_at"])}, על עותק של הנתונים (הקובץ השתנה לאחרונה ב־{_stamp(r["source_changed_at"])}).
-הנתונים עצמם לא שונו: הקובץ נפתח לקריאה בלבד, והכול נעשה על עותקים שנמחקו בסוף.</p></header>
+הנתונים עצמם לא שונו: הקובץ רק נקרא, והכול נעשה על עותקים שנמחקו בסוף.</p></header>
 {verdict}
 <div class="tiles">{tiles}</div>
 <div class="box"><p><b>מה יש בנתונים:</b> קבועים לפי תדירות: {regs}. חד־פעמיים בעדיפות ראשונה או שנייה:
@@ -485,7 +528,7 @@ def render_failure(now: datetime, error: str) -> str:
     return f"""<!doctype html>
 <html lang="he" dir="rtl"><head><meta charset="utf-8"><title>ההשוואה לא רצה</title><style>{_CSS}</style></head>
 <body><div class="wrap"><h1>ההשוואה לא רצה</h1>
-<div class="verdict bad">משהו עצר את ההשוואה לפני שהיא הסתיימה<small>הנתונים לא שונו. כדאי להעביר את השורה שלמטה למי שבנה את האתר.</small></div>
+<div class="verdict bad">משהו עצר את ההשוואה לפני שהיא הסתיימה<small>הנתונים לא שונו. אם התוכנה הישנה פתוחה, כדאי לסגור אותה ולהריץ שוב. אם זה חוזר, להעביר את השורה שלמטה למי שבנה את האתר.</small></div>
 <section><p class="sub">{_e(now.strftime("%Y-%m-%d %H:%M"))}</p><p dir="ltr">{_e(error)}</p></section></div></body></html>
 """
 
