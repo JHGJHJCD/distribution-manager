@@ -655,9 +655,11 @@ def show_filter_breakdown(parent, rec: dict, criteria: dict):
         lo, hi = b.get("min"), b.get("max")
         if lo is None and hi is None:
             continue
-        val = selection.to_number(rec.get(field))
+        val = selection.filter_value(rec, field)        # 0 בהכנסה / פנוי לנפש = לא ידוע (26/11/2026)
         raw = rec.get(field)
         val_txt = _html.escape(str(raw).strip()) if (raw not in (None, "")) else "— חסר —"
+        if val is None and selection.to_number(raw) == 0:
+            val_txt = "0 — לא ידוע"
         if val is None:
             ok, mark, color = False, "✗", "#b91c1c"
         else:

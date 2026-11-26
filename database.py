@@ -1739,7 +1739,13 @@ def get_weekly_list(days_ahead: int = 0, area_filter: str = "הכל", on_date=No
                 nd = date.fromisoformat(nd_str) if nd_str else None
             except ValueError:
                 nd = None
-            if nd is None:
+            if nd is None and not (r.get("frequency") or "").strip():
+                # קבוע (עדיפות 4) בלי תדירות = בתור בכל רביעי, כמו ב-selection.is_due
+                # (26/11/2026). עד אז חושב לו "הרביעי שאחרי היום" — וביום רביעי עצמו
+                # הוא נעלם מהרשימה. לא נכתב ל-DB: אין לו next_distribution נגזר.
+                nd = base_wed
+                r["next_distribution"] = nd.isoformat()
+            elif nd is None:
                 nd = calculate_next_dist(r.get("last_distribution") or "", r.get("frequency") or "")
                 r["next_distribution"] = nd.isoformat()
                 updates.append((r["next_distribution"], r["id"]))
